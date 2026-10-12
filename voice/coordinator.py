@@ -14,6 +14,7 @@ from livekit.agents import Agent, ModelSettings, RunContext, function_tool, llm
 
 from beelink import cli as bee
 from voice.recorder import CallRecorder
+from voice.speech_filter import SpeechFilter
 from worker.runner import JobRunner
 
 INSTRUCTIONS = """\
@@ -30,6 +31,7 @@ and keep the conversation going while it runs.
 6. Repeat back names and numbers that change the outcome, and ask whether you got them right.
 7. If the user starts talking, stop and listen.
 8. Save things to Bee (facts, todos) only after the user has said yes out loud.
+9. When the user says goodbye or that they are done, say a short goodbye and call end_call.
 
 Notes from the app arrive as system messages: the call context (who called and why, and what Bee knows), \
 what the user can see on screen, finished jobs and tool results, and how much of your last reply the user \
@@ -39,7 +41,8 @@ the app, not from the user.
 When the call context lists unconfirmed Bee facts, check them at a natural moment, for example \
 "I heard your bonus is 15 percent. Is that right?" If the user corrects it, queue a fact_update with the \
 corrected text. If they agree, queue a fact_confirm.
-When a job result arrives, tell the user the key result in two or three sentences and say the details are in the app.
+When a job result arrives, tell the user the key result in two or three short sentences (under 50 words) and \
+say the details are in the app.
 """
 
 BEE_WRITE_KINDS = ("fact_confirm", "fact_update", "todo_create", "todo_accept")
@@ -69,6 +72,26 @@ class Coordinator(Agent):
         note = self.context_note
         if note is not None and turn_ctx.get_by_id(note.id) is None:
             turn_ctx.insert(note)
+
+    # ---------- speech ----------
+
+    async def llm_node(self, chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings):
+        # Tool-call markup written as reply text is cut before it reaches the voice, the captions
+        # and the history (see voice/speech_filter.py). Tool calls themselves pass through.
+        speech = SpeechFilter()
+        async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+            if isinstance(chunk, llm.ChatChunk) and chunk.delta and chunk.delta.content:
+                kept = speech.feed(chunk.delta.content)
+                if kept != chunk.delta.content:
+                    chunk = chunk.model_copy(update={"delta": chunk.delta.model_copy(update={"content": kept})})
+            elif isinstance(chunk, str):
+                chunk = speech.feed(chunk)
+            yield chunk
+        tail = speech.flush()
+        if tail:
+            yield tail
+        if speech.stopped:
+            self._recorder.event("speech_markup_dropped", text=speech.dropped)
 
     # ---------- recording ----------
 
@@ -102,7 +125,9 @@ class Coordinator(Agent):
 
     @function_tool
     async def search_workspace(self, context: RunContext, query: str) -> str:
-        """Look up what was said in earlier calls with this user.
+        """Look up what the user and you said in earlier Bee Call phone calls.
+
+        Not for the user's conversations with other people; use search_bee for those.
 
         Args:
             query: A few keywords to look for.
@@ -121,7 +146,9 @@ class Coordinator(Agent):
 
     @function_tool
     async def search_bee(self, context: RunContext, query: str) -> str:
-        """Search the user's earlier Bee conversations by meaning.
+        """Search, by meaning, the user's conversations with other people that their Bee wearable recorded.
+
+        Use it when the user asks what they discussed, planned or agreed with someone.
 
         Args:
             query: What to look for, in plain words.

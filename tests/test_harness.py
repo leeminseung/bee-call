@@ -55,6 +55,15 @@ def test_definition_has_the_inline_functions_and_the_code_interpreter():
     assert all(t["config"]["inlineFunction"]["inputSchema"]["type"] == "object" for t in d["tools"] if t["type"] == "inline_function")
 
 
+def test_models_that_fail_with_the_code_interpreter_get_no_code_interpreter():
+    d = harness_definition("arn:aws:iam::123456789012:role/bee-call-worker", "global.moonshotai.kimi-k3")
+    assert [t["name"] for t in d["tools"]] == list(INLINE_FUNCTIONS)
+    prompt = d["systemPrompt"][0]["text"]
+    assert "code interpreter" not in prompt and "Work out calculations step by step" in prompt
+    nova = harness_definition("arn:aws:iam::123456789012:role/bee-call-worker", "global.amazon.nova-2-lite-v1:0")
+    assert "Use the code interpreter" in nova["systemPrompt"][0]["text"]
+
+
 def test_read_round_keeps_only_inline_calls_still_waiting():
     events = (assistant(("tool", "t_ci", "code_interpreter", ['{"code": "6*7"}'])) + server_tool_result("t_ci")
               + assistant(("text", "Now searching. "), ("tool", "t_ws", "web_search", ['{"quest', 'ion": "trails"}'])))

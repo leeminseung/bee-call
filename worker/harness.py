@@ -11,7 +11,8 @@ Inline functions (run here, on this Mac):
   web_search(question)                 Nova Web Grounding (us-east-1): an answer with sources
   save_file(name, content)             a text result file in the job folder (report.md, a CSV table)
   save_chart(name, title, kind, ...)   a chart from numbers; this Mac draws it as SVG (worker/chart.py)
-Built-in tool (run by AWS): AgentCore Code Interpreter, for calculations.
+Built-in tool (run by AWS): AgentCore Code Interpreter, for calculations, only for models that
+work with it (CODE_INTERPRETER_PROVIDERS).
 
 The job folder stays on this Mac, with one writer per file: the agent writes into it
 only through save_file. The harness itself is created by scripts/deploy_worker.py.
@@ -38,9 +39,14 @@ from worker.web_search import SearchResult, web_search
 REGION = "ap-southeast-2"
 HARNESS_NAME = "bee_call_worker"
 STATE_FILE = Path("workspace") / "state" / "harness.json"  # written by scripts/deploy_worker.py
-# The product model is Claude Opus 5.5; until Claude on Bedrock is open for this account,
-# Nova 2 Lite stands in so the deploy and invoke path can be tested.
-DEFAULT_MODEL = os.environ.get("WORKER_MODEL", "global.amazon.nova-2-lite-v1:0")
+# The product model is Claude Opus 5.5. While Claude on Bedrock is blocked for this account,
+# Kimi K3 stands in: the strongest model open to the account (2026-10-12).
+DEFAULT_MODEL = os.environ.get("WORKER_MODEL", "global.moonshotai.kimi-k3")
+# Kimi K3 in the harness fails on its first model call ("The task request was rejected by the
+# target") when the built-in code interpreter is attached, and works without it (2026-10-12).
+# Nova 2 Lite works with it. Claude is untested (blocked) and kept on the list for the product plan.
+CODE_INTERPRETER_PROVIDERS = ("amazon.", "anthropic.")
+REGION_PREFIXES = ("global.", "us.", "eu.", "au.", "apac.", "jp.")
 MAX_ROUNDS = 40  # inline-function round trips per job (arbitrary)
 MAX_FILE_BYTES = 5_000_000
 MAX_TOOL_TEXT = 8000
@@ -53,7 +59,7 @@ How to work:
 1. Call progress with a short line (under ten words) whenever you start a new step.
 2. Use web_search for anything current or factual. For facts that change the answer, check at least \
 two sources, and say so when they disagree.
-3. Use the code interpreter for calculations, tables and charts.
+3. {calculations}
 4. When you have the answer, call relay_to_user with one or two short sentences the coordinator can say \
 out loud: the conclusion first, numbers rounded, no links.
 5. Then call save_file with name "report.md": the answer, how you got it, and the sources as links. \
@@ -104,22 +110,38 @@ INLINE_FUNCTIONS: dict[str, dict[str, Any]] = {
 }
 
 
-def harness_tools() -> list[dict[str, Any]]:
+def uses_code_interpreter(model_id: str) -> bool:
+    for prefix in REGION_PREFIXES:
+        if model_id.startswith(prefix):
+            model_id = model_id[len(prefix):]
+            break
+    return model_id.startswith(CODE_INTERPRETER_PROVIDERS)
+
+
+def system_prompt(code_interpreter: bool) -> str:
+    calculations = ("Use the code interpreter for calculations, tables and charts." if code_interpreter else
+                    "Work out calculations step by step, and put the numbers you used in the report.")
+    return SYSTEM_PROMPT.format(calculations=calculations)
+
+
+def harness_tools(code_interpreter: bool = True) -> list[dict[str, Any]]:
     tools = [{"type": "inline_function", "name": name, "config": {"inlineFunction": spec}}
              for name, spec in INLINE_FUNCTIONS.items()]
-    tools.append({"type": "agentcore_code_interpreter", "name": "code_interpreter",
-                  "config": {"agentCoreCodeInterpreter": {}}})
+    if code_interpreter:
+        tools.append({"type": "agentcore_code_interpreter", "name": "code_interpreter",
+                      "config": {"agentCoreCodeInterpreter": {}}})
     return tools
 
 
 def harness_definition(role_arn: str, model_id: str = DEFAULT_MODEL) -> dict[str, Any]:
     """The CreateHarness / UpdateHarness parameters for the worker."""
+    code_interpreter = uses_code_interpreter(model_id)
     return {
         "harnessName": HARNESS_NAME,
         "executionRoleArn": role_arn,
         "model": {"bedrockModelConfig": {"modelId": model_id, "maxTokens": 4096}},
-        "systemPrompt": [{"text": SYSTEM_PROMPT}],
-        "tools": harness_tools(),
+        "systemPrompt": [{"text": system_prompt(code_interpreter)}],
+        "tools": harness_tools(code_interpreter),
         "memory": {"disabled": {}},
         "truncation": {"strategy": "sliding_window", "config": {"slidingWindow": {"messagesCount": 60}}},
         "environment": {"agentCoreRuntimeEnvironment": {

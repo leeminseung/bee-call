@@ -9,6 +9,8 @@ COORDINATOR_LLM picks the model in the coordinator slot:
   claude  Claude Sonnet 5.5 on Bedrock (the product)
   fake    the Claude adapter with scripted replies and no network (test stand-in
           that checks every request the way the Messages API would)
+  bedrock any other Bedrock model through the Converse API, named by COORDINATOR_MODEL
+          (stand-in while Claude is blocked on this account; probes/coordinator_bench.py compares them)
   nova    Amazon Nova 2 Lite on Bedrock (test stand-in that can call tools)
   echo    repeats the caller (test stand-in for the audio path)
 WORKER picks what runs delegated jobs:
@@ -55,6 +57,9 @@ REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", REGION)
 VOICE = os.environ.get("POLLY_VOICE", "Ruth")
 COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
+# For COORDINATOR_LLM=bedrock. MiniMax M2.5 did best in probes/coordinator_bench.py on 2026-10-12
+# (21 of 24 scenes after the prompt fixes, first token under 2 s every time, the shortest replies).
+COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "minimax.minimax-m2.5")
 WORKER = os.environ.get("WORKER", "fake")
 WORKSPACE = Path("workspace")
 
@@ -74,6 +79,8 @@ def make_llm(rec: CallRecorder) -> llm.LLM:
         return EchoLLM()
     if COORDINATOR_LLM == "nova":
         return aws.LLM(model="us.amazon.nova-2-lite-v1:0", region="us-east-1")
+    if COORDINATOR_LLM == "bedrock":
+        return aws.LLM(model=COORDINATOR_MODEL, region=BEDROCK_REGION)
     if COORDINATOR_LLM == "claude":
         return ClaudeBedrockLLM(profile=PROFILE, region=BEDROCK_REGION, on_event=rec.event)
     if COORDINATOR_LLM == "fake":
