@@ -87,6 +87,12 @@ def ensure_role(iam, account: str) -> str:
 def ensure_harness(ctl, role_arn: str, model: str) -> dict:
     definition = harness_definition(role_arn, model)
     found = [h for h in ctl.list_harnesses()["harnesses"] if h["harnessName"] == HARNESS_NAME]
+    if found and found[0]["status"] == "CREATE_FAILED":
+        # A harness that never got created cannot be updated; remove it and start over.
+        ctl.delete_harness(harnessId=found[0]["harnessId"])
+        while any(h["harnessName"] == HARNESS_NAME for h in ctl.list_harnesses()["harnesses"]):
+            time.sleep(5)
+        found = []
     if found:
         harness = ctl.update_harness(**update_request(definition, found[0]["harnessId"]))["harness"]
     else:

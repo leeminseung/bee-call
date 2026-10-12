@@ -133,6 +133,10 @@ def make_app(url: str, key: str, secret: str, workspace: Path = WORKSPACE, room_
 
 
 if __name__ == "__main__":
+    import logging
+
+    # One line per request, so a phone that cannot reach the server is easy to tell apart.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     # The default route can be a VPN, so list the Wi-Fi addresses a phone can actually reach.
     from voice.session_server import lan_addresses
 
