@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Bee Call asks the token server on your Mac for a call pass over your Wi-Fi.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Bee Call uses the microphone so you can talk with the AI during a call.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>voip</string>
+	</array>
+</dict>
+</plist>

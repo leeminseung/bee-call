@@ -1,0 +1,186 @@
+"""Watches Bee in real time and notices when something new is worth a look.
+
+`bee stream` delivers each event at most once, cannot replay, and has no fact
+events, so after every burst of events and on every (re)connect the watcher
+also asks `bee changed --cursor <last>` and keeps the cursor in
+workspace/state/bee_cursor.json. Records made during our own AI calls are
+skipped. Each new batch is saved raw under workspace/inbox/<time>/.
+
+It never calls anyone by itself: it hands a Trigger to a callback, and the
+planner decides whether the AI should call. The cursor is saved only after the
+callback returns, so a batch whose handling failed is looked at again on the
+next catch-up. A new Bee event restarts the quiet period before a catch-up, but
+never cancels a catch-up that has already started.
+
+Run on its own to watch and print triggers:
+    uv run python -m beelink.watcher
+"""
+
+import asyncio
+import json
+import logging
+import os
+import signal
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Awaitable, Callable
+
+from beelink import cli
+from beelink.calls import our_call_windows, overlaps_our_call
+
+log = logging.getLogger("beelink.watcher")
+
+STREAM_TYPES = "new-conversation,update-conversation,update-conversation-summary,journal-created,journal-text"
+# Events that mean a conversation or voice note has settled enough to look at.
+SETTLED_EVENTS = {"update-conversation-summary", "update-conversation", "journal-created"}
+
+
+@dataclass
+class Trigger:
+    reason: str
+    inbox_dir: Path
+    conversation_ids: list[int] = field(default_factory=list)
+    counts: dict[str, int] = field(default_factory=dict)
+
+
+def parse_stream_line(line: str) -> tuple[str, dict[str, Any]] | None:
+    """`bee stream --json` prints one JSON object per event: {"event": name, "data": {...}}."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    name = obj.get("event") or obj.get("type")
+    if not name:
+        return None
+    data = obj.get("data")
+    return name, data if isinstance(data, dict) else {}
+
+
+class BeeWatcher:
+    def __init__(self, workspace: Path, on_trigger: Callable[[Trigger], Awaitable[None]],
+                 debounce: float = 20.0) -> None:
+        self.workspace = workspace
+        self.on_trigger = on_trigger
+        self.debounce = debounce
+        self._cursor_file = workspace / "state" / "bee_cursor.json"
+        self._timer: asyncio.Task | None = None  # the quiet period before a catch-up; the only thing ever cancelled
+        self._reason = "event"
+        self._lock = asyncio.Lock()  # one catch-up at a time
+
+    # ---------- cursor ----------
+
+    def _load_cursor(self) -> str | None:
+        if self._cursor_file.exists():
+            return json.loads(self._cursor_file.read_text()).get("cursor")
+        return None
+
+    def _save_cursor(self, cursor: str | None) -> None:
+        if not cursor:
+            return
+        self._cursor_file.parent.mkdir(parents=True, exist_ok=True)
+        self._cursor_file.write_text(json.dumps({"cursor": cursor, "saved_at": datetime.now().isoformat()}))
+
+    # ---------- catching up ----------
+
+    async def catch_up(self, reason: str) -> Trigger | None:
+        payload = await cli.changed(self._load_cursor())
+        next_cursor = payload.get("meta", {}).get("next_cursor")
+
+        windows = our_call_windows(self.workspace)
+        conversations = [c for c in payload.get("conversations", [])
+                         if not overlaps_our_call(c.get("start_time"), c.get("end_time"), windows)]
+        kept = {
+            "conversations": conversations,
+            "facts": payload.get("facts", []),
+            "todos": payload.get("todos", []),
+            "journals": payload.get("journals", []),
+            "dailies": payload.get("dailies", []),
+        }
+        counts = {k: len(v) for k, v in kept.items()}
+        if not any(counts.values()):
+            self._save_cursor(next_cursor)
+            return None
+
+        inbox = self.workspace / "inbox" / datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        inbox.mkdir(parents=True, exist_ok=True)
+        (inbox / "changed.json").write_text(json.dumps(payload, ensure_ascii=False, indent=1))
+        trigger = Trigger(reason=reason, inbox_dir=inbox,
+                          conversation_ids=[c["id"] for c in conversations if "id" in c], counts=counts)
+        await self.on_trigger(trigger)  # if this raises, the cursor stays and the batch comes back next time
+        self._save_cursor(next_cursor)
+        return trigger
+
+    def _schedule(self, reason: str) -> None:
+        self._reason = reason
+        if self._timer and not self._timer.done():
+            self._timer.cancel()  # still in the quiet period: start it over
+        self._timer = asyncio.create_task(self._after_quiet())
+
+    async def _after_quiet(self) -> None:
+        await asyncio.sleep(self.debounce)
+        self._timer = None  # past the quiet period: a new event schedules another catch-up instead of cancelling this one
+        async with self._lock:
+            try:
+                await self.catch_up(self._reason)
+            except Exception:
+                log.exception("catch-up failed; the same Bee changes will be looked at again")
+
+    # ---------- streaming ----------
+
+    async def run(self) -> None:
+        backoff = 2.0
+        while True:
+            # Own process group: the bee CLI is a node wrapper around a native binary,
+            # and both must go when the watcher stops.
+            proc = await asyncio.create_subprocess_exec(
+                cli.bee_bin(), "stream", "--json", "--types", STREAM_TYPES,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            try:
+                async with self._lock:
+                    await self.catch_up("connected")
+                assert proc.stdout is not None
+                async for raw in proc.stdout:
+                    parsed = parse_stream_line(raw.decode(errors="replace"))
+                    if parsed is None:
+                        continue
+                    name, _ = parsed
+                    backoff = 2.0
+                    if name in SETTLED_EVENTS:
+                        self._schedule(name)
+            except Exception as exc:  # keep watching through transient failures
+                log.warning("bee stream error: %s", exc)
+            finally:
+                if proc.returncode is None:
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+            log.info("bee stream ended; reconnecting in %.0fs", backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60.0)
+
+
+async def _print_trigger(trigger: Trigger) -> None:
+    print(f"trigger: {trigger.reason} counts={trigger.counts} saved={trigger.inbox_dir}")
+
+
+async def _main() -> None:
+    task = asyncio.current_task()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, task.cancel)
+    try:
+        await BeeWatcher(Path("workspace"), _print_trigger).run()
+    except asyncio.CancelledError:
+        pass
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(_main())

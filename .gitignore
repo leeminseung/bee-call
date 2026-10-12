@@ -1,0 +1,21 @@
+# Secrets and local settings
+.env
+.env.local
+.env.*.local
+
+# Call data: raw audio and session files stay on this Mac
+workspace/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store
+
+# iOS (Xcode)
+xcuserdata/
+DerivedData/
+*.xcuserstate
+build/

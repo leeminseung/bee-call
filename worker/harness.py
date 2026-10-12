@@ -1,0 +1,323 @@
+"""The cloud worker: an Amazon Bedrock AgentCore Harness agent that does delegated jobs.
+
+AWS runs the agent loop (Strands-based) in an isolated microVM per session, in
+Sydney. This Mac starts a job with InvokeHarness and serves the harness's inline
+functions: when the agent calls one, the harness stops and hands the call to us;
+we run it and send the result back in the same session, and the agent carries on.
+
+Inline functions (run here, on this Mac):
+  progress(text)                       a line on the job card
+  relay_to_user(text)                  one or two sentences for the voice to tell the user
+  web_search(question)                 Nova Web Grounding (us-east-1): an answer with sources
+  save_file(name, content)             a text result file in the job folder (report.md, a CSV table)
+  save_chart(name, title, kind, ...)   a chart from numbers; this Mac draws it as SVG (worker/chart.py)
+Built-in tool (run by AWS): AgentCore Code Interpreter, for calculations.
+
+The job folder stays on this Mac, with one writer per file: the agent writes into it
+only through save_file. The harness itself is created by scripts/deploy_worker.py.
+"""
+
+import asyncio
+import json
+import os
+import re
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Iterable
+
+import boto3
+import botocore.session
+from botocore.config import Config
+from botocore.exceptions import EventStreamError
+
+from worker.chart import render_svg
+from worker.runner import Job
+from worker.web_search import SearchResult, web_search
+
+REGION = "ap-southeast-2"
+HARNESS_NAME = "bee_call_worker"
+STATE_FILE = Path("workspace") / "state" / "harness.json"  # written by scripts/deploy_worker.py
+# The product model is Claude Opus 5.5; until Claude on Bedrock is open for this account,
+# Nova 2 Lite stands in so the deploy and invoke path can be tested.
+DEFAULT_MODEL = os.environ.get("WORKER_MODEL", "global.amazon.nova-2-lite-v1:0")
+MAX_ROUNDS = 40  # inline-function round trips per job (arbitrary)
+MAX_FILE_BYTES = 5_000_000
+MAX_TOOL_TEXT = 8000
+
+SYSTEM_PROMPT = """\
+You are the background worker for Bee Call, a voice assistant that talks with the user on the phone. \
+The coordinator hands you one job at a time and keeps talking with the user while you work.
+
+How to work:
+1. Call progress with a short line (under ten words) whenever you start a new step.
+2. Use web_search for anything current or factual. For facts that change the answer, check at least \
+two sources, and say so when they disagree.
+3. Use the code interpreter for calculations, tables and charts.
+4. When you have the answer, call relay_to_user with one or two short sentences the coordinator can say \
+out loud: the conclusion first, numbers rounded, no links.
+5. Then call save_file with name "report.md": the answer, how you got it, and the sources as links. \
+For a chart, call save_chart with the numbers; never write image data yourself. Mention each chart in the \
+report by its file name.
+6. Finish with a one-paragraph summary as your last message.
+"""
+
+
+def _schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    return {"type": "object", "properties": properties, "required": required}
+
+
+INLINE_FUNCTIONS: dict[str, dict[str, Any]] = {
+    "progress": {
+        "description": "Show a short progress line on the job card the user sees.",
+        "inputSchema": _schema({"text": {"type": "string", "description": "Under ten words."}}, ["text"]),
+    },
+    "relay_to_user": {
+        "description": "Give the coordinator one or two short sentences to say to the user out loud.",
+        "inputSchema": _schema({"text": {"type": "string"}}, ["text"]),
+    },
+    "web_search": {
+        "description": "Search the web and get an answer with numbered sources.",
+        "inputSchema": _schema({"question": {"type": "string", "description": "A specific question."}}, ["question"]),
+    },
+    "save_file": {
+        "description": "Save a text result file (Markdown or CSV) into the job folder the user can open in the app.",
+        "inputSchema": _schema({
+            "name": {"type": "string", "description": "File name such as report.md or prices.csv; no folders."},
+            "content": {"type": "string"},
+        }, ["name", "content"]),
+    },
+    "save_chart": {
+        "description": "Draw a line or bar chart from numbers and save it into the job folder as an image.",
+        "inputSchema": _schema({
+            "name": {"type": "string", "description": "File name without extension, such as rain_by_hour."},
+            "title": {"type": "string"},
+            "kind": {"type": "string", "enum": ["line", "bar"]},
+            "x_label": {"type": "string"},
+            "y_label": {"type": "string"},
+            "series": {"type": "array", "items": {"type": "object", "properties": {
+                "label": {"type": "string"},
+                "points": {"type": "array", "description": "[[x, y], ...]; x is a number or a category name.",
+                           "items": {"type": "array"}}}, "required": ["label", "points"]}},
+        }, ["name", "title", "kind", "series"]),
+    },
+}
+
+
+def harness_tools() -> list[dict[str, Any]]:
+    tools = [{"type": "inline_function", "name": name, "config": {"inlineFunction": spec}}
+             for name, spec in INLINE_FUNCTIONS.items()]
+    tools.append({"type": "agentcore_code_interpreter", "name": "code_interpreter",
+                  "config": {"agentCoreCodeInterpreter": {}}})
+    return tools
+
+
+def harness_definition(role_arn: str, model_id: str = DEFAULT_MODEL) -> dict[str, Any]:
+    """The CreateHarness / UpdateHarness parameters for the worker."""
+    return {
+        "harnessName": HARNESS_NAME,
+        "executionRoleArn": role_arn,
+        "model": {"bedrockModelConfig": {"modelId": model_id, "maxTokens": 4096}},
+        "systemPrompt": [{"text": SYSTEM_PROMPT}],
+        "tools": harness_tools(),
+        "memory": {"disabled": {}},
+        "truncation": {"strategy": "sliding_window", "config": {"slidingWindow": {"messagesCount": 60}}},
+        "environment": {"agentCoreRuntimeEnvironment": {
+            "networkConfiguration": {"networkMode": "PUBLIC"},
+            "lifecycleConfiguration": {"idleRuntimeSessionTimeout": 300, "maxLifetime": 3600},
+        }},
+        "maxIterations": 60,
+        "timeoutSeconds": 900,
+    }
+
+
+# ---------- reading the event stream ----------
+
+@dataclass
+class ToolUse:
+    tool_use_id: str
+    name: str
+    input_json: str = ""
+
+    @property
+    def input(self) -> dict[str, Any]:
+        try:
+            value = json.loads(self.input_json or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}
+
+
+@dataclass
+class Round:
+    """What one InvokeHarness stream said, up to the point the harness stopped."""
+    text: str = ""  # text of the last assistant message
+    tool_uses: list[ToolUse] = field(default_factory=list)  # in the last assistant message
+    answered: set[str] = field(default_factory=set)  # tool uses the harness already ran (built-in tools)
+    stop_reason: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def pending(self) -> list[ToolUse]:
+        return [t for t in self.tool_uses if t.name in INLINE_FUNCTIONS and t.tool_use_id not in self.answered]
+
+
+def read_round(events: Iterable[dict[str, Any]]) -> Round:
+    out = Round()
+    try:
+        _read_events(events, out)
+    except EventStreamError as exc:  # botocore raises exception events while iterating
+        out.errors.append(str(exc))
+    return out
+
+
+def _read_events(events: Iterable[dict[str, Any]], out: Round) -> None:
+    role, blocks = None, {}
+    for event in events:
+        if "messageStart" in event:
+            role, blocks = event["messageStart"].get("role"), {}
+            if role == "assistant":
+                out.text, out.tool_uses = "", []
+        elif "contentBlockStart" in event:
+            start = event["contentBlockStart"]
+            payload = start.get("start", {})
+            if "toolUse" in payload:
+                use = ToolUse(payload["toolUse"]["toolUseId"], payload["toolUse"]["name"])
+                blocks[start["contentBlockIndex"]] = use
+                if role == "assistant":
+                    out.tool_uses.append(use)
+            elif "toolResult" in payload:
+                out.answered.add(payload["toolResult"]["toolUseId"])
+        elif "contentBlockDelta" in event:
+            delta_event = event["contentBlockDelta"]
+            delta = delta_event.get("delta", {})
+            if "text" in delta and role == "assistant":
+                out.text += delta["text"]
+            elif "toolUse" in delta:
+                use = blocks.get(delta_event.get("contentBlockIndex"))
+                if use is not None:
+                    use.input_json += delta["toolUse"].get("input", "")
+        elif "messageStop" in event:
+            out.stop_reason = event["messageStop"].get("stopReason")
+        elif "metadata" in event:
+            usage = event["metadata"].get("usage", {})
+            out.input_tokens += usage.get("inputTokens", 0)
+            out.output_tokens += usage.get("outputTokens", 0)
+        else:  # contentBlockStop needs nothing; exception events end the round with an error
+            out.errors += [f"{name}: {value}" for name, value in event.items() if name.endswith(("Exception", "Error"))]
+
+
+# ---------- running a job ----------
+
+SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
+RESERVED = {"request.md", "events.jsonl", "usage.json"}  # written by this Mac, never by the agent
+FINISHED = {"end_turn", "stop_sequence"}
+
+
+def update_request(definition: dict[str, Any], harness_id: str) -> dict[str, Any]:
+    """UpdateHarness parameters for a definition: some fields must be wrapped in {"optionalValue": ...}."""
+    shape = botocore.session.get_session().get_service_model("bedrock-agentcore-control") \
+        .operation_model("UpdateHarness").input_shape
+    out: dict[str, Any] = {"harnessId": harness_id}
+    for key, value in definition.items():
+        if key == "harnessName":
+            continue
+        member = shape.members[key]
+        wrapped = member.type_name == "structure" and list(member.members) == ["optionalValue"]
+        out[key] = {"optionalValue": value} if wrapped else value
+    return out
+
+
+def allowed_name(name: str) -> bool:
+    return bool(SAFE_NAME.fullmatch(name)) and name.casefold() not in RESERVED
+
+
+def load_harness_arn() -> str | None:
+    if os.environ.get("WORKER_HARNESS_ARN"):
+        return os.environ["WORKER_HARNESS_ARN"]
+    if STATE_FILE.exists():
+        return json.loads(STATE_FILE.read_text()).get("harnessArn")
+    return None
+
+
+class HarnessWorker:
+    def __init__(self, harness_arn: str | None = None, client: Any | None = None,
+                 search: Callable[[str], Awaitable[SearchResult]] = web_search) -> None:
+        self.harness_arn = harness_arn or load_harness_arn()
+        if not self.harness_arn:
+            raise RuntimeError("no harness ARN: run scripts/deploy_worker.py first")
+        self.client = client or boto3.Session(profile_name=os.environ.get("AWS_PROFILE", "bee-call")).client(
+            "bedrock-agentcore", region_name=REGION, config=Config(read_timeout=900))
+        self.search = search
+
+    def _invoke(self, session_id: str, messages: list[dict[str, Any]]) -> Round:
+        response = self.client.invoke_harness(harnessArn=self.harness_arn, runtimeSessionId=session_id,
+                                              messages=messages)
+        return read_round(response["stream"])
+
+    async def _call(self, use: ToolUse, job: Job, progress: Callable[[str], None],
+                    relay: Callable[[str], Awaitable[None]]) -> tuple[str, str]:
+        """Runs one inline function. Returns (text for the agent, status)."""
+        args = use.input
+        if use.name == "progress":
+            progress(str(args.get("text", ""))[:200])
+            return "Shown on the job card.", "success"
+        if use.name == "relay_to_user":
+            await relay(str(args.get("text", "")))
+            return "The coordinator will tell the user.", "success"
+        if use.name == "web_search":
+            result = await self.search(str(args.get("question", "")))
+            return result.markdown()[:MAX_TOOL_TEXT], "success"
+        if use.name == "save_file":
+            name = str(args.get("name", ""))
+            if not allowed_name(name):
+                return f"Not saved: {name!r} is not an allowed file name.", "error"
+            data = str(args.get("content", "")).encode()
+            if len(data) > MAX_FILE_BYTES:
+                return f"Not saved: {len(data)} bytes is over the {MAX_FILE_BYTES} byte limit.", "error"
+            (job.dir / name).write_bytes(data)
+            return f"Saved {name} ({len(data)} bytes).", "success"
+        if use.name == "save_chart":
+            name = f"{str(args.get('name', 'chart')).removesuffix('.svg')}.svg"
+            if not allowed_name(name):
+                return f"Not saved: {name!r} is not an allowed file name.", "error"
+            svg = render_svg(str(args.get("title", "")), str(args.get("kind", "line")), args.get("series") or [],
+                             str(args.get("x_label", "")), str(args.get("y_label", "")))
+            (job.dir / name).write_text(svg)
+            return f"Saved {name}. Mention it in the report.", "success"
+        return f"Unknown function {use.name}.", "error"
+
+    async def run(self, job: Job, progress: Callable[[str], None], relay: Callable[[str], Awaitable[None]]) -> str:
+        session_id = f"beecall-job-{job.job_id}-{uuid.uuid4().hex}"  # 33 to 100 characters
+        messages = [{"role": "user", "content": [{"text": f"Job {job.job_id}: {job.task}"}]}]
+        tokens = [0, 0]
+        for _ in range(MAX_ROUNDS):
+            found = await asyncio.to_thread(self._invoke, session_id, messages)
+            tokens[0] += found.input_tokens
+            tokens[1] += found.output_tokens
+            if found.errors:
+                raise RuntimeError("; ".join(found.errors))
+            if not found.pending:
+                break
+            results = []
+            for use in found.pending:
+                try:
+                    text, status = await self._call(use, job, progress, relay)
+                except Exception as exc:  # the agent hears about it and can try another way
+                    text, status = f"{use.name} failed: {exc}", "error"
+                results.append({"toolResult": {"toolUseId": use.tool_use_id, "content": [{"text": text}],
+                                               "status": status}})
+            messages = [{"role": "user", "content": results}]
+        else:
+            raise RuntimeError(f"the worker did not finish within {MAX_ROUNDS} rounds")
+        if found.stop_reason not in FINISHED:
+            # max_iterations_exceeded, timeout_exceeded, max_tokens, content_filtered and the like
+            raise RuntimeError(f"the worker stopped before finishing ({found.stop_reason or 'no stop reason'})")
+        summary = found.text.strip() or "The worker finished without a summary."
+        if not (job.dir / "report.md").exists():
+            (job.dir / "report.md").write_text(f"# Report for job {job.job_id}\n\n{summary}\n")
+        (job.dir / "usage.json").write_text(json.dumps({"input_tokens": tokens[0], "output_tokens": tokens[1],
+                                                        "stop_reason": found.stop_reason}))
+        return summary

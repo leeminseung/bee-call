@@ -1,0 +1,16 @@
+{"t": 0.0, "type": "call_started", "room": "fake-20261010-210512", "started_at": "2026-10-10T21:05:16"}
+{"t": 0.009, "type": "item", "kind": "AgentHandoff"}
+{"t": 0.7, "type": "agent_state", "old": "initializing", "new": "listening"}
+{"t": 1.52, "type": "agent_state", "old": "listening", "new": "speaking"}
+{"t": 6.04, "type": "message", "role": "assistant", "text": "Hi! This is the echo test. Say something and I'll repeat it.", "interrupted": false, "metrics": null}
+{"t": 6.041, "type": "agent_state", "old": "speaking", "new": "listening"}
+{"t": 7.3, "type": "user_state", "old": "listening", "new": "speaking"}
+{"t": 9.9, "type": "user_state", "old": "speaking", "new": "listening"}
+{"t": 10.05, "type": "user_transcript", "text": "Testing one two three. Can you hear me?"}
+{"t": 10.61, "type": "message", "role": "user", "text": "Testing one two three. Can you hear me?", "interrupted": false, "metrics": null}
+{"t": 10.611, "type": "agent_state", "old": "listening", "new": "thinking"}
+{"t": 11.4, "type": "agent_state", "old": "thinking", "new": "speaking"}
+{"t": 14.77, "type": "message", "role": "assistant", "text": "You said: Testing one two three. Can you hear me?", "interrupted": false, "metrics": null}
+{"t": 14.771, "type": "agent_state", "old": "speaking", "new": "listening"}
+{"t": 19.3, "type": "session_closed", "reason": "CloseReason.PARTICIPANT_DISCONNECTED"}
+{"t": 21.02, "type": "call_ended", "user_audio_skipped_frames": 0, "ai_audio_skipped_frames": 0}
