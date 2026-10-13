@@ -60,8 +60,10 @@ def test_models_that_fail_with_the_code_interpreter_get_no_code_interpreter():
     assert [t["name"] for t in d["tools"]] == list(INLINE_FUNCTIONS)
     prompt = d["systemPrompt"][0]["text"]
     assert "code interpreter" not in prompt and "Work out calculations step by step" in prompt
-    nova = harness_definition("arn:aws:iam::123456789012:role/bee-call-worker", "global.amazon.nova-2-lite-v1:0")
-    assert "Use the code interpreter" in nova["systemPrompt"][0]["text"]
+    for model in ("global.amazon.nova-2-lite-v1:0", "zai.glm-5"):
+        other = harness_definition("arn:aws:iam::123456789012:role/bee-call-worker", model)
+        assert "Use the code interpreter" in other["systemPrompt"][0]["text"], model
+        assert other["tools"][-1]["name"] == "code_interpreter", model
 
 
 def test_read_round_keeps_only_inline_calls_still_waiting():

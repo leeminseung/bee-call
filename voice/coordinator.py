@@ -36,8 +36,8 @@ and keep the conversation going while it runs.
 8. Save things to Bee (facts, todos) only after the user has said yes out loud.
 9. When the user says goodbye or that they are done, say a short goodbye and call end_call.
 
-Notes from the app arrive as system messages or as text in parentheses in a user turn, such as \
-"(The phone call has connected.)": the call context (who called and why, and what Bee knows), what the user can \
+Notes from the app arrive as system messages, as <instructions> blocks in a user turn, or as text in \
+parentheses in a user turn, such as "(The phone call has connected.)": the call context (who called and why, and what Bee knows), what the user can \
 see on screen, finished jobs and tool results, and how much of your last reply the user actually heard. They \
 come from the app, not from the user. Use them, but never read them out word for word.
 Bring up things from the call context only when they connect to what the user is talking about, or once the \
@@ -58,7 +58,7 @@ BEE_SEARCH_TIMEOUT_S = 4.0
 
 class Coordinator(Agent):
     def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *,
-                 notes_as_user: bool = False, now: datetime | None = None) -> None:
+                 now: datetime | None = None) -> None:
         # The date goes into the instructions once, at call start: they must not change during a
         # call (Claude checks its earlier thinking against them).
         super().__init__(instructions=INSTRUCTIONS + f"\nIt is now {now_text(now)}. Use this for words like "
@@ -66,20 +66,15 @@ class Coordinator(Agent):
         self._recorder = recorder
         self._jobs = jobs
         self._workspace = workspace
-        # LiveKit's Bedrock Converse plugin moves every system message to the top of the request, so a
-        # note added mid-call reaches other models out of turn order (a finished job was answered as
-        # if the user's last question were new, 2026-10-13). They get notes as a user turn instead.
-        self._notes_as_user = notes_as_user
         self.context_task: asyncio.Task | None = None  # reads the Bee context at call start
         self.context_note: llm.ChatMessage | None = None  # the Bee context note, once added
 
     async def add_note(self, note: str) -> None:
-        """Adds an app note to the conversation, where the model will read it in turn order."""
+        """Adds an app note to the conversation in turn order. The Claude adapter sends it as a system
+        message after the next user message; for other models LiveKit's provider format keeps it in place
+        as a user turn wrapped in <instructions> tags (convert_mid_conversation_instructions)."""
         chat_ctx = self.chat_ctx.copy()
-        if self._notes_as_user:
-            chat_ctx.add_message(role="user", content=f"({note})")
-        else:
-            chat_ctx.add_message(role="system", content=note)
+        chat_ctx.add_message(role="system", content=note)
         await self.update_chat_ctx(chat_ctx)
 
     async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:

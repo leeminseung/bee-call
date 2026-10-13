@@ -11,8 +11,8 @@ Inline functions (run here, on this Mac):
   web_search(question)                 Nova Web Grounding (us-east-1): an answer with sources
   save_file(name, content)             a text result file in the job folder (report.md, a CSV table)
   save_chart(name, title, kind, ...)   a chart from numbers; this Mac draws it as SVG (worker/chart.py)
-Built-in tool (run by AWS): AgentCore Code Interpreter, for calculations, only for models that
-work with it (CODE_INTERPRETER_PROVIDERS).
+Built-in tool (run by AWS): AgentCore Code Interpreter, for calculations, except for models that
+fail with it (NO_CODE_INTERPRETER).
 
 The job folder stays on this Mac, with one writer per file: the agent writes into it
 only through save_file. The harness itself is created by scripts/deploy_worker.py.
@@ -48,8 +48,8 @@ STATE_FILE = Path("workspace") / "state" / "harness.json"  # written by scripts/
 DEFAULT_MODEL = os.environ.get("WORKER_MODEL", "global.moonshotai.kimi-k3")
 # Kimi K3 in the harness fails on its first model call ("The task request was rejected by the
 # target") when the built-in code interpreter is attached, and works without it (2026-10-12).
-# Nova 2 Lite works with it. Claude is untested (blocked) and kept on the list for the product plan.
-CODE_INTERPRETER_PROVIDERS = ("amazon.", "anthropic.")
+# Nova 2 Lite (2026-10-12) and GLM 5 (2026-10-13) work with it. Claude is untested (blocked).
+NO_CODE_INTERPRETER = ("moonshotai.kimi-k3",)
 REGION_PREFIXES = ("global.", "us.", "eu.", "au.", "apac.", "jp.")
 MAX_ROUNDS = 40  # inline-function round trips per job (arbitrary)
 MAX_FILE_BYTES = 5_000_000
@@ -123,7 +123,7 @@ def uses_code_interpreter(model_id: str) -> bool:
         if model_id.startswith(prefix):
             model_id = model_id[len(prefix):]
             break
-    return model_id.startswith(CODE_INTERPRETER_PROVIDERS)
+    return not model_id.startswith(NO_CODE_INTERPRETER)
 
 
 def system_prompt(code_interpreter: bool) -> str:

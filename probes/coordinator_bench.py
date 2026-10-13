@@ -116,7 +116,7 @@ async def run_once(model_id: str, workspace: Path) -> list[dict]:
     requests: list[dict] = []
     model.on("metrics_collected", lambda m: requests.append(
         {"ttft": m.ttft, "duration": m.duration, "in": m.prompt_tokens, "out": m.completion_tokens}))
-    agent = BenchCoordinator(CallRecorder(workspace, room="bench"), StubJobs(), workspace, notes_as_user=True)
+    agent = BenchCoordinator(CallRecorder(workspace, room="bench"), StubJobs(), workspace)
     results = []
     async with AgentSession(llm=model) as session:
         await session.start(agent)

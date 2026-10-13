@@ -17,18 +17,23 @@ def test_now_text_reads_like_a_spoken_date():
     assert now_text(when.replace(hour=13)).endswith("1:05 PM (Asia/Seoul)")
 
 
-def test_notes_are_user_turns_for_converse_models_and_system_messages_for_claude(tmp_path):
+def test_notes_stay_in_turn_order_for_converse_models(tmp_path):
+    """LiveKit keeps a mid-call system note in place as an <instructions> user turn for Bedrock models."""
     when = datetime(2026, 10, 13, 16, 40, tzinfo=ZoneInfo("Asia/Seoul"))
 
-    async def notes(as_user: bool):
-        agent = Coordinator(CallRecorder(tmp_path, room=f"r{as_user}"), SimpleNamespace(), tmp_path,
-                            notes_as_user=as_user, now=when)
+    async def main():
+        agent = Coordinator(CallRecorder(tmp_path, room="r"), SimpleNamespace(), tmp_path, now=when)
+        chat = agent.chat_ctx.copy()
+        chat.add_message(role="assistant", content="Hi, it's Bee Call. What's on your mind?")
+        chat.add_message(role="user", content="Can you check the weather?")
+        await agent.update_chat_ctx(chat)
         await agent.add_note("Note from the app: background job 01 finished. Result: dry.")
         return agent
 
-    converse = asyncio.run(notes(True))
-    last = converse.chat_ctx.items[-1]
-    assert last.role == "user" and last.text_content == "(Note from the app: background job 01 finished. Result: dry.)"
-    claude = asyncio.run(notes(False))
-    assert claude.chat_ctx.items[-1].role == "system"
-    assert "It is now Tuesday, October 13, 2026, 4:40 PM (Asia/Seoul)." in claude.instructions
+    agent = asyncio.run(main())
+    assert "It is now Tuesday, October 13, 2026, 4:40 PM (Asia/Seoul)." in agent.instructions
+    messages, extra = agent.chat_ctx.to_provider_format(format="aws")
+    assert not any("job 01" in s for s in extra.system_messages)  # not moved to the top
+    last = messages[-1]
+    assert last["role"] == "user" and last["content"][0]["text"] == "Can you check the weather?"
+    assert "<instructions>" in last["content"][1]["text"] and "job 01 finished" in last["content"][1]["text"]

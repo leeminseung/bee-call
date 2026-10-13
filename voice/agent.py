@@ -256,7 +256,7 @@ async def entrypoint(ctx: JobContext) -> None:
     # Wake a cloud worker session now, so the first job does not wait for one to start.
     keep_warm = asyncio.create_task(backend.keep_warm()) if isinstance(backend, HarnessWorker) else None
     jobs = JobRunner(rec.dir, rec.event, backend, relay)
-    agent = Coordinator(rec, jobs, WORKSPACE, notes_as_user=COORDINATOR_LLM not in ("claude", "fake"))
+    agent = Coordinator(rec, jobs, WORKSPACE)
 
     async def shutdown() -> None:
         if keep_warm:
