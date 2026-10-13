@@ -98,9 +98,33 @@
     let args = {};
     try { args = JSON.parse(read.slice(space + 1)) || {}; } catch (e) { /* no arguments to show */ }
     if (name === "search_bee") return `Searched for “${args.query || "…"}”`;
-    if (name === "bee_conversation") return `Read a conversation in full (#${args.conversation_id ?? "?"})`;
+    if (name === "bee_conversation") return "Read a conversation in full";
     if (name === "bee_day") return `Read the day summary for ${args.date || "a day"}`;
     return humanize(name);
+  }
+
+  // The prep note keeps Bee's ids for the AI ("(conversation 10785664)", "todo suggestion 11628862"); people
+  // do not need them, so the page leaves them out. The note itself is unchanged.
+  const ID_WORDS = "convs?|conversations?|todos?|todo suggestions?|suggestions?|facts?|unconfirmed facts?|ids?";
+  const ID_GROUP = new RegExp(`\\s*\\((?:(?:${ID_WORDS})\\.?\\s*)?#?\\d{4,}(?:\\s*(?:,|and|&)\\s*#?\\d{4,})*\\)`, "gi");
+  const ID_AFTER_WORD = new RegExp(`\\b(${ID_WORDS})\\s+#?\\d{4,}\\b`, "gi");
+  function withoutIds(text) {
+    return String(text || "")
+      .replace(ID_GROUP, "")
+      .replace(ID_AFTER_WORD, "$1")
+      .replace(/(^|\s)#\d{4,}\b/g, "$1")
+      .replace(/[ \t]+([,.;:])/g, "$1")
+      .replace(/[ \t]{2,}/g, " ");
+  }
+
+  const INTERNAL_FILES = new Set(["usage.json"]); // the worker's own bookkeeping, shown only with debug events
+
+  // What an error means for the person on the call; the raw text stays one tap away.
+  function errorText(ev) {
+    const source = String(ev.source || "");
+    if (source === "bee_context") return "Some of your Bee data could not be read before the call.";
+    if (source.startsWith("handler:")) return null; // the page's own bookkeeping: debug events only
+    return "Something went wrong during the call.";
   }
 
   function speakerName(speaker) {
@@ -504,11 +528,19 @@
     }
 
     addError(ev, t) {
+      const plain = errorText(ev);
+      if (!this.debug && !plain) return;
       const row = el("li", "row error");
       const source = ev.source && ev.source !== "NoneType" ? `${humanize(ev.source)}: ` : "";
-      const text = el("span", "row-text", `${source}${ev.error || "something went wrong"}`);
-      text.title = "Tap to show the whole error";
-      text.addEventListener("click", () => text.classList.toggle("open")); // long errors start clamped
+      const raw = `${source}${ev.error || "something went wrong"}`;
+      const text = el("span", "row-text", this.debug ? raw : plain);
+      if (!this.debug) {
+        text.title = "Tap to show what went wrong";
+        text.addEventListener("click", () => { text.textContent = text.textContent === plain ? raw : plain; });
+      } else {
+        text.title = "Tap to show the whole error";
+        text.addEventListener("click", () => text.classList.toggle("open")); // long errors start clamped
+      }
       row.append(icon("alert"), text, el("span", "row-time", clock(t)));
       this.add(row);
     }
@@ -607,7 +639,7 @@
       card.append(head);
       const note = typeof ev.note === "string" ? ev.note.trim() : "";
       if (note) {
-        card.append(el("p", "prep-note", note));
+        card.append(el("p", "prep-note", withoutIds(note)));
       } else {
         const why = ev.error ? ` (${ev.error})` : "";
         card.append(el("p", "card-note", `No prep note${why}, so the call started with the plain Bee context.`));
@@ -615,7 +647,9 @@
       const reads = Array.isArray(ev.reads) ? ev.reads.map(readLabel).filter(Boolean) : [];
       if (reads.length) {
         const list = el("ul", "prep-reads");
-        for (const read of reads) list.append(el("li", null, read));
+        const counts = new Map();
+        for (const read of reads) counts.set(read, (counts.get(read) || 0) + 1);
+        for (const [read, n] of counts) list.append(el("li", null, n > 1 ? `${read} (${n} times)` : read));
         card.append(el("p", "quotes-label", "Looked up in Bee"), list);
       }
       card.append(el("p", "card-note", this.prepWhen(ev)));
@@ -713,6 +747,7 @@
         if (typeof path !== "string" || !path) continue;
         const url = fileUrl(this.id, path);
         const name = path.split("/").pop();
+        if (INTERNAL_FILES.has(name) && !this.debug) continue;
         if (IMAGE_RE.test(name)) {
           const link = el("a", "thumb");
           link.href = url;

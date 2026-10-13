@@ -3,7 +3,7 @@
 English is the default and the language of the demo; Korean is for trying real situations in the user's own
 language. The language sets what Amazon Transcribe listens for, Amazon Polly's voice, the language the
 coordinator speaks (one rule added to its instructions; the rest of the instructions stay in English), the
-prep's opening line, and the fallback greetings. LiveKit's turn detector follows the transcript's language.
+prep's opening line, the fallback greetings, and the voice (voice/voices.py). LiveKit's turn detector follows the transcript's language.
 One call is in one language: Transcribe listens for one language per stream.
 """
 
@@ -21,6 +21,7 @@ class CallLanguage:
     opening: str  # how the prep's opening line should sound (voice/prep.py)
     rule: str = ""  # added to the coordinator's instructions
     greetings: dict[str, str] = field(default_factory=dict)
+    elevenlabs_voice: str = ""  # an ElevenLabs voice id for TTS=elevenlabs (voice/voices.py)
 
 
 LANGUAGES = {

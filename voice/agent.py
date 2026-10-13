@@ -50,6 +50,7 @@ from voice.language import call_language
 from voice.prep import INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_model
 from voice.recorder import CallRecorder
 from voice.ringback import STATE_ATTRIBUTE, ring_back
+from voice.voices import make_tts, voice_choice
 from worker.fake import FakeWorker
 from worker.harness import HarnessWorker
 from worker.runner import JobNotification, JobRunner
@@ -60,7 +61,7 @@ PROFILE = os.environ.get("AWS_PROFILE", "bee-call")
 REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", REGION)
 LANGUAGE = call_language()  # CALL_LANGUAGE: en (default) or ko, see voice/language.py
-VOICE = os.environ.get("POLLY_VOICE") or LANGUAGE.voice
+VOICE = voice_choice(LANGUAGE)  # TTS: polly (default) or elevenlabs, see voice/voices.py
 COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
 # For COORDINATOR_LLM=bedrock. GLM 5 speaks while it calls a tool. MiniMax M2.5 scored best in
 # probes/coordinator_bench.py (2026-10-12) but calls tools without a word, and in the first real
@@ -284,7 +285,7 @@ async def entrypoint(ctx: JobContext) -> None:
         inputs = ready.result()
         prep = preparation.prep
     rec = CallRecorder(WORKSPACE, ctx.job.room.name)
-    rec.event("coordinator", llm=COORDINATOR_LLM, language=LANGUAGE.code)
+    rec.event("coordinator", llm=COORDINATOR_LLM, language=LANGUAGE.code, voice=VOICE.describe())
     rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"))
 
     def keep_inputs(got: CallInputs) -> None:
@@ -324,7 +325,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         stt=aws.STT(region=REGION, language=LANGUAGE.transcribe, credentials=ctx.proc.userdata["transcribe_credentials"]),
         llm=make_llm(rec),
-        tts=aws.TTS(voice=VOICE, speech_engine=LANGUAGE.engine, region=REGION),
+        tts=make_tts(VOICE, LANGUAGE, REGION),
         vad=ctx.proc.userdata["vad"],
         turn_handling={"turn_detection": inference.TurnDetector()},
     )

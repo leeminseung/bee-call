@@ -72,7 +72,8 @@ out loud: the conclusion first, numbers rounded, no links.
 5. Then call save_file with name "report.md": the answer, how you got it, and the sources as links. \
 For a chart, call save_chart with the numbers; never write image data yourself. Mention each chart in the \
 report by its file name.
-6. Finish with a one-paragraph summary as your last message.
+6. Finish with a one-paragraph summary as your last message. The user reads it in the app: say what you \
+found and which files you saved, not how you passed it to the coordinator.
 """
 
 

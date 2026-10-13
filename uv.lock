@@ -343,6 +343,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "httpx", extra = ["http2"] },
     { name = "livekit-agents", extra = ["aws", "silero", "turn-detector"] },
+    { name = "livekit-plugins-elevenlabs" },
     { name = "python-dotenv" },
 ]
 
@@ -358,6 +359,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=50.0.2" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.1" },
     { name = "livekit-agents", extras = ["aws", "silero", "turn-detector"], specifier = "==1.8.6" },
+    { name = "livekit-plugins-elevenlabs", specifier = "==1.8.6" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
 ]
 
@@ -1238,6 +1240,9 @@ wheels = [
 aws = [
     { name = "livekit-plugins-aws" },
 ]
+codecs = [
+    { name = "numpy" },
+]
 silero = [
     { name = "livekit-plugins-silero" },
 ]
@@ -1313,6 +1318,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f3/c3/6e0ff67e4e21d8a064ecd03dc9a585c9195bd2e5eae6f330691902c0c2bf/livekit_plugins_aws-1.8.6.tar.gz", hash = "sha256:cc5cb86e95c81d95217bd7aa7f52223f38c948fedc69da9c7bc03d3265f5240a", size = 50427, upload-time = "2026-10-09T22:12:25.941Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/12/a8/f7a76838cd7804d6f8373ae8ea0e2b7aa5fb87662ea368834d0894e0955b/livekit_plugins_aws-1.8.6-py3-none-any.whl", hash = "sha256:31b79465dfc13ff454825a6f980533867d65f9efb9715c5ff5f2d9ca05b3c6b1", size = 56167, upload-time = "2026-10-09T22:12:24.601Z" },
+]
+
+[[package]]
+name = "livekit-plugins-elevenlabs"
+version = "1.8.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/e3/edcec7849022e80de3ecf86f35e3ca2518383ebf0dae39d1777bfb15df7c/livekit_plugins_elevenlabs-1.8.6.tar.gz", hash = "sha256:95ff2198248a76d343be7305ecddb9c88e43a831978a5c1579b5fb7843e51fd4", size = 24466, upload-time = "2026-10-09T22:13:00.43Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/79/6a/8f4cd36c392710d5f618db046d25557f290fff0e114bad1f929b5c0d9a29/livekit_plugins_elevenlabs-1.8.6-py3-none-any.whl", hash = "sha256:d3c54b792e582bda5855389e09eff8c408a6a487f9a7c461f0b0547aa12de6b0", size = 26302, upload-time = "2026-10-09T22:12:59.029Z" },
 ]
 
 [[package]]
