@@ -126,11 +126,13 @@ def test_parse_stream_line():
 def test_context_saves_inputs_and_card(tmp_path, fake_bee):
     session = tmp_path / "workspace" / "2026-10-12" / "1530"
     session.mkdir(parents=True)
-    saved = asyncio.run(context.save_call_inputs(session, conversation_ids=[5]))
-    card = saved["card"]
-    assert saved["facts"][0]["id"] == 7 and saved["suggestions"][0]["id"] == 34
+    inputs = asyncio.run(context.fetch_call_inputs(conversation_ids=[5]))
+    assert inputs.errors == [] and inputs.first_name == "Matt" and inputs.today["activeTodos"][0]["id"] == 51
+    assert inputs.facts[0]["id"] == 7 and inputs.suggestions[0]["id"] == 34 and [c["id"] for c in inputs.recent] == [5, 4]
+    card = context.save_call_inputs(session, inputs)
     names = sorted(p.name for p in (session / "inputs").iterdir())
-    assert names == ["conversation-5.json", "todo_suggestions.json", "transcript-5.json", "unconfirmed_facts.json"]
+    assert names == ["conversation-5.json", "recent_conversations.json", "today.json", "todo_suggestions.json",
+                     "transcript-5.json", "unconfirmed_facts.json"]
     assert card["conversation_id"] == 5 and card["summary"] == "Talked through a job offer"
     assert card["pending_fact_ids"] == [7]
     assert card["utterances"][0]["text"] == "They offered 15 percent bonus."

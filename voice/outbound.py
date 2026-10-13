@@ -7,6 +7,9 @@ Run next to the voice server:
 
 The planner is the rule-based stand-in (beelink/planner.py) until Claude makes this
 decision. Each decision is written to plan.md in the inbox folder, call or not.
+Before the phone rings, the coordinator's model reads Bee and writes its call prep note
+(voice/prep.py), with the model the voice server uses: set COORDINATOR_LLM and
+COORDINATOR_MODEL the same way for both (GLM 5 when unset).
 """
 
 import argparse
@@ -22,6 +25,7 @@ from dotenv import load_dotenv
 from beelink.planner import COOLDOWN, MAX_AGE, RulePlanner
 from beelink.watcher import BeeWatcher, Trigger
 from voice.dispatch import place_call
+from voice.prep import prepare_outbound
 
 load_dotenv(".env.local")
 log = logging.getLogger("bee-call.outbound")
@@ -33,7 +37,10 @@ async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool) -> str |
     print(f"plan: {'CALL' if plan.call else 'no call'} - {plan.reason} ({plan.path})", flush=True)
     if not plan.call or dry_run:
         return None
-    room = await place_call(plan, planner.workspace)
+    prep = await prepare_outbound(plan)
+    print(f"prepared in {prep.seconds} s: " + (f"opening {prep.opening!r}" if prep.note else f"no note ({prep.error})"),
+          flush=True)
+    room = await place_call(plan, planner.workspace, prep=prep.to_meta())
     print(f"calling: room {room}", flush=True)
     return room
 

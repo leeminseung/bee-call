@@ -13,9 +13,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+from beelink.context import CallInputs
 from beelink.planner import OUTBOUND_LOG, RulePlanner
 from voice import agent
 from voice.dispatch import AGENT_NAME, place_call
+from voice.prep import Prep, call_brief
 from voice.outbound import saved_trigger
 from voice.token_server import make_token, recent_calls
 
@@ -99,13 +101,14 @@ def test_place_call_opens_a_room_with_the_voice_server_and_records_the_ring(tmp_
     workspace = tmp_path / "workspace"
     plan = RulePlanner(workspace).decide(saved_trigger(inbox(tmp_path)))
     lk = SimpleNamespace(room=SimpleNamespace(create_room=create_room))
-    room = asyncio.run(place_call(plan, workspace, lk))
+    prep = Prep(note="Matt planned a hike with Dana.", opening="Hi Matt, it's Bee Call. Got a minute about Saturday?")
+    room = asyncio.run(place_call(plan, workspace, lk, prep=prep.to_meta()))
     (request,) = requests
     assert request.name == room and room.startswith("call-")
     assert [a.agent_name for a in request.agents] == [AGENT_NAME]
     meta = json.loads(request.agents[0].metadata)
     assert meta["direction"] == "outbound" and meta["topic"] == plan.topic and meta["conversation_ids"] == [5121]
-    assert meta["kind"] == "conversation"
+    assert meta["kind"] == "conversation" and Prep.from_meta(meta["prep"]) == prep
     ring = json.loads((workspace / OUTBOUND_LOG).read_text().splitlines()[-1])
     assert ring["room"] == room and ring["topic"] == plan.topic
     assert (datetime.fromisoformat(ring["expires_at"]) - datetime.fromisoformat(ring["at"])).total_seconds() == 60
@@ -143,9 +146,8 @@ def test_voice_server_greets_and_briefs_by_who_called(monkeypatch):
     note = agent.call_meta('{"direction": "outbound", "kind": "voice note"}')
     assert agent.greeting(note) == "Hi, it's Bee Call. I'm calling about your new voice note. Do you have a minute?"
     assert agent.call_meta("not json") == {}
-    saved = {"card": {"summary": None, "conversation_id": None}, "facts": [], "suggestions": []}
-    note = agent.bee_note(saved, out)
-    assert note.startswith("Note from the app, call context:") and "You placed this call. Why: A Bee conversation" in note
+    brief = call_brief(CallInputs(facts=[{"id": 7, "text": "Bonus is 15%"}]), out)
+    assert brief == "You placed this call. Why: A Bee conversation just ended.\nUnconfirmed Bee fact (id 7): Bonus is 15%"
 
 
 def test_answering_a_call_that_already_ended_is_refused(tmp_path):

@@ -3,7 +3,7 @@
 The voice server registers as the agent named AGENT_NAME and joins only the rooms
 it is dispatched to. The dispatch metadata tells it which way the call goes and,
 for an AI-initiated call, why: the plan, the Bee inbox and the conversation ids,
-so the call opens with that context.
+and the call prep note written before the phone rang (voice/prep.py).
 
 Ringing the phone is a separate step. Until VoIP push is set up (it needs the paid
 Apple Developer account), an app that is open hears about a new call from the
@@ -24,12 +24,14 @@ AGENT_NAME = "bee-call"
 RING_SECONDS = 60  # how long the voice server waits for the phone to answer (arbitrary)
 
 
-def call_metadata(direction: str, plan: Plan | None = None) -> str:
+def call_metadata(direction: str, plan: Plan | None = None, prep: dict[str, Any] | None = None) -> str:
     data: dict[str, Any] = {"direction": direction}
     if plan is not None:
         data.update({"inbox": str(plan.inbox_dir), "plan": str(plan.path) if plan.path else None,
                      "conversation_ids": plan.conversation_ids, "reason": plan.reason, "topic": plan.topic,
                      "kind": plan.kind})
+    if prep is not None:
+        data["prep"] = prep
     return json.dumps(data, ensure_ascii=False)
 
 
@@ -39,13 +41,15 @@ def room_with_agent(room: str, metadata: str, ring_seconds: int = RING_SECONDS) 
                                  agents=[api.RoomAgentDispatch(agent_name=AGENT_NAME, metadata=metadata)])
 
 
-async def place_call(plan: Plan, workspace: Path, lk: api.LiveKitAPI | None = None) -> str:
-    """Opens the room for an AI-initiated call and records it for the ring. Returns the room name."""
+async def place_call(plan: Plan, workspace: Path, lk: api.LiveKitAPI | None = None,
+                     prep: dict[str, Any] | None = None) -> str:
+    """Opens the room for an AI-initiated call and records it for the ring. Returns the room name.
+    `prep` is the call prep note (voice/prep.py Prep.to_meta()), made before this call."""
     room = f"call-{datetime.now():%Y%m%d-%H%M%S}"
     own = lk is None
     lk = lk or api.LiveKitAPI()  # LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET from the environment
     try:
-        await lk.room.create_room(room_with_agent(room, call_metadata("outbound", plan)))
+        await lk.room.create_room(room_with_agent(room, call_metadata("outbound", plan, prep)))
     finally:
         if own:
             await lk.aclose()

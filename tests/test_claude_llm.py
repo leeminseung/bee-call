@@ -211,6 +211,31 @@ def test_preemptive_reply_that_livekit_drops_leaves_no_trace():
     asyncio.run(main())
 
 
+def test_system_prompt_follows_the_instructions_until_the_first_reply_is_committed():
+    """The call prep note can land in the instructions after an early reply LiveKit threw away (voice/prep.py)."""
+    async def main():
+        client = FakeAnthropic([say("Hi!"), say("Hello again."), say("Sure.")])
+        model = ClaudeBedrockLLM(client=client)
+        early = new_ctx()
+        early.add_message(role="user", content="Hey")
+        dropped = FakeSpeech(scheduled=False)
+        await run_turn(model, early, speech=dropped)
+        dropped._done = True
+        ctx = new_ctx()
+        ctx.items[0] = llm.ChatMessage(id=INSTRUCTIONS_ID, role="system", content=["You are Bee Call. Prep note."])
+        ctx.add_message(role="user", content="Hey there.")
+        chunks = await run_turn(model, ctx, speech=FakeSpeech())
+        spoken(ctx, chunks)
+        ctx.items[0] = llm.ChatMessage(id=INSTRUCTIONS_ID, role="system", content=["Changed after the first reply."])
+        ctx.add_message(role="user", content="Can you help?")
+        await run_turn(model, ctx, speech=FakeSpeech())
+        systems = [call["system"][0]["text"] for call in client.calls]
+        assert systems == ["You are Bee Call.", "You are Bee Call. Prep note.", "You are Bee Call. Prep note."]
+        assert client.problems == []
+
+    asyncio.run(main())
+
+
 def test_reply_the_caller_never_heard_gets_a_note():
     async def main():
         client = FakeAnthropic([say("Let me think about your options here."), say("Sorry, go ahead.")])

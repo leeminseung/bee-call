@@ -13,8 +13,13 @@ struct Caption: Identifiable {
 /// The LiveKit side of a call: room token, room, microphone, captions.
 @Observable
 final class LiveKitClient: NSObject {
+    /// The voice server sets this attribute to "answered" when the AI picks up. Until then a call the user
+    /// started hears ringing from the voice server while the AI reads the user's Bee data.
+    nonisolated static let stateAttribute = "bee_call.state"
+
     private(set) var captions: [Caption] = []
     @ObservationIgnored var onUnexpectedDisconnect: (() -> Void)?
+    @ObservationIgnored var onAgentAnswered: (() -> Void)?
     @ObservationIgnored private var room: Room?
     @ObservationIgnored private var microphoneOn = true // a mute that arrives before the mic is published
 
@@ -54,6 +59,9 @@ final class LiveKitClient: NSObject {
         try Task.checkCancellation() // the call ended while we got the room ready
         try await room.connect(url: access.url, token: access.token)
         try await room.localParticipant.setMicrophone(enabled: microphoneOn)
+        if room.remoteParticipants.values.contains(where: { $0.attributes[Self.stateAttribute] == "answered" }) {
+            onAgentAnswered?() // the AI picked up before we finished joining (its own call, already answered)
+        }
         return access.room
     }
 
@@ -131,6 +139,14 @@ extension LiveKitClient: RoomDelegate {
             guard room === self.room else { return } // we left on purpose
             self.room = nil
             self.onUnexpectedDisconnect?()
+        }
+    }
+
+    nonisolated func room(_ room: Room, participant: Participant, didUpdateAttributes attributes: [String: String]) {
+        guard participant is RemoteParticipant, participant.attributes[Self.stateAttribute] == "answered" else { return }
+        Task { @MainActor in
+            guard room === self.room else { return } // a late update from an earlier call
+            self.onAgentAnswered?()
         }
     }
 }

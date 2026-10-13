@@ -24,6 +24,23 @@ if cmd[:2] == ["conversations", "transcript"]:
     out({"conversationId": int(cmd[2]), "transcript": [
         {"spoken_at": now_ms - 60000, "speaker": "me", "text": "They offered 15 percent bonus."},
         {"spoken_at": now_ms - 30000, "speaker": "speaker_1", "text": "That sounds good."}]})
+if cmd[:2] == ["today", "--context"]:
+    out({"date": "2026-10-13", "todayBrief": {"calendar_events": [{"title": "Team offsite planning"}], "emails": [],
+                                              "timezone": "Asia/Seoul"},
+         "dailySummary": "Spent the morning on offer emails.", "activeTodos": [{"id": 51, "text": "Reply to the recruiter"}],
+         "recentNotes": [], "recentConversations": [{"id": 5, "start_time": now_ms - 3600000,
+                                                     "short_summary": "Talked through a job offer", "utterances_count": 40}]})
+if cmd[:2] == ["conversations", "list"]:
+    out({"conversations": [{"id": 5, "start_time": now_ms - 3600000, "short_summary": "Talked through a job offer",
+                            "utterances_count": 40},
+                           {"id": 4, "start_time": now_ms - 86400000, "short_summary": "Planned a Saturday hike with Dana",
+                            "utterances_count": 12}], "next_cursor": None, "timezone": "Asia/Seoul"})
+if cmd[:1] == ["me"]:
+    out({"id": 1, "first_name": "Matt", "last_name": "Lee", "timezone": "Asia/Seoul"})
+if cmd[:2] == ["daily", "find"]:
+    out({"daily_summary": {"id": 3, "summary": "Hiked with Dana in the morning, then worked on slides."}})
+if cmd[:1] == ["search"]:
+    out({"results": [{"conversation_id": 4, "short_summary": "Planned a Saturday hike with Dana"}]})
 if cmd[:2] == ["facts", "confirm"]:
     out({"fact": {"id": int(cmd[2]), "confirmed": True}})
 if cmd[:2] == ["facts", "update"]:

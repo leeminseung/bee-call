@@ -16,7 +16,10 @@ History rules (one adapter instance per call):
 - The agent instructions become the fixed system prompt, and the first tool
   list is sent with every request; neither changes during a call, because both
   are part of what each thinking block is checked against. Tool use is turned
-  off with tool_choice "none", never by leaving the tools out.
+  off with tool_choice "none", never by leaving the tools out. Until the first
+  reply is committed nothing has been checked against the system prompt, so it
+  follows the instructions: the call prep note can land after an early reply
+  LiveKit threw away (voice/prep.py).
 - `history` holds committed messages and only grows. A reply is committed once
   LiveKit schedules it to be spoken. A preemptive reply LiveKit throws away
   (the caller kept adding words) is dropped together with the messages that led
@@ -247,7 +250,7 @@ class ClaudeBedrockLLM(llm.LLM):
                 continue
             kind = getattr(item, "type", None)
             if kind == "message" and item.id == INSTRUCTIONS_ID:
-                if self.system_prompt is None:
+                if self.system_prompt is None or not self.history:
                     self.system_prompt = item.text_content or ""
                 continue
             draft.item_ids.add(item.id)

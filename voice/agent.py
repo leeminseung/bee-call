@@ -31,6 +31,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 import boto3
@@ -39,13 +40,15 @@ from livekit.agents import AgentServer, AgentSession, JobContext, JobProcess, cl
 from livekit.plugins import aws, silero
 from livekit.plugins.aws.stt import Credentials
 
-from beelink.context import save_call_inputs
+from beelink.context import fetch_call_inputs, save_call_inputs
 from voice.claude_llm import ClaudeBedrockLLM
 from voice.coordinator import Coordinator
 from voice.dispatch import AGENT_NAME, RING_SECONDS
 from voice.echo_llm import EchoLLM
 from voice.fake_claude import FakeAnthropic
+from voice.prep import INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_model
 from voice.recorder import CallRecorder
+from voice.ringback import STATE_ATTRIBUTE, ring_back
 from worker.fake import FakeWorker
 from worker.harness import HarnessWorker
 from worker.runner import JobNotification, JobRunner
@@ -62,6 +65,7 @@ COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
 # call (2026-10-13) the caller heard silence for 23-28 s whenever they kept talking meanwhile.
 COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "zai.glm-5")
 WORKER = os.environ.get("WORKER", "fake")
+FIRST_WORDS_WAIT_S = 6.0  # ringing stops when the AI starts to speak, or after this long anyway (arbitrary)
 WORKSPACE = Path("workspace")
 
 log = logging.getLogger("bee-call")
@@ -186,23 +190,6 @@ def greeting(meta: dict) -> str:
     return "Hi, it's Bee Call. What's on your mind?"
 
 
-def bee_note(saved: dict, meta: dict | None = None) -> str | None:
-    lines = []
-    meta = meta or {}
-    if meta.get("direction") == "outbound":
-        lines.append(f"You placed this call. Why: {meta.get('reason') or "to talk through the user's day"}")
-    elif meta.get("direction") == "inbound":
-        lines.append("The user called you from the app.")
-    card = saved["card"]
-    if card.get("summary"):
-        lines.append(f"Latest Bee conversation (id {card['conversation_id']}): {card['summary']}")
-    for fact in saved["facts"][:10]:
-        lines.append(f"Unconfirmed Bee fact (id {fact.get('id')}): {fact.get('text')}")
-    for sugg in saved["suggestions"][:10]:
-        lines.append(f"Bee todo suggestion (id {sugg.get('id')}): {sugg.get('text')}")
-    return "Note from the app, call context:\n" + "\n".join(lines) if lines else None
-
-
 def prewarm(proc: JobProcess) -> None:
     # Done once per worker process, before any call, so calls start without a stall.
     proc.userdata["vad"] = silero.VAD.load()
@@ -215,21 +202,65 @@ server = AgentServer(setup_fnc=prewarm, num_idle_processes=1)
 @server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext) -> None:
     meta = call_meta(ctx.job.metadata)
+    started = time.monotonic()
+    inbox = Path(meta["inbox"]) if meta.get("inbox") else None
+    conversation_ids = meta.get("conversation_ids") or []
+    backend = {"search": SearchWorker, "harness": HarnessWorker}.get(WORKER, FakeWorker)()
+    # Wake a cloud worker session now, so the first job does not wait for one to start.
+    keep_warm = asyncio.create_task(backend.keep_warm()) if isinstance(backend, HarnessWorker) else None
+    # Join the room at once: an AI call waits here for the phone, and a caller hears ringing from here.
+    await ctx.connect()
     if meta.get("direction") == "outbound":
-        # The AI placed this call: the room exists before the phone answers, so wait for it.
-        await ctx.connect()
+        # Prepared before the phone rang (voice/outbound.py). Bee is read again for the call's record meanwhile.
+        inputs_task = asyncio.create_task(fetch_call_inputs(inbox, conversation_ids))
         try:
             await asyncio.wait_for(ctx.wait_for_participant(), RING_SECONDS)
         except asyncio.TimeoutError:
             log.info("no answer within %ss in room %s", RING_SECONDS, ctx.room.name)
+            inputs_task.cancel()
+            if keep_warm:
+                keep_warm.cancel()
             try:
                 await ctx.delete_room()
             except Exception:
                 log.exception("could not close room %s", ctx.room.name)
             return
+        inputs = await inputs_task
+        prep = Prep.from_meta(meta.get("prep")) or Prep(error="the call was placed without a prep note")
+        preparation = ringing = None
+    else:
+        # The user called: they hear ringing while the AI reads Bee and starts its prep. It picks up as soon as
+        # its opening is written; the note usually follows during the opening (voice/prep.py).
+        ringing = asyncio.create_task(ring_back(ctx.room))
+
+        async def stop_ringing() -> None:  # if the call ends before the AI picks up
+            ringing.cancel()
+
+        ctx.add_shutdown_callback(stop_ringing)
+        inputs = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S)
+        preparation = Preparation(inputs, meta, prep_model(COORDINATOR_LLM)).start()
+        await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - started))
+        prep = preparation.prep
     rec = CallRecorder(WORKSPACE, ctx.job.room.name)
     rec.event("coordinator", llm=COORDINATOR_LLM)
     rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"))
+    card = save_call_inputs(rec.dir, inputs)
+    if card.get("conversation_id") or card.get("pending_fact_ids"):
+        rec.event("why_calling", **card)
+    if inputs.errors:
+        rec.event("error", source="bee_context", error="; ".join(inputs.errors))
+    rec.event("picked_up", after_s=round(time.monotonic() - started, 2), opening=prep.opening,
+              opening_s=prep.opening_s, note_ready=bool(prep.note))
+
+    async def record_prep() -> None:
+        if preparation is not None:
+            await preparation.done
+        rec.event("call_prep", seconds=prep.seconds, model=prep.model, reads=prep.reads, note=prep.note,
+                  opening=prep.opening, error=prep.error)
+        if prep.note:
+            (rec.dir / "prep.md").write_text(f"# Call prep note\n\n{prep.note}\n\nOpening: {prep.opening}\n")
+
+    prep_recorder = asyncio.create_task(record_prep())
     session = AgentSession(
         stt=aws.STT(region=REGION, language="en-US", credentials=ctx.proc.userdata["transcribe_credentials"]),
         llm=make_llm(rec),
@@ -247,15 +278,18 @@ async def entrypoint(ctx: JobContext) -> None:
         if await agent.tell_job(news):
             session.generate_reply()
 
-    backend = {"search": SearchWorker, "harness": HarnessWorker}.get(WORKER, FakeWorker)()
-    # Wake a cloud worker session now, so the first job does not wait for one to start.
-    keep_warm = asyncio.create_task(backend.keep_warm()) if isinstance(backend, HarnessWorker) else None
     jobs = JobRunner(rec.dir, rec.event, backend, notify)
-    agent = Coordinator(rec, jobs, WORKSPACE)
+    # Until (or without) a prep note, the plain Bee context. A note still being written replaces it when it
+    # arrives, up to the first reply.
+    pending = preparation.done if preparation is not None and not preparation.done.done() else None
+    agent = Coordinator(rec, jobs, WORKSPACE, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending)
 
     async def shutdown() -> None:
         if keep_warm:
             keep_warm.cancel()
+        if preparation is not None:
+            preparation.cancel()
+        await asyncio.gather(prep_recorder, return_exceptions=True)
         await jobs.cancel_all()
         if isinstance(session.llm, ClaudeBedrockLLM):
             session.llm.settle()  # a last reply may still be waiting to be committed
@@ -272,28 +306,23 @@ async def entrypoint(ctx: JobContext) -> None:
         # delete_room() schedules itself and returns a future; ending the room ends the phone call.
         ctx.delete_room()
 
-    async def load_bee_context() -> None:
-        try:
-            saved = await save_call_inputs(rec.dir, Path(meta["inbox"]) if meta.get("inbox") else None,
-                                           meta.get("conversation_ids") or [])
-        except Exception as exc:
-            rec.event("error", source="bee_context", error=str(exc))
-            return
-        card = saved["card"]
-        if card.get("conversation_id") or card.get("pending_fact_ids"):
-            rec.event("why_calling", **card)
-        note = bee_note(saved, meta)
-        if note and COORDINATOR_LLM != "echo":
-            chat_ctx = agent.chat_ctx.copy()
-            agent.context_note = chat_ctx.add_message(role="system", content=note)
-            await agent.update_chat_ctx(chat_ctx)
-
-    # Start reading Bee now; the coordinator waits a little for it before its first reply.
-    context_task = asyncio.create_task(load_bee_context())
-    if COORDINATOR_LLM != "echo":
-        agent.context_task = context_task
-    await session.start(room=ctx.room, agent=agent)
-    await session.say(greeting(meta))
+    first_words = asyncio.Event()
+    session.on("agent_state_changed", lambda ev: ev.new_state == "speaking" and first_words.set())
+    try:
+        await session.start(room=ctx.room, agent=agent)
+        session.say(prep.opening or greeting(meta))
+        if ringing is not None:  # ring on through the session start and the voice's first syllable
+            await asyncio.wait_for(first_words.wait(), FIRST_WORDS_WAIT_S)
+    except asyncio.TimeoutError:
+        log.warning("no first words within %ss in room %s", FIRST_WORDS_WAIT_S, ctx.room.name)
+    finally:
+        if ringing is not None:
+            ringing.cancel()
+            (rang,) = await asyncio.gather(ringing, return_exceptions=True)
+            if isinstance(rang, Exception):
+                log.error("ringback failed in room %s: %r", ctx.room.name, rang)
+    # The app shows a call the user started as connected from here.
+    await ctx.room.local_participant.set_attributes({STATE_ATTRIBUTE: "answered"})
 
 
 if __name__ == "__main__":

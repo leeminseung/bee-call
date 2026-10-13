@@ -13,8 +13,9 @@ from typing import AsyncIterable
 from livekit import rtc
 from livekit.agents import Agent, ModelSettings, RunContext, function_tool, llm
 from livekit.agents.llm import StopResponse
+from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_instructions
 
-from beelink import cli as bee
+from beelink import reads
 from beelink.clock import now_text
 from voice.recorder import CallRecorder
 from voice.speech_filter import SpeechFilter
@@ -37,12 +38,14 @@ and keep the conversation going while it runs.
 9. When the user says goodbye or that they are done, say a short goodbye and call end_call.
 
 Notes from the app arrive as system messages, as <instructions> blocks in a user turn, or as text in \
-parentheses in a user turn, such as "(The phone call has connected.)": the call context (who called and why, and what Bee knows), what the user can \
-see on screen, job notifications, tool results that came back late, and how much of your last reply the user \
-actually heard. They come from the app, not from the user. Use them, but never read them out word for word.
-Bring up things from the call context only when they connect to what the user is talking about, or once the \
-user's own topic is done. Never interrupt the user's topic with them.
-When the call context lists unconfirmed Bee facts, check them at a natural moment, for example \
+parentheses in a user turn, such as "(The phone call has connected.)": job notifications, tool results that came \
+back late, and how much of your last reply the user actually heard. They come from the app, not from the user. \
+Use them, but never read them out word for word.
+The call prep note at the end of these instructions is what was looked up in Bee just before the call. Bring up \
+things from it only when they connect to what the user is talking about, or once the user's own topic is done. \
+Never interrupt the user's topic with them. For more from Bee during the call, use bee_today, bee_conversation \
+and search_bee.
+When the prep note lists unconfirmed Bee facts, check them at a natural moment, for example \
 "I heard your bonus is 15 percent. Is that right?" If the user corrects it, queue a fact_update with the \
 corrected text. If they agree, queue a fact_confirm.
 If the user cut you off, reply to what they said. In the same reply, briefly add anything they missed that \
@@ -56,10 +59,7 @@ a job is going, call job_status.
 """
 
 BEE_WRITE_KINDS = ("fact_confirm", "fact_update", "todo_create", "todo_accept")
-CONTEXT_WAIT_S = 3.0  # how long the first reply waits for the Bee context (arbitrary, not measured)
-# Under LiveKit's 5 s wait for tools after an interruption, so a search result is not lost.
-# Three searches took 1.7-1.9 s on 2026-10-12, with few conversations in the account.
-BEE_SEARCH_TIMEOUT_S = 4.0
+NOTE_WAIT_S = 2.0  # the first reply waits at most this long for a prep note still being written (arbitrary)
 
 
 def job_notification(news: JobNotification) -> str:
@@ -78,17 +78,25 @@ def job_notification(news: JobNotification) -> str:
 
 
 class Coordinator(Agent):
-    def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *,
-                 now: datetime | None = None) -> None:
-        # The date goes into the instructions once, at call start: they must not change during a
-        # call (Claude checks its earlier thinking against them).
-        super().__init__(instructions=INSTRUCTIONS + f"\nIt is now {now_text(now)}. Use this for words like "
-                                                      "today, tomorrow and this Saturday.\n")
+    def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *, now: datetime | None = None,
+                 prep_note: str | None = None, pending_note: "asyncio.Future[str | None] | None" = None) -> None:
+        # The date and the prep note go into the instructions before the call's first reply, and stay as they
+        # are after it (Claude checks its earlier thinking against them). A note still being written when the
+        # AI picks up (pending_note) replaces prep_note, the plain Bee context, if it arrives before that.
+        self._base_instructions = INSTRUCTIONS + f"\nIt is now {now_text(now)}. Use this for words like today, " \
+                                                 "tomorrow and this Saturday.\n"
+        super().__init__(instructions=self._with_note(prep_note))
         self._recorder = recorder
         self._jobs = jobs
         self._workspace = workspace
-        self.context_task: asyncio.Task | None = None  # reads the Bee context at call start
-        self.context_note: llm.ChatMessage | None = None  # the Bee context note, once added
+        self._pending_note = pending_note
+        self._note_open = pending_note is not None  # until the first reply
+        self._note_task: asyncio.Task | None = None
+
+    def _with_note(self, note: str | None) -> str:
+        if not note:
+            return self._base_instructions
+        return self._base_instructions + f"\nCall prep note (from Bee, just before the call):\n{note.strip()}\n"
 
     async def add_note(self, note: str) -> None:
         """Adds an app note to the conversation in turn order. The Claude adapter sends it as a system
@@ -98,22 +106,40 @@ class Coordinator(Agent):
         chat_ctx.add_message(role="system", content=note)
         await self.update_chat_ctx(chat_ctx)
 
+    async def on_enter(self) -> None:
+        if self._pending_note is not None:
+            self._note_task = asyncio.create_task(self._take_note_when_ready())
+
+    async def _take_note_when_ready(self) -> None:
+        await self._take_note(await asyncio.shield(self._pending_note))
+
+    async def _take_note(self, note: str | None) -> None:
+        if note and self._note_open:
+            self._note_open = False
+            await self.update_instructions(self._with_note(note))
+            self._recorder.event("prep_note_taken")
+
+    async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
+        pending = self._pending_note
+        if not self._note_open or pending is None:
+            return
+        if not pending.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(pending), NOTE_WAIT_S)
+            except asyncio.TimeoutError:
+                self._recorder.event("prep_note_late", waited_s=NOTE_WAIT_S)
+        if pending.done() and not pending.cancelled():
+            await self._take_note(pending.result())
+        self._note_open = False
+        # This turn's context was copied from the agent before the note landed in its instructions.
+        current = turn_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID)
+        if current is not None and current.text_content != self.instructions:
+            update_instructions(turn_ctx, instructions=self.instructions, add_if_missing=False)
+
     async def tell_job(self, news: JobNotification) -> bool:
         """Adds news about a background job to the conversation; True when the user should hear it now."""
         await self.add_note(job_notification(news))
         return news.needs_reply
-
-    async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
-        # The first reply should already know the Bee context, so wait a little for it.
-        task = self.context_task
-        if task is not None and not task.done():
-            try:
-                await asyncio.wait_for(asyncio.shield(task), CONTEXT_WAIT_S)
-            except asyncio.TimeoutError:
-                self._recorder.event("bee_context_late", waited_s=CONTEXT_WAIT_S)
-        note = self.context_note
-        if note is not None and turn_ctx.get_by_id(note.id) is None:
-            turn_ctx.insert(note)
 
     # ---------- speech ----------
 
@@ -203,13 +229,21 @@ class Coordinator(Agent):
         Args:
             query: What to look for, in plain words.
         """
-        try:
-            results = await bee.search_conversations(query, limit=3, timeout=BEE_SEARCH_TIMEOUT_S)
-        except Exception as exc:
-            return f"Bee search failed: {exc}"
-        if not results:
-            return "No matching Bee conversations."
-        return json.dumps(results, ensure_ascii=False)[:2000]
+        return await reads.search(query)
+
+    @function_tool
+    async def bee_today(self, context: RunContext) -> str:
+        """What the user's Bee wearable has for today: the daily summary, active todos, notes and recent conversations."""
+        return await reads.today()
+
+    @function_tool
+    async def bee_conversation(self, context: RunContext, conversation_id: int) -> str:
+        """One conversation the Bee wearable recorded: its summary and its last lines.
+
+        Args:
+            conversation_id: The Bee conversation id, from the prep note, bee_today or search_bee.
+        """
+        return await reads.conversation(conversation_id)
 
     @function_tool
     async def queue_bee_write(self, context: RunContext, kind: str, text: str | None = None,

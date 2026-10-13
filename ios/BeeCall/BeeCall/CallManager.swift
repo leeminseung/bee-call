@@ -22,6 +22,10 @@ final class CallManager: NSObject {
     // Room → CallKit call, for every AI call rung. The ring stream replays the last minute on each reconnect.
     @ObservationIgnored private var rungRooms: [String: UUID] = [:]
     @ObservationIgnored private var ringTimeout: Task<Void, Never>?
+    // A call the user starts rings until the AI picks up (it reads Bee first, at most about 8 s).
+    @ObservationIgnored private var pickUpTimeout: Task<Void, Never>?
+    @ObservationIgnored private var pickedUp = false
+    private static let pickUpSeconds = 30 // the voice server picks up within about 8 s; this catches a stuck one
 
     override init() {
         let configuration = CXProviderConfiguration()
@@ -181,15 +185,24 @@ final class CallManager: NSObject {
     /// or with `answering`, the room of the AI's call.
     private func join(_ id: UUID, answering roomName: String?) {
         let url = tokenServerURL
+        pickedUp = false
+        liveKit.onAgentAnswered = { [weak self] in self?.agentPickedUp(id) }
         connecting = Task {
             do {
                 let room = try await liveKit.connect(tokenServerURL: url, answering: roomName)
                 try Task.checkCancellation() // the call ended while we were connecting
-                // CallKit counts an answered call as connected once the answer action is fulfilled.
-                if roomName == nil {
-                    provider.reportOutgoingCall(with: id, connectedAt: nil)
+                // CallKit counts an answered call as connected once the answer action is fulfilled. A call the
+                // user starts counts as connected when the AI picks up, which may already have happened.
+                if roomName == nil && !pickedUp {
+                    status = "Ringing…"
+                    pickUpTimeout = Task {
+                        try? await Task.sleep(for: .seconds(Self.pickUpSeconds))
+                        guard !Task.isCancelled, callID == id, !pickedUp else { return }
+                        hangUp(.failed, "Bee Call didn't pick up")
+                    }
+                } else {
+                    status = "Connected · \(room)"
                 }
-                status = "Connected · \(room)"
             } catch {
                 guard !Task.isCancelled else { return } // whoever ended the call cleans up
                 if error is LiveKitClient.CallAlreadyEnded {
@@ -199,6 +212,17 @@ final class CallManager: NSObject {
                 }
             }
         }
+    }
+
+    /// The voice server marked the call answered: for a call the user started, it is now connected.
+    private func agentPickedUp(_ id: UUID) {
+        guard callID == id, !pickedUp, !isEnding else { return }
+        pickedUp = true
+        pickUpTimeout?.cancel()
+        pickUpTimeout = nil
+        guard !rungRooms.values.contains(id) else { return } // the AI's own call: connected when answered
+        provider.reportOutgoingCall(with: id, connectedAt: nil)
+        status = "Connected"
     }
 
     /// Ends the call from our side. CallKit sends no end action for these, so we clean up here.
@@ -218,6 +242,10 @@ final class CallManager: NSObject {
         connecting = nil
         ringTimeout?.cancel()
         ringTimeout = nil
+        pickUpTimeout?.cancel()
+        pickUpTimeout = nil
+        liveKit.onAgentAnswered = nil
+        pickedUp = false
         callID = nil
         isInCall = false
         isRinging = false

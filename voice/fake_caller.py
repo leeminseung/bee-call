@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 from beelink.planner import RulePlanner
 from voice.dispatch import open_inbound_room, place_call
 from voice.outbound import saved_trigger
+from voice.prep import PREP_SECONDS, prepare_outbound
 
 load_dotenv(".env.local")
 PROFILE = os.environ.get("AWS_PROFILE", "bee-call")
@@ -96,7 +97,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--line", action="append", help="caller line (repeatable)")
     parser.add_argument("--voice", default="Matthew", help="Polly voice for the caller")
-    parser.add_argument("--lead", type=float, default=7.0, help="silence before the first line, seconds")
+    parser.add_argument("--lead", type=float, help="silence before the first line, seconds (default 7, plus the "
+                        "longest ring before the AI picks up when the caller starts the call)")
     parser.add_argument("--gap", default="7", help="silence before each line after the first, seconds; a comma "
                         "list sets it line by line and its last value repeats (3,0.6,10: barge in, pause mid-thought, wait)")
     parser.add_argument("--tail", type=float, default=10.0, help="silence after the last line, seconds")
@@ -106,10 +108,11 @@ def main() -> None:
     args = parser.parse_args()
 
     lines = args.line or DEFAULT_LINES
+    lead = args.lead if args.lead is not None else 7.0 + (0 if args.outbound else PREP_SECONDS)
     started = time.time()
     with tempfile.TemporaryDirectory() as tmp:
         track = Path(tmp) / "caller.ogg"
-        build_track(lines, args.voice, args.lead, [float(g) for g in args.gap.split(",")], args.tail, track)
+        build_track(lines, args.voice, lead, [float(g) for g in args.gap.split(",")], args.tail, track)
         if args.outbound:
             # A test: ignore the gap between calls and the age of the saved conversation.
             plan = RulePlanner(WORKSPACE, cooldown=timedelta(0), max_age=timedelta(days=3650)) \
@@ -117,7 +120,9 @@ def main() -> None:
             print(f"plan: {'CALL' if plan.call else 'no call'} - {plan.reason}")
             if not plan.call:
                 return
-            room = asyncio.run(place_call(plan, WORKSPACE))
+            prep = asyncio.run(prepare_outbound(plan))
+            print(f"prepared in {prep.seconds} s: " + (f"opening {prep.opening!r}" if prep.note else f"no note ({prep.error})"))
+            room = asyncio.run(place_call(plan, WORKSPACE, prep=prep.to_meta()))
             print(f"the AI is calling in room {room}; answering in {args.ring:.0f}s")
             time.sleep(args.ring)
         else:

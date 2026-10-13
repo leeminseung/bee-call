@@ -17,7 +17,7 @@ Status: work in progress for the Amazon "Build, Ship, Shape" hackathon (Bee trac
 | Session screen (`web/`, `voice/session_server.py`) | this Mac | Live view of a call: transcript, why the AI called, job cards |
 | Token server (`voice/token_server.py`) | this Mac | Hands LiveKit room tokens to the app, and tells an open app when the AI is calling |
 
-Every call is kept as plain files under `workspace/<date>/<time>/`: `transcript.md`, `events.jsonl`, `audio/` (raw audio, never uploaded), `inputs/` (raw Bee data), `jobs/`, `bee-queue.jsonl`. `workspace/` is not in git.
+Every call is kept as plain files under `workspace/<date>/<time>/`: `transcript.md`, `events.jsonl`, `audio/` (raw audio, never uploaded), `inputs/` (raw Bee data), `prep.md` (the call prep note), `jobs/`, `bee-queue.jsonl`. `workspace/` is not in git.
 
 ## Setup
 
@@ -44,6 +44,8 @@ uv run python -m beelink.writer workspace/<date>/<time>   # after a call: dry ru
 ```
 
 The voice server joins only rooms it is dispatched to, as the agent `bee-call`. A call the user starts gets it through the app's token. A call the AI starts gets it from `voice/dispatch.py`, with metadata that says why the AI is calling; the voice server then waits up to 60 seconds for the phone to answer. Until VoIP push is set up (it needs a paid Apple Developer account), an open app hears about the AI's call on the token server's `/ring` stream.
+
+Before the AI picks up, it reads the user's Bee data and writes itself a call prep note (`voice/prep.py`). The voice server reads Bee all at once (today's context, recent conversations, unconfirmed facts, todo suggestions, the conversations behind the call), and the coordinator's own model starts from that: it writes its opening line first, may take one round of up to three more Bee reads (a conversation in full, a search, another day's summary), then writes the note. For a call the user starts, the caller hears ringing from the voice server meanwhile, and the AI picks up when its opening is ready, at most about 8 seconds in; the note usually lands during the opening, and the first reply waits up to 2 seconds for one still being written. The app shows the call as connected only when the voice server sets the participant attribute `bee_call.state` to `answered`. For a call the AI starts, `voice/outbound.py` prepares before the phone rings, so the user never waits. Without a note, the coordinator gets the plain Bee context instead. During the call it can read more with its `bee_today`, `bee_conversation` and `search_bee` tools. `voice/outbound.py` prepares with the model the voice server uses, so set `COORDINATOR_LLM` and `COORDINATOR_MODEL` the same way for both (GLM 5 when unset).
 
 Whether a Bee change is worth a call is decided by a rule-based stand-in for now (`beelink/planner.py`): a conversation with at least four utterances that ended within the last hour, or a new voice note; never during another call; at least 30 minutes after the last call, whoever started it. Each decision, call or not, is written to `plan.md` in the Bee inbox folder. The watcher saves its Bee cursor only after a change was handled, so a call that could not be placed is retried on the next catch-up. Try one decision without Bee events with `uv run python -m voice.outbound --once workspace/inbox/<folder> --dry-run --any-age`.
 
