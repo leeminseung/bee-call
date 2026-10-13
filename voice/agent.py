@@ -42,6 +42,7 @@ from livekit.plugins.aws.stt import Credentials
 
 from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
 from voice.claude_llm import ClaudeBedrockLLM
+from voice.continuation import earlier_call
 from voice.coordinator import Coordinator
 from voice.dispatch import AGENT_NAME, RING_SECONDS
 from voice.echo_llm import EchoLLM
@@ -189,6 +190,8 @@ def greeting(meta: dict) -> str:
     lines = LANGUAGE.greetings
     if COORDINATOR_LLM == "echo":
         return lines["echo"]
+    if meta.get("earlier_call"):
+        return lines["continue"]
     if meta.get("direction") == "outbound":
         if meta.get("kind") == "voice note":
             return lines["voice note"]
@@ -219,6 +222,8 @@ server = AgentServer(setup_fnc=prewarm, num_idle_processes=1)
 async def entrypoint(ctx: JobContext) -> None:
     meta = call_meta(ctx.job.metadata)
     started = time.monotonic()
+    if meta.get("continue_from"):  # the user tapped "Continue this call" in an earlier call's record
+        meta["earlier_call"] = earlier_call(WORKSPACE, meta["continue_from"])
     inbox = Path(meta["inbox"]) if meta.get("inbox") else None
     conversation_ids = meta.get("conversation_ids") or []
     backend = {"search": SearchWorker, "harness": HarnessWorker}.get(WORKER, FakeWorker)()
@@ -286,7 +291,8 @@ async def entrypoint(ctx: JobContext) -> None:
         prep = preparation.prep
     rec = CallRecorder(WORKSPACE, ctx.job.room.name)
     rec.event("coordinator", llm=COORDINATOR_LLM, language=LANGUAGE.code, voice=VOICE.describe())
-    rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"))
+    rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"),
+              continue_from=meta.get("continue_from") if meta.get("earlier_call") else None)
 
     def keep_inputs(got: CallInputs) -> None:
         try:
@@ -344,7 +350,7 @@ async def entrypoint(ctx: JobContext) -> None:
     # arrives, up to the first reply.
     pending = preparation.done if preparation is not None and not preparation.done.done() else None
     agent = Coordinator(rec, jobs, WORKSPACE, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
-                        language=LANGUAGE)
+                        language=LANGUAGE, earlier_call=meta.get("earlier_call"))
 
     async def shutdown() -> None:
         if keep_warm:

@@ -20,6 +20,7 @@ final class CallManager: NSObject {
     @ObservationIgnored private let controller = CXCallController()
     @ObservationIgnored private var callID: UUID?
     @ObservationIgnored private var tokenServerURL = ""
+    @ObservationIgnored private var earlierCall: String? // the record id of the call a new call continues
     @ObservationIgnored private var connecting: Task<Void, Never>?
     // Room → CallKit call, for every AI call rung. The ring stream replays the last minute on each reconnect.
     @ObservationIgnored private var rungRooms: [String: UUID] = [:]
@@ -60,10 +61,12 @@ final class CallManager: NSObject {
         _ = await LiveKitSDK.ensureDeviceAccess(for: [.audio])
     }
 
-    func startCall(tokenServerURL: String) async {
+    /// Calls Bee Call. With `continuing`, the new call picks up from that earlier call (its record id).
+    func startCall(tokenServerURL: String, continuing earlierCall: String? = nil) async {
         guard !isInCall else { return }
         isInCall = true
-        status = "Calling…"
+        self.earlierCall = earlierCall
+        status = earlierCall == nil ? "Calling…" : "Calling to continue…"
         // Ask now, while the app is on screen. Inside the CallKit audio window the SDK
         // cannot show the prompt, and turning the engine on fails without permission.
         guard await LiveKitSDK.ensureDeviceAccess(for: [.audio]) else {
@@ -274,7 +277,8 @@ final class CallManager: NSObject {
         liveKit.onAgentAnswered = { [weak self] in self?.agentPickedUp(id) }
         connecting = Task {
             do {
-                let room = try await liveKit.connect(tokenServerURL: url, answering: roomName)
+                let room = try await liveKit.connect(tokenServerURL: url, answering: roomName,
+                                                     continuing: roomName == nil ? earlierCall : nil)
                 try Task.checkCancellation() // the call ended while we were connecting
                 // CallKit counts an answered call as connected once the answer action is fulfilled. A call the
                 // user starts counts as connected when the AI picks up, which may already have happened.
@@ -332,6 +336,7 @@ final class CallManager: NSObject {
         liveKit.onAgentAnswered = nil
         pickedUp = false
         callID = nil
+        earlierCall = nil
         isInCall = false
         isRinging = false
         isEnding = false

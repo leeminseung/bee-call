@@ -123,12 +123,18 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime | None = N
         if meta.get("topic"):
             why += f" (topic: {meta['topic']})"
         ask = "In the opening, greet the user, say in a few words why you are calling, and ask if they have a minute."
+    elif meta.get("earlier_call"):
+        why = "The user is calling you from the app to continue an earlier call with you"
+        ask = ("In the opening, greet the user and pick up where the earlier call left off: in a few words, what you "
+               "were on, and what came of its background jobs. Then let the user lead.")
     else:
-        why = "The user is calling you from the app."
+        why = "The user is calling you from the app"
         ask = ("In the opening, greet the user and ask what is on their mind. At most a light nod to their day: "
                "they called, so let them bring their own topic.")
     name = f" The user's first name is {inputs.first_name}." if inputs.first_name else ""
     parts = [f"It is now {now_text(now)}. {why}.{name}"]
+    if meta.get("earlier_call"):
+        parts.append("The earlier call this one continues:\n" + str(meta["earlier_call"]))
     for conv_id, conv, lines in inputs.conversations:
         parts.append("The conversation behind this call:\n" + reads.conversation_text(conv or {"id": conv_id}, lines))
     if inputs.today is not None:

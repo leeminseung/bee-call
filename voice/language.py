@@ -34,6 +34,7 @@ LANGUAGES = {
             "topic": "Hi, it's Bee Call. I'm calling about your conversation: {topic}. Do you have a minute?",
             "outbound": "Hi, it's Bee Call. Do you have a minute to talk through your day?",
             "inbound": "Hi, it's Bee Call. What's on your mind?",
+            "continue": "Hi, it's Bee Call again. Let's pick up where we left off.",
         }),
     "ko": CallLanguage(
         # Neural, not generative: in the first Korean call (2026-10-14) the generative engine turned a 3 s opening
@@ -48,6 +49,7 @@ LANGUAGES = {
             "topic": "안녕하세요, Bee Call이에요. 방금 나누신 대화 때문에 전화드렸어요. 잠깐 통화 괜찮으세요?",
             "outbound": "안녕하세요, Bee Call이에요. 잠깐 오늘 하루 이야기 나눌 수 있을까요?",
             "inbound": "네, Bee Call이에요. 어떤 이야기 해 볼까요?",
+            "continue": "네, Bee Call이에요. 아까 하던 이야기 이어서 해 볼까요?",
         }),
 }
 

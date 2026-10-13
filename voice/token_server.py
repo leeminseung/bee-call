@@ -30,6 +30,7 @@ from livekit import api
 
 from beelink.planner import OUTBOUND_LOG
 from voice import voip_push
+from voice.continuation import session_dir
 from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata
 
 load_dotenv(".env.local")
@@ -44,7 +45,8 @@ def env(name: str) -> str:
     return value
 
 
-def make_token(identity: str, room: str, answer: bool, key: str, secret: str) -> str:
+def make_token(identity: str, room: str, answer: bool, key: str, secret: str,
+               continue_from: str | None = None) -> str:
     token = (
         api.AccessToken(key, secret)
         .with_identity(identity)
@@ -56,7 +58,8 @@ def make_token(identity: str, room: str, answer: bool, key: str, secret: str) ->
     if not answer:
         # A call the user starts: dispatch the voice server when the app's join creates the room.
         token = token.with_room_config(api.RoomConfiguration(
-            agents=[api.RoomAgentDispatch(agent_name=AGENT_NAME, metadata=call_metadata("inbound"))]))
+            agents=[api.RoomAgentDispatch(agent_name=AGENT_NAME,
+                                          metadata=call_metadata("inbound", continue_from=continue_from))]))
     return token.to_jwt()
 
 
@@ -75,10 +78,13 @@ async def token(request: web.Request) -> web.Response:
     if answer and not request.query.get("room"):
         raise web.HTTPBadRequest(text="answer=1 needs the room of the AI's call\n")
     room = request.query.get("room") or f"call-{time.strftime('%Y%m%d-%H%M%S')}"
+    continue_from = request.query.get("continue")  # "Continue this call" in an earlier call's record
+    if continue_from is not None and (answer or session_dir(request.app["workspace"], continue_from) is None):
+        raise web.HTTPBadRequest(text="continue= needs the id of an earlier call, like 2026-10-14/0055\n")
     if answer and not await request.app["room_exists"](request.app, room):
         # Joining would create an empty room with no voice server in it.
         raise web.HTTPGone(text="that call has ended\n")
-    jwt = make_token(identity, room, answer, request.app["key"], request.app["secret"])
+    jwt = make_token(identity, room, answer, request.app["key"], request.app["secret"], continue_from)
     return web.json_response({"url": request.app["url"], "token": jwt, "room": room, "identity": identity})
 
 

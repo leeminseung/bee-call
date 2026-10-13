@@ -1,0 +1,118 @@
+"""Continuing an earlier call: what the new call learns about the earlier one, and how the id gets there
+(the app's token request, the dispatch metadata, the prep's opening, the coordinator's instructions)."""
+
+import asyncio
+import json
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+from zoneinfo import ZoneInfo
+
+import jwt
+
+from beelink.context import CallInputs
+from voice.continuation import earlier_call, session_dir
+from voice.coordinator import Coordinator
+from voice.language import call_language
+from voice.prep import seed_text
+from voice.recorder import CallRecorder
+
+NOW = datetime(2026, 10, 14, 1, 20, tzinfo=ZoneInfo("Asia/Seoul"))
+EARLIER = "2026-10-13/2353"
+
+
+def earlier_session(workspace: Path) -> Path:
+    folder = workspace / EARLIER
+    folder.mkdir(parents=True)
+    events = [
+        {"t": 0.0, "type": "call_started", "started_at": "2026-10-13T23:53:32", "room": "call-1"},
+        {"t": 26.5, "type": "job_started", "job_id": "01", "task": "Compare MacBook Air and Pro prices in Korea"},
+        {"t": 30.0, "type": "job_started", "job_id": "02", "task": "Find a laptop bag"},
+        {"t": 31.0, "type": "job_started", "job_id": "03", "task": "Check the Apple store hours"},
+        {"t": 146.1, "type": "job_done", "job_id": "01", "summary": "The Air starts at 1.59 million won.",
+         "files": ["jobs/01/report.md", "jobs/01/usage.json"]},
+        {"t": 150.0, "type": "job_failed", "job_id": "03", "error": "web search timed out"},
+        {"t": 199.7, "type": "session_closed", "reason": "CloseReason.PARTICIPANT_DISCONNECTED"},
+        {"t": 200.4, "type": "job_failed", "job_id": "02", "error": "cancelled"},
+        {"t": 200.4, "type": "call_ended"},
+    ]
+    (folder / "events.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\nnot json\n")
+    (folder / "transcript.md").write_text(
+        "# Call 2026-10-13 23:53 (room call-1)\n\n"
+        "- 00:04.1 **AI:** Hi Minseung! What's on your mind tonight?\n"
+        "- 00:19.2 **User:** I'm choosing between a MacBook Air and a MacBook Pro.\n"
+        "- 03:17.5 **AI:** Sure! Here's the comparison:\n\nThe Air starts at about 1.6 million won. (interrupted)\n")
+    return folder
+
+
+def test_the_new_call_learns_what_was_said_and_what_the_jobs_did(tmp_path):
+    earlier_session(tmp_path)
+    text = earlier_call(tmp_path, EARLIER)
+    assert text.startswith("The earlier call: Tue Oct 13, 11:53 PM, about 3 min.")
+    assert "AI: Hi Minseung! What's on your mind tonight?" in text
+    assert "User: I'm choosing between a MacBook Air and a MacBook Pro." in text
+    assert "AI: Sure! Here's the comparison: The Air starts at about 1.6 million won. (interrupted)" in text
+    assert "Finished. Result: The Air starts at 1.59 million won." in text
+    assert "Files in the app: report.md\n" in text  # not usage.json
+    assert "Find a laptop bag\n  Stopped unfinished when that call ended." in text
+    assert "Failed: web search timed out" in text
+
+
+def test_only_ids_of_earlier_calls_name_a_folder(tmp_path):
+    earlier_session(tmp_path)
+    assert session_dir(tmp_path, EARLIER) == tmp_path / EARLIER
+    for bad in ("../../etc", "2026-10-13/2353/../2353", "2026-10-13", "2026-10-13/0000", None, 2353):
+        assert session_dir(tmp_path, bad) is None
+        assert earlier_call(tmp_path, bad) is None
+
+
+def test_the_app_asks_for_a_continued_call_with_the_record_id(tmp_path):
+    from aiohttp.test_utils import TestClient, TestServer
+    from voice.token_server import make_app
+
+    earlier_session(tmp_path)
+
+    async def main():
+        app = make_app("wss://example", "APIkey", "s" * 32, tmp_path, room_exists=None)
+        async with TestClient(TestServer(app)) as client:
+            good = await client.get("/token", params={"identity": "user", "continue": EARLIER})
+            plain = await client.get("/token", params={"identity": "user"})
+            missing = await client.get("/token", params={"identity": "user", "continue": "2026-10-13/0001"})
+            sneaky = await client.get("/token", params={"identity": "user", "continue": "../../etc"})
+            return await good.json(), await plain.json(), missing.status, sneaky.status
+
+    good, plain, missing, sneaky = asyncio.run(main())
+    meta = lambda body: json.loads(  # noqa: E731
+        jwt.decode(body["token"], options={"verify_signature": False})["roomConfig"]["agents"][0]["metadata"])
+    assert meta(good) == {"direction": "inbound", "continue_from": EARLIER}
+    assert meta(plain) == {"direction": "inbound"}
+    assert (missing, sneaky) == (400, 400)
+
+
+def test_the_opening_picks_up_the_earlier_call(tmp_path):
+    earlier_session(tmp_path)
+    meta = {"direction": "inbound", "continue_from": EARLIER, "earlier_call": earlier_call(tmp_path, EARLIER)}
+    seed = seed_text(CallInputs(), meta, NOW)
+    assert "The user is calling you from the app to continue an earlier call with you." in seed
+    assert "The earlier call this one continues:\nThe earlier call: Tue Oct 13" in seed
+    assert seed.endswith("Then let the user lead.")
+    assert "calling you from the app." in seed_text(CallInputs(), {"direction": "inbound"}, NOW)
+
+
+def test_the_coordinator_keeps_the_earlier_call_for_the_whole_call(tmp_path):
+    earlier_session(tmp_path)
+    text = earlier_call(tmp_path, EARLIER)
+    agent = Coordinator(CallRecorder(tmp_path, room="r"), SimpleNamespace(), tmp_path, now=NOW, earlier_call=text)
+    assert "The user started this call to continue an earlier call with you." in agent.instructions
+    assert text in agent.instructions
+    plain = Coordinator(CallRecorder(tmp_path, room="r2"), SimpleNamespace(), tmp_path, now=NOW)
+    assert "earlier call" not in plain.instructions
+
+
+def test_a_continued_call_without_an_opening_still_says_so(monkeypatch):
+    from voice import agent
+
+    monkeypatch.setattr(agent, "COORDINATOR_LLM", "bedrock")
+    for code, words in (("en", "pick up where we left off"), ("ko", "이어서")):
+        monkeypatch.setattr(agent, "LANGUAGE", call_language(code))
+        assert words in agent.greeting({"direction": "inbound", "earlier_call": "..."})

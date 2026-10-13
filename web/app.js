@@ -117,6 +117,12 @@
       .replace(/[ \t]{2,}/g, " ");
   }
 
+  // The iPhone app's web view carries this bridge (CallRecordSheet.swift); a Mac browser does not.
+  function appBridge() {
+    const handlers = window.webkit && window.webkit.messageHandlers;
+    return handlers && handlers.beeCall ? handlers.beeCall : null;
+  }
+
   const INTERNAL_FILES = new Set(["usage.json"]); // the worker's own bookkeeping, shown only with debug events
 
   // What an error means for the person on the call; the raw text stays one tap away.
@@ -348,13 +354,14 @@
       this.pendingEl = el("li", "turn user pending");
       this.dock = el("ol", "timeline dock"); // running jobs stay at the bottom until they finish
       this.beeSlot = el("div", "bee-slot");
+      this.continueSlot = el("div", "continue-slot"); // "Continue this call", in the iPhone app once the call is over
       const foot = el("footer", "session-foot");
       this.footNote = el("span", "foot-note");
       this.debugButton = el("button", "link-button");
       this.debugButton.type = "button";
       this.debugButton.addEventListener("click", () => this.toggleDebug());
       foot.append(this.footNote, this.debugButton);
-      this.root.append(this.whySlot, this.prepSlot, this.timeline, this.dock, this.beeSlot, foot);
+      this.root.append(this.whySlot, this.prepSlot, this.timeline, this.dock, this.beeSlot, this.continueSlot, foot);
       view.replaceChildren(this.root);
     }
 
@@ -369,6 +376,7 @@
       this.timeline.replaceChildren(this.pendingEl); // the unconfirmed user line always sits last
       this.dock.replaceChildren();
       this.beeSlot.replaceChildren();
+      this.continueSlot.replaceChildren();
       this.jobs = new Map();
       this.bee = null;
       this.pending = [];
@@ -437,6 +445,7 @@
       if (this.closed) return;
       const now = performance.now();
       const idle = (now - this.lastAt) / 1000;
+      if (this.endT !== null || (this.ready && idle > STALE_S)) this.renderContinue();
       if (this.endT !== null) {
         setStatus({ state: "ended", text: "Call ended", time: clock(this.endT) });
       } else if (!this.ready && !this.events.length) {
@@ -486,6 +495,7 @@
         case "why_calling": this.renderWhy(ev); break;
         case "call":
           this.direction = ev.direction;
+          if (typeof ev.continue_from === "string" && ev.continue_from) this.addContinued(ev.continue_from);
           this.addDebug(ev, t);
           break;
         case "picked_up": // when the AI's first words played (a call the user started rang until then)
@@ -525,6 +535,26 @@
       const row = el("li", "row system");
       row.append(icon("phone"), el("span", null, detail ? `${text} · ${detail}` : text));
       this.add(row);
+    }
+
+    // This call continues an earlier one (voice/continuation.py): link back to it.
+    addContinued(id) {
+      const row = el("li", "row system");
+      const link = el("a", "row-link", `Continues your call from ${titleFor(id, null)}`);
+      link.href = `#/s/${id}`;
+      row.append(icon("phone"), link);
+      this.add(row);
+    }
+
+    // A new call that picks up from this one. The app starts it; the page only asks.
+    renderContinue() {
+      const bridge = appBridge();
+      if (!bridge || this.continueSlot.childElementCount) return;
+      const button = el("button", "continue-call");
+      button.type = "button";
+      button.append(icon("phone"), el("span", null, "Continue this call"));
+      button.addEventListener("click", () => bridge.postMessage({ continue: this.id }));
+      this.continueSlot.replaceChildren(button, el("p", "card-note", "Bee Call picks up where this call left off."));
     }
 
     addError(ev, t) {

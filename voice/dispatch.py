@@ -28,8 +28,11 @@ AGENT_NAME = "bee-call"
 RING_SECONDS = 60  # how long the voice server waits for the phone to answer (arbitrary)
 
 
-def call_metadata(direction: str, plan: Plan | None = None, prep: dict[str, Any] | None = None) -> str:
+def call_metadata(direction: str, plan: Plan | None = None, prep: dict[str, Any] | None = None,
+                  continue_from: str | None = None) -> str:
     data: dict[str, Any] = {"direction": direction}
+    if continue_from:  # the earlier call this one continues (voice/continuation.py)
+        data["continue_from"] = continue_from
     if plan is not None:
         data.update({"inbox": str(plan.inbox_dir), "plan": str(plan.path) if plan.path else None,
                      "conversation_ids": plan.conversation_ids, "reason": plan.reason, "topic": plan.topic,

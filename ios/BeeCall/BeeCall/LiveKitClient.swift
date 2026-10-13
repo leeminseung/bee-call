@@ -34,9 +34,10 @@ final class LiveKitClient: NSObject {
 
     /// Joins a room and publishes the microphone. Returns the room name. A new room for a call the user
     /// starts; with `answering`, the room of the AI's call. Only the pass from the token server differs.
-    func connect(tokenServerURL: String, answering roomName: String? = nil) async throws -> String {
+    func connect(tokenServerURL: String, answering roomName: String? = nil,
+                 continuing earlierCall: String? = nil) async throws -> String {
         captions = []
-        let access = try await fetchAccess(from: tokenServerURL, answering: roomName)
+        let access = try await fetchAccess(from: tokenServerURL, answering: roomName, continuing: earlierCall)
         try Task.checkCancellation() // the call ended while we fetched the token
         return try await connect(access: access)
     }
@@ -108,7 +109,9 @@ final class LiveKitClient: NSObject {
 
     /// A pass for a new call: the voice server is dispatched into the new room when the app joins.
     /// With `answering`, a pass into the room of the AI's call instead; the voice server is already there.
-    private func fetchAccess(from address: String, answering roomName: String?) async throws -> Access {
+    /// With `continuing`, the new call picks up from that earlier call (its record id, like 2026-10-14/0055).
+    private func fetchAccess(from address: String, answering roomName: String?,
+                             continuing earlierCall: String? = nil) async throws -> Access {
         let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard var parts = URLComponents(string: address), parts.scheme != nil else {
             throw TokenServerError(errorDescription: "The token server address is not a URL.")
@@ -116,6 +119,8 @@ final class LiveKitClient: NSObject {
         var query = [URLQueryItem(name: "identity", value: "user")]
         if let roomName {
             query += [URLQueryItem(name: "room", value: roomName), URLQueryItem(name: "answer", value: "1")]
+        } else if let earlierCall {
+            query.append(URLQueryItem(name: "continue", value: earlierCall))
         }
         parts.queryItems = (parts.queryItems ?? []) + query
         guard let url = parts.url else {

@@ -67,7 +67,11 @@ struct CallScreen: View {
         .padding()
         .sheet(isPresented: $showsCallRecord) {
             if let callRecordURL {
-                CallRecordSheet(url: callRecordURL)
+                CallRecordSheet(url: callRecordURL) { earlierCall in
+                    guard !calls.isInCall else { return } // one call at a time; the record stays open
+                    showsCallRecord = false
+                    Task { await calls.startCall(tokenServerURL: tokenServerURL, continuing: earlierCall) }
+                }
             }
         }
         // A new id cancels the running listener and starts the next one.

@@ -81,13 +81,16 @@ def job_notification(news: JobNotification) -> str:
 class Coordinator(Agent):
     def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *, now: datetime | None = None,
                  prep_note: str | None = None, pending_note: "asyncio.Future[str | None] | None" = None,
-                 language: CallLanguage | None = None) -> None:
+                 language: CallLanguage | None = None, earlier_call: str | None = None) -> None:
         # The date and the prep note go into the instructions before the call's first reply, and stay as they
         # are after it (Claude checks its earlier thinking against them). A note still being written when the
         # AI picks up (pending_note) replaces prep_note, the plain Bee context, if it arrives before that.
         rule = f"\n{language.rule}\n" if language and language.rule else ""
-        self._base_instructions = INSTRUCTIONS + rule + f"\nIt is now {now_text(now)}. Use this for words like " \
-                                                        "today, tomorrow and this Saturday.\n"
+        # A call the user continued from an earlier call's record (voice/continuation.py).
+        earlier = (f"\nThe user started this call to continue an earlier call with you. That call, as it was "
+                   f"recorded:\n{earlier_call.strip()}\n") if earlier_call else ""
+        self._base_instructions = INSTRUCTIONS + rule + earlier + f"\nIt is now {now_text(now)}. Use this for " \
+                                                                  "words like today, tomorrow and this Saturday.\n"
         super().__init__(instructions=self._with_note(prep_note))
         self._recorder = recorder
         self._jobs = jobs

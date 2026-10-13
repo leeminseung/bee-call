@@ -3,8 +3,10 @@ import WebKit
 
 /// The session screen from the Mac (voice/session_server.py): the live or latest call, and the list
 /// of earlier calls. Only a web page, so it can stay open during a call; CallKit keeps the audio.
+/// An ended call's record has "Continue this call", which the page sends here with the record's id.
 struct CallRecordSheet: View {
     let url: URL
+    let onContinue: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var failed = false
     @State private var attempt = 0
@@ -23,7 +25,7 @@ struct CallRecordSheet: View {
 
     var body: some View {
         NavigationStack {
-            SessionPage(url: url, attempt: attempt, failed: $failed)
+            SessionPage(url: url, attempt: attempt, failed: $failed, onContinue: onContinue)
                 .overlay {
                     if failed {
                         ContentUnavailableView {
@@ -52,20 +54,29 @@ struct CallRecordSheet: View {
 
 /// WKWebView with the session screen. Loads again when `attempt` changes.
 private struct SessionPage: UIViewRepresentable {
+    static let bridge = "beeCall" // window.webkit.messageHandlers.beeCall in web/app.js
     let url: URL
     let attempt: Int
     @Binding var failed: Bool
+    let onContinue: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(failed: $failed)
+        Coordinator(failed: $failed, onContinue: onContinue)
     }
 
     func makeUIView(context: Context) -> WKWebView {
-        let view = WKWebView()
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(context.coordinator, name: Self.bridge)
+        let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         view.uiDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true // back from a file opened with Raw
         return view
+    }
+
+    static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) {
+        // The content controller keeps its handler alive; let the coordinator go with the sheet.
+        view.configuration.userContentController.removeScriptMessageHandler(forName: bridge)
     }
 
     func updateUIView(_ view: WKWebView, context: Context) {
@@ -74,12 +85,21 @@ private struct SessionPage: UIViewRepresentable {
         view.load(URLRequest(url: url, timeoutInterval: 10))
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         let failed: Binding<Bool>
+        let onContinue: (String) -> Void
         var loadedAttempt: Int?
 
-        init(failed: Binding<Bool>) {
+        init(failed: Binding<Bool>, onContinue: @escaping (String) -> Void) {
             self.failed = failed
+            self.onContinue = onContinue
+        }
+
+        /// "Continue this call": {"continue": "2026-10-14/0055"}. Only an id of that shape is passed on.
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard let body = message.body as? [String: Any], let id = body["continue"] as? String,
+                  id.wholeMatch(of: /\d{4}-\d{2}-\d{2}\/\d{4}(-\d+)?/) != nil else { return }
+            onContinue(id)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
