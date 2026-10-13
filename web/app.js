@@ -90,6 +90,19 @@
     return s ? s[0].toUpperCase() + s.slice(1) : "";
   }
 
+  // One of the AI's extra Bee reads before a call, recorded as "tool {json arguments}".
+  function readLabel(read) {
+    if (typeof read !== "string" || !read.trim()) return null;
+    const space = read.indexOf(" ");
+    const name = space < 0 ? read : read.slice(0, space);
+    let args = {};
+    try { args = JSON.parse(read.slice(space + 1)) || {}; } catch (e) { /* no arguments to show */ }
+    if (name === "search_bee") return `Searched for “${args.query || "…"}”`;
+    if (name === "bee_conversation") return `Read a conversation in full (#${args.conversation_id ?? "?"})`;
+    if (name === "bee_day") return `Read the day summary for ${args.date || "a day"}`;
+    return humanize(name);
+  }
+
   function speakerName(speaker) {
     if (!speaker) return "Someone";
     if (speaker === "me") return "You";
@@ -306,6 +319,7 @@
     build() {
       this.root = el("section", "session");
       this.whySlot = el("div", "why-slot");
+      this.prepSlot = el("div", "prep-slot"); // what the AI looked up in Bee before it picked up
       this.timeline = el("ol", "timeline");
       this.pendingEl = el("li", "turn user pending");
       this.dock = el("ol", "timeline dock"); // running jobs stay at the bottom until they finish
@@ -316,12 +330,16 @@
       this.debugButton.type = "button";
       this.debugButton.addEventListener("click", () => this.toggleDebug());
       foot.append(this.footNote, this.debugButton);
-      this.root.append(this.whySlot, this.timeline, this.dock, this.beeSlot, foot);
+      this.root.append(this.whySlot, this.prepSlot, this.timeline, this.dock, this.beeSlot, foot);
       view.replaceChildren(this.root);
     }
 
     reset() {
       this.whySlot.replaceChildren();
+      this.prepSlot.replaceChildren();
+      this.direction = null;
+      this.pickedUp = null;
+      this.prepEvent = null;
       this.pendingEl.replaceChildren();
       this.pendingEl.hidden = true;
       this.timeline.replaceChildren(this.pendingEl); // the unconfirmed user line always sits last
@@ -442,6 +460,19 @@
           break;
         }
         case "why_calling": this.renderWhy(ev); break;
+        case "call":
+          this.direction = ev.direction;
+          this.addDebug(ev, t);
+          break;
+        case "picked_up": // when the AI's first words played (a call the user started rang until then)
+          this.pickedUp = ev;
+          if (this.prepEvent) this.renderPrep(this.prepEvent);
+          this.addDebug(ev, t);
+          break;
+        case "call_prep":
+          this.renderPrep(ev);
+          this.addDebug(ev, t);
+          break;
         case "agent_state":
           if (typeof ev.new === "string") this.agentState = ev.new;
           this.addDebug(ev, t, `agent ${ev.old} → ${ev.new}`);
@@ -565,6 +596,41 @@
         card.append(el("p", "card-note", `${facts} unconfirmed ${facts === 1 ? "fact" : "facts"} in Bee to check with you`));
       }
       this.whySlot.replaceChildren(card);
+    }
+
+    // The note the AI wrote from Bee before it picked up (voice/prep.py), and the extra reads it chose.
+    renderPrep(ev) {
+      this.prepEvent = ev;
+      const card = el("section", "card prep");
+      const head = el("div", "card-head");
+      head.append(icon("search"), el("span", null, "Before picking up"));
+      card.append(head);
+      const note = typeof ev.note === "string" ? ev.note.trim() : "";
+      if (note) {
+        card.append(el("p", "prep-note", note));
+      } else {
+        const why = ev.error ? ` (${ev.error})` : "";
+        card.append(el("p", "card-note", `No prep note${why}, so the call started with the plain Bee context.`));
+      }
+      const reads = Array.isArray(ev.reads) ? ev.reads.map(readLabel).filter(Boolean) : [];
+      if (reads.length) {
+        const list = el("ul", "prep-reads");
+        for (const read of reads) list.append(el("li", null, read));
+        card.append(el("p", "quotes-label", "Looked up in Bee"), list);
+      }
+      card.append(el("p", "card-note", this.prepWhen(ev)));
+      this.prepSlot.replaceChildren(card);
+    }
+
+    prepWhen(ev) {
+      const seconds = (n) => `${Number(n).toFixed(1)} s`;
+      if (this.direction === "outbound") {
+        return typeof ev.seconds === "number" ? `Prepared before your phone rang, in ${seconds(ev.seconds)}`
+          : "Prepared before your phone rang";
+      }
+      const after = this.pickedUp && this.pickedUp.after_s;
+      return typeof after === "number" ? `Read while your phone rang · picked up after ${seconds(after)}`
+        : "Read while your phone rang";
     }
 
     // ---------- background jobs ----------

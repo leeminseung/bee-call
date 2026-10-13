@@ -305,7 +305,7 @@ async def entrypoint(ctx: JobContext) -> None:
         inputs, inputs_saver = CallInputs(), asyncio.create_task(keep_inputs_when_read())
     else:
         keep_inputs(inputs)
-    rec.event("picked_up", after_s=round(time.monotonic() - started, 2), opening=prep.opening,
+    rec.event("prep_ready", after_s=round(time.monotonic() - started, 2), opening=prep.opening,
               opening_s=prep.opening_s, note_ready=bool(prep.note))
 
     async def record_prep() -> None:
@@ -379,6 +379,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 log.error("ringback failed in room %s: %r", ctx.room.name, rang)
     # The app shows a call the user started as connected from here.
     await ctx.room.local_participant.set_attributes({STATE_ATTRIBUTE: "answered"})
+    rec.event("picked_up", after_s=round(time.monotonic() - started, 2))
 
 
 if __name__ == "__main__":

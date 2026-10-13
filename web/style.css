@@ -176,7 +176,7 @@ h1 {
 
 /* ---------- one call ---------- */
 
-.why-slot:not(:empty) { margin-bottom: 20px; }
+.why-slot:not(:empty), .prep-slot:not(:empty) { margin-bottom: 20px; }
 .dock:not(:empty) { margin-top: 14px; }
 .bee-slot:not(:empty) { margin-top: 22px; }
 
@@ -236,6 +236,7 @@ h1 {
 .card-head { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--muted); }
 .card-head > .pill { margin-left: auto; }
 .why .card-head > .icon { color: var(--blue); }
+.prep .card-head > .icon { color: var(--green); }
 .job .card-head > .icon { color: var(--violet); }
 .bee .card-head > .icon { color: var(--amber); }
 .card-title { margin: 6px 0 0; font-size: 16px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
@@ -247,6 +248,8 @@ h1 {
 .card-note { margin: 12px 0 0; font-size: 13.5px; color: var(--muted); }
 
 .why-summary { margin: 6px 0 0; font-size: 16.5px; overflow-wrap: anywhere; }
+.prep-note { margin: 6px 0 0; font-size: 15.5px; white-space: pre-line; overflow-wrap: anywhere; }
+.prep-reads { margin: 6px 0 0; padding-left: 18px; font-size: 14px; color: var(--muted); }
 .quotes-label { margin: 14px 0 0; font-size: 12.5px; font-weight: 600; color: var(--faint); }
 .quotes { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 8px; }
 .quote { padding: 1px 0 1px 11px; border-left: 3px solid var(--line); }
