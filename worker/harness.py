@@ -20,6 +20,7 @@ only through save_file. The harness itself is created by scripts/deploy_worker.p
 
 import asyncio
 import json
+import logging
 import os
 import re
 import uuid
@@ -32,9 +33,12 @@ import botocore.session
 from botocore.config import Config
 from botocore.exceptions import EventStreamError
 
+from beelink.clock import now_text
 from worker.chart import render_svg
 from worker.runner import Job
 from worker.web_search import SearchResult, web_search
+
+log = logging.getLogger("bee-call.worker")
 
 REGION = "ap-southeast-2"
 HARNESS_NAME = "bee_call_worker"
@@ -183,7 +187,10 @@ class Round:
 
     @property
     def pending(self) -> list[ToolUse]:
-        return [t for t in self.tool_uses if t.name in INLINE_FUNCTIONS and t.tool_use_id not in self.answered]
+        # Every call the harness left unanswered is ours to answer, including calls to tools that do
+        # not exist: those get an error result so the agent can carry on. Leaving them out ended a
+        # job with stop reason tool_use and nothing to do (2026-10-13).
+        return [t for t in self.tool_uses if t.name not in BUILT_IN_TOOLS and t.tool_use_id not in self.answered]
 
 
 def read_round(events: Iterable[dict[str, Any]]) -> Round:
@@ -236,6 +243,7 @@ def _read_events(events: Iterable[dict[str, Any]], out: Round) -> None:
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
 RESERVED = {"request.md", "events.jsonl", "usage.json"}  # written by this Mac, never by the agent
 FINISHED = {"end_turn", "stop_sequence"}
+BUILT_IN_TOOLS = {"code_interpreter"}  # run by the harness itself
 
 
 def update_request(definition: dict[str, Any], harness_id: str) -> dict[str, Any]:
@@ -309,11 +317,13 @@ class HarnessWorker:
                              str(args.get("x_label", "")), str(args.get("y_label", "")))
             (job.dir / name).write_text(svg)
             return f"Saved {name}. Mention it in the report.", "success"
-        return f"Unknown function {use.name}.", "error"
+        log.warning("worker called an unknown tool %r", use.name)
+        return f"There is no tool named {use.name}. Use one of: {', '.join(INLINE_FUNCTIONS)}.", "error"
 
     async def run(self, job: Job, progress: Callable[[str], None], relay: Callable[[str], Awaitable[None]]) -> str:
         session_id = f"beecall-job-{job.job_id}-{uuid.uuid4().hex}"  # 33 to 100 characters
-        messages = [{"role": "user", "content": [{"text": f"Job {job.job_id}: {job.task}"}]}]
+        # The worker has no clock; relative dates in the task ("this Saturday") need today's date.
+        messages = [{"role": "user", "content": [{"text": f"Job {job.job_id} (it is now {now_text()}; read today, tomorrow and weekdays against this): {job.task}"}]}]
         tokens = [0, 0]
         for _ in range(MAX_ROUNDS):
             found = await asyncio.to_thread(self._invoke, session_id, messages)

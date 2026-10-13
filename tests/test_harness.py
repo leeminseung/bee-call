@@ -98,7 +98,8 @@ def test_worker_serves_inline_functions_until_the_agent_finishes(tmp_path):
 
     asyncio.run(main())
     first, second, third, fourth, fifth = harness.requests
-    assert first["messages"] == [{"role": "user", "content": [{"text": "Job 01: Compare the trails"}]}]
+    opening = first["messages"][0]["content"][0]["text"]
+    assert opening.startswith("Job 01 (it is now ") and opening.endswith("): Compare the trails")
     assert len({r["runtimeSessionId"] for r in harness.requests}) == 1 and len(first["runtimeSessionId"]) >= 33
     assert second["messages"][0]["content"][0]["toolResult"]["toolUseId"] == "t1"
     assert "trails.example" in third["messages"][0]["content"][0]["toolResult"]["content"][0]["text"]
@@ -184,3 +185,22 @@ def test_save_chart_draws_svg_and_file_names_are_checked(tmp_path):
     assert (tmp_path / "request.md").read_text() == "original"
     results = [b["toolResult"]["status"] for b in harness.requests[2]["messages"][0]["content"]]
     assert results == ["error", "error"]
+
+
+def test_a_call_to_a_tool_that_does_not_exist_gets_an_error_and_the_job_goes_on(tmp_path):
+    harness = FakeHarness([
+        assistant(("tool", "u1", "get_current_date", ["{}"])),
+        assistant(("text", "Finished without the date tool."), stop="end_turn"),
+    ])
+
+    async def main():
+        async def relay(text):
+            pass
+
+        job = Job(job_id="01", dir=tmp_path, task="What day is Saturday?")
+        return await HarnessWorker("arn:harness", client=harness, search=fake_search).run(job, lambda t: None, relay)
+
+    assert asyncio.run(main()) == "Finished without the date tool."
+    answer = harness.requests[1]["messages"][0]["content"][0]["toolResult"]
+    assert answer["toolUseId"] == "u1" and answer["status"] == "error"
+    assert "There is no tool named get_current_date" in answer["content"][0]["text"]

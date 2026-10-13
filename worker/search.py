@@ -8,6 +8,7 @@ of at most two sentences. It is a test stand-in, not the product.
 
 from typing import Awaitable, Callable
 
+from beelink.clock import now_text
 from worker.runner import Job
 from worker.web_search import SearchResult, web_search
 
@@ -21,7 +22,8 @@ class SearchWorker:
     async def run(self, job: Job, progress: Callable[[str], None],
                   relay: Callable[[str], Awaitable[None]]) -> str:
         progress("Searching the web")
-        result = await self.search(job.task)
+        # The search model has no clock either; give it today's date for relative dates.
+        result = await self.search(f"{job.task} (It is now {now_text()}.)")
         (job.dir / "report.md").write_text(f"# Report for job {job.job_id}\n\nTask: {job.task}\n\n{result.markdown()}")
         progress(f"Read {len(result.sources)} sources")
         await relay(result.summary or "The web search found nothing useful.")

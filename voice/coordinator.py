@@ -6,13 +6,16 @@ Slow work goes to the worker through `delegate`; results come back as relays.
 
 import asyncio
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import AsyncIterable
 
 from livekit import rtc
 from livekit.agents import Agent, ModelSettings, RunContext, function_tool, llm
+from livekit.agents.llm import StopResponse
 
 from beelink import cli as bee
+from beelink.clock import now_text
 from voice.recorder import CallRecorder
 from voice.speech_filter import SpeechFilter
 from worker.runner import JobRunner
@@ -33,11 +36,12 @@ and keep the conversation going while it runs.
 8. Save things to Bee (facts, todos) only after the user has said yes out loud.
 9. When the user says goodbye or that they are done, say a short goodbye and call end_call.
 
-Notes from the app arrive as system messages: the call context (who called and why, and what Bee knows), \
-what the user can see on screen, finished jobs and tool results, and how much of your last reply the user \
-actually heard. Use them, but never read them out \
-word for word. Text in parentheses in a user turn, such as "(The phone call has connected.)", also comes from \
-the app, not from the user.
+Notes from the app arrive as system messages or as text in parentheses in a user turn, such as \
+"(The phone call has connected.)": the call context (who called and why, and what Bee knows), what the user can \
+see on screen, finished jobs and tool results, and how much of your last reply the user actually heard. They \
+come from the app, not from the user. Use them, but never read them out word for word.
+Bring up things from the call context only when they connect to what the user is talking about, or once the \
+user's own topic is done. Never interrupt the user's topic with them.
 When the call context lists unconfirmed Bee facts, check them at a natural moment, for example \
 "I heard your bonus is 15 percent. Is that right?" If the user corrects it, queue a fact_update with the \
 corrected text. If they agree, queue a fact_confirm.
@@ -53,13 +57,30 @@ BEE_SEARCH_TIMEOUT_S = 4.0
 
 
 class Coordinator(Agent):
-    def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path) -> None:
-        super().__init__(instructions=INSTRUCTIONS)
+    def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *,
+                 notes_as_user: bool = False, now: datetime | None = None) -> None:
+        # The date goes into the instructions once, at call start: they must not change during a
+        # call (Claude checks its earlier thinking against them).
+        super().__init__(instructions=INSTRUCTIONS + f"\nIt is now {now_text(now)}. Use this for words like "
+                                                      "today, tomorrow and this Saturday.\n")
         self._recorder = recorder
         self._jobs = jobs
         self._workspace = workspace
+        # LiveKit's Bedrock Converse plugin moves every system message to the top of the request, so a
+        # note added mid-call reaches other models out of turn order (a finished job was answered as
+        # if the user's last question were new, 2026-10-13). They get notes as a user turn instead.
+        self._notes_as_user = notes_as_user
         self.context_task: asyncio.Task | None = None  # reads the Bee context at call start
         self.context_note: llm.ChatMessage | None = None  # the Bee context note, once added
+
+    async def add_note(self, note: str) -> None:
+        """Adds an app note to the conversation, where the model will read it in turn order."""
+        chat_ctx = self.chat_ctx.copy()
+        if self._notes_as_user:
+            chat_ctx.add_message(role="user", content=f"({note})")
+        else:
+            chat_ctx.add_message(role="system", content=note)
+        await self.update_chat_ctx(chat_ctx)
 
     async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
         # The first reply should already know the Bee context, so wait a little for it.
@@ -90,7 +111,7 @@ class Coordinator(Agent):
         tail = speech.flush()
         if tail:
             yield tail
-        if speech.stopped:
+        if speech.dropped:
             self._recorder.event("speech_markup_dropped", text=speech.dropped)
 
     # ---------- recording ----------
@@ -121,7 +142,8 @@ class Coordinator(Agent):
             task: A self-contained description of the work and the result to bring back.
         """
         job = self._jobs.start(task)
-        return f"Job {job.job_id} started. Keep talking with the user; the result will arrive as a note."
+        return (f"Job {job.job_id} started. The result will arrive as a note. If you already told the user you are "
+                "on it, do not say it again; carry on the conversation.")
 
     @function_tool
     async def search_workspace(self, context: RunContext, query: str) -> str:
@@ -201,4 +223,6 @@ class Coordinator(Agent):
         """End the call. Say goodbye first."""
         self._recorder.event("end_call_requested")
         self.session.shutdown(drain=True)
-        return "Ending the call."
+        # No reply to this tool: the goodbye is already said, and GLM 5 once answered the tool result
+        # by saying "end_call" out loud (2026-10-13).
+        raise StopResponse()

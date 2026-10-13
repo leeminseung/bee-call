@@ -57,9 +57,10 @@ REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", REGION)
 VOICE = os.environ.get("POLLY_VOICE", "Ruth")
 COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
-# For COORDINATOR_LLM=bedrock. MiniMax M2.5 did best in probes/coordinator_bench.py on 2026-10-12
-# (21 of 24 scenes after the prompt fixes, first token under 2 s every time, the shortest replies).
-COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "minimax.minimax-m2.5")
+# For COORDINATOR_LLM=bedrock. GLM 5 speaks while it calls a tool. MiniMax M2.5 scored best in
+# probes/coordinator_bench.py (2026-10-12) but calls tools without a word, and in the first real
+# call (2026-10-13) the caller heard silence for 23-28 s whenever they kept talking meanwhile.
+COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "zai.glm-5")
 WORKER = os.environ.get("WORKER", "fake")
 WORKSPACE = Path("workspace")
 
@@ -248,14 +249,12 @@ async def entrypoint(ctx: JobContext) -> None:
             note = (f"Note from the app: background job {job_id} finished. Tell the user the key result in "
                     f"your own words, in at most two sentences, and say the details are in the app. Result: {text}")
         # The note stays in the agent's history, so it still reaches the model if this reply is cut off.
-        chat_ctx = agent.chat_ctx.copy()
-        chat_ctx.add_message(role="system", content=note)
-        await agent.update_chat_ctx(chat_ctx)
+        await agent.add_note(note)
         session.generate_reply()
 
     backend = {"search": SearchWorker, "harness": HarnessWorker}.get(WORKER, FakeWorker)()
     jobs = JobRunner(rec.dir, rec.event, backend, relay)
-    agent = Coordinator(rec, jobs, WORKSPACE)
+    agent = Coordinator(rec, jobs, WORKSPACE, notes_as_user=COORDINATOR_LLM not in ("claude", "fake"))
 
     async def shutdown() -> None:
         await jobs.cancel_all()
