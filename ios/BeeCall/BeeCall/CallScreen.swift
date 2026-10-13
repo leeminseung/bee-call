@@ -3,15 +3,25 @@ import SwiftUI
 struct CallScreen: View {
     let calls: CallManager
     @AppStorage("tokenServerURL") private var tokenServerURL = "http://localhost:8787/token"
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var showsCallRecord = false
 
     var body: some View {
         VStack(spacing: 16) {
             Text("Bee Call")
                 .font(.largeTitle.bold())
-            Text(calls.status)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            VStack(spacing: 4) {
+                Text(calls.status)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                if !calls.isInCall && !calls.ringStatus.isEmpty {
+                    Text(calls.ringStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
 
             captions
 
@@ -28,6 +38,15 @@ struct CallScreen: View {
             }
 
             Button {
+                showsCallRecord = true
+            } label: {
+                Label("Call record", systemImage: "list.bullet.rectangle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(callRecordURL == nil)
+
+            Button {
                 Task {
                     if calls.isInCall {
                         await calls.endCall()
@@ -36,7 +55,7 @@ struct CallScreen: View {
                     }
                 }
             } label: {
-                Text(calls.isInCall ? "End" : "Call")
+                Text(calls.isRinging ? "Decline" : calls.isInCall ? "End" : "Call")
                     .font(.title3.bold())
                     .frame(maxWidth: .infinity)
             }
@@ -46,6 +65,25 @@ struct CallScreen: View {
             .disabled(calls.isEnding)
         }
         .padding()
+        .sheet(isPresented: $showsCallRecord) {
+            if let callRecordURL {
+                CallRecordSheet(url: callRecordURL)
+            }
+        }
+        // A new id cancels the running listener and starts the next one.
+        .task(id: ringSource) {
+            await calls.listenForRings(tokenServerURL: ringSource)
+        }
+    }
+
+    /// Where to listen for the AI's calls: the token server while the app is in the foreground, else
+    /// nowhere. Inactive still counts as foreground; the incoming-call banner makes the app inactive.
+    private var ringSource: String {
+        scenePhase == .background ? "" : tokenServerURL
+    }
+
+    private var callRecordURL: URL? {
+        CallRecordSheet.url(tokenServerURL: tokenServerURL)
     }
 
     private var captions: some View {

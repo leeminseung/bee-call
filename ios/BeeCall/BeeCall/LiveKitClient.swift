@@ -27,12 +27,19 @@ final class LiveKitClient: NSObject {
         return URLSession(configuration: configuration)
     }()
 
-    /// Joins a new room and publishes the microphone. Returns the room name.
-    func connect(tokenServerURL: String) async throws -> String {
+    /// Joins a room and publishes the microphone. Returns the room name. A new room for a call the user
+    /// starts; with `answering`, the room of the AI's call. Only the pass from the token server differs.
+    func connect(tokenServerURL: String, answering roomName: String? = nil) async throws -> String {
+        captions = []
+        let access = try await fetchAccess(from: tokenServerURL, answering: roomName)
+        try Task.checkCancellation() // the call ended while we fetched the token
+        return try await connect(access: access)
+    }
+
+    private func connect(access: Access) async throws -> String {
         let room = Room()
         room.add(delegate: self)
         self.room = room // set first, so disconnect() can stop this attempt at any point
-        captions = []
         // The voice server sends both sides' transcripts on this topic. An AI line arrives as one
         // stream in chunks; a user line is re-sent in full as a new stream each time it improves.
         try await room.registerTextStreamHandler(for: "lk.transcription") { [weak self, weak room] reader, sender in
@@ -44,8 +51,7 @@ final class LiveKitClient: NSObject {
                 await self.show(text, segment: segment, from: sender, sentAt: reader.info.timestamp, in: room)
             }
         }
-        let access = try await fetchAccess(from: tokenServerURL)
-        try Task.checkCancellation() // the call ended while we fetched the token
+        try Task.checkCancellation() // the call ended while we got the room ready
         try await room.connect(url: access.url, token: access.token)
         try await room.localParticipant.setMicrophone(enabled: microphoneOn)
         return access.room
@@ -85,21 +91,33 @@ final class LiveKitClient: NSObject {
         let room: String
     }
 
+    /// The token server answered 410 to an answer request: the AI stopped ringing and closed the room.
+    struct CallAlreadyEnded: Error {}
+
     private struct TokenServerError: LocalizedError {
         let errorDescription: String?
     }
 
-    private func fetchAccess(from address: String) async throws -> Access {
+    /// A pass for a new call: the voice server is dispatched into the new room when the app joins.
+    /// With `answering`, a pass into the room of the AI's call instead; the voice server is already there.
+    private func fetchAccess(from address: String, answering roomName: String?) async throws -> Access {
         let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard var parts = URLComponents(string: address), parts.scheme != nil else {
             throw TokenServerError(errorDescription: "The token server address is not a URL.")
         }
-        parts.queryItems = (parts.queryItems ?? []) + [URLQueryItem(name: "identity", value: "user")]
+        var query = [URLQueryItem(name: "identity", value: "user")]
+        if let roomName {
+            query += [URLQueryItem(name: "room", value: roomName), URLQueryItem(name: "answer", value: "1")]
+        }
+        parts.queryItems = (parts.queryItems ?? []) + query
         guard let url = parts.url else {
             throw TokenServerError(errorDescription: "The token server address is not a URL.")
         }
         let (data, response) = try await http.data(for: URLRequest(url: url, timeoutInterval: 10))
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if code == 410, roomName != nil {
+            throw CallAlreadyEnded()
+        }
         guard code == 200 else {
             throw TokenServerError(errorDescription: "The token server answered \(code).")
         }
