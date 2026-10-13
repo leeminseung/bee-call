@@ -253,10 +253,14 @@ async def entrypoint(ctx: JobContext) -> None:
         session.generate_reply()
 
     backend = {"search": SearchWorker, "harness": HarnessWorker}.get(WORKER, FakeWorker)()
+    # Wake a cloud worker session now, so the first job does not wait for one to start.
+    keep_warm = asyncio.create_task(backend.keep_warm()) if isinstance(backend, HarnessWorker) else None
     jobs = JobRunner(rec.dir, rec.event, backend, relay)
     agent = Coordinator(rec, jobs, WORKSPACE, notes_as_user=COORDINATOR_LLM not in ("claude", "fake"))
 
     async def shutdown() -> None:
+        if keep_warm:
+            keep_warm.cancel()
         await jobs.cancel_all()
         if isinstance(session.llm, ClaudeBedrockLLM):
             session.llm.settle()  # a last reply may still be waiting to be committed

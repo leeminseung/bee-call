@@ -204,3 +204,42 @@ def test_a_call_to_a_tool_that_does_not_exist_gets_an_error_and_the_job_goes_on(
     answer = harness.requests[1]["messages"][0]["content"][0]["toolResult"]
     assert answer["toolUseId"] == "u1" and answer["status"] == "error"
     assert "There is no tool named get_current_date" in answer["content"][0]["text"]
+
+
+def test_a_warm_session_is_ready_before_the_first_job_and_the_job_uses_it(tmp_path):
+    harness = FakeHarness([
+        assistant(("text", "ready"), stop="end_turn"),  # the warm-up at call start
+        assistant(("text", "Done."), stop="end_turn"),  # the job
+    ])
+
+    async def main():
+        worker = HarnessWorker("arn:harness", client=harness, search=fake_search)
+        warm = asyncio.create_task(worker.keep_warm())
+        while not harness.requests:  # the warm-up went out
+            await asyncio.sleep(0.01)
+        async def relay(text):
+            pass
+        summary = await worker.run(Job(job_id="01", dir=tmp_path, task="Anything"), lambda t: None, relay)
+        warm.cancel()
+        await warm
+        return summary
+
+    assert asyncio.run(main()) == "Done."
+    warm_up, job = harness.requests
+    assert warm_up["messages"][0]["content"][0]["text"].startswith("Warm-up before a phone call")
+    assert warm_up["runtimeSessionId"] == job["runtimeSessionId"]
+
+
+def test_a_warm_up_that_calls_a_tool_is_told_not_to(tmp_path):
+    harness = FakeHarness([
+        assistant(("tool", "w1", "progress", ['{"text": "warming"}'])),
+        assistant(("text", "ready"), stop="end_turn"),
+    ])
+
+    async def main():
+        worker = HarnessWorker("arn:harness", client=harness, search=fake_search)
+        await worker._ping("beecall-warm-test-0123456789abcdef0123456789")
+
+    asyncio.run(main())
+    answer = harness.requests[1]["messages"][0]["content"][0]["toolResult"]
+    assert answer["toolUseId"] == "w1" and answer["status"] == "error"

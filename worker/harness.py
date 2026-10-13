@@ -114,6 +114,10 @@ INLINE_FUNCTIONS: dict[str, dict[str, Any]] = {
 }
 
 
+def new_session_id(tag: str) -> str:
+    return f"beecall-{tag}-{uuid.uuid4().hex}"  # 33 to 100 characters
+
+
 def uses_code_interpreter(model_id: str) -> bool:
     for prefix in REGION_PREFIXES:
         if model_id.startswith(prefix):
@@ -243,6 +247,11 @@ def _read_events(events: Iterable[dict[str, Any]], out: Round) -> None:
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
 RESERVED = {"request.md", "events.jsonl", "usage.json"}  # written by this Mac, never by the agent
 FINISHED = {"end_turn", "stop_sequence"}
+# A new harness session starts a fresh microVM, which took about 30 s on 2026-10-13, so the voice
+# server warms one at call start and keeps it from idling out until a job takes it.
+WARM_TEXT = ("Warm-up before a phone call, not a job. Reply with the single word ready and call no tools. "
+             "Jobs come in later messages.")
+KEEP_WARM_S = 240  # under the session idle timeout (idleRuntimeSessionTimeout 300 in harness_definition)
 BUILT_IN_TOOLS = {"code_interpreter"}  # run by the harness itself
 
 
@@ -281,6 +290,43 @@ class HarnessWorker:
         self.client = client or boto3.Session(profile_name=os.environ.get("AWS_PROFILE", "bee-call")).client(
             "bedrock-agentcore", region_name=REGION, config=Config(read_timeout=900))
         self.search = search
+        self._ready: str | None = None  # a warm session no job is using
+        self._warm_lock = asyncio.Lock()  # one invocation at a time on the warm session
+
+    async def keep_warm(self) -> None:
+        """Keeps one harness session awake for the next job. Run it as a task for the length of a
+        call and cancel it when the call ends; a job takes the warm session when it starts."""
+        try:
+            while True:
+                async with self._warm_lock:
+                    self._ready = self._ready or new_session_id("warm")
+                    try:
+                        await self._ping(self._ready)
+                    except Exception:
+                        log.warning("worker warm-up failed", exc_info=True)
+                        self._ready = None
+                await asyncio.sleep(KEEP_WARM_S)
+        except asyncio.CancelledError:
+            pass  # the call ended
+
+    async def _ping(self, session_id: str) -> None:
+        messages = [{"role": "user", "content": [{"text": WARM_TEXT}]}]
+        for _ in range(3):
+            found = await asyncio.to_thread(self._invoke, session_id, messages)
+            if found.errors:
+                raise RuntimeError("; ".join(found.errors))
+            if not found.pending:
+                return
+            messages = [{"role": "user", "content": [
+                {"toolResult": {"toolUseId": use.tool_use_id, "status": "error",
+                                "content": [{"text": "This is a warm-up, not a job. Do not call tools now."}]}}
+                for use in found.pending]}]
+
+    async def _take_session(self, job_id: str) -> str:
+        # Waiting for a warm-up still in flight is quicker than starting another cold session.
+        async with self._warm_lock:
+            session_id, self._ready = self._ready, None
+        return session_id or new_session_id(f"job-{job_id}")
 
     def _invoke(self, session_id: str, messages: list[dict[str, Any]]) -> Round:
         response = self.client.invoke_harness(harnessArn=self.harness_arn, runtimeSessionId=session_id,
@@ -321,7 +367,7 @@ class HarnessWorker:
         return f"There is no tool named {use.name}. Use one of: {', '.join(INLINE_FUNCTIONS)}.", "error"
 
     async def run(self, job: Job, progress: Callable[[str], None], relay: Callable[[str], Awaitable[None]]) -> str:
-        session_id = f"beecall-job-{job.job_id}-{uuid.uuid4().hex}"  # 33 to 100 characters
+        session_id = await self._take_session(job.job_id)
         # The worker has no clock; relative dates in the task ("this Saturday") need today's date.
         messages = [{"role": "user", "content": [{"text": f"Job {job.job_id} (it is now {now_text()}; read today, tomorrow and weekdays against this): {job.task}"}]}]
         tokens = [0, 0]
@@ -352,4 +398,5 @@ class HarnessWorker:
             (job.dir / "report.md").write_text(f"# Report for job {job.job_id}\n\n{summary}\n")
         (job.dir / "usage.json").write_text(json.dumps({"input_tokens": tokens[0], "output_tokens": tokens[1],
                                                         "stop_reason": found.stop_reason}))
+        self._ready = self._ready or session_id  # still warm: the next job can use it
         return summary
