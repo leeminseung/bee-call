@@ -40,7 +40,7 @@ from livekit.agents import AgentServer, AgentSession, JobContext, JobProcess, cl
 from livekit.plugins import aws, silero
 from livekit.plugins.aws.stt import Credentials
 
-from beelink.context import fetch_call_inputs, save_call_inputs
+from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
 from voice.claude_llm import ClaudeBedrockLLM
 from voice.coordinator import Coordinator
 from voice.dispatch import AGENT_NAME, RING_SECONDS
@@ -66,6 +66,9 @@ COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
 COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "zai.glm-5")
 WORKER = os.environ.get("WORKER", "fake")
 FIRST_WORDS_WAIT_S = 6.0  # ringing stops when the AI starts to speak, or after this long anyway (arbitrary)
+# After the user answers an AI call, its prepared opening does not wait longer than this for the Bee read
+# that only feeds the call record (arbitrary).
+OUTBOUND_INPUTS_WAIT_S = 0.5
 WORKSPACE = Path("workspace")
 
 log = logging.getLogger("bee-call")
@@ -190,6 +193,14 @@ def greeting(meta: dict) -> str:
     return "Hi, it's Bee Call. What's on your mind?"
 
 
+async def read_by(task: asyncio.Task, seconds: float) -> CallInputs | None:
+    """The task's Bee inputs if they are read within `seconds`; None while still reading (the task keeps going)."""
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), seconds)
+    except asyncio.TimeoutError:
+        return None
+
+
 def prewarm(proc: JobProcess) -> None:
     # Done once per worker process, before any call, so calls start without a stall.
     proc.userdata["vad"] = silero.VAD.load()
@@ -225,30 +236,75 @@ async def entrypoint(ctx: JobContext) -> None:
             except Exception:
                 log.exception("could not close room %s", ctx.room.name)
             return
-        inputs = await inputs_task
         prep = Prep.from_meta(meta.get("prep")) or Prep(error="the call was placed without a prep note")
         preparation = ringing = None
+        # This read is for the call record, and for the plain Bee context only when the call has no prep note.
+        inputs = await read_by(inputs_task, OUTBOUND_INPUTS_WAIT_S if prep.note else INBOUND_READ_TIMEOUT_S)
     else:
         # The user called: they hear ringing while the AI reads Bee and starts its prep. It picks up as soon as
         # its opening is written; the note usually follows during the opening (voice/prep.py).
         ringing = asyncio.create_task(ring_back(ctx.room))
 
-        async def stop_ringing() -> None:  # if the call ends before the AI picks up
+        async def stop_ringing() -> None:  # if the job ends before the AI picks up
             ringing.cancel()
 
         ctx.add_shutdown_callback(stop_ringing)
-        inputs = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S)
-        preparation = Preparation(inputs, meta, prep_model(COORDINATOR_LLM)).start()
-        await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - started))
+        preparation = inputs_task = None
+        left = asyncio.Event()  # the caller hung up while it rang
+        try:
+            caller = await asyncio.wait_for(ctx.wait_for_participant(), 5)
+            ctx.room.on("participant_disconnected", lambda p: p.identity == caller.identity and left.set())
+        except asyncio.TimeoutError:
+            pass
+
+        async def get_ready() -> CallInputs:
+            nonlocal preparation
+            got = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S)
+            preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM)).start()
+            await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - started))
+            return got
+
+        ready, hung_up = asyncio.create_task(get_ready()), asyncio.create_task(left.wait())
+        await asyncio.wait({ready, hung_up}, return_when=asyncio.FIRST_COMPLETED)
+        hung_up.cancel()
+        if not ready.done():
+            log.info("the caller hung up while it rang, in room %s", ctx.room.name)
+            for task in (ready, ringing, keep_warm):
+                if task:
+                    task.cancel()
+            if preparation is not None:
+                preparation.cancel()
+            await asyncio.gather(ready, ringing, return_exceptions=True)
+            ctx.shutdown(reason="the caller hung up while it rang")
+            return
+        inputs = ready.result()
         prep = preparation.prep
     rec = CallRecorder(WORKSPACE, ctx.job.room.name)
     rec.event("coordinator", llm=COORDINATOR_LLM)
     rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"))
-    card = save_call_inputs(rec.dir, inputs)
-    if card.get("conversation_id") or card.get("pending_fact_ids"):
-        rec.event("why_calling", **card)
-    if inputs.errors:
-        rec.event("error", source="bee_context", error="; ".join(inputs.errors))
+
+    def keep_inputs(got: CallInputs) -> None:
+        try:
+            card = save_call_inputs(rec.dir, got)
+        except Exception as exc:  # the call goes on without its Bee record
+            rec.event("error", source="bee_context", error=f"saving the Bee inputs failed: {exc}")
+            return
+        if card.get("conversation_id") or card.get("pending_fact_ids"):
+            rec.event("why_calling", **card)
+        if got.errors:
+            rec.event("error", source="bee_context", error="; ".join(got.errors))
+
+    async def keep_inputs_when_read() -> None:
+        try:
+            keep_inputs(await inputs_task)
+        except Exception as exc:
+            rec.event("error", source="bee_context", error=f"reading Bee failed: {exc}")
+
+    inputs_saver = None
+    if inputs is None:  # still being read: the call starts now, and the record gets it when it lands
+        inputs, inputs_saver = CallInputs(), asyncio.create_task(keep_inputs_when_read())
+    else:
+        keep_inputs(inputs)
     rec.event("picked_up", after_s=round(time.monotonic() - started, 2), opening=prep.opening,
               opening_s=prep.opening_s, note_ready=bool(prep.note))
 
@@ -289,7 +345,7 @@ async def entrypoint(ctx: JobContext) -> None:
             keep_warm.cancel()
         if preparation is not None:
             preparation.cancel()
-        await asyncio.gather(prep_recorder, return_exceptions=True)
+        await asyncio.gather(prep_recorder, *([inputs_saver] if inputs_saver else []), return_exceptions=True)
         await jobs.cancel_all()
         if isinstance(session.llm, ClaudeBedrockLLM):
             session.llm.settle()  # a last reply may still be waiting to be committed

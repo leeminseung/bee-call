@@ -138,6 +138,16 @@ def test_context_saves_inputs_and_card(tmp_path, fake_bee):
     assert card["utterances"][0]["text"] == "They offered 15 percent bonus."
 
 
+def test_a_conversation_bee_returns_as_null_does_not_break_a_call(tmp_path, fake_bee):
+    from voice.prep import call_brief
+
+    inputs = asyncio.run(context.fetch_call_inputs(conversation_ids=[999]))
+    assert inputs.conversations == [(999, {}, [])] and inputs.errors == []
+    card = context.save_call_inputs(tmp_path, inputs)
+    assert card["conversation_id"] == 999 and card["summary"] is None
+    assert call_brief(inputs, {"direction": "outbound", "reason": "A Bee conversation just ended."})
+
+
 def one_conversation(tmp_path, monkeypatch):
     now = int(time.time() * 1000)
     changed = {"meta": {"next_cursor": "cursor-9"},

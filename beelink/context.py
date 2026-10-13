@@ -69,7 +69,8 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
     for conv_id, pair in zip(ids, convs):
         if pair is not None:
             conv_raw, transcript_raw = pair
-            inputs.conversations.append((conv_id, conv_raw.get("conversation", {}), transcript_raw.get("transcript", [])))
+            inputs.conversations.append((conv_id, (conv_raw or {}).get("conversation") or {},
+                                         (transcript_raw or {}).get("transcript") or []))
     return inputs
 
 

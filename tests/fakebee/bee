@@ -18,6 +18,8 @@ if cmd[:3] == ["facts", "list", "--unconfirmed"]:
     out({"facts": [{"id": 7, "text": "Bonus is 15%", "tags": ["work"], "created_at": now_ms, "confirmed": False}]})
 if cmd[:2] == ["todos", "suggestions"]:
     out({"todoSuggestions": [{"id": 34, "text": "Ask about bonus terms", "emoji": "", "details": "", "alarm_at": None}]})
+if cmd[:2] in (["conversations", "get"], ["conversations", "transcript"]) and cmd[2] == "999":
+    out({"conversation": None, "transcript": None})  # a conversation Bee returns as null
 if cmd[:2] == ["conversations", "get"]:
     out({"conversation": {"id": int(cmd[2]), "short_summary": "Talked through a job offer", "start_time": now_ms}})
 if cmd[:2] == ["conversations", "transcript"]:
