@@ -324,7 +324,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         stt=aws.STT(region=REGION, language=LANGUAGE.transcribe, credentials=ctx.proc.userdata["transcribe_credentials"]),
         llm=make_llm(rec),
-        tts=aws.TTS(voice=VOICE, speech_engine="generative", region=REGION),
+        tts=aws.TTS(voice=VOICE, speech_engine=LANGUAGE.engine, region=REGION),
         vad=ctx.proc.userdata["vad"],
         turn_handling={"turn_detection": inference.TurnDetector()},
     )

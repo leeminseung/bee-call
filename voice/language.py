@@ -16,7 +16,8 @@ class CallLanguage:
     code: str
     name: str
     transcribe: str  # Amazon Transcribe streaming language code
-    voice: str  # Amazon Polly voice; both work with the generative engine in Sydney (checked 2026-10-14)
+    voice: str  # Amazon Polly voice
+    engine: str  # Amazon Polly engine for that voice
     opening: str  # how the prep's opening line should sound (voice/prep.py)
     rule: str = ""  # added to the coordinator's instructions
     greetings: dict[str, str] = field(default_factory=dict)
@@ -24,7 +25,7 @@ class CallLanguage:
 
 LANGUAGES = {
     "en": CallLanguage(
-        code="en", name="English", transcribe="en-US", voice="Ruth",
+        code="en", name="English", transcribe="en-US", voice="Ruth", engine="generative",
         opening="under 20 words of spoken English",
         greetings={
             "echo": "Hi! This is the echo test. Say something and I'll repeat it.",
@@ -34,7 +35,9 @@ LANGUAGES = {
             "inbound": "Hi, it's Bee Call. What's on your mind?",
         }),
     "ko": CallLanguage(
-        code="ko", name="Korean", transcribe="ko-KR", voice="Seoyeon",
+        # Neural, not generative: in the first Korean call (2026-10-14) the generative engine turned a 3 s opening
+        # into 15.6 s of unintelligible speech, and its length varied run to run (4.3 s, 5.9 s); neural stayed 3.8 s.
+        code="ko", name="Korean", transcribe="ko-KR", voice="Seoyeon", engine="neural",
         opening="one or two short sentences of spoken Korean, in the polite style",
         rule=("Speak Korean with the user, in natural, polite spoken Korean. The app's notes, Bee data and job "
               "results may be in English; say what matters in Korean, and keep names and numbers exact."),

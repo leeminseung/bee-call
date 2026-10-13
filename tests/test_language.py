@@ -19,9 +19,10 @@ NOW = datetime(2026, 10, 14, 0, 30, tzinfo=ZoneInfo("Asia/Seoul"))
 def test_english_is_the_default_and_korean_is_one_setting(monkeypatch):
     monkeypatch.delenv("CALL_LANGUAGE", raising=False)
     english = call_language()
-    assert (english.code, english.transcribe, english.voice, english.rule) == ("en", "en-US", "Ruth", "")
+    assert (english.code, english.transcribe, english.voice, english.engine, english.rule) == (
+        "en", "en-US", "Ruth", "generative", "")
     korean = call_language("KO ")
-    assert (korean.transcribe, korean.voice) == ("ko-KR", "Seoyeon") and "Korean" in korean.rule
+    assert (korean.transcribe, korean.voice, korean.engine) == ("ko-KR", "Seoyeon", "neural") and "Korean" in korean.rule
     with pytest.raises(SystemExit):
         call_language("fr")
 
