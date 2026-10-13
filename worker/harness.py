@@ -43,9 +43,11 @@ log = logging.getLogger("bee-call.worker")
 REGION = "ap-southeast-2"
 HARNESS_NAME = "bee_call_worker"
 STATE_FILE = Path("workspace") / "state" / "harness.json"  # written by scripts/deploy_worker.py
-# The product model is Claude Opus 5.5. While Claude on Bedrock is blocked for this account,
-# Kimi K3 stands in: the strongest model open to the account (2026-10-12).
-DEFAULT_MODEL = os.environ.get("WORKER_MODEL", "global.moonshotai.kimi-k3")
+# The product model is Claude Opus 5.5. While Claude on Bedrock is blocked for this account, GLM 5
+# stands in (Matt, 2026-10-13): steps take 1-5 s and it runs the code interpreter. Kimi K3 checked
+# sources more carefully but thought for up to a minute or more per step and cannot use the code
+# interpreter in the harness.
+DEFAULT_MODEL = os.environ.get("WORKER_MODEL", "zai.glm-5")
 # Kimi K3 in the harness fails on its first model call ("The task request was rejected by the
 # target") when the built-in code interpreter is attached, and works without it (2026-10-12).
 # Nova 2 Lite (2026-10-12) and GLM 5 (2026-10-13) work with it. Claude is untested (blocked).
