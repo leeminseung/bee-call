@@ -7,8 +7,11 @@ GET /token?identity=matt                 a token for a new call the user starts;
 GET /token?identity=matt&room=R&answer=1 a token to answer the AI's call in room R (already dispatched);
                                          410 if the room is gone (the voice server gave up after RING_SECONDS)
 GET /ring                                Server-Sent Events: one "ring" event per call the AI places
-                                         (calls placed in the last RING_SECONDS, then new ones). Until VoIP
-                                         push is set up, this is how an open app learns the AI is calling.
+                                         (calls placed in the last RING_SECONDS, then new ones): how an open
+                                         app learns the AI is calling without VoIP push.
+POST /voip  {"token": hex, "environment": "development"|"production"}
+                                         the app's VoIP push token, so an AI call rings a closed app too
+                                         (voice/voip_push.py); 204, or 400 for something else
 
 Listens on all interfaces so an iPhone on the same Wi-Fi can reach it.
 Development only: anyone on the network can get a token.
@@ -26,6 +29,7 @@ from dotenv import load_dotenv
 from livekit import api
 
 from beelink.planner import OUTBOUND_LOG
+from voice import voip_push
 from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata
 
 load_dotenv(".env.local")
@@ -123,12 +127,23 @@ async def ring(request: web.Request) -> web.StreamResponse:
     return resp
 
 
+async def voip_token(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+        voip_push.save_device_token(request.app["workspace"], str(body["token"]), str(body["environment"]))
+    except (ValueError, KeyError, TypeError) as exc:
+        raise web.HTTPBadRequest(text=f"expected a VoIP token: {exc}")
+    print(f"VoIP push token saved ({body['environment']})", flush=True)
+    return web.Response(status=204)
+
+
 def make_app(url: str, key: str, secret: str, workspace: Path = WORKSPACE, room_exists=livekit_room_exists) -> web.Application:
     app = web.Application()
     app["url"], app["key"], app["secret"], app["workspace"] = url, key, secret, workspace
     app["room_exists"] = room_exists
     app.router.add_get("/token", token)
     app.router.add_get("/ring", ring)
+    app.router.add_post("/voip", voip_token)
     return app
 
 

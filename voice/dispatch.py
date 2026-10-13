@@ -5,13 +5,14 @@ it is dispatched to. The dispatch metadata tells it which way the call goes and,
 for an AI-initiated call, why: the plan, the Bee inbox and the conversation ids,
 and the call prep note written before the phone rang (voice/prep.py).
 
-Ringing the phone is a separate step. Until VoIP push is set up (it needs the paid
-Apple Developer account), an app that is open hears about a new call from the
-token server, which streams workspace/state/outbound.jsonl. This module is the
-only writer of that file.
+Ringing the phone is a separate step. The ring line goes into
+workspace/state/outbound.jsonl, which the token server streams to an open app, and
+to Apple's VoIP push for a closed or locked one (voice/voip_push.py, once its key is
+set up and the app has registered). This module is the only writer of that file.
 """
 
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,9 @@ from typing import Any
 from livekit import api
 
 from beelink.planner import OUTBOUND_LOG, Plan
+from voice import voip_push
+
+log = logging.getLogger("bee-call.dispatch")
 
 AGENT_NAME = "bee-call"
 RING_SECONDS = 60  # how long the voice server waits for the phone to answer (arbitrary)
@@ -53,15 +57,22 @@ async def place_call(plan: Plan, workspace: Path, lk: api.LiveKitAPI | None = No
     finally:
         if own:
             await lk.aclose()
-    log = workspace / OUTBOUND_LOG
-    log.parent.mkdir(parents=True, exist_ok=True)
+    path = workspace / OUTBOUND_LOG
+    path.parent.mkdir(parents=True, exist_ok=True)
     placed = datetime.now()
-    with log.open("a") as f:
-        # expires_at: after this the voice server has given up, so an app must not try to answer.
-        f.write(json.dumps({"at": placed.isoformat(timespec="seconds"), "room": room,
-                            "expires_at": (placed + timedelta(seconds=RING_SECONDS)).isoformat(timespec="seconds"),
-                            "topic": plan.topic, "kind": plan.kind, "reason": plan.reason,
-                            "plan": str(plan.path) if plan.path else None}, ensure_ascii=False) + "\n")
+    # expires_at: after this the voice server has given up, so an app must not try to answer.
+    line = {"at": placed.isoformat(timespec="seconds"), "room": room,
+            "expires_at": (placed + timedelta(seconds=RING_SECONDS)).isoformat(timespec="seconds"),
+            "topic": plan.topic, "kind": plan.kind, "reason": plan.reason,
+            "plan": str(plan.path) if plan.path else None}
+    with path.open("a") as f:
+        f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    try:
+        pushed = await voip_push.ring(line, workspace)
+        if pushed:
+            log.info("VoIP push sent for room %s (apns-id %s)", room, pushed)
+    except Exception as exc:  # an open app still hears the ring stream
+        log.warning("VoIP push for room %s failed: %s", room, exc)
     return room
 
 

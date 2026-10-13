@@ -16,7 +16,7 @@ struct CallScreen: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 if !calls.isInCall && !calls.ringStatus.isEmpty {
-                    Text(calls.ringStatus)
+                    Text(calls.ringsWhenClosed ? "\(calls.ringStatus), also while the app is closed" : calls.ringStatus)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

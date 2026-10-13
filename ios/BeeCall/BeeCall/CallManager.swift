@@ -2,6 +2,7 @@ import AVFoundation
 import CallKit
 import LiveKit
 import Observation
+import PushKit
 
 /// Runs each call through CallKit, so iOS treats it as a phone call:
 /// call-priority audio, AirPods and lock-screen controls, the green call indicator.
@@ -12,6 +13,7 @@ final class CallManager: NSObject {
     private(set) var isInCall = false
     private(set) var isRinging = false // the AI's call, until it is answered or ends
     private(set) var isEnding = false
+    private(set) var ringsWhenClosed = false // the token server has this phone's VoIP push token
     let liveKit = LiveKitClient()
 
     @ObservationIgnored private let provider: CXProvider
@@ -22,6 +24,9 @@ final class CallManager: NSObject {
     // Room → CallKit call, for every AI call rung. The ring stream replays the last minute on each reconnect.
     @ObservationIgnored private var rungRooms: [String: UUID] = [:]
     @ObservationIgnored private var ringTimeout: Task<Void, Never>?
+    // VoIP pushes ring the AI's calls while the app is closed or the phone is locked.
+    @ObservationIgnored private let pushRegistry = PKPushRegistry(queue: .main)
+    @ObservationIgnored private var voipToken: String?
     // A call the user starts rings until the AI picks up (it reads Bee first, at most about 8 s).
     @ObservationIgnored private var pickUpTimeout: Task<Void, Never>?
     @ObservationIgnored private var pickedUp = false
@@ -46,6 +51,8 @@ final class CallManager: NSObject {
         liveKit.onUnexpectedDisconnect = { [weak self] in
             self?.hangUp(.remoteEnded, "The call dropped")
         }
+        pushRegistry.delegate = self
+        pushRegistry.desiredPushTypes = [.voIP]
     }
 
     func startCall(tokenServerURL: String) async {
@@ -97,6 +104,7 @@ final class CallManager: NSObject {
                 try await RingStream.read(from: url, onOpen: {
                     ringStatus = "Waiting for calls"
                     delay = 1
+                    Task { await sendVoipToken(tokenServerURL: tokenServerURL) } // the address may be new
                 }, onRing: {
                     ringPhone(for: $0, tokenServerURL: tokenServerURL)
                 })
@@ -157,10 +165,71 @@ final class CallManager: NSObject {
             provider.reportCall(with: id, endedAt: nil, reason: .remoteEnded) // ended while CallKit set it up
             return
         }
+        stopRingingAtExpiry(id, ring)
+    }
+
+    private func stopRingingAtExpiry(_ id: UUID, _ ring: Ring) {
         ringTimeout = Task {
             try? await Task.sleep(for: .seconds(answerBy(ring).timeIntervalSinceNow))
             guard !Task.isCancelled, callID == id, isRinging else { return }
             hangUp(.unanswered, "Missed a call from Bee Call")
+        }
+    }
+
+    // MARK: - VoIP push
+
+    /// Gives the token server this phone's VoIP push token, so the AI's calls ring while the app is closed.
+    private func sendVoipToken(tokenServerURL: String) async {
+        guard let token = voipToken, let url = RingStream.endpoint("/voip", tokenServerURL: tokenServerURL) else { return }
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Builds run from Xcode get pushes from Apple's development service; a TestFlight build would not.
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token, "environment": "development"])
+        let response = try? await URLSession.shared.data(for: request)
+        ringsWhenClosed = (response?.1 as? HTTPURLResponse)?.statusCode == 204
+    }
+
+    /// iOS ends an app that does not report a call to CallKit for every VoIP push, and may stop its pushes, so
+    /// this reports one at once, before anything else: also for a ring that expired, rang already, or cannot ring.
+    private func reportPushedCall(_ ring: Ring?, completion: @escaping () -> Void) {
+        let done = Handed(completion)
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: "Bee Call")
+        update.localizedCallerName = callerName(topic: ring?.topic)
+        update.hasVideo = false
+        if let ring, let rung = rungRooms[ring.room] {
+            // The ring stream rang this room already. Reporting it again only gets callUUIDAlreadyExists.
+            provider.reportNewIncomingCall(with: rung, update: update) { _ in done.call() }
+            return
+        }
+        let address = UserDefaults.standard.string(forKey: "tokenServerURL") ?? ""
+        guard let ring, answerBy(ring) > .now, !isInCall, !address.isEmpty else {
+            let id = UUID()
+            provider.reportNewIncomingCall(with: id, update: update) { [weak self] _ in
+                Task { @MainActor in self?.provider.reportCall(with: id, endedAt: nil, reason: .unanswered) }
+                done.call()
+            }
+            return
+        }
+        let id = UUID()
+        rungRooms[ring.room] = id
+        callID = id
+        tokenServerURL = address
+        isInCall = true
+        isRinging = true
+        status = ring.topic.map { "Bee Call is calling about: \($0)" } ?? "Bee Call is calling…"
+        provider.reportNewIncomingCall(with: id, update: update) { [weak self] error in
+            let failure = error?.localizedDescription
+            Task { @MainActor in
+                guard let self, self.callID == id else { return }
+                if let failure {
+                    self.finish("Could not ring: \(failure)")
+                } else {
+                    self.stopRingingAtExpiry(id, ring)
+                }
+            }
+            done.call()
         }
     }
 
@@ -251,6 +320,30 @@ final class CallManager: NSObject {
         isRinging = false
         isEnding = false
         status = message
+    }
+}
+
+/// PushKit's completion handler, passed into CallKit's callback; calling it from any queue is fine.
+private struct Handed: @unchecked Sendable {
+    let call: () -> Void
+    init(_ call: @escaping () -> Void) { self.call = call }
+}
+
+extension CallManager: PKPushRegistryDelegate {
+    func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
+        voipToken = pushCredentials.token.map { String(format: "%02x", $0) }.joined()
+        let address = UserDefaults.standard.string(forKey: "tokenServerURL") ?? ""
+        Task { await sendVoipToken(tokenServerURL: address) }
+    }
+
+    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+        voipToken = nil
+        ringsWhenClosed = false
+    }
+
+    func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload,
+                      for type: PKPushType, completion: @escaping () -> Void) {
+        reportPushedCall(RingStream.ring(fromPush: payload.dictionaryPayload), completion: completion)
     }
 }
 

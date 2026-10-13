@@ -8,8 +8,8 @@ struct Ring {
 }
 
 /// The token server's GET /ring, a Server-Sent Events stream: first the calls placed in the last
-/// minute, then each new one. Until VoIP push is set up (it needs the paid Apple Developer account),
-/// this is how an open app hears that the AI is calling.
+/// minute, then each new one. This is how an open app hears that the AI is calling; a VoIP push
+/// carries the same ring to a closed or locked one (CallManager).
 enum RingStream {
     /// The server answered, but not with a ring stream (for example a token server without /ring).
     struct BadStatus: Error {
@@ -18,13 +18,25 @@ enum RingStream {
 
     /// `/ring` on the token server's scheme, host and port. Nil if the address is empty or not a URL.
     static func url(tokenServerURL: String) -> URL? {
+        endpoint("/ring", tokenServerURL: tokenServerURL)
+    }
+
+    /// Another path on the token server, such as `/voip`.
+    static func endpoint(_ path: String, tokenServerURL: String) -> URL? {
         let address = tokenServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard var parts = URLComponents(string: address), parts.scheme == "http" || parts.scheme == "https",
               parts.host?.isEmpty == false else { return nil }
-        parts.path = "/ring"
+        parts.path = path
         parts.query = nil
         parts.fragment = nil
         return parts.url
+    }
+
+    /// The ring a VoIP push carries: the same fields as a ring event.
+    static func ring(fromPush payload: [AnyHashable: Any]) -> Ring? {
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
+        return parse(String(decoding: data, as: UTF8.self))
     }
 
     /// Reads ring events until the stream ends. `onOpen` runs once the server has accepted the stream.
