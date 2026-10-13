@@ -274,10 +274,13 @@
 				CODE_SIGN_ENTITLEMENTS = BeeCall.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = M7S7HJLWCF;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BeeCall/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Bee Call";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Bee Call asks the token server on your Mac for a call pass over your Wi-Fi.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bee Call uses the microphone so you can talk with the AI during a call.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -307,10 +310,13 @@
 				CODE_SIGN_ENTITLEMENTS = BeeCall.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = M7S7HJLWCF;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BeeCall/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Bee Call";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Bee Call asks the token server on your Mac for a call pass over your Wi-Fi.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bee Call uses the microphone so you can talk with the AI during a call.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
