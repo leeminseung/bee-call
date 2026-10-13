@@ -57,10 +57,11 @@ def voice_test_policy(params: dict[str, Any]) -> Blocks:
     """Replies for live voice tests: long enough to cut off, and a delegate call on "test job"."""
     messages = params["messages"]
     last = messages[-1]
-    if last["role"] == "system" and "background job" in last["content"] and " failed (" in last["content"]:
+    note = last["content"] if last["role"] == "system" else ""
+    if "<job-notification>" in note and "<error>" in note:
         return [{"type": "text", "text": "Sorry, the test job failed. Want me to try again?"}]
-    if last["role"] == "system" and "background job" in last["content"]:
-        result = last["content"].split("Result: ", 1)[1].strip() if "Result: " in last["content"] else "It is done."
+    if "<job-notification>" in note and "<summary>" in note:  # a notification with only files needs no reply
+        result = note.split("<summary>", 1)[1].split("</summary>", 1)[0].strip()
         return [{"type": "text", "text": f"Your test job is done. {result} The details are in the app."}]
     if last["role"] == "user" and any(b.get("type") == "tool_result" for b in last["content"]):
         return [{"type": "text", "text": "Okay, it's running. I'll tell you when it's done."}]

@@ -48,7 +48,7 @@ from voice.fake_claude import FakeAnthropic
 from voice.recorder import CallRecorder
 from worker.fake import FakeWorker
 from worker.harness import HarnessWorker
-from worker.runner import JobRunner
+from worker.runner import JobNotification, JobRunner
 from worker.search import SearchWorker
 
 load_dotenv(".env.local")
@@ -238,24 +238,19 @@ async def entrypoint(ctx: JobContext) -> None:
         turn_handling={"turn_detection": inference.TurnDetector()},
     )
 
-    async def relay(job_id: str, text: str, failed: bool = False) -> None:
+    async def notify(news: JobNotification) -> None:
         if COORDINATOR_LLM == "echo":
-            session.say(f"Sorry, background job {job_id} failed." if failed else text)
+            if news.needs_reply:
+                session.say(f"Sorry, background job {news.job_id} failed." if news.error else news.summary)
             return
-        if failed:
-            note = (f"Note from the app: background job {job_id} failed ({text}). Tell the user in one short "
-                    "sentence, and offer to try again or another way.")
-        else:
-            note = (f"Note from the app: background job {job_id} finished. Tell the user the key result in "
-                    f"your own words, in at most two sentences, and say the details are in the app. Result: {text}")
         # The note stays in the agent's history, so it still reaches the model if this reply is cut off.
-        await agent.add_note(note)
-        session.generate_reply()
+        if await agent.tell_job(news):
+            session.generate_reply()
 
     backend = {"search": SearchWorker, "harness": HarnessWorker}.get(WORKER, FakeWorker)()
     # Wake a cloud worker session now, so the first job does not wait for one to start.
     keep_warm = asyncio.create_task(backend.keep_warm()) if isinstance(backend, HarnessWorker) else None
-    jobs = JobRunner(rec.dir, rec.event, backend, relay)
+    jobs = JobRunner(rec.dir, rec.event, backend, notify)
     agent = Coordinator(rec, jobs, WORKSPACE)
 
     async def shutdown() -> None:

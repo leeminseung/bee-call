@@ -110,28 +110,29 @@ def test_worker_serves_inline_functions_until_the_agent_finishes(tmp_path):
 
 
 def run_job(tmp_path, rounds, search=fake_search):
-    """Runs one job through the real JobRunner with a scripted harness; returns (events, relays)."""
+    """Runs one job through the real JobRunner with a scripted harness; returns (events, notifications)
+    with each notification as (status, summary, error)."""
     from worker.runner import JobRunner
 
-    events, relays = [], []
+    events, news = [], []
 
-    async def on_relay(job_id, text, failed=False):
-        relays.append((text, failed))
+    async def on_notify(n):
+        news.append((n.status, n.summary, n.error))
 
     async def main():
         runner = JobRunner(tmp_path, lambda name, **f: events.append((name, f)),
-                           HarnessWorker("arn:harness", client=FakeHarness(rounds), search=search), on_relay)
+                           HarnessWorker("arn:harness", client=FakeHarness(rounds), search=search), on_notify)
         runner.start("Compare the trails")
         await asyncio.gather(*runner.tasks.values())
 
     asyncio.run(main())
-    return events, relays
+    return events, news
 
 
 def test_a_worker_that_hits_a_limit_fails_and_the_user_hears_it(tmp_path):
-    events, relays = run_job(tmp_path, [assistant(("text", "Still going"), stop="max_iterations_exceeded")])
+    events, news = run_job(tmp_path, [assistant(("text", "Still going"), stop="max_iterations_exceeded")])
     assert [name for name, _ in events][-1] == "job_failed"
-    assert relays == [("the worker stopped before finishing (max_iterations_exceeded)", True)]
+    assert news == [("failed", None, "the worker stopped before finishing (max_iterations_exceeded)")]
 
 
 def test_an_error_inside_the_stream_fails_the_job(tmp_path):
@@ -141,13 +142,13 @@ def test_an_error_inside_the_stream_fails_the_job(tmp_path):
         yield {"messageStart": {"role": "assistant"}}
         raise EventStreamError({"Error": {"Code": "internalServerException", "Message": "boom"}}, "InvokeHarness")
 
-    events, relays = run_job(tmp_path, [broken()])
-    assert [name for name, _ in events][-1] == "job_failed" and relays[0][1] is True and "boom" in relays[0][0]
+    events, news = run_job(tmp_path, [broken()])
+    assert [name for name, _ in events][-1] == "job_failed" and news[0][0] == "failed" and "boom" in news[0][2]
 
 
 def test_a_job_that_never_relayed_still_tells_the_user_its_summary(tmp_path):
-    events, relays = run_job(tmp_path, [assistant(("text", "Gwanaksan is gentler."), stop="end_turn")])
-    assert relays == [("Gwanaksan is gentler.", False)] and ("job_done" in [name for name, _ in events])
+    events, news = run_job(tmp_path, [assistant(("text", "Gwanaksan is gentler."), stop="end_turn")])
+    assert news == [("completed", "Gwanaksan is gentler.", None)] and ("job_done" in [name for name, _ in events])
 
 
 def test_requests_match_the_api_model():

@@ -1,7 +1,7 @@
 """The coordinator: the voice the user talks to, its call rules and its tools.
 
 It also tees the caller's audio and the AI's speech into the recorder.
-Slow work goes to the worker through `delegate`; results come back as relays.
+Slow work goes to the worker through `delegate`; its news comes back as job notifications.
 """
 
 import asyncio
@@ -18,7 +18,7 @@ from beelink import cli as bee
 from beelink.clock import now_text
 from voice.recorder import CallRecorder
 from voice.speech_filter import SpeechFilter
-from worker.runner import JobRunner
+from worker.runner import JobNotification, JobRunner, short
 
 INSTRUCTIONS = """\
 You are the voice of Bee Call. You phone the user to talk through their day and help them get one \
@@ -38,15 +38,21 @@ and keep the conversation going while it runs.
 
 Notes from the app arrive as system messages, as <instructions> blocks in a user turn, or as text in \
 parentheses in a user turn, such as "(The phone call has connected.)": the call context (who called and why, and what Bee knows), what the user can \
-see on screen, finished jobs and tool results, and how much of your last reply the user actually heard. They \
-come from the app, not from the user. Use them, but never read them out word for word.
+see on screen, job notifications, tool results that came back late, and how much of your last reply the user \
+actually heard. They come from the app, not from the user. Use them, but never read them out word for word.
 Bring up things from the call context only when they connect to what the user is talking about, or once the \
 user's own topic is done. Never interrupt the user's topic with them.
 When the call context lists unconfirmed Bee facts, check them at a natural moment, for example \
 "I heard your bonus is 15 percent. Is that right?" If the user corrects it, queue a fact_update with the \
 corrected text. If they agree, queue a fact_confirm.
-When a job result arrives, tell the user the key result in two or three short sentences (under 50 words) and \
-say the details are in the app.
+If the user cut you off, reply to what they said. In the same reply, briefly add anything they missed that \
+answers something they asked, unless they told you to drop it.
+Background jobs: delegate starts a job and returns at once. When the job has news, the app sends a \
+<job-notification> block with the job id, its status (running, completed or failed), the task, and a summary, an \
+error or the files the job made. When a notification has a summary or an error, tell the user the key point in two \
+or three short sentences (under 50 words) and say the details are in the app. A notification with only files needs \
+no reply. Say a job is done, or give its result, only after its notification has arrived. When the user asks how \
+a job is going, call job_status.
 """
 
 BEE_WRITE_KINDS = ("fact_confirm", "fact_update", "todo_create", "todo_accept")
@@ -54,6 +60,21 @@ CONTEXT_WAIT_S = 3.0  # how long the first reply waits for the Bee context (arbi
 # Under LiveKit's 5 s wait for tools after an interruption, so a search result is not lost.
 # Three searches took 1.7-1.9 s on 2026-10-12, with few conversations in the account.
 BEE_SEARCH_TIMEOUT_S = 4.0
+
+
+def job_notification(news: JobNotification) -> str:
+    """The note for news about a background job, modeled on how Claude Code tells its model about a background
+    task: a label, then a tagged block. What to do with it is in INSTRUCTIONS, not in each note."""
+    lines = ["[App notification, not the caller speaking]", "<job-notification>", f"<job-id>{news.job_id}</job-id>",
+             f"<status>{news.status}</status>", f"<task>{short(news.task)}</task>"]
+    if news.summary:
+        lines.append(f"<summary>{news.summary}</summary>")
+    if news.error:
+        lines.append(f"<error>{news.error}</error>")
+    if news.files:
+        lines.append(f"<files>{', '.join(news.files)}</files>")
+    lines.append("</job-notification>")
+    return "\n".join(lines)
 
 
 class Coordinator(Agent):
@@ -76,6 +97,11 @@ class Coordinator(Agent):
         chat_ctx = self.chat_ctx.copy()
         chat_ctx.add_message(role="system", content=note)
         await self.update_chat_ctx(chat_ctx)
+
+    async def tell_job(self, news: JobNotification) -> bool:
+        """Adds news about a background job to the conversation; True when the user should hear it now."""
+        await self.add_note(job_notification(news))
+        return news.needs_reply
 
     async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
         # The first reply should already know the Bee context, so wait a little for it.
@@ -133,12 +159,19 @@ class Coordinator(Agent):
     async def delegate(self, context: RunContext, task: str) -> str:
         """Hand slow work (research, calculation, analysis) to the background worker. Returns at once.
 
+        A started job cannot be changed. For more or different work, call delegate again.
+
         Args:
             task: A self-contained description of the work and the result to bring back.
         """
         job = self._jobs.start(task)
-        return (f"Job {job.job_id} started. The result will arrive as a note. If you already told the user you are "
-                "on it, do not say it again; carry on the conversation.")
+        return (f"Job {job.job_id} is running in the background. A job notification will come when it has news. "
+                "If you already told the user you are on it, do not say it again; carry on the conversation.")
+
+    @function_tool
+    async def job_status(self, context: RunContext) -> str:
+        """See how this call's background jobs are going: the latest step of each running job, or how it ended."""
+        return self._jobs.status_text()
 
     @function_tool
     async def search_workspace(self, context: RunContext, query: str) -> str:
