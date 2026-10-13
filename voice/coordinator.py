@@ -17,6 +17,7 @@ from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_inst
 
 from beelink import reads
 from beelink.clock import now_text
+from voice.language import CallLanguage
 from voice.recorder import CallRecorder
 from voice.speech_filter import SpeechFilter
 from worker.runner import JobNotification, JobRunner, short
@@ -79,12 +80,14 @@ def job_notification(news: JobNotification) -> str:
 
 class Coordinator(Agent):
     def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *, now: datetime | None = None,
-                 prep_note: str | None = None, pending_note: "asyncio.Future[str | None] | None" = None) -> None:
+                 prep_note: str | None = None, pending_note: "asyncio.Future[str | None] | None" = None,
+                 language: CallLanguage | None = None) -> None:
         # The date and the prep note go into the instructions before the call's first reply, and stay as they
         # are after it (Claude checks its earlier thinking against them). A note still being written when the
         # AI picks up (pending_note) replaces prep_note, the plain Bee context, if it arrives before that.
-        self._base_instructions = INSTRUCTIONS + f"\nIt is now {now_text(now)}. Use this for words like today, " \
-                                                 "tomorrow and this Saturday.\n"
+        rule = f"\n{language.rule}\n" if language and language.rule else ""
+        self._base_instructions = INSTRUCTIONS + rule + f"\nIt is now {now_text(now)}. Use this for words like " \
+                                                        "today, tomorrow and this Saturday.\n"
         super().__init__(instructions=self._with_note(prep_note))
         self._recorder = recorder
         self._jobs = jobs

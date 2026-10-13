@@ -49,6 +49,8 @@ Before the AI picks up, it reads the user's Bee data and writes itself a call pr
 
 Whether a Bee change is worth a call is decided by a rule-based stand-in for now (`beelink/planner.py`): a conversation with at least four utterances that ended within the last hour, or a new voice note; never during another call; at least 30 minutes after the last call, whoever started it. Each decision, call or not, is written to `plan.md` in the Bee inbox folder. The watcher saves its Bee cursor only after a change was handled, so a call that could not be placed is retried on the next catch-up. Try one decision without Bee events with `uv run python -m voice.outbound --once workspace/inbox/<folder> --dry-run --any-age`.
 
+`CALL_LANGUAGE` picks the call language: `en` (the default, and the demo) or `ko` (`voice/language.py`). It sets what Amazon Transcribe listens for, the Amazon Polly voice (Ruth or Seoyeon), the language the coordinator speaks and the prep's opening line; the rest of the instructions stay in English, and LiveKit's turn detector follows the transcript's language. One call is in one language, since Transcribe listens for one language per stream. Start `voice/outbound.py` with the same setting, and try Korean without a phone with `uv run python -m voice.fake_caller --language ko`.
+
 `COORDINATOR_LLM` picks what answers in the coordinator slot: `claude` (the product), or one of three test stand-ins:
 
 - `fake`: the real Claude adapter with scripted replies and no network. It checks every request against the Messages API rules and checks that earlier turns were never edited, so you can test barge-in, tools and job results without Bedrock access. Say "test job" to start a background job.

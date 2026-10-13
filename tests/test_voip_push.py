@@ -70,10 +70,17 @@ def push(tmp_path, config, status=200, body=b"", headers=None):
     return result, requests
 
 
-def test_nothing_is_sent_until_the_key_and_the_phone_are_set_up(tmp_path, config):
-    assert asyncio.run(voip_push.ring(LINE, tmp_path, config)) is None  # no phone registered
+def test_nothing_is_sent_until_the_key_and_the_phone_are_set_up(tmp_path, config, monkeypatch):
+    for name in ("APNS_KEY_PATH", "APNS_KEY_ID", "APNS_TEAM_ID"):  # .env.local may hold the real ones
+        monkeypatch.delenv(name, raising=False)
+
+    def no_network(request):
+        raise AssertionError("nothing should be sent")
+
+    offline = httpx.MockTransport(no_network)
+    assert asyncio.run(voip_push.ring(LINE, tmp_path, config, transport=offline)) is None  # no phone registered
     save_device_token(tmp_path, DEVICE, "development")
-    assert asyncio.run(voip_push.ring(LINE, tmp_path, None)) is None  # no key in the environment
+    assert asyncio.run(voip_push.ring(LINE, tmp_path, None, transport=offline)) is None  # no key in the environment
 
 
 def test_the_push_carries_the_ring_to_the_registered_phone(tmp_path, config):

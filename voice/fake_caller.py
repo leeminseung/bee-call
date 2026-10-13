@@ -39,25 +39,31 @@ PROFILE = os.environ.get("AWS_PROFILE", "bee-call")
 REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 WORKSPACE = Path("workspace")
 
-DEFAULT_LINES = [
-    "Hi, can you hear me okay?",
-    "I got a job offer today and I'm not sure what to do.",
-    "The new one pays more, but my team is great.",
-]
+DEFAULT_LINES = {
+    "en": ["Hi, can you hear me okay?",
+           "I got a job offer today and I'm not sure what to do.",
+           "The new one pays more, but my team is great."],
+    "ko": ["안녕하세요, 제 목소리 잘 들리세요?",
+           "오늘 이직 제안을 받았는데 어떻게 할지 모르겠어요.",
+           "새 회사가 연봉은 더 높은데, 지금 팀이 정말 좋거든요."],
+}
+# The caller's Polly voice and engine by language; it must not sound like the AI (voice/language.py).
+CALLER_VOICES = {"en": ("Matthew", "generative"), "ko": ("Jihye", "neural")}
 
 
-def synthesize(polly, text: str, path: Path, voice: str) -> None:
-    resp = polly.synthesize_speech(Engine="generative", VoiceId=voice, OutputFormat="mp3", Text=text)
+def synthesize(polly, text: str, path: Path, voice: str, engine: str = "generative") -> None:
+    resp = polly.synthesize_speech(Engine=engine, VoiceId=voice, OutputFormat="mp3", Text=text)
     path.write_bytes(resp["AudioStream"].read())
 
 
-def build_track(lines: list[str], voice: str, lead: float, gaps: list[float], tail: float, out: Path) -> None:
+def build_track(lines: list[str], voice: str, lead: float, gaps: list[float], tail: float, out: Path,
+                engine: str = "generative") -> None:
     polly = boto3.Session(profile_name=PROFILE).client("polly", region_name=REGION)
     with tempfile.TemporaryDirectory() as tmp:
         parts = []
         for i, text in enumerate(lines):
             mp3 = Path(tmp) / f"line{i}.mp3"
-            synthesize(polly, text, mp3, voice)
+            synthesize(polly, text, mp3, voice, engine)
             parts.append(mp3)
         inputs, filters = [], []
         for i, part in enumerate(parts):
@@ -96,7 +102,9 @@ def summarize(session: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--line", action="append", help="caller line (repeatable)")
-    parser.add_argument("--voice", default="Matthew", help="Polly voice for the caller")
+    parser.add_argument("--language", choices=sorted(DEFAULT_LINES), default="en",
+                        help="the caller's language; start the voice server with the same CALL_LANGUAGE")
+    parser.add_argument("--voice", help="Polly voice for the caller (default by language)")
     parser.add_argument("--lead", type=float, help="silence before the first line, seconds (default 7, plus the "
                         "longest ring before the AI picks up when the caller starts the call)")
     parser.add_argument("--gap", default="7", help="silence before each line after the first, seconds; a comma "
@@ -107,12 +115,13 @@ def main() -> None:
     parser.add_argument("--ring", type=float, default=3.0, help="seconds to let it ring before answering (--outbound)")
     args = parser.parse_args()
 
-    lines = args.line or DEFAULT_LINES
+    lines = args.line or DEFAULT_LINES[args.language]
+    voice, engine = (args.voice, "generative") if args.voice else CALLER_VOICES[args.language]
     lead = args.lead if args.lead is not None else 7.0 + (0 if args.outbound else PREP_SECONDS)
     started = time.time()
     with tempfile.TemporaryDirectory() as tmp:
         track = Path(tmp) / "caller.ogg"
-        build_track(lines, args.voice, lead, [float(g) for g in args.gap.split(",")], args.tail, track)
+        build_track(lines, voice, lead, [float(g) for g in args.gap.split(",")], args.tail, track, engine)
         if args.outbound:
             # A test: ignore the gap between calls and the age of the saved conversation.
             plan = RulePlanner(WORKSPACE, cooldown=timedelta(0), max_age=timedelta(days=3650)) \

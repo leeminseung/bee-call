@@ -31,6 +31,7 @@ from beelink import reads
 from beelink.clock import now_text
 from beelink.context import CallInputs, fetch_call_inputs
 from beelink.planner import Plan
+from voice.language import CallLanguage, call_language
 
 PREP_SECONDS = 8.0  # the most a caller hears ringing before the AI picks up (agreed with Matt, 2026-10-13)
 # Starting the voice and its first syllable took about 2 s after the opening was ready (2026-10-13), and the
@@ -46,8 +47,8 @@ and the phone is ringing on their side while you get ready. Use these seconds th
 at their notes before answering.
 
 The next message says who is calling whom and why, and what the user's Bee wearable recorded.
-1. First write <opening>what you say when you pick up</opening>: under 20 words of spoken English, as the end of \
-the next message asks. The call is answered as soon as this is written.
+1. First write <opening>what you say when you pick up</opening>: {opening}, as the end of the next message \
+asks. The call is answered as soon as this is written.
 2. Then, if one more look would help your note, such as a conversation in full, a search by topic or another \
 day's summary, call up to three tools at once. You get one round of tools.
 3. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to, open \
@@ -194,7 +195,7 @@ async def _not_read(use: dict[str, Any]) -> dict[str, Any]:
                            "content": [{"text": f"Not read: at most {MAX_READS} reads."}]}}
 
 
-async def _stream(client, model_id: str, messages: list[dict[str, Any]],
+async def _stream(client, model_id: str, system: str, messages: list[dict[str, Any]],
                   on_text: Callable[[str], None]) -> dict[str, Any]:
     """One streamed Converse request: on_text gets the text so far as it grows. Returns the assistant message."""
     loop = asyncio.get_running_loop()
@@ -204,7 +205,7 @@ async def _stream(client, model_id: str, messages: list[dict[str, Any]],
     def pump() -> None:  # boto3 streams are blocking, so they are read in a thread
         try:
             response = client.converse_stream(
-                modelId=model_id, system=[{"text": PREP_INSTRUCTIONS}], messages=messages,
+                modelId=model_id, system=[{"text": system}], messages=messages,
                 toolConfig={"tools": TOOLS}, inferenceConfig={"maxTokens": 500, "temperature": 0.3})
             for event in response["stream"]:
                 if stop.is_set():
@@ -248,8 +249,9 @@ class Preparation:
     with the note (or None) when the prep ends."""
 
     def __init__(self, inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *,
-                 client=None, now: datetime | None = None) -> None:
+                 client=None, now: datetime | None = None, language: CallLanguage | None = None) -> None:
         self.prep = Prep(model=model[0] if model else None)
+        self._system = PREP_INSTRUCTIONS.replace("{opening}", (language or call_language()).opening)
         self._inputs, self._meta, self._model, self._client, self._now = inputs, meta, model, client, now
         self._opening = asyncio.Event()
         self.done: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
@@ -303,7 +305,7 @@ class Preparation:
     async def _run(self, model_id: str, region: str) -> None:
         client = self._client or bedrock_client(region)
         messages = [{"role": "user", "content": [{"text": seed_text(self._inputs, self._meta, self._now)}]}]
-        reply = await _stream(client, model_id, messages, self._on_text)
+        reply = await _stream(client, model_id, self._system, messages, self._on_text)
         written = "".join(block.get("text", "") for block in reply["content"])
         uses = [block["toolUse"] for block in reply["content"] if "toolUse" in block]
         if uses:
@@ -311,7 +313,7 @@ class Preparation:
                                              for n, u in enumerate(uses)))
             ask = "Now write the note." if self.prep.opening else "Now write the opening and the note."
             messages += [reply, {"role": "user", "content": [*results, {"text": ask}]}]
-            reply = await _stream(client, model_id, messages, lambda text: self._on_text(written + text))
+            reply = await _stream(client, model_id, self._system, messages, lambda text: self._on_text(written + text))
             written += "".join(block.get("text", "") for block in reply["content"])
         self.prep.note = parse_note(written)
         if not self.prep.note:
@@ -319,9 +321,10 @@ class Preparation:
 
 
 async def prepare_call(inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *,
-                       deadline_s: float = NOTE_SECONDS, client=None, now: datetime | None = None) -> Prep:
+                       deadline_s: float = NOTE_SECONDS, client=None, now: datetime | None = None,
+                       language: CallLanguage | None = None) -> Prep:
     """Runs the prep to the end. Never raises: a Prep without a note says why in `error`."""
-    preparation = Preparation(inputs, meta, model, client=client, now=now).start(deadline_s)
+    preparation = Preparation(inputs, meta, model, client=client, now=now, language=language).start(deadline_s)
     await preparation.done
     return preparation.prep
 

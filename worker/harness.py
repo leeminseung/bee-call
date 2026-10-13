@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -373,8 +374,11 @@ class HarnessWorker:
         # The worker has no clock; relative dates in the task ("this Saturday") need today's date.
         messages = [{"role": "user", "content": [{"text": f"Job {job.job_id} (it is now {now_text()}; read today, tomorrow and weekdays against this): {job.task}"}]}]
         tokens = [0, 0]
+        steps: list[dict[str, Any]] = []  # seconds per model round (AWS side, built-in tools included) and per inline call
         for _ in range(MAX_ROUNDS):
+            started = time.monotonic()
             found = await asyncio.to_thread(self._invoke, session_id, messages)
+            steps.append({"round_s": round(time.monotonic() - started, 1), "calls": []})
             tokens[0] += found.input_tokens
             tokens[1] += found.output_tokens
             if found.errors:
@@ -383,10 +387,12 @@ class HarnessWorker:
                 break
             results = []
             for use in found.pending:
+                started = time.monotonic()
                 try:
                     text, status = await self._call(use, job, progress, relay)
                 except Exception as exc:  # the agent hears about it and can try another way
                     text, status = f"{use.name} failed: {exc}", "error"
+                steps[-1]["calls"].append({"name": use.name, "s": round(time.monotonic() - started, 1)})
                 results.append({"toolResult": {"toolUseId": use.tool_use_id, "content": [{"text": text}],
                                                "status": status}})
             messages = [{"role": "user", "content": results}]
@@ -399,6 +405,7 @@ class HarnessWorker:
         if not (job.dir / "report.md").exists():
             (job.dir / "report.md").write_text(f"# Report for job {job.job_id}\n\n{summary}\n")
         (job.dir / "usage.json").write_text(json.dumps({"input_tokens": tokens[0], "output_tokens": tokens[1],
-                                                        "stop_reason": found.stop_reason}))
+                                                        "stop_reason": found.stop_reason, "steps": steps}))
+        log.info("job %s took %d rounds: %s", job.job_id, len(steps), steps)
         self._ready = self._ready or session_id  # still warm: the next job can use it
         return summary

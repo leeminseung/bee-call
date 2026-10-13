@@ -163,11 +163,7 @@ final class CallManager: NSObject {
                 stopRingingAtExpiry(id, ring) // a VoIP push for this call rang it while we asked for the mic
                 return
             }
-            if (error as? CXErrorCodeIncomingCallError)?.code == .filteredByDoNotDisturb {
-                finish("Missed a call from Bee Call: Do Not Disturb or a Focus is on")
-            } else {
-                finish("Could not ring: \(error.localizedDescription)")
-            }
+            finish(Self.ringFailure(error))
             return
         }
         guard callID == id else {
@@ -175,6 +171,15 @@ final class CallManager: NSObject {
             return
         }
         stopRingingAtExpiry(id, ring)
+    }
+
+    /// What to show when iOS would not ring the AI's call.
+    nonisolated private static func ringFailure(_ error: Error) -> String {
+        switch (error as? CXErrorCodeIncomingCallError)?.code {
+        case .filteredByDoNotDisturb: "Missed a call from Bee Call: Do Not Disturb or a Focus is on"
+        case .filteredByBlockList: "Missed a call from Bee Call: it is blocked on this phone"
+        default: "Could not ring: \(error.localizedDescription)"
+        }
     }
 
     private func stopRingingAtExpiry(_ id: UUID, _ ring: Ring) {
@@ -231,11 +236,11 @@ final class CallManager: NSObject {
         isRinging = true
         status = ring.topic.map { "Bee Call is calling about: \($0)" } ?? "Bee Call is calling…"
         provider.reportNewIncomingCall(with: id, update: update) { [weak self] error in
-            let failure = error?.localizedDescription
+            let failure = error.map(Self.ringFailure)
             Task { @MainActor in
                 guard let self, self.callID == id else { return }
                 if let failure {
-                    self.finish("Could not ring: \(failure)")
+                    self.finish(failure)
                 } else {
                     self.stopRingingAtExpiry(id, ring)
                 }

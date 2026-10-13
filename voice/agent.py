@@ -46,6 +46,7 @@ from voice.coordinator import Coordinator
 from voice.dispatch import AGENT_NAME, RING_SECONDS
 from voice.echo_llm import EchoLLM
 from voice.fake_claude import FakeAnthropic
+from voice.language import call_language
 from voice.prep import INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_model
 from voice.recorder import CallRecorder
 from voice.ringback import STATE_ATTRIBUTE, ring_back
@@ -58,7 +59,8 @@ load_dotenv(".env.local")
 PROFILE = os.environ.get("AWS_PROFILE", "bee-call")
 REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", REGION)
-VOICE = os.environ.get("POLLY_VOICE", "Ruth")
+LANGUAGE = call_language()  # CALL_LANGUAGE: en (default) or ko, see voice/language.py
+VOICE = os.environ.get("POLLY_VOICE") or LANGUAGE.voice
 COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
 # For COORDINATOR_LLM=bedrock. GLM 5 speaks while it calls a tool. MiniMax M2.5 scored best in
 # probes/coordinator_bench.py (2026-10-12) but calls tools without a word, and in the first real
@@ -182,15 +184,17 @@ def call_meta(raw: str | None) -> dict:
 
 
 def greeting(meta: dict) -> str:
+    """The first line when there is no prepared opening."""
+    lines = LANGUAGE.greetings
     if COORDINATOR_LLM == "echo":
-        return "Hi! This is the echo test. Say something and I'll repeat it."
+        return lines["echo"]
     if meta.get("direction") == "outbound":
         if meta.get("kind") == "voice note":
-            return "Hi, it's Bee Call. I'm calling about your new voice note. Do you have a minute?"
+            return lines["voice note"]
         if meta.get("topic"):
-            return f"Hi, it's Bee Call. I'm calling about your conversation: {meta['topic']}. Do you have a minute?"
-        return "Hi, it's Bee Call. Do you have a minute to talk through your day?"
-    return "Hi, it's Bee Call. What's on your mind?"
+            return lines["topic"].format(topic=meta["topic"])
+        return lines["outbound"]
+    return lines["inbound"]
 
 
 async def read_by(task: asyncio.Task, seconds: float) -> CallInputs | None:
@@ -260,7 +264,7 @@ async def entrypoint(ctx: JobContext) -> None:
         async def get_ready() -> CallInputs:
             nonlocal preparation
             got = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S)
-            preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM)).start()
+            preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM), language=LANGUAGE).start()
             await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - started))
             return got
 
@@ -280,7 +284,7 @@ async def entrypoint(ctx: JobContext) -> None:
         inputs = ready.result()
         prep = preparation.prep
     rec = CallRecorder(WORKSPACE, ctx.job.room.name)
-    rec.event("coordinator", llm=COORDINATOR_LLM)
+    rec.event("coordinator", llm=COORDINATOR_LLM, language=LANGUAGE.code)
     rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"))
 
     def keep_inputs(got: CallInputs) -> None:
@@ -318,7 +322,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     prep_recorder = asyncio.create_task(record_prep())
     session = AgentSession(
-        stt=aws.STT(region=REGION, language="en-US", credentials=ctx.proc.userdata["transcribe_credentials"]),
+        stt=aws.STT(region=REGION, language=LANGUAGE.transcribe, credentials=ctx.proc.userdata["transcribe_credentials"]),
         llm=make_llm(rec),
         tts=aws.TTS(voice=VOICE, speech_engine="generative", region=REGION),
         vad=ctx.proc.userdata["vad"],
@@ -338,7 +342,8 @@ async def entrypoint(ctx: JobContext) -> None:
     # Until (or without) a prep note, the plain Bee context. A note still being written replaces it when it
     # arrives, up to the first reply.
     pending = preparation.done if preparation is not None and not preparation.done.done() else None
-    agent = Coordinator(rec, jobs, WORKSPACE, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending)
+    agent = Coordinator(rec, jobs, WORKSPACE, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
+                        language=LANGUAGE)
 
     async def shutdown() -> None:
         if keep_warm:
