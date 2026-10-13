@@ -74,6 +74,9 @@ struct CallScreen: View {
         .task(id: ringSource) {
             await calls.listenForRings(tokenServerURL: ringSource)
         }
+        .task {
+            await calls.askForMicrophone()
+        }
     }
 
     /// Where to listen for the AI's calls: the token server while the app is in the foreground, else

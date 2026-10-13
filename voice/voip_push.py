@@ -32,6 +32,9 @@ import jwt
 log = logging.getLogger("bee-call.voip")
 
 TOKEN_FILE = Path("state") / "voip_token.json"  # under the workspace; written by the token server
+# The signed provider token, shared by the processes that place calls (voice.outbound, the fake caller): APNs
+# answers TooManyProviderTokenUpdates to a team that renews it too often.
+PROVIDER_TOKEN_FILE = Path("state") / "apns_provider_token.json"
 APNS_HOSTS = {"development": "https://api.sandbox.push.apple.com", "production": "https://api.push.apple.com"}
 DEFAULT_BUNDLE_ID = "com.leeminseung.beecall"
 TOKEN_REFRESH_S = 40 * 60  # APNs takes a provider token for up to an hour and refuses one renewed too often
@@ -58,18 +61,23 @@ class ApnsConfig:
         return cls(Path(path).expanduser(), key_id, team_id, os.environ.get("APNS_BUNDLE_ID") or DEFAULT_BUNDLE_ID)
 
 
-_tokens: dict[ApnsConfig, tuple[float, str]] = {}
-
-
-def provider_token(config: ApnsConfig, now: float | None = None) -> str:
-    """The JWT APNs wants in the authorization header, reused for TOKEN_REFRESH_S."""
+def provider_token(config: ApnsConfig, now: float | None = None, cache: Path | None = None) -> str:
+    """The JWT APNs wants in the authorization header, reused for TOKEN_REFRESH_S (across processes when
+    `cache` names a file)."""
     now = time.time() if now is None else now
-    made = _tokens.get(config)
-    if made and now - made[0] < TOKEN_REFRESH_S:
-        return made[1]
+    try:
+        made = json.loads(cache.read_text()) if cache else None
+    except (OSError, ValueError):
+        made = None
+    if isinstance(made, dict) and made.get("kid") == config.key_id and made.get("iss") == config.team_id \
+            and 0 <= now - float(made.get("iat", 0)) < TOKEN_REFRESH_S and isinstance(made.get("token"), str):
+        return made["token"]
     token = jwt.encode({"iss": config.team_id, "iat": int(now)}, config.key_path.read_text(), algorithm="ES256",
                        headers={"kid": config.key_id})
-    _tokens[config] = (now, token)
+    if cache:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.touch(mode=0o600)
+        cache.write_text(json.dumps({"kid": config.key_id, "iss": config.team_id, "iat": int(now), "token": token}))
     return token
 
 
@@ -105,13 +113,12 @@ async def ring(line: dict[str, Any], workspace: Path, config: ApnsConfig | None 
     device = load_device_token(workspace)
     if config is None or device is None:
         return None
-    headers = {"authorization": f"bearer {provider_token(config)}", "apns-topic": f"{config.bundle_id}.voip",
+    token = provider_token(config, cache=workspace / PROVIDER_TOKEN_FILE)
+    headers = {"authorization": f"bearer {token}", "apns-topic": f"{config.bundle_id}.voip",
                "apns-push-type": "voip", "apns-priority": "10"}
-    try:  # a push that cannot arrive before the voice server gives up is dropped by APNs
-        headers["apns-expiration"] = str(int(datetime.fromisoformat(line["expires_at"]).timestamp()))
-    except (KeyError, TypeError, ValueError):
-        pass
-    payload = {key: line.get(key) for key in ("room", "topic", "expires_at")}
+    if isinstance(line.get("expires_epoch"), int):  # APNs drops a push that cannot arrive before the voice server gives up
+        headers["apns-expiration"] = str(line["expires_epoch"])
+    payload = {key: line.get(key) for key in ("room", "topic", "expires_at", "expires_epoch")}
     url = f"{APNS_HOSTS[device['environment']]}/3/device/{device['token']}"
     async with httpx.AsyncClient(http2=transport is None, transport=transport, timeout=10) as client:
         response = await client.post(url, headers=headers, json=payload)

@@ -72,13 +72,15 @@ enum RingStream {
         let room: String
         let topic: String?
         let expiresAt: String
+        let expiresEpoch: Double? // seconds since 1970; the Mac's local time above has no time zone
     }
 
     private static func parse(_ json: String) -> Ring? {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         guard let line = try? decoder.decode(Line.self, from: Data(json.utf8)),
-              let expiresAt = macClock.date(from: line.expiresAt) else { return nil }
+              let expiresAt = line.expiresEpoch.map(Date.init(timeIntervalSince1970:))
+                ?? macClock.date(from: line.expiresAt) else { return nil }
         let topic = line.topic?.trimmingCharacters(in: .whitespacesAndNewlines)
         return Ring(room: line.room, topic: topic?.isEmpty == false ? topic : nil, expiresAt: expiresAt)
     }

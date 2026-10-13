@@ -23,7 +23,8 @@ from tests.test_outbound import inbox
 
 DEVICE = "ab" * 32
 LINE = {"at": "2026-10-13T21:00:00", "room": "call-20261013-210000", "expires_at": "2026-10-13T21:01:00",
-        "topic": "Planned a Saturday hike with Dana", "kind": "conversation", "reason": "...", "plan": None}
+        "expires_epoch": 1791892860, "topic": "Planned a Saturday hike with Dana", "kind": "conversation",
+        "reason": "...", "plan": None}
 
 
 KEY = ec.generate_private_key(ec.SECP256R1())  # made up for the tests
@@ -37,13 +38,15 @@ def config(tmp_path) -> ApnsConfig:
     return ApnsConfig(path, "TEST123456", "TEAM123456")
 
 
-def test_the_provider_token_is_signed_with_the_key_and_reused_for_a_while(config):
-    first = provider_token(config, now=1_000_000)
+def test_the_provider_token_is_signed_with_the_key_and_shared_for_a_while(config, tmp_path):
+    cache = tmp_path / "state" / "apns_provider_token.json"
+    first = provider_token(config, now=1_000_000, cache=cache)
     claims = jwt.decode(first, KEY.public_key(), algorithms=["ES256"])
     assert claims == {"iss": "TEAM123456", "iat": 1_000_000}
     assert jwt.get_unverified_header(first) == {"alg": "ES256", "kid": "TEST123456", "typ": "JWT"}
-    assert provider_token(config, now=1_000_000 + 60) == first
-    assert provider_token(config, now=1_000_000 + 41 * 60) != first
+    assert oct(cache.stat().st_mode & 0o777) == "0o600"
+    assert provider_token(config, now=1_000_000 + 60, cache=cache) == first  # another process, a minute later
+    assert provider_token(config, now=1_000_000 + 41 * 60, cache=cache) != first
 
 
 def test_the_device_token_is_checked_and_kept(tmp_path):
@@ -81,8 +84,9 @@ def test_the_push_carries_the_ring_to_the_registered_phone(tmp_path, config):
     assert request.headers["apns-topic"] == "com.leeminseung.beecall.voip"
     assert request.headers["apns-push-type"] == "voip" and request.headers["apns-priority"] == "10"
     assert request.headers["authorization"].startswith("bearer ey")
-    assert int(request.headers["apns-expiration"]) > 1_700_000_000
-    assert json.loads(request.content) == {"room": LINE["room"], "topic": LINE["topic"], "expires_at": LINE["expires_at"]}
+    assert request.headers["apns-expiration"] == "1791892860"
+    assert json.loads(request.content) == {"room": LINE["room"], "topic": LINE["topic"], "expires_at": LINE["expires_at"],
+                                           "expires_epoch": 1791892860}
 
 
 def test_a_token_apple_no_longer_knows_is_dropped(tmp_path, config):

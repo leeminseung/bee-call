@@ -112,6 +112,7 @@ def test_place_call_opens_a_room_with_the_voice_server_and_records_the_ring(tmp_
     ring = json.loads((workspace / OUTBOUND_LOG).read_text().splitlines()[-1])
     assert ring["room"] == room and ring["topic"] == plan.topic
     assert (datetime.fromisoformat(ring["expires_at"]) - datetime.fromisoformat(ring["at"])).total_seconds() == 60
+    assert ring["expires_epoch"] == int(datetime.fromisoformat(ring["expires_at"]).timestamp())
 
 
 def claims(jwt: str) -> dict:

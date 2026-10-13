@@ -55,6 +55,11 @@ final class CallManager: NSObject {
         pushRegistry.desiredPushTypes = [.voIP]
     }
 
+    /// Asks for the microphone while the app is on screen. A call rung by a VoIP push cannot show the prompt.
+    func askForMicrophone() async {
+        _ = await LiveKitSDK.ensureDeviceAccess(for: [.audio])
+    }
+
     func startCall(tokenServerURL: String) async {
         guard !isInCall else { return }
         isInCall = true
@@ -154,6 +159,10 @@ final class CallManager: NSObject {
             try await provider.reportNewIncomingCall(with: id, update: update)
         } catch {
             guard callID == id else { return }
+            if (error as? CXErrorCodeIncomingCallError)?.code == .callUUIDAlreadyExists {
+                stopRingingAtExpiry(id, ring) // a VoIP push for this call rang it while we asked for the mic
+                return
+            }
             if (error as? CXErrorCodeIncomingCallError)?.code == .filteredByDoNotDisturb {
                 finish("Missed a call from Bee Call: Do Not Disturb or a Focus is on")
             } else {
@@ -198,13 +207,15 @@ final class CallManager: NSObject {
         update.remoteHandle = CXHandle(type: .generic, value: "Bee Call")
         update.localizedCallerName = callerName(topic: ring?.topic)
         update.hasVideo = false
-        if let ring, let rung = rungRooms[ring.room] {
-            // The ring stream rang this room already. Reporting it again only gets callUUIDAlreadyExists.
+        if let ring, let rung = rungRooms[ring.room], callID == rung {
+            // The ring stream rang this call (or is about to): reporting it again changes nothing on screen,
+            // and if this report wins the race the stream's own report gets callUUIDAlreadyExists.
             provider.reportNewIncomingCall(with: rung, update: update) { _ in done.call() }
             return
         }
         let address = UserDefaults.standard.string(forKey: "tokenServerURL") ?? ""
-        guard let ring, answerBy(ring) > .now, !isInCall, !address.isEmpty else {
+        guard let ring, rungRooms[ring.room] == nil, answerBy(ring) > .now, !isInCall, !address.isEmpty else {
+            // Unreadable, already rung and over, expired, during another call, or no token server set.
             let id = UUID()
             provider.reportNewIncomingCall(with: id, update: update) { [weak self] _ in
                 Task { @MainActor in self?.provider.reportCall(with: id, endedAt: nil, reason: .unanswered) }

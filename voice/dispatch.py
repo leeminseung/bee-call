@@ -60,9 +60,11 @@ async def place_call(plan: Plan, workspace: Path, lk: api.LiveKitAPI | None = No
     path = workspace / OUTBOUND_LOG
     path.parent.mkdir(parents=True, exist_ok=True)
     placed = datetime.now()
-    # expires_at: after this the voice server has given up, so an app must not try to answer.
+    # expires_at: after this the voice server has given up, so an app must not try to answer. It is this Mac's
+    # local time; expires_epoch is the same moment for a phone in another time zone.
+    expires = placed + timedelta(seconds=RING_SECONDS)
     line = {"at": placed.isoformat(timespec="seconds"), "room": room,
-            "expires_at": (placed + timedelta(seconds=RING_SECONDS)).isoformat(timespec="seconds"),
+            "expires_at": expires.isoformat(timespec="seconds"), "expires_epoch": int(expires.timestamp()),
             "topic": plan.topic, "kind": plan.kind, "reason": plan.reason,
             "plan": str(plan.path) if plan.path else None}
     with path.open("a") as f:
