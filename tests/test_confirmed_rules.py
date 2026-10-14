@@ -162,12 +162,13 @@ def test_the_fifth_offer_of_a_day_shows_only_in_the_app_list(tmp_path, monkeypat
     store = OfferStore(me.workspace)
     morning = datetime(2026, 10, 15, 8, 0)
     question, plan = asked(tmp_path, now=morning, workspace=me.workspace)
-    for i in range(4):
-        offer = question if i == 0 else store.ask(plan, morning + timedelta(minutes=i))
-        assert asyncio.run(send_offer(offer, me.person, morning + timedelta(minutes=i))).startswith("notification sent")
-    fifth = store.ask(plan, morning + timedelta(minutes=10))
-    assert asyncio.run(send_offer(fifth, me.person, morning + timedelta(minutes=10))).startswith("held: 4 notifications")
-    assert [o.id for o in store.open(morning + timedelta(minutes=11))] == [fifth.id]  # what the app lists
+    for i in range(4):  # 40 minutes apart: a notification waits 30 minutes after the last one (2026-10-15)
+        at = morning + timedelta(minutes=40 * i)
+        offer = question if i == 0 else store.ask(plan, at)
+        assert asyncio.run(send_offer(offer, me.person, at)).startswith("notification sent")
+    fifth = store.ask(plan, morning + timedelta(hours=3))
+    assert asyncio.run(send_offer(fifth, me.person, morning + timedelta(hours=3))).startswith("held: 4 notifications")
+    assert [o.id for o in store.open(morning + timedelta(hours=3, minutes=1))] == [fifth.id]  # what the app lists
     for moment in (morning + timedelta(hours=3), datetime(2026, 10, 16, 8, 0)):
         asyncio.run(send_held(me.person, moment))
     assert fifth.id not in sent and len(sent) == 4

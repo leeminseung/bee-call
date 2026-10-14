@@ -72,7 +72,9 @@ class Offer:
     claim: str | None = None  # the runner's claim while it is calling or placing (Claim.token)
     error: str | None = None
     notified_at: str | None = None  # when its notification went out; None while held (quiet hours, daily limit)
-    notice: str | None = None  # its notification: "sending" (recorded before the push), then "sent"
+    # Its notification: "sending" (recorded before the push), then "sent"; "app only" when the day's notifications
+    # were used up: then it shows only in the app's list, and never as a notification (Matt, 2026-10-15).
+    notice: str | None = None
     # Why a call the user agreed to was not placed: "budget", "late" (more than LATE_BY) or "failed"; the user is
     # told once, by a plain notification (voice/outbound.py tell_not_placed), at told_at.
     not_placed: str | None = None
@@ -225,10 +227,12 @@ class OfferStore:
         senders at once never pass the daily limit together. Returns the offer, or why it is not sent."""
         with self._lock():
             offer = self.get(offer_id)
-            if offer is None or offer.state != "asked" or offer.notified_at:
+            if offer is None or offer.state != "asked" or offer.notified_at or offer.notice == "app only":
                 return "it no longer waits for its notification"
             if self.notified_on(now) >= daily_limit:
-                return f"{daily_limit} notifications went out today already"
+                offer.notice = "app only"
+                self._save(offer)
+                return f"{daily_limit} notifications went out today already; it shows only in the app"
             offer.notified_at, offer.notice = _iso(now), "sending"
             return self._save(offer)
 
@@ -247,9 +251,14 @@ class OfferStore:
         prefix = day.date().isoformat()
         return sum(1 for o in self.all() if o.notified_at and o.notified_at.startswith(prefix))
 
+    def last_notified(self) -> datetime | None:
+        """When the latest offer notification went out."""
+        sent = [o.at("notified_at") for o in self.all() if o.notified_at]
+        return max(sent) if sent else None
+
     def unsent(self, now: datetime) -> list[Offer]:
-        """Open questions whose notification is still held."""
-        return [o for o in self.open(now) if o.state == "asked" and not o.notified_at]
+        """Open questions whose notification is still held (not those shown only in the app)."""
+        return [o for o in self.open(now) if o.state == "asked" and not o.notified_at and o.notice != "app only"]
 
     def ask(self, plan: Plan, now: datetime, at: str | None = None) -> Offer:
         """A plan the planner wants to call about becomes a question. An older question still unanswered is

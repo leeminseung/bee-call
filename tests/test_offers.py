@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from beelink.planner import RulePlanner
+from beelink.planner import OUTBOUND_LOG, RulePlanner
 from voice import outbound, voip_push
 from voice.language import call_language
 from voice.offers import LATE_BY, OfferStore, agreed, call_time, notification, plan_of
@@ -325,11 +325,11 @@ def test_notifications_wait_for_morning_and_for_tomorrow_after_four(tmp_path, mo
     morning = datetime(2026, 10, 15, 8, 0)
     asyncio.run(send_held(me.person, morning))
     assert sent == [offer.id] and store.get(offer.id).notified_at == "2026-10-15T08:00:00"
-    for i in range(3):  # three more today: four in all
-        o = store.ask(plan, morning + timedelta(minutes=i + 1))
-        asyncio.run(send_offer(o, me.person, morning + timedelta(minutes=i + 1)))
-    fifth = store.ask(plan, morning + timedelta(minutes=10))
-    assert asyncio.run(send_offer(fifth, me.person, morning + timedelta(minutes=10))).startswith("held: 4 notifications")
+    for i in range(3):  # three more today, each 30 minutes after the last (2026-10-15): four in all
+        o = store.ask(plan, morning + timedelta(minutes=40 * (i + 1)))
+        asyncio.run(send_offer(o, me.person, morning + timedelta(minutes=40 * (i + 1))))
+    fifth = store.ask(plan, morning + timedelta(hours=3))
+    assert asyncio.run(send_offer(fifth, me.person, morning + timedelta(hours=3))).startswith("held: 4 notifications")
 
 
 # ---------- the offers gate: a call rings only after the user's yes (server review findings 2, 5, 8, 15) ----------
@@ -618,3 +618,106 @@ def test_a_question_nobody_answered_closes_without_a_word(tmp_path, monkeypatch)
     OfferStore(me.workspace).expire(datetime(2026, 10, 15, 21, 0))
     asyncio.run(tell_not_placed(me.person, datetime(2026, 10, 15, 21, 1)))
     assert sent == [] and OfferStore(me.workspace).get(offer.id).state == "expired"
+
+
+# ---------- offer notifications wait 30 minutes after a call or a notification, and never ring into a call ----------
+# (the user's decision of 2026-10-15; BC-015, BC-016)
+
+def sends(monkeypatch) -> list[str]:
+    sent = []
+
+    async def alert(payload, person, **kw):
+        sent.append(payload["offer"])
+        return "apns"
+
+    monkeypatch.setattr(voip_push, "alert", alert)
+    return sent
+
+
+def a_call(workspace, started: datetime, minutes: float) -> None:
+    folder = workspace / started.strftime("%Y-%m-%d") / started.strftime("%H%M")
+    folder.mkdir(parents=True)
+    lines = [{"t": 0.0, "type": "call_started", "started_at": started.isoformat(timespec="seconds")},
+             {"t": minutes * 60, "type": "call_ended"}]
+    (folder / "events.jsonl").write_text("".join(json.dumps(l) + "\n" for l in lines))
+
+
+def test_an_offer_waits_thirty_minutes_after_a_call_and_still_shows_in_the_app(tmp_path, monkeypatch):
+    from voice.outbound import send_held, send_offer
+
+    sent = sends(monkeypatch)
+    me = signed_in(tmp_path)
+    a_call(me.workspace, datetime(2026, 10, 15, 19, 50), minutes=10)  # ended at 20:00
+    offer, _ = asked(tmp_path, now=datetime(2026, 10, 15, 20, 10), workspace=me.workspace)
+    said = asyncio.run(send_offer(offer, me.person, datetime(2026, 10, 15, 20, 10)))
+    assert said.startswith("held:") and "20:30" in said and sent == []
+    assert [o.id for o in OfferStore(me.workspace).open(datetime(2026, 10, 15, 20, 11))] == [offer.id]
+    asyncio.run(send_held(me.person, datetime(2026, 10, 15, 20, 29)))
+    assert sent == []
+    asyncio.run(send_held(me.person, datetime(2026, 10, 15, 20, 30)))
+    assert sent == [offer.id]
+
+
+def test_missed_and_declined_ai_calls_hold_offers_too(tmp_path, monkeypatch):
+    from voice.dispatch import decline_ring
+    from voice.outbound import send_offer
+
+    sent = sends(monkeypatch)
+    me = signed_in(tmp_path)
+    log = me.workspace / OUTBOUND_LOG
+    log.parent.mkdir(parents=True)
+    log.write_text("".join(json.dumps({"at": at, "room": room}) + "\n" for at, room in (
+        ("2026-10-15T19:00:00", "call-matt-20261015-190000"),  # missed: it rang its 60 s
+        ("2026-10-15T20:00:00", "call-matt-20261015-200000"))))  # declined 20 s in
+    decline_ring(me.person, "call-matt-20261015-200000", datetime(2026, 10, 15, 20, 0, 20))
+    offer, _ = asked(tmp_path, now=datetime(2026, 10, 15, 20, 10), workspace=me.workspace)
+    assert "20:30" in asyncio.run(send_offer(offer, me.person, datetime(2026, 10, 15, 20, 30, 10)))  # held
+    assert asyncio.run(send_offer(offer, me.person, datetime(2026, 10, 15, 20, 30, 20))).startswith("notification sent")
+    assert sent == [offer.id]
+
+
+def test_an_offer_waits_thirty_minutes_after_the_last_offer_notification(tmp_path, monkeypatch):
+    from voice.outbound import send_offer
+
+    sent = sends(monkeypatch)
+    me = signed_in(tmp_path)
+    first, plan = asked(tmp_path, now=datetime(2026, 10, 15, 12, 0), workspace=me.workspace)
+    assert asyncio.run(send_offer(first, me.person, datetime(2026, 10, 15, 12, 0))).startswith("notification sent")
+    OfferStore(me.workspace).answer(first.id, "decline", datetime(2026, 10, 15, 12, 5))
+    second = OfferStore(me.workspace).ask(plan, datetime(2026, 10, 15, 12, 10))
+    assert "12:30" in asyncio.run(send_offer(second, me.person, datetime(2026, 10, 15, 12, 10)))
+    assert asyncio.run(send_offer(second, me.person, datetime(2026, 10, 15, 12, 30))).startswith("notification sent")
+    assert sent == [first.id, second.id]
+
+
+def test_no_offer_notification_goes_out_during_a_call(tmp_path, monkeypatch):
+    from voice.outbound import send_offer
+
+    sent = sends(monkeypatch)
+    me = signed_in(tmp_path)
+    live = me.workspace / datetime.now().strftime("%Y-%m-%d") / "0001"
+    live.mkdir(parents=True)
+    (live / "events.jsonl").write_text(json.dumps({"t": 0.0, "type": "call_started",
+                                                   "started_at": datetime.now().isoformat(timespec="seconds")}) + "\n")
+    offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
+    said = asyncio.run(send_offer(offer, me.person, datetime.now()))
+    assert said.startswith("held: a call is going on") and sent == []
+
+
+def test_the_fifth_offer_of_a_day_is_never_notified_even_when_it_suggests_tomorrow(tmp_path, monkeypatch):
+    """The user's rule (2026-10-15): the fifth offer of a day shows only in the app list."""
+    from voice.outbound import send_held, send_offer
+
+    sent = sends(monkeypatch)
+    me = signed_in(tmp_path)
+    store = OfferStore(me.workspace)
+    morning = datetime(2026, 10, 15, 8, 0)
+    _, plan = asked(tmp_path, now=morning, workspace=me.workspace)
+    for i in range(4):  # four sent, 40 minutes apart
+        o = store.ask(plan, morning + timedelta(minutes=40 * i))
+        assert asyncio.run(send_offer(o, me.person, morning + timedelta(minutes=40 * i))).startswith("notification")
+    late = datetime(2026, 10, 15, 20, 55)  # suggests 21:00 tomorrow
+    fifth = store.ask(plan, late)
+    assert asyncio.run(send_offer(fifth, me.person, late)).startswith("held: 4 notifications")
+    asyncio.run(send_held(me.person, datetime(2026, 10, 16, 8, 0)))  # a new day, with the offer still open
+    assert fifth.id not in sent and [o.id for o in store.open(datetime(2026, 10, 16, 8, 0))] == [fifth.id]

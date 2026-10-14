@@ -34,11 +34,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from beelink import cli as bee
-from beelink.planner import COOLDOWN, MAX_AGE, RulePlanner, call_in_progress, last_outbound
+from beelink.calls import our_call_windows
+from beelink.planner import COOLDOWN, MAX_AGE, OUTBOUND_LOG, RulePlanner, call_in_progress, last_outbound
 from beelink.watcher import BeeWatcher, Trigger
 from voice import voip_push
 from voice.continuation import earlier_call
-from voice.dispatch import RING_SECONDS, place_call
+from voice.dispatch import DECLINES, RING_SECONDS, place_call
 from voice.costs import SpendLog, day_budget
 from voice.language import CallLanguage, call_language
 from voice.people import People, Person, Settings, dev_person
@@ -58,6 +59,9 @@ META_TRIES = 3  # a think that fails is tried again with the same events this ma
 BOOKED_AHEAD = timedelta(seconds=30)  # a booked call is prepared this early, so it rings on time
 NOW_PREP_S = OPENING_BY_S + 2.0  # "Call me now": ring soon; the note gets this long (GLM 5 needed 4.5-7.7 s)
 PEOPLE_CHECK_S = 10.0  # how often the list of people and their settings is read again (arbitrary)
+# An offer notification waits this long after a call ended (answered, missed or declined) and after the last offer
+# notification went out (Matt, 2026-10-15).
+OFFER_GAP = timedelta(minutes=30)
 
 
 async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, person: Person) -> str | None:
@@ -72,15 +76,64 @@ async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, person: 
     return offer.id
 
 
-async def send_offer(offer: Offer, person: Person, now: datetime, language: CallLanguage | None = None) -> str:
-    """Sends an offer's notification unless it is quiet time or the day's notifications are used up; then it is
-    held (it still shows in the app) and send_held() sends it later. Returns what happened, in words."""
-    store = OfferStore(person.workspace)
+def last_call_end(workspace: Path) -> datetime | None:
+    """When the person's last call ended: a call recorded in their folder (either direction), or an AI call that
+    rang without an answer (missed) or was declined while it rang."""
+    ends = [end for _, end in our_call_windows(workspace)]
+    declined_at = {}
+    for line in _lines(workspace / DECLINES):
+        declined_at[line.get("room")] = datetime.fromisoformat(line["at"]).timestamp()
+    for line in _lines(workspace / OUTBOUND_LOG):
+        placed = datetime.fromisoformat(line["at"]).timestamp()
+        ends.append(declined_at.get(line.get("room"), placed + RING_SECONDS))
+    return datetime.fromtimestamp(max(ends)) if ends else None
+
+
+def _lines(path: Path) -> list[dict]:
+    try:
+        text = path.read_text()
+    except OSError:
+        return []
+    out = []
+    for raw in text.splitlines():
+        try:
+            line = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(line, dict) and isinstance(line.get("at"), str):
+            out.append(line)
+    return out
+
+
+def notification_wait(person: Person, now: datetime) -> str | None:
+    """Why an offer notification may not go out now, or None. It never goes out during a call, or within OFFER_GAP
+    of the last call's end or of the last offer notification, or in quiet hours; send_held() sends it once it may.
+    The offer shows in the app's list meanwhile."""
+    workspace = person.workspace
+    if busy(workspace, now):
+        return f"a call is going on; the notification goes out {OFFER_GAP.seconds // 60} minutes after it ends"
+    ended = last_call_end(workspace)
+    if ended is not None and timedelta(0) <= now - ended < OFFER_GAP:
+        return f"the last call ended at {ended:%H:%M}; the notification goes out at {ended + OFFER_GAP:%H:%M}"
+    sent = OfferStore(workspace).last_notified()
+    if sent is not None and timedelta(0) <= now - sent < OFFER_GAP:
+        return f"the last offer went out at {sent:%H:%M}; this one goes out at {sent + OFFER_GAP:%H:%M}"
     if quiet(now):
-        return f"held: quiet hours, the notification goes out at {quiet_ends(now):%H:%M}; it shows in the app now"
+        return f"quiet hours, the notification goes out at {quiet_ends(now):%H:%M}"
+    return None
+
+
+async def send_offer(offer: Offer, person: Person, now: datetime, language: CallLanguage | None = None) -> str:
+    """Sends an offer's notification unless it has to wait (notification_wait): then it is held, still shows in the
+    app, and send_held() sends it later. Once the day's notifications are used up, the offer shows only in the app.
+    Returns what happened, in words."""
+    store = OfferStore(person.workspace)
+    wait = notification_wait(person, now)
+    if wait is not None:
+        return f"held: {wait}; it shows in the app now"
     going = store.start_notifying(offer.id, now, DAILY_NOTIFICATIONS)
     if isinstance(going, str):
-        return f"held: {going}; it shows in the app now"
+        return f"held: {going}"
     payload = notification(going, now, language or call_language())
     try:
         sent = await voip_push.alert(payload, person, collapse_id=offer.id,
@@ -97,7 +150,8 @@ async def send_offer(offer: Offer, person: Person, now: datetime, language: Call
 
 
 async def send_held(person: Person, now: datetime, language: CallLanguage | None = None) -> None:
-    """Sends notifications held by quiet hours or the daily limit, once they may go out."""
+    """Sends the notifications that had to wait (a call, the 30 minutes after one or after a notification, quiet
+    hours), once they may go out."""
     for offer in OfferStore(person.workspace).unsent(now):
         result = await send_offer(offer, person, now, language)
         if result.startswith("held") or result.startswith("no notification"):
