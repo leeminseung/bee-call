@@ -25,8 +25,10 @@ final class Server {
 
     private(set) var state: State
     private(set) var problem: String? // the last sign-in failure, in words
-    private(set) var beeStatus = "" // shown under the call status when the person uses Bee
     @ObservationIgnored private var nonce: String?
+    @ObservationIgnored let bee = BeeSync(noteStatus: { Server.shared.noteStatus($0) })
+    @ObservationIgnored let settings = SettingsSync(tokenReadable: { Server.savedToken() != nil },
+                                                    noteStatus: { Server.shared.noteStatus($0) })
 
     private init() {
         state = Self.savedToken() == nil ? .signedOut : .signedIn(person: UserDefaults.standard.string(forKey: "person") ?? "")
@@ -48,11 +50,11 @@ final class Server {
     nonisolated static var tokenURL: String { api.isEmpty ? "" : api + "/token" }
 
     /// The call record page (voice/session_server.py). In a Debug build: the same host as the token server,
-    /// port 8788.
+    /// port 8788, with ?debug=1, the only address on which the page offers its debug events (web/app.js).
     nonisolated static var recordsURL: URL? {
         #if DEBUG
         if let host = URLComponents(string: api)?.host {
-            return URL(string: "http://\(host):8788/")
+            return URL(string: "http://\(host):8788/?debug=1")
         }
         #endif
         return URL(string: Bundle.main.object(forInfoDictionaryKey: "BeeCallRecords") as? String ?? "")
@@ -95,6 +97,18 @@ final class Server {
         if let token = savedToken() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+    }
+
+    /// Every kind of launch, also one for a VoIP push or a notification button, which never reach the foreground:
+    /// the switches go to the server, and "Use Bee" turned off is carried out (contract section 1).
+    func appLaunched() {
+        settings.send()
+        guard Self.savedToken() != nil else { return }
+        Task { await bee.sync(openingApprovalPage: false) }
+    }
+
+    var isSignedIn: Bool {
+        if case .signedIn = state { true } else { false }
     }
 
     /// Every answer goes through here: a 401 means the sign-in is gone (expired, or the person was removed).
@@ -176,12 +190,13 @@ final class Server {
         Self.deleteToken()
         UserDefaults.standard.removeObject(forKey: "person")
         state = .signedOut
-        beeStatus = ""
+        bee.clearStatus()
     }
 
     /// Push tokens and settings belong to the person, so they go to the server again after a sign-in.
     private func afterSignIn() async {
-        await OfferCenter.shared.sendToken(again: true)
+        bee.forgetHandledSwitch()
+        await PushTokens.shared.signedIn()
         await syncSettings()
     }
 
@@ -190,50 +205,8 @@ final class Server {
     /// Sends the switches from the Settings app to the server, and connects or disconnects Bee to match "Use Bee".
     func syncSettings() async {
         guard case .signedIn = state else { return }
-        let defaults = UserDefaults.standard
-        var settings: [String: Any] = [
-            "language": defaults.string(forKey: "language") ?? "en",
-            "record_on_server": defaults.bool(forKey: "record_on_server"),
-            "record_on_phone": defaults.bool(forKey: "record_on_phone"),
-        ]
-        // A typed time the server would refuse is left out, so it does not hold back the other settings.
-        let time = (defaults.string(forKey: "call_time") ?? "").trimmingCharacters(in: .whitespaces)
-        if time.wholeMatch(of: /([01]\d|2[0-3]):[0-5]\d/) != nil {
-            settings["call_time"] = time
-        }
-        if let request = Self.request("/settings", method: "PUT", json: settings),
-           let (_, response) = try? await URLSession.shared.data(for: request) {
-            noteStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
-        }
-        await syncBee(wanted: defaults.bool(forKey: "use_bee"))
-    }
-
-    private func syncBee(wanted: Bool) async {
-        guard let request = Self.request("/me"), let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let me = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let settings = me["settings"] as? [String: Any] else { return }
-        let connected = settings["bee"] as? Bool ?? false
-        let connecting = me["bee_connecting"] as? Bool ?? false
-        if wanted && !connected && !connecting {
-            beeStatus = "Connecting Bee: approve Bee Call in the Bee app"
-            guard let start = Self.request("/bee/connect", method: "POST", timeout: 40),
-                  let (body, answer) = try? await URLSession.shared.data(for: start),
-                  (answer as? HTTPURLResponse)?.statusCode == 200,
-                  let link = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["link"] as? String,
-                  let url = URL(string: link) else {
-                beeStatus = "Bee could not be connected right now"
-                return
-            }
-            await UIApplication.shared.open(url) // Bee's own approval page
-        } else if !wanted && connected {
-            if let stop = Self.request("/bee/disconnect", method: "POST") {
-                _ = try? await URLSession.shared.data(for: stop)
-            }
-            beeStatus = ""
-        } else {
-            beeStatus = connected ? "Bee connected" : connecting ? "Waiting for your approval in the Bee app" : ""
-        }
+        await settings.send().value
+        await bee.sync()
     }
 
     // MARK: - Keychain

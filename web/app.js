@@ -16,6 +16,9 @@
   const BEE_KIND = {
     fact_confirm: "Confirm fact", fact_update: "Update fact", todo_create: "New to-do", todo_accept: "Accept to-do",
   };
+  // The debug toggle, and the debug events behind it, exist only with ?debug=1 in the address, which the iPhone
+  // app adds in its Debug builds. A call record otherwise shows the conversation, why the AI called, and its jobs.
+  const DEBUG_ALLOWED = /(?:^\?|&)debug=1(?:&|$)/.test(location.search);
 
   const $ = (id) => document.getElementById(id);
   const view = $("view");
@@ -206,7 +209,7 @@
     view.replaceChildren(el("p", "empty", text));
   }
 
-  const UNREACHABLE = "Can't reach the session server on the Mac. Retrying…";
+  const UNREACHABLE = "Can't reach the call records right now. Retrying…"; // the server is on the Mac or in the cloud
   const NO_CALLS = "No calls yet. When the AI calls you, the call shows up here.";
 
   // ---------- file viewer (keeps the iPhone web view on this page) ----------
@@ -440,7 +443,7 @@
   class SessionPage {
     constructor(id) {
       this.id = id;
-      this.debug = readPref("debug") === "1";
+      this.debug = DEBUG_ALLOWED && readPref("debug") === "1";
       this.events = [];
       this.ready = false; // the backlog has arrived
       this.reconnecting = false;
@@ -469,6 +472,7 @@
       this.footNote = el("span", "foot-note");
       this.debugButton = el("button", "link-button");
       this.debugButton.type = "button";
+      this.debugButton.hidden = !DEBUG_ALLOWED;
       this.debugButton.addEventListener("click", () => this.toggleDebug());
       foot.append(this.footNote, this.debugButton);
       this.root.append(this.whySlot, this.prepSlot, this.timeline, this.dock, this.beeSlot, this.continueSlot, foot);
@@ -479,16 +483,20 @@
       this.whySlot.replaceChildren();
       this.prepSlot.replaceChildren();
       this.direction = null;
+      this.callInfo = null; // the "call" event: which way the call went, and for an AI call its topic and reason
+      this.beeContext = null; // the "why_calling" event: the Bee conversation and facts read for the call
       this.pickedUp = null;
       this.prepEvent = null;
       this.pendingEl.replaceChildren();
       this.pendingEl.hidden = true;
       this.timeline.replaceChildren(this.pendingEl); // the unconfirmed user line always sits last
+      this.userTurn = null; // the person's bubble since the AI's last turn
       this.dock.replaceChildren();
       this.beeSlot.replaceChildren();
       this.continueSlot.replaceChildren();
       this.jobs = new Map();
-      this.bee = null;
+      this.bee = null; // writes queued for after the call (records before 2026-10-15)
+      this.writes = null; // writes made during the call
       this.pending = [];
       this.agentState = null;
       this.endT = null;
@@ -602,9 +610,14 @@
           this.footNote.textContent = ev.room ? `Room ${ev.room}` : "";
           break;
         }
-        case "why_calling": this.renderWhy(ev); break;
+        case "why_calling":
+          this.beeContext = ev;
+          this.renderWhy();
+          break;
         case "call":
           this.direction = ev.direction;
+          this.callInfo = ev;
+          this.renderWhy();
           if (typeof ev.continue_from === "string" && ev.continue_from) this.addContinued(ev.continue_from);
           this.addDebug(ev, t);
           break;
@@ -630,6 +643,7 @@
           this.updateJob(ev, t);
           break;
         case "bee_write_queued": case "bee_write_done": this.updateBee(ev); break;
+        case "bee_write": case "bee_write_undone": this.beeWrite(ev); break;
         case "error": this.addError(ev, t); break;
         case "session_closed": case "call_ended": this.end(ev, t); break;
         case "screen_signal": break; // meant for the AI, nothing to show
@@ -696,39 +710,84 @@
       this.add(row);
     }
 
+    // The person's turns before the AI's next turn read as one bubble: speech recognition cuts continuous speech
+    // into several turns. `userTurn` is that open bubble, closed by the AI's next turn.
     addMessage(ev, t) {
       const user = ev.role === "user";
-      if (user) this.clearPending();
-      const turn = el("li", `turn ${user ? "user" : "ai"}${ev.interrupted ? " interrupted" : ""}`);
-      const body = el("div", user ? "bubble" : "speech");
-      body.append(el("span", "sr-only", user ? "You said: " : "AI said: "));
       const text = typeof ev.text === "string" ? ev.text.trim() : "";
-      body.append(text || "…");
-      if (ev.interrupted) body.append(" ", el("span", "cut", "interrupted"));
-      turn.append(body, el("div", "meta", clock(t)));
+      let turn;
+      if (user) {
+        this.pending = []; // this turn confirms the words shown so far
+        if (this.userTurn) {
+          this.userTurn.texts.push(text);
+          this.userTurn.interrupted = Boolean(ev.interrupted);
+        } else {
+          this.userTurn = { ...this.newTurn("user", ev, t), texts: [text], interrupted: Boolean(ev.interrupted) };
+        }
+        turn = this.userTurn.turn;
+      } else {
+        if (this.userTurn) {
+          const closed = this.userTurn;
+          this.userTurn = null;
+          this.renderUserTurn(closed); // words still unconfirmed move to a bubble of their own after this turn
+        }
+        const ai = this.newTurn("ai", ev, t);
+        ai.body.append(el("span", "sr-only", "AI said: "), text || "…");
+        if (ev.interrupted) ai.body.append(" ", el("span", "cut", "interrupted"));
+        turn = ai.turn;
+      }
       if (this.debug && ev.metrics) {
         const details = el("details", "msg-metrics");
         const raw = typeof ev.metrics === "string" ? ev.metrics : JSON.stringify(ev.metrics, null, 2);
         details.append(el("summary", null, "metrics"), el("pre", "json", raw));
         turn.append(details);
       }
-      this.add(turn);
+      this.showPending();
     }
 
-    // user_transcript is final speech that the matching user `message` confirms a moment later.
+    newTurn(who, ev, t) {
+      const turn = el("li", `turn ${who}${ev.interrupted ? " interrupted" : ""}`);
+      const body = el("div", who === "user" ? "bubble" : "speech");
+      turn.append(body, el("div", "meta", clock(t)));
+      this.add(turn);
+      return { turn, body };
+    }
+
+    renderUserTurn(turn) {
+      turn.turn.classList.toggle("interrupted", turn.interrupted);
+      const said = turn.texts.filter(Boolean).join(" ") || "…";
+      const parts = [el("span", "sr-only", "You said: "), said];
+      if (turn.interrupted) parts.push(" ", el("span", "cut", "interrupted"));
+      if (turn === this.userTurn && this.pending.length) {
+        parts.push(" ", el("span", "pending-text", this.pending.join(" ")));
+      }
+      turn.body.replaceChildren(...parts);
+    }
+
+    // user_transcript is final speech that the matching user `message` confirms a moment later. It shows in the
+    // person's open bubble, or in a bubble of its own (the last in the timeline) when the AI spoke last.
     addPending(text) {
       if (typeof text !== "string" || !text.trim()) return;
       this.pending.push(text.trim());
-      const bubble = el("div", "bubble");
-      bubble.append(el("span", "sr-only", "You are saying: "), this.pending.join(" "));
-      this.pendingEl.replaceChildren(bubble);
-      this.pendingEl.hidden = false;
+      this.showPending();
     }
 
     clearPending() {
       this.pending = [];
-      this.pendingEl.replaceChildren();
-      this.pendingEl.hidden = true;
+      this.showPending();
+    }
+
+    showPending() {
+      if (this.userTurn) this.renderUserTurn(this.userTurn);
+      if (this.userTurn || !this.pending.length) {
+        this.pendingEl.replaceChildren();
+        this.pendingEl.hidden = true;
+        return;
+      }
+      const bubble = el("div", "bubble");
+      bubble.append(el("span", "sr-only", "You are saying: "), this.pending.join(" "));
+      this.pendingEl.replaceChildren(bubble);
+      this.pendingEl.hidden = false;
     }
 
     end(ev, t) {
@@ -743,13 +802,40 @@
       }
     }
 
-    renderWhy(ev) {
+    // Why the AI called: every call the AI started gets the card, from its "call" event's topic and reason (also a
+    // booked call, or a person without Bee), with the Bee conversation behind it when there is one. A call the
+    // person started never gets it. A record from before the "call" event shows its Bee conversation as before.
+    renderWhy() {
+      const call = this.callInfo;
+      const bee = this.beeContext;
+      if ((call && call.direction !== "outbound") || (!call && !bee)) {
+        this.whySlot.replaceChildren();
+        return;
+      }
       const card = el("section", "card why");
       const head = el("div", "card-head");
       head.append(icon("chat"), el("span", null, "Why I'm calling"));
       card.append(head);
-      if (typeof ev.summary === "string" && ev.summary.trim()) card.append(el("p", "why-summary", ev.summary.trim()));
+      const said = (value) => (typeof value === "string" ? value.trim() : "");
+      if (call) {
+        if (said(call.topic)) card.append(el("p", "card-title", said(call.topic)));
+        if (said(call.reason)) card.append(el("p", "why-summary", said(call.reason)));
+        if (!said(call.topic) && !said(call.reason)) card.append(el("p", "why-summary", "You said yes to this call."));
+      }
+      if (bee) this.addBeeContext(card, bee, Boolean(call));
+      this.whySlot.replaceChildren(card);
+    }
+
+    // The Bee conversation the call is about, and the unconfirmed facts it brings. Under an AI call's own reason,
+    // Bee's summary of the conversation goes with the quotes.
+    addBeeContext(card, ev, underReason) {
+      const summary = typeof ev.summary === "string" ? ev.summary.trim() : "";
+      if (summary && !underReason) card.append(el("p", "why-summary", summary));
       const utterances = Array.isArray(ev.utterances) ? ev.utterances.filter((u) => u && u.text) : [];
+      if (utterances.length || (summary && underReason)) {
+        card.append(el("p", "quotes-label", "From your Bee conversation"));
+        if (summary && underReason) card.append(el("p", "quotes-summary", summary));
+      }
       if (utterances.length) {
         const list = el("ul", "quotes");
         for (const u of utterances) {
@@ -761,13 +847,12 @@
           quote.append(who, el("p", null, u.text));
           list.append(quote);
         }
-        card.append(el("p", "quotes-label", "From your Bee conversation"), list);
+        card.append(list);
       }
       const facts = Array.isArray(ev.pending_fact_ids) ? ev.pending_fact_ids.length : 0;
       if (facts) {
         card.append(el("p", "card-note", `${facts} unconfirmed ${facts === 1 ? "fact" : "facts"} in Bee to check with you`));
       }
-      this.whySlot.replaceChildren(card);
     }
 
     // The note the AI wrote from Bee before it picked up (voice/prep.py), and the extra reads it chose.
@@ -924,7 +1009,7 @@
         head.append(icon("bookmark"), el("span", null, "To save in Bee"), count);
         const list = el("ul", "bee-list");
         card.append(head, list);
-        this.beeSlot.replaceChildren(card);
+        this.beeSlot.append(card);
         this.bee = { count, list, items: [] };
       }
       const kind = String(ev.kind || "");
@@ -955,6 +1040,77 @@
       const saved = this.bee.items.filter((i) => i.state === "saved").length;
       const total = this.bee.items.length;
       this.bee.count.textContent = saved ? `${saved} of ${total} saved` : `${total} queued`;
+    }
+
+    // ---------- Bee writes during the call ----------
+
+    // The AI asks ("Shall I put ... in Bee as a to-do?"), writes right after the person's yes, and takes the last
+    // write out again when asked to (bee_write_undone). A write that failed is tried once more after the call,
+    // and that result comes as another bee_write with "retried". The server names each write with a key, which
+    // its undo and its retry carry too. Without a key, an undo names its write by kind and text (or takes out
+    // the last saved write), and only a retry updates the failed write with the same kind and text.
+    beeWrite(ev) {
+      if (!this.writes) {
+        const card = el("section", "card bee");
+        const head = el("div", "card-head");
+        const count = el("span", "pill");
+        head.append(icon("bookmark"), el("span", null, "Saved in Bee"), count);
+        const list = el("ul", "bee-list");
+        card.append(head, list);
+        this.beeSlot.append(card);
+        this.writes = { count, list, items: [] };
+      }
+      const items = this.writes.items;
+      const kind = String(ev.kind || "");
+      const text = beeText(ev); // its own text, or the Bee item it confirms or accepts
+      const key = typeof ev.key === "string" && ev.key ? ev.key : null;
+      const sameKey = key ? items.find((i) => i.key === key) : null;
+      if (ev.type === "bee_write_undone") {
+        const named = (i) => (!kind || i.kind === kind) && (!text || i.text === text);
+        const item = key ? sameKey : [...items].reverse().find((i) => i.state === "saved" && named(i));
+        if (item) this.setWriteState(item, "undone");
+      } else {
+        const earlier = key ? sameKey
+          : ev.retried ? items.find((i) => i.state === "failed" && i.kind === kind && i.text === text) : null;
+        const item = earlier || this.addWrite(ev, kind, text, key);
+        this.setWriteState(item, ev.result === "ok" ? "saved" : "failed", Boolean(ev.retried));
+      }
+      const kept = items.filter((i) => i.state !== "undone");
+      const saved = kept.filter((i) => i.state === "saved").length;
+      this.writes.count.textContent = !kept.length ? "Taken out"
+        : saved === kept.length ? `${saved} saved` : `${saved} of ${kept.length} saved`;
+    }
+
+    addWrite(ev, kind, text, key) {
+      const row = el("li", "bee-item");
+      const status = el("span", "bee-status");
+      row.append(el("span", "bee-kind", BEE_KIND[kind] || humanize(kind) || "Item"),
+        el("span", "bee-text", text || "(no text)"), status);
+      const question = ownText({ text: ev.question });
+      const answer = ownText({ text: ev.answer });
+      const asked = [question && `Asked: “${question}”`, answer && `You said: “${answer}”`].filter(Boolean).join(" · ");
+      if (asked) row.append(el("p", "bee-asked", asked));
+      const note = el("p", "bee-note");
+      row.append(note);
+      const item = { key, kind, text, row, status, note, state: null };
+      this.writes.items.push(item);
+      this.writes.list.append(row);
+      return item;
+    }
+
+    // A write that failed in the call is tried once more after it; once that retry has failed too, nothing more
+    // is promised.
+    setWriteState(item, state, retried = false) {
+      item.state = state;
+      item.row.dataset.state = state;
+      item.status.replaceChildren();
+      if (state === "saved") item.status.append(icon("check"), "Saved");
+      else if (state === "failed") item.status.append(icon("x"), retried ? "Not saved" : "Not saved yet");
+      else item.status.append("Taken out");
+      item.note.textContent = state !== "failed" ? ""
+        : retried ? "Bee Call tried again after the call, and it did not go through."
+          : "Bee Call tries again after the call.";
+      item.note.hidden = state !== "failed";
     }
   }
 

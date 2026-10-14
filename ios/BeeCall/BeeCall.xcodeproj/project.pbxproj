@@ -10,8 +10,19 @@
 		BEECA1100000000000000013 /* LiveKit in Frameworks */ = {isa = PBXBuildFile; productRef = BEECA1100000000000000012 /* LiveKit */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		BEECA1100000000000000026 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BEECA1100000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BEECA1100000000000000007;
+			remoteInfo = BeeCall;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		BEECA1100000000000000004 /* BeeCall.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BeeCall.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BEECA1100000000000000020 /* BeeCallTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BeeCallTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -33,6 +44,11 @@
 			path = BeeCall;
 			sourceTree = "<group>";
 		};
+		BEECA1100000000000000021 /* BeeCallTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BeeCallTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -44,6 +60,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BEECA1100000000000000024 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -51,6 +74,7 @@
 			isa = PBXGroup;
 			children = (
 				BEECA1100000000000000005 /* BeeCall */,
+				BEECA1100000000000000021 /* BeeCallTests */,
 				BEECA1100000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -59,6 +83,7 @@
 			isa = PBXGroup;
 			children = (
 				BEECA1100000000000000004 /* BeeCall.app */,
+				BEECA1100000000000000020 /* BeeCallTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -89,6 +114,29 @@
 			productReference = BEECA1100000000000000004 /* BeeCall.app */;
 			productType = "com.apple.product-type.application";
 		};
+		BEECA1100000000000000022 /* BeeCallTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BEECA1100000000000000028 /* Build configuration list for PBXNativeTarget "BeeCallTests" */;
+			buildPhases = (
+				BEECA1100000000000000023 /* Sources */,
+				BEECA1100000000000000024 /* Frameworks */,
+				BEECA1100000000000000025 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BEECA1100000000000000027 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				BEECA1100000000000000021 /* BeeCallTests */,
+			);
+			name = BeeCallTests;
+			packageProductDependencies = (
+			);
+			productName = BeeCallTests;
+			productReference = BEECA1100000000000000020 /* BeeCallTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -101,6 +149,10 @@
 				TargetAttributes = {
 					BEECA1100000000000000007 = {
 						CreatedOnToolsVersion = 27.0;
+					};
+					BEECA1100000000000000022 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = BEECA1100000000000000007;
 					};
 				};
 			};
@@ -122,12 +174,20 @@
 			projectRoot = "";
 			targets = (
 				BEECA1100000000000000007 /* BeeCall */,
+				BEECA1100000000000000022 /* BeeCallTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		BEECA110000000000000000A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BEECA1100000000000000025 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -144,7 +204,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BEECA1100000000000000023 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		BEECA1100000000000000027 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BEECA1100000000000000007 /* BeeCall */;
+			targetProxy = BEECA1100000000000000026 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		BEECA110000000000000000C /* Debug */ = {
@@ -342,6 +417,46 @@
 			};
 			name = Release;
 		};
+		BEECA1100000000000000029 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = M7S7HJLWCF;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.leeminseung.beecall.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BeeCall.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/BeeCall";
+			};
+			name = Debug;
+		};
+		BEECA110000000000000002A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = M7S7HJLWCF;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.leeminseung.beecall.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BeeCall.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/BeeCall";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -359,6 +474,15 @@
 			buildConfigurations = (
 				BEECA110000000000000000F /* Debug */,
 				BEECA1100000000000000010 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BEECA1100000000000000028 /* Build configuration list for PBXNativeTarget "BeeCallTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BEECA1100000000000000029 /* Debug */,
+				BEECA110000000000000002A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

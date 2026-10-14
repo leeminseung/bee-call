@@ -198,6 +198,7 @@ h1 {
   font-size: 11.5px; line-height: 1.6; color: var(--faint); white-space: nowrap;
 }
 .turn.pending .bubble { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
+.pending-text { color: var(--muted); } /* words not yet confirmed, at the end of the person's open bubble */
 /* Replies can carry paragraph breaks ("First, ...\n\nSecond, ..."); keep them. */
 .bubble, .speech, .relay, .job-summary, .why-summary, .quote p, .bee-text, .row-text { white-space: pre-line; }
 
@@ -251,6 +252,7 @@ h1 {
 .prep-note { margin: 6px 0 0; font-size: 15.5px; white-space: pre-line; overflow-wrap: anywhere; }
 .prep-reads { margin: 6px 0 0; padding-left: 18px; font-size: 14px; color: var(--muted); }
 .quotes-label { margin: 14px 0 0; font-size: 12.5px; font-weight: 600; color: var(--faint); }
+.quotes-summary { margin: 2px 0 0; font-size: 14.5px; color: var(--muted); overflow-wrap: anywhere; }
 .quotes { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 8px; }
 .quote { padding: 1px 0 1px 11px; border-left: 3px solid var(--line); }
 .quote-who { display: flex; gap: 6px; font-size: 12.5px; color: var(--muted); }
@@ -299,6 +301,9 @@ h1 {
 .bee-status .icon { width: 13px; height: 13px; stroke-width: 2.5; }
 .bee-item[data-state="saved"] .bee-status { color: var(--green); }
 .bee-item[data-state="failed"] .bee-status { color: var(--red); }
+.bee-item[data-state="undone"] .bee-text { color: var(--muted); text-decoration: line-through; }
+.bee-asked, .bee-note { grid-column: 1; margin: 3px 0 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.bee-note { color: var(--red); }
 
 .session-foot {
   margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line);

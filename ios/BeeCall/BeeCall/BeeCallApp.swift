@@ -11,8 +11,7 @@ struct BeeCallApp: App {
 
     init() {
         // The Bee Call page in the iOS Settings app (Settings.bundle) shows these until the person changes them.
-        UserDefaults.standard.register(defaults: ["language": "en", "call_time": "21:00", "record_on_server": true,
-                                                  "record_on_phone": false, "use_bee": false])
+        UserDefaults.standard.register(defaults: AppSettings.defaults)
     }
 
     var body: some Scene {
@@ -24,9 +23,16 @@ struct BeeCallApp: App {
                     SignInView(server: server)
                 }
             }
-            // The switches live in the Settings app, so the server learns them whenever the app comes back.
+            // The switches live in the Settings app. SettingsSync sends them at launch and on every change; coming
+            // back to the app sends them again too, and brings Bee in line with "Use Bee".
             .task(id: scenePhase) {
                 if scenePhase == .active { await server.syncSettings() }
+            }
+            // A Bee Call entry tapped in the Phone app's Recents: a new call, as the Call button makes.
+            .onContinueUserActivity(RecentsCall.activityType) { activity in
+                guard RecentsCall.startsCall(activity, signedIn: server.isSignedIn, inCall: calls.isInCall)
+                else { return }
+                Task { await calls.startCall(tokenServerURL: Server.tokenURL) }
             }
         }
     }
