@@ -27,6 +27,7 @@ from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
 from voice.recorder import CallRecorder
 from voice.speech_filter import SpeechFilter
+from voice.speech_gate import SpeechGate
 from worker.runner import JobNotification, JobRunner, short
 
 INSTRUCTIONS = """\
@@ -222,12 +223,19 @@ class Coordinator(Agent):
     # ---------- recording ----------
 
     async def stt_node(self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings):
+        # A transcript too quiet to be the user (the AI's own voice coming back faintly) is kept out of the
+        # conversation and noted in the call record (voice/speech_gate.py).
+        gate = SpeechGate(on_drop=lambda text, level: self._recorder.event("transcript_dropped", text=text,
+                                                                           level=round(level)))
+
         async def tee() -> AsyncIterable[rtc.AudioFrame]:
             async for frame in audio:
                 self._recorder.user_audio.write(frame)
                 yield frame
 
-        return Agent.default.stt_node(self, tee(), model_settings)
+        async for event in Agent.default.stt_node(self, gate.listen(tee()), model_settings):
+            if gate.allows(event):
+                yield event
 
     async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
         async def tee() -> AsyncIterable[rtc.AudioFrame]:
