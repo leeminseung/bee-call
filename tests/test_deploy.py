@@ -1,15 +1,51 @@
-"""Running on the EC2 server as well as on a Mac: the agent name each machine registers under, and the AWS
-credentials each process finds.
+"""Running on the EC2 server as well as on a Mac: the agent name each machine registers under, the AWS credentials
+each process finds, and the deployment's own parts (the services' environment file, Caddy's config, the settings
+copied to SSM, the commands sent through Run Command, the systemd units).
 
-No network: AWS config files are written for the test, and credentials are made up.
+No network: AWS config files are written for the test, and credentials and settings are made up.
 """
 
+import base64
+import re
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from deploy.config import TEMPLATE, caddyfile, env_file, quoted
+from scripts.deploy_server import BOOTSTRAP, parse_sets, remote_commands, server_settings, zone_for
 from voice import agent
 from voice.aws_session import aws_profile, aws_session
 from voice.dispatch import AGENT_NAME, agent_name
 
+UNITS = Path(__file__).parent.parent / "deploy" / "systemd"
+SERVICES = ["bee-call-token", "bee-call-session", "bee-call-agent", "bee-call-outbound"]
+
+
+def systemd_env(text: str) -> dict[str, str]:
+    """Reads KEY="value" lines the way systemd 252's EnvironmentFile= does: inside double quotes a backslash
+    before one of " \\ ` $ gives that character, and before anything else stays as written."""
+    found = {}
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        key, _, rest = line.partition("=")
+        assert rest.startswith('"') and rest.endswith('"'), line
+        value, chars, i = [], rest[1:-1], 0
+        while i < len(chars):
+            if chars[i] == "\\" and i + 1 < len(chars):
+                value.append(chars[i + 1] if chars[i + 1] in '"\\`$' else chars[i:i + 2])
+                i += 2
+            else:
+                assert chars[i] != '"', f"an unescaped quote ends the value early: {line}"
+                value.append(chars[i])
+                i += 1
+        found[key] = "".join(value)
+    return found
+
+
+# ---------- the agent name and AWS credentials ----------
 
 def test_each_machine_names_its_voice_server_and_the_server_keeps_the_default():
     assert agent_name({}) == "bee-call"
@@ -19,6 +55,7 @@ def test_each_machine_names_its_voice_server_and_the_server_keeps_the_default():
 
 def test_the_voice_server_registers_under_the_name_calls_are_dispatched_to():
     assert agent.server._agent_name == AGENT_NAME  # LiveKit keeps the name the rtc_session decorator was given
+    assert agent.server._num_idle_processes == 1  # one warm job process, not one per CPU as `start` would keep
 
 
 def test_aws_profile_is_named_on_a_mac_and_left_to_the_default_chain_on_ec2():
@@ -51,3 +88,115 @@ def test_transcribe_gets_the_keys_as_they_are_at_the_start_of_each_call():
     first, second = agent.transcribe_credentials(session), agent.transcribe_credentials(session)
     assert (first.access_key_id, first.session_token) == ("AKIA1", "token1")
     assert (second.access_key_id, second.secret_access_key, second.session_token) == ("ASIA2", "secret2", "token2")
+
+
+# ---------- the services' environment, from SSM ----------
+
+def test_the_env_file_gives_the_services_exactly_the_values_in_ssm():
+    params = {"LIVEKIT_URL": "wss://bee-call.livekit.cloud", "ELEVENLABS_API_KEY": 'sk_a"b\\c$HOME`id`',
+              "CALL_TIME": "  21:00 # evening", "NOTE": "it's é", "apns-key": "-----BEGIN PRIVATE KEY-----\nMIGT\n",
+              "github-deploy-key": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Bl\n"}
+    text, skipped = env_file(params, Path("/run/bee-call/apns-key.p8"))
+    assert systemd_env(text) == {"CALL_TIME": "  21:00 # evening", "ELEVENLABS_API_KEY": 'sk_a"b\\c$HOME`id`',
+                                 "LIVEKIT_URL": "wss://bee-call.livekit.cloud", "NOTE": "it's é",
+                                 "APNS_KEY_PATH": "/run/bee-call/apns-key.p8"}
+    assert "PRIVATE KEY" not in text and skipped == {}  # the keys are files, never environment variables
+    assert quoted("$x") == '"\\$x"'
+
+
+def test_the_server_never_takes_a_profile_static_keys_or_the_dev_person_from_ssm():
+    params = {"AWS_PROFILE": "bee-call", "AWS_ACCESS_KEY_ID": "AKIA", "BEE_CALL_DEV_PERSON": "matt",
+              "APNS_KEY_PATH": "/Users/me/AuthKey.p8", "TWO_LINES": "a\nb", "TTS": "elevenlabs"}
+    text, skipped = env_file(params)
+    assert systemd_env(text) == {"TTS": "elevenlabs"}
+    assert set(skipped) == {"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "BEE_CALL_DEV_PERSON", "APNS_KEY_PATH", "TWO_LINES"}
+
+
+# ---------- Caddy ----------
+
+def test_caddy_serves_the_token_server_on_443_and_the_session_screen_on_8443():
+    text = caddyfile(" Bee.Example.com. ", TEMPLATE.read_text())
+    assert "__HOSTNAME__" not in text
+    sites = re.findall(r"^(\S+) \{\n\treverse_proxy (\S+) \{\n\t\tflush_interval -1 ", text, re.MULTILINE)
+    assert sites == [("bee.example.com", "127.0.0.1:8787"), ("bee.example.com:8443", "127.0.0.1:8788")]
+    assert "protocols h1 h2" in text  # HTTP/3 needs UDP, which the security group does not open
+
+
+@pytest.mark.parametrize("name", ["", "localhost", "1.2.3.4", "bee.example.com:443", "*.example.com",
+                                  "bee example.com", "bee.example.com {\n}", "-bee.example.com", "bee..example.com"])
+def test_caddy_takes_only_a_plain_dns_name(name):
+    with pytest.raises(ValueError):
+        caddyfile(name, TEMPLATE.read_text())
+
+
+# ---------- scripts/deploy_server.py ----------
+
+def test_secrets_copy_this_macs_settings_except_its_own():
+    local = {"LIVEKIT_URL": "wss://bee-call.livekit.cloud", "LIVEKIT_API_SECRET": "s3cret", "TTS": "elevenlabs",
+             "AWS_PROFILE": "bee-call", "APNS_KEY_PATH": "/Users/me/AuthKey.p8", "LIVEKIT_AGENT_NAME": "bee-call-dev",
+             "BEE_CALL_DEV_PERSON": "matt", "ELEVENLABS_VOICE": "", "COORDINATOR_LLM": "claude"}
+    chosen, skipped = server_settings(local, harness_arn="arn:aws:bedrock-agentcore:ap-southeast-2:1:harness/w",
+                                      extra={"CALL_LANGUAGE": "ko"})
+    assert {name: value for name, (value, _) in chosen.items()} == {
+        "LIVEKIT_URL": "wss://bee-call.livekit.cloud", "LIVEKIT_API_SECRET": "s3cret", "TTS": "elevenlabs",
+        "COORDINATOR_LLM": "claude", "WORKER_HARNESS_ARN": "arn:aws:bedrock-agentcore:ap-southeast-2:1:harness/w",
+        "WORKER": "harness", "CALL_LANGUAGE": "ko"}
+    assert chosen["WORKER"][1] == "server default" and chosen["COORDINATOR_LLM"][1] == ".env.local"
+    assert set(skipped) == {"AWS_PROFILE", "APNS_KEY_PATH", "LIVEKIT_AGENT_NAME", "BEE_CALL_DEV_PERSON",
+                            "ELEVENLABS_VOICE"}
+
+
+def test_without_the_workers_arn_the_server_keeps_the_fake_worker():
+    chosen, _ = server_settings({})
+    assert {name: value for name, (value, _) in chosen.items()} == {"COORDINATOR_LLM": "bedrock"}
+
+
+@pytest.mark.parametrize("pair", ["AWS_PROFILE=bee-call", "BEE_CALL_DEV_PERSON=matt", "lower=x", "NOEQUALS"])
+def test_set_refuses_what_the_server_must_not_take(pair):
+    with pytest.raises(SystemExit):
+        parse_sets([pair])
+
+
+def test_dns_picks_the_hosted_zone_that_holds_the_name():
+    assert zone_for("bee.example.com", ["example.com.", "other.org."]) == "example.com"
+    assert zone_for("bee.example.com", ["example.com.", "bee.example.com."]) == "bee.example.com"
+    assert zone_for("example.com", ["example.com."]) == "example.com"
+    assert zone_for("notexample.com", ["example.com."]) is None
+
+
+def test_run_command_rebuilds_the_script_on_the_server_unchanged():
+    script = "set -e\necho \"it's $((40 + 2)) \\$HOME\"\nexit 3\n"
+    lines = remote_commands(script, chunk=8)
+    chunks = [re.fullmatch(r"printf '%s' '([A-Za-z0-9+/=]+)' >> \"\$f\"", line).group(1) for line in lines[1:-1]]
+    assert base64.b64decode("".join(chunks)).decode() == script and max(map(len, chunks)) == 8
+    run = subprocess.run(["sh", "-c", "\n".join(lines)], capture_output=True, text=True)  # as Run Command does
+    assert (run.returncode, run.stdout) == (3, "it's 42 $HOME\n")
+
+
+def test_the_user_data_fits_ec2s_limit_and_hands_over_to_the_checkout():
+    text = BOOTSTRAP.read_text()
+    assert text.startswith("#!/bin/bash\n") and len(text.encode()) < 16 * 1024
+    assert text.rstrip().endswith('exec "$APP/deploy/install.sh"')
+
+
+# ---------- systemd units ----------
+
+def unit(name: str) -> list[str]:
+    return [line.strip() for line in (UNITS / f"{name}.service").read_text().splitlines()]
+
+
+@pytest.mark.parametrize("name", SERVICES)
+def test_every_service_runs_unprivileged_in_seoul_time_with_the_settings_from_ssm(name):
+    lines = unit(name)
+    for expected in ["User=bee-call", "Restart=always", "EnvironmentFile=/run/bee-call/env",
+                     "Requires=bee-call-env.service", "Environment=TZ=Asia/Seoul",
+                     "Environment=BEE_CALL_DATA=/var/lib/bee-call", "WorkingDirectory=/opt/bee-call/app"]:
+        assert expected in lines, f"{name}: {expected}"
+    assert next(line for line in lines if line.startswith("ExecStart=")).startswith(
+        "ExecStart=/opt/bee-call/app/.venv/bin/python -m ")
+
+
+def test_the_voice_server_finishes_calls_before_it_stops_and_registers_as_bee_call():
+    lines = unit("bee-call-agent")
+    assert "ExecStart=/opt/bee-call/app/.venv/bin/python -m voice.agent start" in lines
+    assert {"KillMode=mixed", "TimeoutStopSec=10min", "Environment=LIVEKIT_AGENT_NAME=bee-call"} <= set(lines)

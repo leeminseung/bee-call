@@ -1,0 +1,29 @@
+# Between calls: the Bee watcher, the meta agent, the offers it sends and the calls the user agreed to
+# (voice/outbound.py). The watcher's `bee stream` runs as a child of this service.
+[Unit]
+Description=Bee Call between calls (Bee watcher, meta agent, offers)
+Requires=bee-call-env.service
+After=bee-call-env.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=bee-call
+Group=bee-call
+WorkingDirectory=/opt/bee-call/app
+EnvironmentFile=/run/bee-call/env
+Environment=TZ=Asia/Seoul
+Environment=BEE_CALL_DATA=/var/lib/bee-call
+Environment=BEE_BIN=/opt/bee-call/bin/bee
+Environment=BEE_FORCE_FILE_STORE=1
+Environment=LIVEKIT_AGENT_NAME=bee-call
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/bee-call/app/.venv/bin/python -m voice.outbound
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

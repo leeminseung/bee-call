@@ -1,0 +1,41 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CoordinatorPrepMetaAgentAndWebSearch",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:515927224114:inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "BackgroundWorker",
+      "Effect": "Allow",
+      "Action": "bedrock-agentcore:InvokeHarness",
+      "Resource": "arn:aws:bedrock-agentcore:ap-southeast-2:515927224114:harness/*"
+    },
+    {
+      "Sid": "SpeechToText",
+      "Effect": "Allow",
+      "Action": ["transcribe:StartStreamTranscription", "transcribe:StartStreamTranscriptionWebSocket"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TextToSpeech",
+      "Effect": "Allow",
+      "Action": "polly:SynthesizeSpeech",
+      "Resource": "*"
+    },
+    {
+      "Sid": "SettingsFromParameterStore",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParametersByPath", "ssm:GetParameter"],
+      "Resource": [
+        "arn:aws:ssm:ap-southeast-2:515927224114:parameter/bee-call",
+        "arn:aws:ssm:ap-southeast-2:515927224114:parameter/bee-call/*"
+      ]
+    }
+  ]
+}

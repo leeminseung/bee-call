@@ -1,0 +1,15 @@
+# Writes /run/bee-call/env (root only) and the APNs key from SSM Parameter Store /bee-call/, before the services
+# start (deploy/config.py). Restarting this unit restarts the four services too, with the settings read again.
+[Unit]
+Description=Bee Call settings from SSM Parameter Store
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/bee-call/app
+ExecStart=/opt/bee-call/app/.venv/bin/python -m deploy.config env
+
+[Install]
+WantedBy=multi-user.target
