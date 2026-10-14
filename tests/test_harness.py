@@ -372,6 +372,40 @@ def test_a_round_still_running_when_the_call_ends_is_counted(tmp_path):
     assert (at_end["status"], at_end["input_tokens"], at_end.get("estimated")) == ("cancelled", 2_500_000, None)
 
 
+def test_a_round_that_ends_as_its_wait_is_cancelled_is_counted_after_the_guess(tmp_path):
+    """Second review of this round's fixes: were the round's own count to land before the guess, the guess would
+    stay marked as one ("estimated") though the count is right."""
+    import threading
+    import time
+
+    release, order = threading.Event(), []
+
+    class Harness(FakeHarness):
+        def invoke_harness(self, **params):
+            release.wait(5)
+            return super().invoke_harness(**params)
+
+    worker = HarnessWorker("arn:harness", client=Harness([assistant(("text", "done"), stop="end_turn")]),
+                           search=fake_search)
+
+    def cancelled():
+        order.append("guess")
+        release.set()  # the round ends just now, while the guess is being counted
+        time.sleep(0.3)  # time for the round's thread to count itself, were it free to
+        order.append("guess counted")
+
+    async def main():
+        waiting = asyncio.create_task(worker._paid_round("s", [], cancelled=cancelled,
+                                                         late=lambda found: order.append("count")))
+        await asyncio.sleep(0.1)
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+        await until(lambda: "count" in order)
+
+    asyncio.run(main())
+    assert order == ["guess", "guess counted", "count"]
+
+
 def test_a_warm_up_still_running_when_the_call_ends_is_counted(tmp_path):
     harness = HeldHarness([assistant(("text", "ready"), stop="end_turn")], held=0)
     spend = tmp_path / "state" / "spend.jsonl"

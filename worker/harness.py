@@ -379,7 +379,7 @@ class HarnessWorker:
             with lock:
                 box["cancelled"] = True
                 found = box.get("found")
-            cancelled()
+                cancelled()  # under the lock, so a round ending now puts its count in place of this one after it
             if found is not None:  # it ended just as the wait was cancelled
                 late(found)
             raise
