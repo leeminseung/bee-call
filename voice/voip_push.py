@@ -1,8 +1,9 @@
 """Apple push for the iPhone app: the VoIP push (PushKit) that rings an AI call even when the app is closed or
 the phone is locked, and the plain alert push that asks before a call (voice/offers.py).
 
-The app registers for VoIP pushes at launch and sends its device token to the token server, which keeps
-it in workspace/state/voip_token.json. When the AI places a call, voice/dispatch.py hands the ring line
+The app registers for VoIP pushes at launch and sends its device token to the token server, which gives it
+to the signed-in person in the server's registry of phones (voice/people.py devices.json): one owner per
+token, gone when that sign-in ends. When the AI places a call, voice/dispatch.py hands the ring line
 (room, topic, expires_at) to ring(), which sends it to Apple's push service (APNs) over HTTP/2. On the
 phone, PushKit wakes the app and it reports the call to CallKit at once. An open app also hears the ring
 on the token server's /ring stream; it rings once per room either way.
@@ -15,8 +16,8 @@ in .env.local:
   APNS_BUNDLE_ID  the app's bundle id (com.leeminseung.beecall when unset)
 Without them, or before the app has registered, ring() does nothing and only an open app rings.
 
-The alert push needs its own device token (the app sends it to POST /push, kept in state/alert_token.json) and
-goes to the app's bundle id with push type "alert"; the same .p8 key signs both.
+The alert push needs its own device token (the app sends it to POST /push, kept the same way) and goes to the
+app's bundle id with push type "alert"; the same .p8 key signs both.
 """
 
 import json
@@ -25,7 +26,6 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,9 +36,6 @@ from voice.people import Person
 
 log = logging.getLogger("bee-call.voip")
 
-TOKEN_FILE = Path("state") / "voip_token.json"  # under the workspace; written by the token server
-ALERT_TOKEN_FILE = Path("state") / "alert_token.json"  # the app's token for plain notifications
-TOKEN_FILES = {"voip": TOKEN_FILE, "alert": ALERT_TOKEN_FILE}
 # The signed provider token, shared by the processes that place calls (voice.outbound, the fake caller): APNs
 # answers TooManyProviderTokenUpdates to a team that renews it too often.
 PROVIDER_TOKEN_FILE = Path("state") / "apns_provider_token.json"
@@ -88,24 +85,20 @@ def provider_token(config: ApnsConfig, now: float | None = None, cache: Path | N
     return token
 
 
-def save_device_token(person: Person, token: str, environment: str, kind: str = "voip") -> None:
-    """Called by the token server when the app sends the token PushKit (voip) or iOS (alert) gave it."""
+def save_device_token(person: Person, token: str, environment: str, kind: str = "voip",
+                      session_token: str | None = None) -> None:
+    """Called by the token server when the app sends the token PushKit (voip) or iOS (alert) gave it: the token
+    becomes this person's alone, until the sign-in `session_token` ends (voice/people.py register_device)."""
     token = token.strip().lower()
     if not DEVICE_TOKEN.fullmatch(token):
         raise ValueError("not a device token")
     if environment not in APNS_HOSTS:
         raise ValueError(f"environment must be one of {', '.join(APNS_HOSTS)}")
-    path = person.workspace / TOKEN_FILES[kind]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"token": token, "environment": environment,
-                                "at": datetime.now().isoformat(timespec="seconds")}) + "\n")
+    person.people.register_device(person.id, kind, token, environment, session_token)
 
 
 def load_device_token(person: Person, kind: str = "voip") -> dict[str, str] | None:
-    try:
-        data = json.loads((person.workspace / TOKEN_FILES[kind]).read_text())
-    except (OSError, ValueError):
-        return None
+    data = person.device(kind)
     if not isinstance(data, dict) or not DEVICE_TOKEN.fullmatch(str(data.get("token", ""))) \
             or data.get("environment") not in APNS_HOSTS:
         return None
@@ -158,5 +151,5 @@ async def _send(kind: str, payload: dict[str, Any], person: Person, config: Apns
     except ValueError:
         reason = response.text[:200]
     if reason in GONE:  # the app was deleted, or this token belongs to another build; wait for a new one
-        (person.workspace / TOKEN_FILES[kind]).unlink(missing_ok=True)
+        person.people.forget_device(kind, device["token"])
     raise PushError(f"APNs answered {response.status_code} {reason}".strip())

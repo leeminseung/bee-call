@@ -11,6 +11,8 @@ Under the data root (BEE_CALL_DATA, default data/):
                       folder holds a credential
   accounts.json       Apple sign-in ids of approved people, and of those waiting for Matt's approval
   sessions.json       the sign-in tokens the app holds, kept only as hashes
+  devices.json        each phone's push tokens (alert and VoIP), each with exactly one owner and the sign-in
+                      that registered it; a token leaves with that sign-in, or moves when someone else registers it
   harness.json        the background worker's AgentCore harness (scripts/deploy_worker.py), for everyone
 
 Every request, call and tool works inside one person's folder, so one person's calls, Bee data and notes never
@@ -40,6 +42,9 @@ PERSON_ID = re.compile(r"[a-z][a-z0-9-]{0,31}")
 CALL_TIME = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 SESSION_DAYS = 180  # a sign-in lasts this long; then the app signs in with Apple again (arbitrary)
 DEFAULT_BUDGET_USD = 3.0  # estimated spend a day before calls stop (arbitrary until per-minute costs are measured)
+DEVICE_KINDS = ("alert", "voip")  # the app's two push tokens: plain notifications, and VoIP pushes that ring
+# Where each person's push tokens were kept before devices.json; read once into it, then removed.
+LEGACY_DEVICE_FILES = {"voip": Path("state") / "voip_token.json", "alert": Path("state") / "alert_token.json"}
 
 
 def data_root() -> Path:
@@ -124,6 +129,10 @@ class Person:
 
     def settings(self) -> Settings:
         return self.people.settings(self.id)
+
+    def device(self, kind: str) -> dict[str, Any] | None:
+        """This person's phone for one kind of push: {"token", "environment"}, or None."""
+        return self.people.device(self.id, kind)
 
 
 def _hash(token: str) -> str:
@@ -258,7 +267,7 @@ class People:
         return matches[0]
 
     def remove(self, person: str) -> None:
-        """Takes the person's access away: their accounts and sign-ins go. Their folder stays."""
+        """Takes the person's access away: their accounts, sign-ins and phones go. Their folder stays."""
         self.folder(person)
         with self._lock():
             accounts = self._read("accounts.json")
@@ -268,6 +277,7 @@ class People:
             sessions = self._read("sessions.json")
             self._write("sessions.json", {h: s for h, s in sessions.items()
                                           if not (isinstance(s, dict) and s.get("person") == person)})
+            self._drop_devices(lambda entry: entry.get("person") == person)
 
     # ---------- sign-in tokens ----------
 
@@ -302,10 +312,89 @@ class People:
         return person if isinstance(person, str) and self.known(person) else None
 
     def end_session(self, token: str) -> None:
+        """Signing out: the sign-in ends, and the push tokens it registered go with it, so the phone it was on
+        no longer gets this person's offers and calls."""
         with self._lock():
             sessions = self._read("sessions.json")
             if sessions.pop(_hash(token), None) is not None:
                 self._write("sessions.json", sessions)
+            self._drop_devices(lambda entry: entry.get("session") == _hash(token))
+
+    # ---------- phones (push tokens) ----------
+
+    def register_device(self, person: str, kind: str, token: str, environment: str,
+                        session_token: str | None = None, now: datetime | None = None) -> None:
+        """A phone signed in as `person` sent its push token (voice/voip_push.py checks its form). From now on the
+        token is this person's alone: whoever held it before loses it at the same moment, and it replaces this
+        person's earlier phone of that kind. It stays until the sign-in that sent it ends (None: a request made
+        on this Mac without one)."""
+        if kind not in DEVICE_KINDS:
+            raise ValueError(f"kind must be one of {', '.join(DEVICE_KINDS)}")
+        self.folder(person)
+        with self._lock():
+            devices = self._devices()
+            mine = devices.setdefault(kind, {})
+            for other in [t for t, entry in mine.items() if entry.get("person") == person]:
+                del mine[other]
+            mine[token] = {"person": person, "environment": environment,
+                           "session": _hash(session_token) if session_token else None,
+                           "at": (now or datetime.now()).isoformat(timespec="seconds")}
+            self._write("devices.json", devices)
+
+    def device(self, person: str, kind: str) -> dict[str, Any] | None:
+        """The person's phone for this kind of push, {"token", "environment"}, or None."""
+        with self._lock():
+            devices = self._devices()
+        for token, entry in devices.get(kind, {}).items():
+            if entry.get("person") == person:
+                return {"token": token, "environment": entry.get("environment")}
+        return None
+
+    def forget_device(self, kind: str, token: str) -> None:
+        """Apple says the token will never work again (the app was deleted, or it belongs to another build)."""
+        with self._lock():
+            devices = self._devices()
+            if devices.get(kind, {}).pop(token, None) is not None:
+                self._write("devices.json", devices)
+
+    def _drop_devices(self, matches) -> None:
+        """Under the lock: removes every registered token whose entry `matches`."""
+        devices = self._devices()
+        changed = False
+        for kind in DEVICE_KINDS:
+            for token in [t for t, entry in devices.get(kind, {}).items() if matches(entry)]:
+                del devices[kind][token]
+                changed = True
+        if changed:
+            self._write("devices.json", devices)
+
+    def _devices(self) -> dict[str, dict[str, dict[str, Any]]]:
+        """Under the lock: devices.json. The first time, the tokens each person's folder kept before it are read
+        in (the newest registration wins a token two folders hold) and their files removed."""
+        if (self.root / "devices.json").exists():
+            devices = self._read("devices.json")
+            return {kind: {t: e for t, e in (devices.get(kind) or {}).items() if isinstance(e, dict)}
+                    for kind in DEVICE_KINDS}
+        devices: dict[str, dict[str, dict[str, Any]]] = {kind: {} for kind in DEVICE_KINDS}
+        found = []
+        for folder in sorted((self.root / "people").glob("*")) if (self.root / "people").is_dir() else []:
+            if not PERSON_ID.fullmatch(folder.name):
+                continue
+            for kind, name in LEGACY_DEVICE_FILES.items():
+                try:
+                    data = json.loads((folder / name).read_text())
+                    found.append((str(data["at"]), kind, str(data["token"]), folder.name, str(data["environment"]),
+                                  folder / name))
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+        for at, kind, token, person, environment, _ in sorted(found):  # oldest first: the newest owner stays
+            for other in [t for t, entry in devices[kind].items() if entry["person"] == person]:
+                del devices[kind][other]
+            devices[kind][token] = {"person": person, "environment": environment, "session": None, "at": at}
+        self._write("devices.json", devices)
+        for *_, path in found:
+            path.unlink(missing_ok=True)
+        return devices
 
 
 # ---------- command line, for Matt ----------

@@ -215,6 +215,65 @@ def test_people_see_only_their_own_offers_tokens_and_calls(tmp_path):
     assert json.loads(claims["roomConfig"]["agents"][0]["metadata"])["person"] == "jiwoo"
 
 
+def test_a_phone_s_push_tokens_have_one_owner_and_leave_with_the_sign_in(tmp_path):
+    """Server review finding 1, BC-074, contract section 3: Matt signs out on his phone and Jiwoo signs in on it."""
+    people = People(tmp_path / "data")
+    for who in ("matt", "jiwoo"):
+        people.add(who)
+    matt, jiwoo = people.person("matt"), people.person("jiwoo")
+    on_phone, on_ipad, jiwoo_on_phone = people.new_session("matt"), people.new_session("matt"), people.new_session("jiwoo")
+    phone, ipad = {"alert": "ab" * 32, "voip": "ac" * 32}, {"alert": "cd" * 32, "voip": "ce" * 32}
+
+    def held(person):
+        return {kind: (voip_push.load_device_token(person, kind) or {}).get("token") for kind in ("alert", "voip")}
+
+    async def main():
+        async with TestClient(TestServer(app_for(people))) as client:
+            async def register(sign_in, device):
+                for path, kind in (("/push", "alert"), ("/voip", "voip")):
+                    sent = await client.post(path, json={"token": device[kind], "environment": "production"},
+                                             headers={"Authorization": f"Bearer {sign_in}"})
+                    assert sent.status == 204
+
+            await register(on_phone, phone)
+            await register(jiwoo_on_phone, phone)  # Jiwoo signs in on Matt's phone without Matt signing out
+            moved = held(matt), held(jiwoo)
+            await register(on_phone, phone)  # Matt is back on his phone
+            back = held(matt), held(jiwoo)
+            await register(on_ipad, ipad)  # and on his iPad: that is where his calls go now
+            await client.post("/auth/signout", headers={"Authorization": f"Bearer {on_ipad}"})
+            ipad_out = held(matt)
+            await register(on_phone, phone)
+            await client.post("/auth/signout", headers={"Authorization": f"Bearer {on_phone}"})
+            phone_out = held(matt)
+            await register(jiwoo_on_phone, phone)  # Jiwoo signs in on the phone Matt left
+            return moved, back, ipad_out, phone_out, held(matt), held(jiwoo)
+
+    moved, back, ipad_out, phone_out, matt_after, jiwoo_after = asyncio.run(main())
+    nothing = {"alert": None, "voip": None}
+    assert moved == (nothing, phone) and back == (phone, nothing)
+    assert ipad_out == nothing  # the iPad's sign-in ended, and the phone's token had moved to the iPad's
+    assert phone_out == nothing and (matt_after, jiwoo_after) == (nothing, phone)
+    people.remove("jiwoo")
+    assert held(jiwoo) == nothing
+
+
+def test_push_tokens_kept_before_the_registry_find_their_newest_owner(tmp_path):
+    people = People(tmp_path / "data")
+    phone = "ab" * 32
+    for who, at in (("matt", "2026-10-14T10:00:00"), ("jiwoo", "2026-10-14T11:00:00")):  # the same phone, twice
+        people.add(who)
+        state = people.workspace(who) / "state"
+        state.mkdir()
+        (state / "alert_token.json").write_text(json.dumps({"token": phone, "environment": "production", "at": at}))
+    (people.workspace("matt") / "state" / "voip_token.json").write_text(
+        json.dumps({"token": "ac" * 32, "environment": "production", "at": "2026-10-14T10:00:00"}))
+    assert voip_push.load_device_token(people.person("matt"), "alert") is None
+    assert voip_push.load_device_token(people.person("jiwoo"), "alert")["token"] == phone
+    assert voip_push.load_device_token(people.person("matt"), "voip")["token"] == "ac" * 32
+    assert [p for who in ("matt", "jiwoo") for p in people.workspace(who).glob("state/*_token.json")] == []
+
+
 def test_the_record_screen_shows_each_person_only_their_calls(tmp_path, monkeypatch):
     matt = signed_in(tmp_path, "matt")
     matt.people.add("jiwoo")

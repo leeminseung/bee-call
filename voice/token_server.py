@@ -13,7 +13,7 @@ GET  /auth/nonce                         {"nonce"}: a one-time value the app has
 POST /auth/apple {"identity_token", "nonce"}
                                          200 {"token", "person"}; 403 {"waiting": CODE} until Matt approves that
                                          sign-in (uv run python -m voice.people approve CODE --as ID)
-POST /auth/signout                       ends this sign-in
+POST /auth/signout                       ends this sign-in; the push tokens it registered go with it
 GET  /me                                 who is signed in, their settings and today's estimated spend
 PUT  /settings {"language": "ko", ...}   the settings the app may change (voice/people.py APP_SETTINGS)
 
@@ -27,9 +27,12 @@ GET  /ring                               Server-Sent Events: one "ring" event pe
                                          person (calls placed in the last RING_SECONDS, then new ones): how an
                                          open app learns the AI is calling without VoIP push
 POST /voip  {"token": hex, "environment": "development"|"production"}
-                                         the app's VoIP push token, so an AI call rings a closed app too
+                                         the app's VoIP push token, so an AI call rings a closed app too. It
+                                         belongs to the signed-in person alone from then on (another person who
+                                         had it loses it) and leaves with this sign-in
 POST /push  {"token": hex, "environment": ...}
-                                         the app's token for plain notifications (the offers that ask first)
+                                         the app's token for plain notifications (the offers that ask first),
+                                         kept the same way
 GET  /offers                             offers still waiting for an answer or a call
 POST /offers/<id>  {"choice": "now"|"later"|"decline"}
                                          the user's answer; voice/outbound.py places the call. 404 unknown,
@@ -300,7 +303,8 @@ async def ring(request: web.Request) -> web.StreamResponse:
 async def voip_token(request: web.Request) -> web.Response:
     try:
         body = await request.json()
-        voip_push.save_device_token(someone(request), str(body["token"]), str(body["environment"]))
+        voip_push.save_device_token(someone(request), str(body["token"]), str(body["environment"]),
+                                    session_token=bearer(request))
     except (ValueError, KeyError, TypeError) as exc:
         raise web.HTTPBadRequest(text=f"expected a VoIP token: {exc}")
     log.info("VoIP push token saved for %s (%s)", person(request), body["environment"])
@@ -311,7 +315,8 @@ async def alert_token(request: web.Request) -> web.Response:
     """The app's token for plain notifications (the offers that ask before a call)."""
     try:
         body = await request.json()
-        voip_push.save_device_token(someone(request), str(body["token"]), str(body["environment"]), "alert")
+        voip_push.save_device_token(someone(request), str(body["token"]), str(body["environment"]), "alert",
+                                    session_token=bearer(request))
     except (ValueError, KeyError, TypeError) as exc:
         raise web.HTTPBadRequest(text=f"expected a notification token: {exc}")
     log.info("notification token saved for %s (%s)", person(request), body["environment"])
