@@ -365,6 +365,25 @@ def test_a_caller_whose_phone_drops_and_comes_back_before_the_ai_speaks_keeps_th
     assert [e["kind"] for e in MetaSession(me.workspace).take_events()] == ["call_ended"]
 
 
+def test_a_caller_who_leaves_and_rejoins_before_the_ai_speaks_keeps_the_call(tmp_path, monkeypatch, quick):
+    """A caller back in the room is no longer gone, however they left."""
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"}, session=FakeSession(first_words_after=0.8))
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)  # the ringing stopped; the voice has not started
+        call.hang_up()
+        call.come_back()
+        await asyncio.sleep(1.0)  # the voice starts
+        await call.end()
+
+    asyncio.run(main())
+    (folder,) = call_folders(me.workspace)
+    assert [e["kind"] for e in MetaSession(me.workspace).take_events()] == ["call_ended"]
+
+
 def test_the_jobs_of_a_call_left_before_the_ai_spoke_still_count(tmp_path, monkeypatch, quick):
     """Second review of this round's fixes, finding 3: such a call leaves no folder, so what its background jobs
     used goes into the spend log first (server review finding 4)."""
