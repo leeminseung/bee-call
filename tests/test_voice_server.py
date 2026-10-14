@@ -233,10 +233,14 @@ def spend_entries(workspace) -> list[dict]:
 def test_a_call_hung_up_while_it_rings_leaves_nothing_but_its_cost(tmp_path, monkeypatch, quick, hang_up_after):
     """BC-027: hung up while it still rings, the prep stops, and no call record or call_ended event is kept. The
     prep's model use still counts (server review finding 4)."""
+    from livekit.agents.metrics.usage import TTSModelUsage
+
     me = signed_in(tmp_path)
     client = Converse(text(OPENING + NOTE * 30), gap=0.03, usage=(5000, 300))  # the opening at about 0.1 s
     with_prep_model(monkeypatch, client)
     call = FakeCall(me.people, {"direction": "inbound", "person": "matt"}, session=FakeSession(first_words_after=0.6))
+    # The voice had begun on the opening when the caller left: that much speech was paid for.
+    call.session.usage.model_usage = [TTSModelUsage(provider="Amazon Polly", model="neural", characters_count=40)]
     use_fakes(monkeypatch, call)
 
     async def main():
@@ -253,6 +257,8 @@ def test_a_call_hung_up_while_it_rings_leaves_nothing_but_its_cost(tmp_path, mon
     assert call.shutdown_reason == "the caller hung up while it rang"
     (prep,) = [e for e in spend_entries(me.workspace) if e["what"] == "call_prep"]
     assert prep["input_tokens"] > 0 and prep["estimated"]  # stopped mid-answer: Bedrock's count never came
+    voice = [e for e in spend_entries(me.workspace) if e["what"] == "call_hung_up_while_ringing"]
+    assert [m["characters_count"] for e in voice for m in e["models"]] == ([40] if hang_up_after > 0.4 else [])
 
 
 def test_a_caller_seen_late_is_still_watched_while_it_rings(tmp_path, monkeypatch, quick):
