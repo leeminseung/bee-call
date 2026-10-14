@@ -88,8 +88,14 @@ class Offer:
         return parse_time(value) if value else None
 
     def view(self) -> dict[str, Any]:
-        """What the app shows: the times also as epochs, for a phone in another time zone."""
+        """What the app shows: the times also as epochs, for a phone in another time zone. The state is what the
+        user can do: the app offers "Call off" for "booked", so a booked call a runner already prepares is still
+        "booked" until its room is being made; from then on, like a "Call me now" being prepared, it is "calling"."""
         data = {k: getattr(self, k) for k in ("id", "state", "topic", "kind", "source", "suggested_at", "call_at")}
+        if self.state == "calling" and booked_call(self):
+            data["state"] = "booked"
+        elif self.state == "placing":
+            data["state"] = "calling"
         for name in ("suggested_at", "call_at"):
             moment = self.at(name)
             data[name.replace("_at", "_epoch")] = int(moment.timestamp()) if moment else None

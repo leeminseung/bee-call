@@ -722,3 +722,26 @@ def test_the_fifth_offer_of_a_day_is_never_notified_even_when_it_suggests_tomorr
     assert asyncio.run(send_offer(fifth, me.person, late)).startswith("held: 4 notifications")
     asyncio.run(send_held(me.person, datetime(2026, 10, 16, 8, 0, tzinfo=SEOUL)))  # a new day, with the offer still open
     assert fifth.id not in sent and [o.id for o in store.open(datetime(2026, 10, 16, 8, 0, tzinfo=SEOUL))] == [fifth.id]
+
+
+def test_the_app_sees_a_booked_call_as_booked_until_its_room_is_being_made(tmp_path):
+    """The app shows "Call off" for booked offers. A booked call claimed 30 s early can still be called off, so the
+    app sees it as booked until its room is being made; a "Call me now" being prepared shows as calling."""
+    from aiohttp.test_utils import TestClient, TestServer
+    from voice.token_server import make_app
+
+    me = signed_in(tmp_path)
+    store = OfferStore(me.workspace)
+    booked = store.book("the interview", datetime.now(SEOUL) + timedelta(seconds=20), datetime.now(SEOUL))
+    tapped, _ = asked(tmp_path, now=datetime.now(SEOUL), workspace=me.workspace)
+    store.answer(tapped.id, "now", datetime.now(SEOUL))
+    claims = [store.claim(o.id, datetime.now(SEOUL)) for o in (booked, tapped)]
+
+    async def listed():
+        app = make_app("wss://example", "APIkey", "s" * 32, me.people, room_exists=None)
+        async with TestClient(TestServer(app), headers=me.headers) as client:
+            return {o["id"]: o["state"] for o in (await (await client.get("/offers")).json())["offers"]}
+
+    assert asyncio.run(listed()) == {booked.id: "booked", tapped.id: "calling"}
+    store.begin_placing(claims[0], datetime.now(SEOUL))
+    assert asyncio.run(listed())[booked.id] == "calling"
