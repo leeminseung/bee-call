@@ -135,16 +135,17 @@ final class LiveKitClient: NSObject {
 }
 
 extension LiveKitClient: RoomDelegate {
-    nonisolated func roomIsReconnecting(_ room: Room) {
+    /// Every reconnect, quick or full. (roomIsReconnecting comes only for a full one, LiveKit's last attempt.)
+    nonisolated func room(_ room: Room, didStartReconnectWithMode reconnectMode: ReconnectMode) {
         Task { @MainActor in
             guard room === self.room else { return } // an earlier call's room
             self.onLinkChange?(.reconnecting)
         }
     }
 
-    nonisolated func roomDidReconnect(_ room: Room) {
+    nonisolated func room(_ room: Room, didCompleteReconnectWithMode reconnectMode: ReconnectMode) {
         Task { @MainActor in
-            guard room === self.room else { return }
+            guard room === self.room else { return } // also an earlier call's room, or one that failed to come back
             self.onLinkChange?(.reconnected)
         }
     }

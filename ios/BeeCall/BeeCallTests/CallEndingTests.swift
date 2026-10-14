@@ -29,6 +29,15 @@ final class CallEndingTests: XCTestCase {
         XCTAssertEqual(CallEnding.afterDisconnect(LiveKitError(.unknown)), dropped)
     }
 
+    /// LiveKit announces every reconnect, quick or full, with didStartReconnectWithMode and
+    /// didCompleteReconnectWithMode; roomIsReconnecting comes only for a full one, the last of its attempts
+    /// (RoomDelegate in SDK 2.17.0).
+    @MainActor func testTheClientHearsQuickReconnectsToo() {
+        let client = LiveKitClient()
+        XCTAssertTrue(client.responds(to: #selector(RoomDelegate.room(_:didStartReconnectWithMode:))))
+        XCTAssertTrue(client.responds(to: #selector(RoomDelegate.room(_:didCompleteReconnectWithMode:))))
+    }
+
     @MainActor func testTheStatusSaysReconnectingWhileLiveKitReconnects() {
         let calls = CallManager()
         XCTAssertEqual(calls.statusLine, "Ready")
