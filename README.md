@@ -50,7 +50,7 @@ On a Mac, `uv run python -m voice.people add matt` approves a person for use fro
 
 A person can use Bee Call without Bee (Use Bee off, the default until they connect Bee). Their calls never touch Bee: nothing is read from Bee before or during a call, the call AI has no Bee tools, and nothing the call AI, the prep or the meta agent is told mentions Bee. The AI asks about their day and works from their earlier calls and the meta agent's notes.
 
-Each person's day has a budget (`daily_budget_usd`, 3 USD by default): an estimate from the calls' minutes and model use, background jobs and the meta agent (`voice/costs.py`). Past it, the app's new calls are refused, agreed AI calls are not placed (the offer says why), and the meta agent waits for the next day.
+Each person's day has a budget (`daily_budget_usd`, 3 USD by default): an estimate from the calls' minutes and model use, background jobs and the meta agent (`voice/costs.py`). Past it (a spend equal to the budget counts as past it), the app's new calls are refused, and the voice server checks again when a call the user started begins; agreed AI calls are not placed, and the meta agent waits for the next day. The budget is checked only before a call starts: a call in progress is never cut. Whenever a call the user agreed to cannot be placed (the budget is used up, it is more than 10 minutes late, or placing it failed), a plain notification without buttons says so, once, in the person's language, for example "Couldn't place your 9:00 PM call: today's budget is used up."
 
 ## Run
 

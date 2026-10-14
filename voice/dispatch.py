@@ -105,7 +105,7 @@ async def place_call(claim: Claim, person: Person, prep: dict[str, Any] | None =
         await create_room(room, call_metadata("outbound", plan, prep, offer.continue_from, agreed(claim.offer),
                                               person.id), lk)
     except Exception as exc:
-        store.fail(claim, datetime.now(), f"{type(exc).__name__}: {exc}"[:300])
+        store.fail(claim, datetime.now(), f"{type(exc).__name__}: {exc}"[:300], why="failed")
         raise
     store.placed(claim, datetime.now(), room)
     line = write_ring_line(person, room, plan)

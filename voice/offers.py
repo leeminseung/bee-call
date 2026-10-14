@@ -73,6 +73,10 @@ class Offer:
     error: str | None = None
     notified_at: str | None = None  # when its notification went out; None while held (quiet hours, daily limit)
     notice: str | None = None  # its notification: "sending" (recorded before the push), then "sent"
+    # Why a call the user agreed to was not placed: "budget", "late" (more than LATE_BY) or "failed"; the user is
+    # told once, by a plain notification (voice/outbound.py tell_not_placed), at told_at.
+    not_placed: str | None = None
+    told_at: str | None = None
     history: list[dict[str, str]] = field(default_factory=list)  # [{"at": ISO, "state": ...}]
 
     def at(self, name: str) -> datetime | None:
@@ -206,9 +210,10 @@ class OfferStore:
         """The call's room exists and the phone rings."""
         return self._move_claimed(claim, now, ("placing",), "called", room=room)
 
-    def fail(self, claim: Claim, now: datetime, error: str) -> Offer | None:
-        """The claimed call could not be placed; `error` says why."""
-        return self._move_claimed(claim, now, ("calling", "placing"), "failed", error=error)
+    def fail(self, claim: Claim, now: datetime, error: str, why: str = "failed") -> Offer | None:
+        """The claimed call could not be placed; `error` says why, and `why` ("budget" or "failed") what the
+        user is told."""
+        return self._move_claimed(claim, now, ("calling", "placing"), "failed", error=error, not_placed=why)
 
     def call_off(self, offer_id: str, now: datetime, why: str) -> Offer | None:
         """A call booked in a call is moved or called off in that call (voice/coordinator.py)."""
@@ -296,14 +301,30 @@ class OfferStore:
             if offer.state == "asked" and expires_at and now >= expires_at:
                 self._save(self._set(offer, "expired", now))
             elif offer.state in ("now", "booked") and call_at and now > call_at + LATE_BY:
-                self._save(self._set(offer, "expired", now, error="the call could not be placed in time"))
+                self._save(self._set(offer, "expired", now, error="the call could not be placed in time",
+                                     not_placed="late"))
             elif offer.state in ("calling", "placing") and offer.history and \
                     now - datetime.fromisoformat(offer.history[-1]["at"]) > STUCK:
-                self._save(self._set(offer, "failed", now, error="placing the call did not finish"))
+                self._save(self._set(offer, "failed", now, error="placing the call did not finish",
+                                     not_placed="failed"))
 
     def expire(self, now: datetime) -> None:
         with self._lock():
             self._expire(now)
+
+    def to_tell(self, now: datetime) -> list[Offer]:
+        """Calls the user agreed to that could not be placed, and the user was not told yet."""
+        self.expire(now)
+        return [o for o in self.all() if o.not_placed and not o.told_at]
+
+    def start_telling(self, offer_id: str, now: datetime) -> Offer | None:
+        """Records, before the push, that the user is being told: once, also when two loops look at once."""
+        with self._lock():
+            offer = self.get(offer_id)
+            if offer is None or not offer.not_placed or offer.told_at:
+                return None
+            offer.told_at = _iso(now)
+            return self._save(offer)
 
     def open(self, now: datetime) -> list[Offer]:
         self.expire(now)
@@ -340,15 +361,42 @@ def agreed(offer: Offer) -> str:
     return f"at {when} the user accepted the time your notification suggested"
 
 
-def when_label(moment: datetime, now: datetime, language: CallLanguage) -> str:
-    tomorrow = moment.date() != now.date()
+def clock_label(moment: datetime, language: CallLanguage) -> str:
+    """The time of day as the user reads it: "밤 9시", "9:00 PM"."""
     if language.code == "ko":
         hour = moment.hour
         period = "밤" if hour >= 20 or hour < 5 else "저녁" if hour >= 17 else "오후" if hour >= 12 else "오전"
-        clock = f"{hour % 12 or 12}시" + (f" {moment.minute}분" if moment.minute else "")
-        return f"{'내일' if tomorrow else '오늘'} {period} {clock}"
-    clock = moment.strftime("%-I:%M %p")
-    return f"{clock} {'tomorrow' if tomorrow else 'today'}"
+        return f"{period} {hour % 12 or 12}시" + (f" {moment.minute}분" if moment.minute else "")
+    return moment.strftime("%-I:%M %p")
+
+
+def when_label(moment: datetime, now: datetime, language: CallLanguage) -> str:
+    tomorrow = moment.date() != now.date()
+    if language.code == "ko":
+        return f"{'내일' if tomorrow else '오늘'} {clock_label(moment, language)}"
+    return f"{clock_label(moment, language)} {'tomorrow' if tomorrow else 'today'}"
+
+
+NOT_PLACED = {  # why an agreed call was not placed, as the user reads it
+    "en": {"budget": "today's budget is used up.", "late": "it could not be placed on time.",
+           "failed": "something went wrong while placing it."},
+    "ko": {"budget": "오늘 예산을 다 썼어요.", "late": "제시간에 걸 수 없었어요.", "failed": "거는 중에 문제가 생겼어요."},
+}
+
+
+def not_placed_notification(offer: Offer, language: CallLanguage) -> dict[str, Any]:
+    """The plain notification for a call the user agreed to that could not be placed (contract section 5): no
+    buttons, in the person's language."""
+    why = NOT_PLACED["ko" if language.code == "ko" else "en"].get(offer.not_placed or "failed")
+    call_at = offer.at("call_at")
+    if language.code == "ko":
+        which = "요청하신 통화를" if not booked_call(offer) or call_at is None else f"{clock_label(call_at, language)} 통화를"
+        body = f"{which} 걸지 못했어요. {why}"
+    else:
+        which = "the call you asked for" if not booked_call(offer) or call_at is None else \
+            f"your {clock_label(call_at, language)} call"
+        body = f"Couldn't place {which}: {why}"
+    return {"aps": {"alert": {"title": "Bee Call", "body": body}, "sound": "default", "thread-id": "offers"}}
 
 
 def notification(offer: Offer, now: datetime, language: CallLanguage) -> dict[str, Any]:

@@ -42,7 +42,7 @@ from voice.dispatch import RING_SECONDS, place_call
 from voice.costs import SpendLog, day_budget
 from voice.language import CallLanguage, call_language
 from voice.people import People, Person, Settings, dev_person
-from voice.offers import OPEN, Offer, OfferStore, agreed, notification, plan_of
+from voice.offers import OPEN, Offer, OfferStore, agreed, not_placed_notification, notification, plan_of
 from voice.prep import NOTE_SECONDS, OPENING_BY_S, prepare_outbound
 from meta.agent import Thinker
 from meta.session import DAILY_NOTIFICATIONS, MetaSession, add_event, meta_notes, quiet, quiet_ends
@@ -131,7 +131,7 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
             continue
         budget = day_budget(person, now)
         if budget.used_up:
-            store.fail(claim, now, f"{budget.why()}; ask again tomorrow")
+            store.fail(claim, now, f"{budget.why()}; ask again tomorrow", why="budget")
             log.info("offer %s not called: %s", offer.id, budget.why())
             continue
         try:
@@ -159,13 +159,31 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
     return []
 
 
+async def tell_not_placed(person: Person, now: datetime) -> None:
+    """Tells the user, with one plain notification each, about calls they agreed to that could not be placed: the
+    budget was used up, it was more than LATE_BY late, or placing failed (contract section 5). These follow the
+    user's own yes, so quiet hours hold none of them and they do not count among the day's offers."""
+    store = OfferStore(person.workspace)
+    for offer in store.to_tell(now):
+        telling = store.start_telling(offer.id, now)
+        if telling is None:  # another loop got there first
+            continue
+        payload = not_placed_notification(telling, call_language(person.settings().language))
+        try:
+            await voip_push.alert(payload, person, collapse_id=f"{offer.id}-not-placed")
+        except Exception as exc:  # it shows nowhere else; the offer keeps why
+            log.warning("could not tell %s that offer %s was not placed: %s", person.id, offer.id, exc)
+
+
 async def serve_offers(person: Person, until: str | None = None, **for_person) -> None:
-    """Checks for due calls every OFFER_CHECK_S; with `until`, stops once that offer is no longer open.
-    `for_person` goes on to call_due (language; prepare and place in tests)."""
+    """Checks for due calls every OFFER_CHECK_S, and tells the user of agreed calls that could not be placed;
+    with `until`, stops once that offer is no longer open. `for_person` goes on to call_due (language; prepare
+    and place in tests)."""
     store = OfferStore(person.workspace)
     while True:
         try:
             await call_due(person, **for_person)
+            await tell_not_placed(person, datetime.now())
         except Exception:
             log.exception("checking offers failed")
         if until is not None:

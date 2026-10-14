@@ -553,3 +553,68 @@ def test_call_me_back_in_ten_minutes_late_in_a_call_books_ten_minutes_from_now(t
         assert not asyncio.run(agent.book_call(None, topic="x", in_minutes=bad)).startswith(("Booked", "Moved"))
     assert len(OfferStore(workspace).all()) == 1
 
+
+
+# ---------- an agreed call that cannot be placed says so (BC-104, contract section 5) ----------
+
+def notices(monkeypatch) -> list[dict]:
+    sent = []
+
+    async def alert(payload, person, **kw):
+        sent.append(payload)
+        return "apns"
+
+    monkeypatch.setattr(voip_push, "alert", alert)
+    return sent
+
+
+def test_an_agreed_call_past_the_budget_tells_the_user_once(tmp_path, monkeypatch):
+    from voice.outbound import tell_not_placed
+
+    sent = notices(monkeypatch)
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"daily_budget_usd": 0, "language": "ko"},
+                              allowed=("daily_budget_usd", "language"))
+    night = datetime.now().replace(hour=21, minute=0, second=0, microsecond=0)
+    booked = OfferStore(me.workspace).book("the interview", night, night - timedelta(hours=1))
+    asyncio.run(call_due(me.person, night, prepare=prepared_quickly, place=placing([])))
+    for _ in range(2):  # every round of the loop looks; the user hears it once
+        asyncio.run(tell_not_placed(me.person, night))
+    (payload,) = sent
+    assert payload["aps"]["alert"]["body"] == "밤 9시 통화를 걸지 못했어요. 오늘 예산을 다 썼어요."
+    assert payload["aps"]["thread-id"] == "offers" and "category" not in payload["aps"]
+    assert OfferStore(me.workspace).get(booked.id).state == "failed"
+
+
+def test_a_call_too_late_or_failed_tells_the_user_why_in_their_language(tmp_path, monkeypatch):
+    from voice.outbound import tell_not_placed
+
+    sent = notices(monkeypatch)
+    me = signed_in(tmp_path)
+    store = OfferStore(me.workspace)
+    late = store.book("the dentist", datetime(2026, 10, 15, 21, 0), datetime(2026, 10, 15, 12, 0))
+    store.expire(datetime(2026, 10, 15, 21, 11))  # the runner was busy with another call
+    asked_now, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
+    store.answer(asked_now.id, "now", datetime.now())
+
+    async def broken(claim, person, **kw):
+        store.fail(claim, datetime.now(), "LiveKit is down")
+        raise RuntimeError("LiveKit is down")
+
+    asyncio.run(call_due(me.person, prepare=prepared_quickly, place=broken))
+    asyncio.run(tell_not_placed(me.person, datetime(2026, 10, 15, 23, 30)))  # quiet hours hold none of these
+    assert sorted(p["aps"]["alert"]["body"] for p in sent) == [
+        "Couldn't place the call you asked for: something went wrong while placing it.",
+        "Couldn't place your 9:00 PM call: it could not be placed on time."]
+    assert store.get(late.id).state == "expired"
+
+
+def test_a_question_nobody_answered_closes_without_a_word(tmp_path, monkeypatch):
+    from voice.outbound import tell_not_placed
+
+    sent = notices(monkeypatch)
+    me = signed_in(tmp_path)
+    offer, _ = asked(tmp_path, now=datetime(2026, 10, 15, 18, 0), workspace=me.workspace)
+    OfferStore(me.workspace).expire(datetime(2026, 10, 15, 21, 0))
+    asyncio.run(tell_not_placed(me.person, datetime(2026, 10, 15, 21, 1)))
+    assert sent == [] and OfferStore(me.workspace).get(offer.id).state == "expired"
