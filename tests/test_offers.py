@@ -509,3 +509,26 @@ def test_two_senders_at_once_keep_to_the_daily_limit(tmp_path, monkeypatch):
 
     asyncio.run(both())
     assert pushed == [last.id] and store.notified_on(now) == 4
+
+
+def test_answers_to_an_offer_get_the_status_the_app_can_tell_apart(tmp_path):
+    """Contract section 4: 404 for no such offer (checked first), 400 for an unknown choice, 409 for a closed or
+    answered offer, 401 once the sign-in has ended."""
+    from aiohttp.test_utils import TestClient, TestServer
+    from voice.token_server import make_app
+
+    me = signed_in(tmp_path)
+    offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
+
+    async def main():
+        app = make_app("wss://example", "APIkey", "s" * 32, me.people, room_exists=None)
+        async with TestClient(TestServer(app), headers=me.headers) as client:
+            async def answer(offer_id, choice):
+                return (await client.post(f"/offers/{offer_id}", json={"choice": choice})).status
+
+            statuses = [await answer("20261014-183000-abcd", "explode"), await answer(offer.id, "explode"),
+                        await answer(offer.id, "decline"), await answer(offer.id, "now")]
+            me.people.end_session(me.token)
+            return statuses + [await answer(offer.id, "now")]
+
+    assert asyncio.run(main()) == [404, 400, 200, 409, 401]

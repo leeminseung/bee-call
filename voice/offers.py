@@ -45,6 +45,14 @@ ANSWERS = {"now": "now", "later": "booked", "decline": "declined"}
 OFFER_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 
 
+class UnknownChoice(ValueError):
+    """The answer is not one of ANSWERS (the token server's 400)."""
+
+
+class OfferClosed(ValueError):
+    """The offer no longer takes this answer: answered, closed, or its call is being placed (409)."""
+
+
 @dataclass
 class Offer:
     id: str
@@ -263,20 +271,21 @@ class OfferStore:
             return self._save(offer)
 
     def answer(self, offer_id: str, choice: str, now: datetime) -> Offer:
-        """The user's answer from a notification button or the app. KeyError: no such offer. ValueError: the
-        offer is no longer waiting for an answer, or the choice is unknown. "decline" also calls off a booked
-        call (the app's "Call off"), until its room is being made: also while a runner prepares it."""
-        if choice not in ANSWERS:
-            raise ValueError(f"choice must be one of {', '.join(ANSWERS)}")
+        """The user's answer from a notification button or the app. KeyError: no such offer (checked first).
+        UnknownChoice: not one of ANSWERS. OfferClosed: the offer no longer waits for an answer. "decline" also
+        calls off a booked call (the app's "Call off"), until its room is being made: also while a runner
+        prepares it."""
         with self._lock():
             self._expire(now)
             offer = self.get(offer_id)
             if offer is None:
                 raise KeyError(offer_id)
+            if choice not in ANSWERS:
+                raise UnknownChoice(f"choice must be one of {', '.join(ANSWERS)}")
             if choice == "decline" and booked_call(offer) and offer.state in ("booked", "calling"):
                 return self._save(self._set(offer, "declined", now, claim=None))
             if offer.state != "asked":
-                raise ValueError(f"the offer is {offer.state}")
+                raise OfferClosed(f"the offer is {offer.state}")
             state = ANSWERS[choice]
             call_at = {"now": _iso(now), "booked": offer.suggested_at}.get(state)
             return self._save(self._set(offer, state, now, call_at=call_at))

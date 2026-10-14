@@ -35,8 +35,9 @@ POST /push  {"token": hex, "environment": ...}
                                          kept the same way
 GET  /offers                             offers still waiting for an answer or a call
 POST /offers/<id>  {"choice": "now"|"later"|"decline"}
-                                         the user's answer; voice/outbound.py places the call. 404 unknown,
-                                         409 already answered or closed
+                                         the user's answer; voice/outbound.py places the call. "decline" also
+                                         calls off a booked call until its room is being made. 404 unknown
+                                         (checked first), 400 another choice, 409 already answered or closed
 
 Bee, for the people who use it:
 POST /bee/connect                        {"link"}: the approval link the app opens. The server waits for the
@@ -65,7 +66,7 @@ from voice import apple_signin, voip_push
 from voice.continuation import session_dir
 from voice.costs import spent_today
 from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata, room_name
-from voice.offers import OfferStore
+from voice.offers import OfferClosed, OfferStore, UnknownChoice
 from voice.people import People, Person, dev_person, waiting_code
 from voice.session_server import local_host
 
@@ -341,7 +342,9 @@ async def answer_offer(request: web.Request) -> web.Response:
         offer = store.answer(request.match_info["offer_id"], choice, datetime.now())
     except KeyError:
         raise web.HTTPNotFound(text="no such offer\n")
-    except ValueError as exc:
+    except UnknownChoice as exc:
+        raise web.HTTPBadRequest(text=f"{exc}\n")
+    except OfferClosed as exc:
         raise web.HTTPConflict(text=f"{exc}\n")
     log.info("offer %s of %s: %s -> %s", offer.id, person(request), choice, offer.state)
     add_event(workspace(request), "offer_answered", offer=offer.id, choice=choice, topic=offer.topic)
