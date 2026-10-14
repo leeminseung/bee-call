@@ -34,6 +34,8 @@ final class CallManager: NSObject {
     // A call the user starts rings until the AI picks up (it reads Bee first, at most about 8 s).
     @ObservationIgnored private var pickUpTimeout: Task<Void, Never>?
     @ObservationIgnored private var pickedUp = false
+    @ObservationIgnored private let decline = CallDecline(transport: URLSession.shared,
+                                                          noteStatus: { Server.shared.noteStatus($0) })
     private static let pickUpSeconds = 30 // the voice server picks up within about 8 s; this catches a stuck one
 
     override init() {
@@ -421,6 +423,9 @@ extension CallManager: CXProviderDelegate {
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         // Also reached when iOS ends the call (lock screen, AirPods, Dynamic Island).
         let declined = isRinging // the AI's call, ended before it was answered
+        if declined, let room = rungRooms.first(where: { $0.value == action.callUUID })?.key {
+            Task { await decline.send(room: room) } // not awaited: CallKit's end goes on at once
+        }
         isEnding = true
         connecting?.cancel()
         Task {
