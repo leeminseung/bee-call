@@ -24,13 +24,13 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Callable
 
-import boto3
 from botocore.config import Config
 
 from beelink import reads
 from beelink.clock import now_text
 from beelink.context import CallInputs, fetch_call_inputs
 from beelink.planner import Plan
+from voice.aws_session import aws_session
 from voice.language import CallLanguage, call_language
 
 PREP_SECONDS = 8.0  # the most a caller hears ringing before the AI picks up (agreed with Matt, 2026-10-13)
@@ -111,9 +111,8 @@ def prep_model(mode: str) -> tuple[str, str] | None:
 
 @functools.lru_cache(maxsize=4)
 def bedrock_client(region: str):
-    session = boto3.Session(profile_name=os.environ.get("AWS_PROFILE", "bee-call"))
-    return session.client("bedrock-runtime", region_name=region,
-                          config=Config(connect_timeout=3, read_timeout=20, retries={"max_attempts": 1}))
+    return aws_session().client("bedrock-runtime", region_name=region,
+                                config=Config(connect_timeout=3, read_timeout=20, retries={"max_attempts": 1}))
 
 
 def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime | None = None) -> str:

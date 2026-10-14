@@ -14,14 +14,14 @@ Run: uv run python -m worker.web_search "What is the weather in Seoul this Satur
 """
 
 import asyncio
-import os
 import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-import boto3
 from botocore.config import Config
 from dotenv import load_dotenv
+
+from voice.aws_session import aws_session
 
 load_dotenv(".env.local")
 MODEL = "us.amazon.nova-2-lite-v1:0"
@@ -116,9 +116,7 @@ def parse_response(question: str, response: dict[str, Any]) -> SearchResult:
 
 
 def make_client() -> Any:
-    profile = os.environ.get("AWS_PROFILE", "bee-call")
-    return boto3.Session(profile_name=profile).client("bedrock-runtime", region_name=REGION,
-                                                      config=Config(read_timeout=300))
+    return aws_session().client("bedrock-runtime", region_name=REGION, config=Config(read_timeout=300))
 
 
 async def web_search(question: str, client: Any | None = None, max_tokens: int = 2048) -> SearchResult:
