@@ -1,6 +1,37 @@
 import SwiftUI
 import UserNotifications
 
+/// What became of an answer to an offer: the one place that reads the server's reply to POST /offers/<id>
+/// (contract section 4), and what to tell the person.
+enum OfferAnswer: Equatable {
+    case accepted
+    case signedOut // 401: the sign-in has ended
+    case closed // 404 or 409: no such offer, or it closed or was answered already
+    case unreachable // no reply at all
+    case failed(Int) // any other reply, such as a 502 while the server restarts
+
+    init(status: Int?) {
+        switch status {
+        case nil: self = .unreachable
+        case let code? where (200..<300).contains(code): self = .accepted
+        case 401?: self = .signedOut
+        case 404?, 409?: self = .closed
+        case let code?: self = .failed(code)
+        }
+    }
+
+    /// The line under the offer list, or the notification after a button's answer did not go through.
+    var notice: String? {
+        switch self {
+        case .accepted: nil
+        case .signedOut: "Your sign-in ended. Sign in again to answer."
+        case .closed: "That offer has closed. You can call Bee Call any time."
+        case .unreachable: "Couldn't reach Bee Call. Try again from here."
+        case .failed(let code): "Bee Call couldn't take that answer (error \(code)). Try again from here."
+        }
+    }
+}
+
 /// The AI asks before it calls (voice/offers.py on the Mac): a notification such as "About “Planned a Saturday
 /// hike”: free for a 5-minute call at 9:00 PM today?" with three buttons, which also show on the lock screen and
 /// Apple Watch. A button sends the answer to the token server, even while the app is closed; the Mac then calls
@@ -36,6 +67,7 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     private(set) var open: [Offer] = []
     private(set) var notificationsOn = false
     private(set) var notice: String? // one line under the list when an answer did not go through
+    private(set) var answering: Set<String> = [] // offers whose answer is on its way; their buttons are off
     @ObservationIgnored private let transport: any HTTPTransport
     @ObservationIgnored private let noteStatus: (Int) -> Void
 
@@ -95,18 +127,20 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    /// Sends the answer; false when the token server refused it (the offer had closed) or could not be reached.
+    /// Sends the answer, and says under the list what became of it. Nil when an answer to this offer is already
+    /// on its way (a double tap): one answer per offer at a time.
     @discardableResult
-    func answer(_ offerID: String, _ choice: Choice) async -> Bool {
+    func answer(_ offerID: String, _ choice: Choice) async -> OfferAnswer? {
+        guard answering.insert(offerID).inserted else { return nil }
+        defer { answering.remove(offerID) } // after the refresh, so the row does not come back for a moment
         guard let request = Server.request("/offers/\(offerID)", method: "POST", json: ["choice": choice.rawValue])
-        else { return false }
+        else { return .unreachable }
         let response = try? await transport.send(request)
-        let code = response?.1.httpStatus
-        let accepted = code == 200
-        notice = accepted ? nil : code == nil ? "Couldn't reach Bee Call. Try again from here."
-            : "That offer has closed. You can call Bee Call any time."
+        let result = OfferAnswer(status: response?.1.httpStatus)
+        if result == .signedOut { noteStatus(401) }
+        notice = result.notice
         await refresh()
-        return accepted
+        return result
     }
 
     /// After a button on a notification did not go through: say so, since the notification itself is gone.
@@ -133,7 +167,7 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         guard let offerID else { return }
         if let choice = Choice(rawValue: action) {
             // iOS keeps the app running until this returns.
-            if await !answer(offerID, choice) { await tellAnswerFailed() }
+            if let result = await answer(offerID, choice), result != .accepted { await tellAnswerFailed() }
         } else {
             await refresh() // the notification itself was tapped: the app opens on the offer list
         }
@@ -169,7 +203,7 @@ struct OfferList: View {
         if !offers.open.isEmpty || offers.notice != nil {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(offers.open) { offer in
-                    OfferRow(offer: offer) { choice in
+                    OfferRow(offer: offer, isAnswering: offers.answering.contains(offer.id)) { choice in
                         Task { await offers.answer(offer.id, choice) }
                     }
                 }
@@ -185,6 +219,7 @@ struct OfferList: View {
 
 private struct OfferRow: View {
     let offer: OfferCenter.Offer
+    let isAnswering: Bool // the answer is on its way: the buttons wait for it
     let answer: (OfferCenter.Choice) -> Void
 
     var body: some View {
@@ -210,6 +245,7 @@ private struct OfferRow: View {
                 }
             }
             .controlSize(.small)
+            .disabled(isAnswering)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
