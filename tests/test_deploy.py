@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from deploy.config import TEMPLATE, caddyfile, env_file, quoted
+from scripts import deploy_server
 from scripts.deploy_server import (BOOTSTRAP, harness_on_this_mac, parse_sets, remote_commands, server_settings,
                                    zone_for)
 from voice import agent
@@ -184,6 +185,40 @@ def test_run_command_keeps_the_end_of_a_long_output():
     lines = remote_commands("printf 'x%.0s' $(seq 30000); echo; echo finished >&2\n")
     run = subprocess.run(["sh", "-c", "\n".join(lines)], capture_output=True, text=True)
     assert run.returncode == 0 and len(run.stdout) == 23000 and run.stdout.endswith("x\nfinished\n")
+
+
+class FakeSsm:
+    """Run Command as boto3 shows it: the invocation is unknown at first, then in progress, then done."""
+
+    class exceptions:
+        class InvocationDoesNotExist(Exception):
+            pass
+
+    def __init__(self, final: dict):
+        self.answers = [None, {"Status": "InProgress"}, final]
+        self.sent = None
+
+    def send_command(self, **kwargs):
+        self.sent = kwargs
+        return {"Command": {"CommandId": "c-1"}}
+
+    def get_command_invocation(self, CommandId, InstanceId):
+        answer = self.answers.pop(0)
+        if answer is None:
+            raise self.exceptions.InvocationDoesNotExist()
+        return answer
+
+
+def test_run_command_waits_for_the_server_and_stops_on_a_failure(monkeypatch):
+    monkeypatch.setattr(deploy_server.time, "sleep", lambda s: None)
+    done = {"Status": "Success", "ResponseCode": 0, "StandardOutputContent": "ok\n", "StandardErrorContent": ""}
+    ssm = FakeSsm(done)
+    assert deploy_server.run_on_server(ssm, "i-1", "echo ok", timeout=60) == "ok\n"
+    assert ssm.sent["DocumentName"] == "AWS-RunShellScript" and ssm.sent["Parameters"]["executionTimeout"] == ["60"]
+    failed = {"Status": "Failed", "ResponseCode": 1, "StandardOutputContent": "uv: lock out of date\n",
+              "StandardErrorContent": ""}
+    with pytest.raises(SystemExit):
+        deploy_server.run_on_server(FakeSsm(failed), "i-1", "exit 1")
 
 
 def test_the_user_data_fits_ec2s_limit_and_hands_over_to_the_checkout():
