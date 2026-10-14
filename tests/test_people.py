@@ -728,3 +728,22 @@ def test_without_bee_the_prep_of_an_ai_call_reads_nothing_and_never_mentions_bee
     (request,) = client.requests
     assert "toolConfig" not in request
     assert re.findall(r"\bBee\b(?! Call)", request["system"][0]["text"] + json.dumps(request["messages"])) == []
+
+
+# ---------- each person's time zone (contract section 1) ----------
+
+def test_the_app_sets_the_person_s_time_zone_and_their_clock_follows_it(tmp_path):
+    me = signed_in(tmp_path)
+    assert me.people.settings("matt").time_zone == "Asia/Seoul"  # until the phone says otherwise
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            statuses = []
+            for zone in ("Mars/Olympus_Mons", 9, "../../etc/localtime", "", "America/New_York"):
+                statuses.append((await client.put("/settings", json={"time_zone": zone})).status)
+            return statuses
+
+    assert asyncio.run(main()) == [400, 400, 400, 400, 200]
+    now = me.person.now()
+    assert now.tzinfo is not None and str(now.tzinfo) == "America/New_York"
+    assert abs((now - datetime.now().astimezone()).total_seconds()) < 5  # the same moment, in their zone

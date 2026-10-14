@@ -37,11 +37,13 @@ from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 PERSON_ID = re.compile(r"[a-z][a-z0-9-]{0,31}")
 CALL_TIME = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 SESSION_DAYS = 180  # a sign-in lasts this long; then the app signs in with Apple again (arbitrary)
 DEFAULT_BUDGET_USD = 3.0  # estimated spend a day before calls stop (arbitrary until per-minute costs are measured)
+DEFAULT_TIME_ZONE = "Asia/Seoul"  # until the person's phone sends its own (Matt, 2026-10-15: the friend is in Korea too)
 DEVICE_KINDS = ("alert", "voip")  # the app's two push tokens: plain notifications, and VoIP pushes that ring
 # Where each person's push tokens were kept before devices.json; read once into it, then removed.
 LEGACY_DEVICE_FILES = {"voip": Path("state") / "voip_token.json", "alert": Path("state") / "alert_token.json"}
@@ -68,6 +70,10 @@ class Settings:
     bee: bool = False  # Bee is connected (POST /bee/connect)
     tts: str | None = None  # the voice, for Matt to change by hand; None means the language's default
     voice: str | None = None
+    time_zone: str = DEFAULT_TIME_ZONE  # an IANA name; the app sends the phone's (contract section 1)
+
+    def zone(self) -> ZoneInfo:
+        return ZoneInfo(self.time_zone)
 
     @classmethod
     def from_file(cls, path: Path) -> "Settings":
@@ -111,6 +117,11 @@ class Settings:
         elif name in ("tts", "voice"):
             if value is not None and (not isinstance(value, str) or not re.fullmatch(r"[\w.-]{1,64}", value)):
                 raise ValueError(f"{name} must be a short name or null")
+        elif name == "time_zone":
+            try:
+                ZoneInfo(value)
+            except (TypeError, ValueError, ZoneInfoNotFoundError):
+                raise ValueError("time_zone must be an IANA time zone name, like Asia/Seoul")
         else:
             raise ValueError(f"unknown setting {name!r}")
         setattr(self, name, value)
@@ -125,7 +136,7 @@ class Settings:
         return env
 
 
-APP_SETTINGS = ("language", "call_time", "record_on_server", "record_on_phone")  # what the app may change
+APP_SETTINGS = ("language", "call_time", "record_on_server", "record_on_phone", "time_zone")  # what the app may change
 
 
 @dataclass(frozen=True)
@@ -141,6 +152,12 @@ class Person:
 
     def settings(self) -> Settings:
         return self.people.settings(self.id)
+
+    def now(self) -> datetime:
+        """The one clock for the person's time: now, in their time zone (aware). Every "the user's time" comes from
+        here: the suggested call time, quiet hours, the day's notifications and budget, the 30 minutes after a
+        call, call folder dates, booked times, and the "It is now" lines the models read."""
+        return datetime.now(self.settings().zone())
 
     def device(self, kind: str) -> dict[str, Any] | None:
         """This person's phone for one kind of push: {"token", "environment"}, or None."""

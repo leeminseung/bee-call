@@ -15,7 +15,8 @@ POST /auth/apple {"identity_token", "nonce"}
                                          sign-in (uv run python -m voice.people approve CODE --as ID)
 POST /auth/signout                       ends this sign-in; the push tokens it registered go with it
 GET  /me                                 who is signed in, their settings and today's estimated spend
-PUT  /settings {"language": "ko", ...}   the settings the app may change (voice/people.py APP_SETTINGS)
+PUT  /settings {"language": "ko", ...}   the settings the app may change (voice/people.py APP_SETTINGS), with
+                                         time_zone, the phone's IANA zone (400 for a name zoneinfo does not know)
 
 Calls:
 GET  /token                              a token for a new call the user starts; the voice server is dispatched
