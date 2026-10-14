@@ -23,7 +23,8 @@ struct BeeCallApp: App {
                     SignInView(server: server)
                 }
             }
-            // The switches live in the Settings app, so the server learns them whenever the app comes back.
+            // The switches live in the Settings app. SettingsSync sends them at launch and on every change; coming
+            // back to the app sends them again too, and brings Bee in line with "Use Bee".
             .task(id: scenePhase) {
                 if scenePhase == .active { await server.syncSettings() }
             }

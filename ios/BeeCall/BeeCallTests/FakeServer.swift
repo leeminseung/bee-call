@@ -12,6 +12,8 @@ final class FakeServer: HTTPTransport {
         case unreachable
         /// Never answers, like a server that has stopped responding; the request ends only when its task is cancelled.
         case hang
+        /// Answers with this status code after a while, like a slow network.
+        case after(Duration, Int)
     }
 
     private(set) var requests: [URLRequest] = []
@@ -38,6 +40,9 @@ final class FakeServer: HTTPTransport {
         case .hang:
             while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(20)) }
             throw URLError(.cancelled)
+        case .after(let delay, let code):
+            try await Task.sleep(for: delay)
+            return (Data(), response(code))
         }
     }
 
@@ -52,6 +57,20 @@ final class FakeServer: HTTPTransport {
                                     "no request \(key)")
         let data = try XCTUnwrap(request.httpBody, "\(key) has no body")
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+/// Waits until `condition` holds, checking every 20 ms; fails the test after `timeout`.
+@MainActor
+func waitUntil(_ what: String, timeout: Duration = .seconds(3), file: StaticString = #filePath, line: UInt = #line,
+               _ condition: () -> Bool) async {
+    let start = ContinuousClock.now
+    while !condition() {
+        if ContinuousClock.now - start > timeout {
+            XCTFail("timed out waiting until \(what)", file: file, line: line)
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(20))
     }
 }
 

@@ -275,6 +275,12 @@ final class CallManager: NSObject {
         liveKit.onAgentAnswered = { [weak self] in self?.agentPickedUp(id) }
         connecting = Task {
             do {
+                if roomName != nil {
+                    // The voice server reads "Save on the server" when the phone joins, so the switches go first;
+                    // a slow network holds the call at most SettingsSync.answerWait (contract section 1).
+                    await Server.shared.settings.sendBeforeAnswering()
+                    try Task.checkCancellation() // the call ended while the settings went out
+                }
                 let room = try await liveKit.connect(tokenServerURL: url, answering: roomName,
                                                      continuing: roomName == nil ? earlierCall : nil)
                 try Task.checkCancellation() // the call ended while we were connecting

@@ -27,7 +27,7 @@ final class Server {
     private(set) var problem: String? // the last sign-in failure, in words
     private(set) var beeStatus = "" // shown under the call status when the person uses Bee
     @ObservationIgnored private var nonce: String?
-    @ObservationIgnored let settings = SettingsSync(isSignedIn: { Server.shared.isSignedIn },
+    @ObservationIgnored let settings = SettingsSync(tokenReadable: { Server.savedToken() != nil },
                                                     noteStatus: { Server.shared.noteStatus($0) })
 
     private init() {
@@ -196,7 +196,7 @@ final class Server {
     /// Sends the switches from the Settings app to the server, and connects or disconnects Bee to match "Use Bee".
     func syncSettings() async {
         guard case .signedIn = state else { return }
-        await settings.send()
+        await settings.send().value
         await syncBee(wanted: AppSettings(.standard).useBee)
     }
 
