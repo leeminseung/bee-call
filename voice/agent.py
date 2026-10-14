@@ -74,6 +74,7 @@ COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
 COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "zai.glm-5")
 WORKER = os.environ.get("WORKER", "fake")
 FIRST_WORDS_WAIT_S = 6.0  # ringing stops when the AI starts to speak, or after this long anyway (arbitrary)
+TURN_ENDPOINTING = {"mode": "dynamic", "min_delay": 0.5, "max_delay": 3.0}  # LiveKit 1.8.6 EndpointingOptions
 # After the user answers an AI call, its prepared opening does not wait longer than this for the Bee read
 # that only feeds the call record (arbitrary).
 OUTBOUND_INPUTS_WAIT_S = 0.5
@@ -384,7 +385,10 @@ async def entrypoint(ctx: JobContext) -> None:
         vad=ctx.proc.userdata["vad"],
         # Named rather than left to LiveKit's defaults, which follow the launch mode: `dev` (a Mac) picks LiveKit's
         # cloud turn detector and adaptive interruptions, `start` (the server) a local model and voice activity only.
-        turn_handling={"turn_detection": inference.TurnDetector(version="v1"), "interruption": {"mode": "adaptive"}},
+        # The wait before a turn counts as over learns how long this caller pauses mid-sentence (between 0.5 and
+        # 3 s): with LiveKit's fixed 0.3 s, the 2026-10-15 call cut one answer into five turns at pauses of 1-1.9 s.
+        turn_handling={"turn_detection": inference.TurnDetector(version="v1"), "interruption": {"mode": "adaptive"},
+                       "endpointing": TURN_ENDPOINTING},
     )
 
     async def notify(news: JobNotification) -> None:

@@ -131,3 +131,20 @@ def test_the_call_ai_keeps_a_quiet_transcript_out_and_notes_it_in_the_call_recor
     assert len(dropped) == 1 and dropped[0]["text"] == "확인해보세요." and dropped[0]["level"] < 100
     assert (rec.dir / "audio" / "user.wav").stat().st_size > 44  # the call's own recording still gets every frame
 
+
+def test_the_wait_before_a_turn_ends_learns_the_caller_s_pauses(monkeypatch):
+    # LiveKit fills unset keys from defaults that depend on the turn detector: for the cloud detector the server uses
+    # (a streaming one) a fixed 0.3 s, which is what the 2026-10-15 call had. Ours: learned, from 0.5 s up to 3 s.
+    from livekit.agents import inference
+    from livekit.agents.voice.endpointing import DynamicEndpointing, create_endpointing
+    from livekit.agents.voice.turn import _resolve_endpointing
+
+    from voice.agent import TURN_ENDPOINTING
+
+    monkeypatch.setenv("LIVEKIT_API_KEY", "test")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "test")
+    detector = inference.TurnDetector(version="v1")
+    assert _resolve_endpointing(None, turn_detection=detector)["min_delay"] == 0.3  # LiveKit's own, before
+    timer = create_endpointing(_resolve_endpointing(TURN_ENDPOINTING, turn_detection=detector))
+    assert isinstance(timer, DynamicEndpointing)
+    assert timer.min_delay == 0.5 and timer.max_delay == 3.0
