@@ -330,17 +330,18 @@ async def run_call(ctx: JobContext, people: People) -> None:
     """One call, from the dispatch to the AI's first words; the rest runs in the session and its shutdown."""
     meta = call_meta(ctx.job.metadata)
     started = time.monotonic()
+    room = ctx.job.room.name  # ctx.room has no name until the job connects to it
     person = person_for_call(meta, people)
     if person is None:
-        log.error("call in room %s is for no approved person (%r); not answering", ctx.room.name, meta.get("person"))
+        log.error("call in room %s is for no approved person (%r); not answering", room, meta.get("person"))
         ctx.shutdown(reason="no approved person for this call")
         return
     someone = people.person(person)  # their folder, settings, phone and clock (someone.now)
     if meta.get("direction") != "outbound":  # the AI's own calls were checked before they were placed
         budget = day_budget(someone, someone.now())
         if budget.used_up:  # the app's pass to the room lasts two hours; the budget is checked as the call starts
-            log.info("not answering the call in room %s: %s", ctx.room.name, budget.why())
-            await ctx.delete_room()  # ends the call on the phone
+            log.info("not answering the call in room %s: %s", room, budget.why())
+            await ctx.delete_room(room)  # ends the call on the phone
             ctx.shutdown(reason=budget.why())
             return
     workspace = people.workspace(person)

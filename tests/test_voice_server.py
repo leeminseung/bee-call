@@ -91,9 +91,9 @@ def test_an_ai_call_unanswered_in_time_is_missed_and_not_called_again(tmp_path, 
         await call.end()
 
     asyncio.run(main())
-    assert call.deleted and call.session.started is None and call_folders(me.workspace) == []
+    assert call.deleted == call.room_name and call.session.started is None and call_folders(me.workspace) == []
     (event,) = MetaSession(me.workspace).take_events()
-    assert (event["kind"], event["topic"], event["room"]) == ("call_missed", "the interview", call.room.name)
+    assert (event["kind"], event["topic"], event["room"]) == ("call_missed", "the interview", call.room_name)
 
 
 def spend_today(workspace, usd: float) -> None:
@@ -120,7 +120,7 @@ def test_a_call_the_user_starts_past_the_budget_is_not_answered(tmp_path, monkey
         await call.end()
 
     asyncio.run(main())
-    assert call.session.started is None and call.ringing == [] and call.deleted  # the app's call ends
+    assert call.session.started is None and call.ringing == [] and call.deleted == call.room_name  # the call ends
     assert call_folders(me.workspace) == before and MetaSession(me.workspace).take_events() == []
 
 
@@ -141,7 +141,7 @@ def test_the_budget_is_checked_only_before_a_call_starts_and_never_cuts_one(tmp_
             await agent.run_call(call, me.people)
             spend_today(me.workspace, 1.0)  # and past it during the call
             await asyncio.sleep(0.2)
-            return call.session.started is not None, call.session.closed, call.deleted
+            return call.session.started is not None, call.session.closed, bool(call.deleted)
 
         assert asyncio.run(main()) == (True, False, False)
         asyncio.run(call.end())
@@ -289,12 +289,12 @@ def test_an_ai_call_declined_while_it_rings_is_declined_not_missed(tmp_path, mon
     async def main():
         waiting = asyncio.create_task(agent.run_call(call, me.people))
         await asyncio.sleep(0.1)
-        decline_ring(me.person, call.room.name)  # what the token server does for the app
+        decline_ring(me.person, call.room_name)  # what the token server does for the app
         await asyncio.wait_for(waiting, 2)
         await call.end()
 
     asyncio.run(main())
-    assert call.deleted and call.session.started is None and call_folders(me.workspace) == []
+    assert call.deleted == call.room_name and call.session.started is None and call_folders(me.workspace) == []
     (event,) = MetaSession(me.workspace).take_events()
     assert (event["kind"], event["topic"]) == ("call_declined", "the interview")
 

@@ -39,9 +39,11 @@ class FakeLocalParticipant:
 
 
 class FakeRoom(FakeEmitter):
-    def __init__(self, name: str) -> None:
+    """Like rtc.Room, it has no name until the job connects to it."""
+
+    def __init__(self) -> None:
         super().__init__()
-        self.name = name
+        self.name = ""
         self.local_participant = FakeLocalParticipant()
 
 
@@ -81,13 +83,14 @@ class FakeCall:
     def __init__(self, people, meta: dict[str, Any], room: str = "call-matt-20261015-090000",
                  session: FakeSession | None = None) -> None:
         self.people = people
-        self.room = FakeRoom(room)
+        self.room_name = room
+        self.room = FakeRoom()
         self.session = session or FakeSession()
         self.caller = SimpleNamespace(identity=meta.get("person") or "caller", kind=0)
         self.joined = asyncio.Event()
         self.shutdown_callbacks: list = []
         self.shutdown_reason: str | None = None
-        self.deleted = False
+        self.deleted: str | None = None  # the room deleted, by name
         self.ringing: list[str] = []  # "start", "stop" as the voice server's ringback plays and stops
         self.job = SimpleNamespace(metadata=json.dumps(meta), room=SimpleNamespace(name=room))
         self.proc = SimpleNamespace(userdata={"vad": None, "aws": None})
@@ -95,7 +98,7 @@ class FakeCall:
     # ---------- JobContext ----------
 
     async def connect(self) -> None:
-        pass
+        self.room.name = self.room_name
 
     async def wait_for_participant(self):
         await self.joined.wait()
@@ -107,8 +110,9 @@ class FakeCall:
     def shutdown(self, reason: str = "") -> None:
         self.shutdown_reason = reason
 
-    def delete_room(self):
-        self.deleted = True
+    def delete_room(self, room_name: str | None = None):
+        """As JobContext.delete_room: the room named, or the connected room (no name before connecting)."""
+        self.deleted = room_name or self.room.name or "(a room with no name)"
         done = asyncio.get_running_loop().create_future()
         done.set_result(None)
         return done
