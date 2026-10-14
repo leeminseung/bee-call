@@ -4,6 +4,9 @@ The voice server registers as the agent named AGENT_NAME and joins only the room
 it is dispatched to. The dispatch metadata tells it which way the call goes and,
 for an AI-initiated call, why: the plan, the Bee inbox and the conversation ids,
 and the call prep note written before the phone rang (voice/prep.py).
+AGENT_NAME is LIVEKIT_AGENT_NAME, bee-call when unset. Every machine that runs a
+voice server needs its own name (bee-call on the server, bee-call-dev on a Mac):
+LiveKit shares the calls for one name among all the workers registered under it.
 
 Ringing the phone is a separate step. The ring line goes into
 workspace/state/outbound.jsonl, which the token server streams to an open app, and
@@ -13,10 +16,13 @@ set up and the app has registered). This module is the only writer of that file.
 
 import json
 import logging
+import os
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
 from livekit import api
 
 from beelink.planner import OUTBOUND_LOG, Plan
@@ -24,7 +30,15 @@ from voice import voip_push
 
 log = logging.getLogger("bee-call.dispatch")
 
-AGENT_NAME = "bee-call"
+# The entry points import this module before they load .env.local, where a Mac sets LIVEKIT_AGENT_NAME.
+load_dotenv(".env.local")
+
+
+def agent_name(env: Mapping[str, str] = os.environ) -> str:
+    return env.get("LIVEKIT_AGENT_NAME", "").strip() or "bee-call"
+
+
+AGENT_NAME = agent_name()
 RING_SECONDS = 60  # how long the voice server waits for the phone to answer (arbitrary)
 
 
