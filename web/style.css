@@ -251,6 +251,7 @@ h1 {
 .prep-note { margin: 6px 0 0; font-size: 15.5px; white-space: pre-line; overflow-wrap: anywhere; }
 .prep-reads { margin: 6px 0 0; padding-left: 18px; font-size: 14px; color: var(--muted); }
 .quotes-label { margin: 14px 0 0; font-size: 12.5px; font-weight: 600; color: var(--faint); }
+.quotes-summary { margin: 2px 0 0; font-size: 14.5px; color: var(--muted); overflow-wrap: anywhere; }
 .quotes { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 8px; }
 .quote { padding: 1px 0 1px 11px; border-left: 3px solid var(--line); }
 .quote-who { display: flex; gap: 6px; font-size: 12.5px; color: var(--muted); }

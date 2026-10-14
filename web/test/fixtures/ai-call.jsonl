@@ -1,0 +1,31 @@
+{"t": 0.0, "type": "call_started", "room": "call-matt-20261015-210002", "started_at": "2026-10-15T21:00:02"}
+{"t": 0.004, "type": "coordinator", "llm": "claude", "language": "en", "voice": "polly:Joanna", "person": "matt", "audio_on_server": true, "audio_on_phone": false}
+{"t": 0.005, "type": "call", "direction": "outbound", "topic": "Saturday hike with Dana", "reason": "You promised Dana a trail pick by tonight, and her knee is still sore.", "continue_from": null}
+{"t": 0.31, "type": "why_calling", "summary": "Planned a Saturday hike with Dana.", "conversation_id": 5121, "utterances": [{"at": "18:41", "speaker": "speaker_1", "text": "So are we still on for Saturday?"}, {"at": "18:41", "speaker": "me", "text": "Yes! I'll pick the trail by tonight."}], "pending_fact_ids": []}
+{"t": 0.32, "type": "prep_ready", "after_s": 0.3, "opening": "Hi, it's Bee Call. Is now still good to pick Saturday's trail?", "opening_s": 0.0, "note_ready": true}
+{"t": 0.4, "type": "call_prep", "seconds": 3.2, "model": "claude-sonnet-5-5", "reads": [], "note": "Dana's knee is still sore; she wants an easy trail.", "opening": "Hi, it's Bee Call. Is now still good to pick Saturday's trail?", "error": null, "input_tokens": 2100, "output_tokens": 180}
+{"t": 0.6, "type": "agent_state", "old": "initializing", "new": "speaking"}
+{"t": 1.9, "type": "picked_up", "after_s": 1.9}
+{"t": 4.2, "type": "message", "role": "assistant", "text": "Hi, it's Bee Call. Is now still good to pick Saturday's trail?", "interrupted": false, "metrics": null}
+{"t": 4.21, "type": "agent_state", "old": "speaking", "new": "listening"}
+{"t": 6.0, "type": "user_transcript", "text": "Yes, now is fine."}
+{"t": 6.3, "type": "message", "role": "user", "text": "Yes, now is fine.", "interrupted": false, "metrics": null}
+{"t": 7.1, "type": "user_transcript", "text": "Dana says her knee is better,"}
+{"t": 7.4, "type": "message", "role": "user", "text": "Dana says her knee is better,", "interrupted": false, "metrics": null}
+{"t": 8.9, "type": "user_transcript", "text": "but she still wants an easy route."}
+{"t": 9.2, "type": "message", "role": "user", "text": "but she still wants an easy route.", "interrupted": false, "metrics": null}
+{"t": 9.21, "type": "agent_state", "old": "listening", "new": "thinking"}
+{"t": 12.0, "type": "message", "role": "assistant", "text": "Got it. Shall I put \"Text Dana the trail plan\" in Bee as a to-do?", "interrupted": false, "metrics": null}
+{"t": 13.5, "type": "user_transcript", "text": "Yes please."}
+{"t": 13.8, "type": "message", "role": "user", "text": "Yes please.", "interrupted": false, "metrics": null}
+{"t": 14.6, "type": "bee_write", "kind": "todo_create", "text": "Text Dana the trail plan", "question": "Shall I put \"Text Dana the trail plan\" in Bee as a to-do?", "answer": "Yes please.", "result": "ok"}
+{"t": 16.0, "type": "message", "role": "assistant", "text": "Done, it's in Bee as a to-do: Text Dana the trail plan.", "interrupted": false, "metrics": null}
+{"t": 17.2, "type": "message", "role": "user", "text": "Actually, take that out.", "interrupted": false, "metrics": null}
+{"t": 17.9, "type": "bee_write_undone", "kind": "todo_create", "text": "Text Dana the trail plan"}
+{"t": 19.0, "type": "message", "role": "assistant", "text": "Took it out. Shall I save in Bee that Dana prefers easy routes for now?", "interrupted": false, "metrics": null}
+{"t": 20.1, "type": "message", "role": "user", "text": "Sure.", "interrupted": false, "metrics": null}
+{"t": 20.8, "type": "bee_write", "kind": "fact_update", "text": "Dana prefers easy routes while her knee heals", "question": "Shall I save in Bee that Dana prefers easy routes for now?", "answer": "Sure.", "result": "failed", "error": "Bee did not answer in time"}
+{"t": 22.0, "type": "message", "role": "assistant", "text": "Bee didn't take that one, so I'll try again after the call. Talk soon!", "interrupted": false, "metrics": null}
+{"t": 23.0, "type": "tool", "name": "end_call", "arguments": "{}", "output": "Ending the call."}
+{"t": 23.4, "type": "session_closed", "reason": "CloseReason.USER_INITIATED"}
+{"t": 24.1, "type": "call_ended", "user_audio_skipped_frames": 0, "ai_audio_skipped_frames": 0}

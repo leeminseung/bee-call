@@ -1,0 +1,9 @@
+{"t": 0.0, "type": "call_started", "room": "call-matt-20261015-183000", "started_at": "2026-10-15T18:30:00"}
+{"t": 0.004, "type": "coordinator", "llm": "claude", "language": "en", "voice": "polly:Joanna", "person": "matt", "audio_on_server": true, "audio_on_phone": false}
+{"t": 0.005, "type": "call", "direction": "inbound", "topic": null, "reason": null, "continue_from": null}
+{"t": 0.3, "type": "why_calling", "summary": "", "conversation_id": null, "utterances": [], "pending_fact_ids": [8812, 8813]}
+{"t": 2.6, "type": "picked_up", "after_s": 2.6}
+{"t": 4.0, "type": "message", "role": "assistant", "text": "Hi, Bee Call here. What's up?", "interrupted": false, "metrics": null}
+{"t": 6.2, "type": "message", "role": "user", "text": "Just checking in.", "interrupted": false, "metrics": null}
+{"t": 8.0, "type": "session_closed", "reason": "CloseReason.PARTICIPANT_DISCONNECTED"}
+{"t": 8.5, "type": "call_ended", "user_audio_skipped_frames": 0, "ai_audio_skipped_frames": 0}

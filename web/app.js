@@ -483,6 +483,8 @@
       this.whySlot.replaceChildren();
       this.prepSlot.replaceChildren();
       this.direction = null;
+      this.callInfo = null; // the "call" event: which way the call went, and for an AI call its topic and reason
+      this.beeContext = null; // the "why_calling" event: the Bee conversation and facts read for the call
       this.pickedUp = null;
       this.prepEvent = null;
       this.pendingEl.replaceChildren();
@@ -606,9 +608,14 @@
           this.footNote.textContent = ev.room ? `Room ${ev.room}` : "";
           break;
         }
-        case "why_calling": this.renderWhy(ev); break;
+        case "why_calling":
+          this.beeContext = ev;
+          this.renderWhy();
+          break;
         case "call":
           this.direction = ev.direction;
+          this.callInfo = ev;
+          this.renderWhy();
           if (typeof ev.continue_from === "string" && ev.continue_from) this.addContinued(ev.continue_from);
           this.addDebug(ev, t);
           break;
@@ -747,13 +754,40 @@
       }
     }
 
-    renderWhy(ev) {
+    // Why the AI called: every call the AI started gets the card, from its "call" event's topic and reason (also a
+    // booked call, or a person without Bee), with the Bee conversation behind it when there is one. A call the
+    // person started never gets it. A record from before the "call" event shows its Bee conversation as before.
+    renderWhy() {
+      const call = this.callInfo;
+      const bee = this.beeContext;
+      if ((call && call.direction !== "outbound") || (!call && !bee)) {
+        this.whySlot.replaceChildren();
+        return;
+      }
       const card = el("section", "card why");
       const head = el("div", "card-head");
       head.append(icon("chat"), el("span", null, "Why I'm calling"));
       card.append(head);
-      if (typeof ev.summary === "string" && ev.summary.trim()) card.append(el("p", "why-summary", ev.summary.trim()));
+      const said = (value) => (typeof value === "string" ? value.trim() : "");
+      if (call) {
+        if (said(call.topic)) card.append(el("p", "card-title", said(call.topic)));
+        if (said(call.reason)) card.append(el("p", "why-summary", said(call.reason)));
+        if (!said(call.topic) && !said(call.reason)) card.append(el("p", "why-summary", "You said yes to this call."));
+      }
+      if (bee) this.addBeeContext(card, bee, Boolean(call));
+      this.whySlot.replaceChildren(card);
+    }
+
+    // The Bee conversation the call is about, and the unconfirmed facts it brings. Under an AI call's own reason,
+    // Bee's summary of the conversation goes with the quotes.
+    addBeeContext(card, ev, underReason) {
+      const summary = typeof ev.summary === "string" ? ev.summary.trim() : "";
+      if (summary && !underReason) card.append(el("p", "why-summary", summary));
       const utterances = Array.isArray(ev.utterances) ? ev.utterances.filter((u) => u && u.text) : [];
+      if (utterances.length || (summary && underReason)) {
+        card.append(el("p", "quotes-label", "From your Bee conversation"));
+        if (summary && underReason) card.append(el("p", "quotes-summary", summary));
+      }
       if (utterances.length) {
         const list = el("ul", "quotes");
         for (const u of utterances) {
@@ -765,13 +799,12 @@
           quote.append(who, el("p", null, u.text));
           list.append(quote);
         }
-        card.append(el("p", "quotes-label", "From your Bee conversation"), list);
+        card.append(list);
       }
       const facts = Array.isArray(ev.pending_fact_ids) ? ev.pending_fact_ids.length : 0;
       if (facts) {
         card.append(el("p", "card-note", `${facts} unconfirmed ${facts === 1 ? "fact" : "facts"} in Bee to check with you`));
       }
-      this.whySlot.replaceChildren(card);
     }
 
     // The note the AI wrote from Bee before it picked up (voice/prep.py), and the extra reads it chose.
