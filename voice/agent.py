@@ -240,6 +240,7 @@ async def entrypoint(ctx: JobContext) -> None:
             await asyncio.wait_for(ctx.wait_for_participant(), RING_SECONDS)
         except asyncio.TimeoutError:
             log.info("no answer within %ss in room %s", RING_SECONDS, ctx.room.name)
+            add_event(WORKSPACE, "call_missed", room=ctx.room.name, topic=meta.get("topic"), reason=meta.get("reason"))
             inputs_task.cancel()
             if keep_warm:
                 keep_warm.cancel()

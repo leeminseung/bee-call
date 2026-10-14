@@ -50,6 +50,7 @@ WORKSPACE = Path("workspace")
 OFFER_CHECK_S = 5.0  # how often answered and booked offers are checked (arbitrary)
 META_CHECK_S = 3.0  # how often the meta agent's inbox is checked; events that come together are seen together
 BOOKED_NOTICE = timedelta(minutes=10)  # the meta agent hears of a booked call this early, to set its agenda
+META_TRIES = 3  # a think that fails is tried again with the same events this many times in all
 BOOKED_AHEAD = timedelta(seconds=30)  # a booked call is prepared this early, so it rings on time
 NOW_PREP_S = OPENING_BY_S + 2.0  # "Call me now": ring soon; the note gets this long (GLM 5 needed 4.5-7.7 s)
 
@@ -171,10 +172,28 @@ def bee_event(trigger: Trigger, workspace: Path) -> dict:
             "reason": trigger.reason}
 
 
+async def think_about_new_events(session: MetaSession, thinker: Thinker, now: datetime, tries: int) -> int:
+    """One look at the inbox. The cursor moves only after a think that worked; a failed one sees the same events
+    next round, up to META_TRIES times in all, and then they are logged as given up. Returns the failed tries so far."""
+    events, offset = session.peek_events()
+    if not events:
+        return tries
+    entry = await thinker.think(events, now)
+    print(f"meta agent ({entry['seconds']} s): {entry.get('decision') or entry.get('error')}", flush=True)
+    tries = tries + 1 if entry.get("error") else 0
+    if entry.get("error") and tries < META_TRIES:
+        return tries
+    if tries:
+        session.log({"at": now.isoformat(timespec="seconds"), "events": events, "actions": [], "tools": [],
+                     "error": f"gave up on these events after {tries} failed tries"})
+    session.commit(offset)
+    return 0
+
+
 async def serve_meta(workspace: Path, thinker: Thinker, until_offer_closes: bool = False) -> None:
     """Wakes the meta agent for new events, tells it about booked calls coming up, and sends held notifications
     once they may go out. With until_offer_closes (for --once), stops when no offer is open any more."""
-    session, store, announced = MetaSession(workspace), OfferStore(workspace), set()
+    session, store, announced, tries = MetaSession(workspace), OfferStore(workspace), set(), 0
     while True:
         now = datetime.now()
         try:
@@ -184,10 +203,7 @@ async def serve_meta(workspace: Path, thinker: Thinker, until_offer_closes: bool
                         and offer.id not in announced:
                     announced.add(offer.id)
                     add_event(workspace, "booked_soon", offer=offer.id, call_at=offer.call_at, topic=offer.topic)
-            events = session.take_events()
-            if events:
-                entry = await thinker.think(events, now)
-                print(f"meta agent ({entry['seconds']} s): {entry.get('decision') or entry.get('error')}", flush=True)
+            tries = await think_about_new_events(session, thinker, now, tries)
             await send_held(workspace, now)
         except Exception:
             log.exception("the meta loop failed")

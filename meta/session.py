@@ -73,15 +73,15 @@ class MetaSession:
     def dir(self) -> Path:
         return self.workspace / META_DIR
 
-    def take_events(self) -> list[dict[str, Any]]:
-        """The events added since the last call, oldest first; the cursor moves past them."""
-        inbox, cursor = self.dir / "events.jsonl", self.dir / "events.cursor"
-        if not inbox.exists():
-            return []
+    def peek_events(self) -> tuple[list[dict[str, Any]], int]:
+        """The events added since the cursor, oldest first, and the offset to commit once they are handled."""
+        inbox = self.dir / "events.jsonl"
         try:
-            start = int(cursor.read_text())
+            start = int((self.dir / "events.cursor").read_text())
         except (OSError, ValueError):
             start = 0
+        if not inbox.exists():
+            return [], start
         with open(inbox, "rb") as f:
             f.seek(start)
             data = f.read()
@@ -94,8 +94,19 @@ class MetaSession:
                 continue
             if isinstance(event, dict):
                 events.append(event)
-        if complete:
-            cursor.write_text(str(start + len(complete)))
+        return events, start + len(complete)
+
+    def commit(self, offset: int) -> None:
+        """Moves the cursor past handled events. A temp file and a rename, so a crash never resets it."""
+        self.dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.dir / f".cursor.{os.getpid()}.tmp"
+        tmp.write_text(str(offset))
+        tmp.replace(self.dir / "events.cursor")
+
+    def take_events(self) -> list[dict[str, Any]]:
+        """Peek and commit at once (tests, the probe)."""
+        events, offset = self.peek_events()
+        self.commit(offset)
         return events
 
     def log(self, entry: dict[str, Any]) -> None:
@@ -124,8 +135,8 @@ class MetaSession:
             events = "; ".join(f"{e.get('kind')}" + (f" ({e.get('summary')})" if e.get("summary") else "")
                                for e in entry.get("events", []))
             actions = "; ".join(f"{a.get('tool')}: {a.get('result')}" for a in entry.get("actions", []))
-            text = f"[{entry.get('at')}] woke for: {events or '-'}\nDecided: {entry.get('decision', '').strip()}" + \
-                (f"\nDid: {actions}" if actions else "")
+            outcome = f"Failed: {entry['error']}" if entry.get("error") else f"Decided: {entry.get('decision', '').strip()}"
+            text = f"[{entry.get('at')}] woke for: {events or '-'}\n{outcome}" + (f"\nDid: {actions}" if actions else "")
             if used + len(text) > limit_chars:
                 break
             parts.append(text)

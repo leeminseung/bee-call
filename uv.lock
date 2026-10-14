@@ -345,6 +345,7 @@ dependencies = [
     { name = "livekit-agents", extra = ["aws", "silero", "turn-detector"] },
     { name = "livekit-plugins-elevenlabs" },
     { name = "python-dotenv" },
+    { name = "regex" },
 ]
 
 [package.dev-dependencies]
@@ -361,6 +362,7 @@ requires-dist = [
     { name = "livekit-agents", extras = ["aws", "silero", "turn-detector"], specifier = "==1.8.6" },
     { name = "livekit-plugins-elevenlabs", specifier = "==1.8.6" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
+    { name = "regex", specifier = ">=2026.9.29" },
 ]
 
 [package.metadata.requires-dev]
