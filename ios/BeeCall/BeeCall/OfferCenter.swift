@@ -36,8 +36,6 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     private(set) var open: [Offer] = []
     private(set) var notificationsOn = false
     private(set) var notice: String? // one line under the list when an answer did not go through
-    @ObservationIgnored private var deviceToken: String?
-    @ObservationIgnored private var tokenSent = false
 
     // The buttons. Two sets of titles, picked by the Mac's call language (CALL_LANGUAGE).
     private static let categories: Set<UNNotificationCategory> = [
@@ -66,26 +64,8 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    /// iOS's token for plain notifications (not the VoIP one), handed on by the app delegate.
-    func register(deviceToken: Data) {
-        self.deviceToken = deviceToken.map { String(format: "%02x", $0) }.joined()
-        tokenSent = false
-        Task { await sendToken() }
-    }
-
-    /// Sent at launch, after a sign-in (the token belongs to the person), and again on each refresh until the
-    /// server has it (it may be unreachable at launch).
-    func sendToken(again: Bool = false) async {
-        if again { tokenSent = false }
-        guard let token = deviceToken, !tokenSent,
-              let request = Server.request("/push", method: "POST",
-                                           json: ["token": token, "environment": Server.pushEnvironment]) else { return }
-        let response = try? await URLSession.shared.data(for: request)
-        tokenSent = (response?.1 as? HTTPURLResponse)?.statusCode == 204
-    }
-
     func refresh() async {
-        await sendToken()
+        await PushTokens.shared.deliverIfNeeded(.alert) // the server may have been unreachable at launch
         guard let request = Server.request("/offers"),
               let (data, response) = try? await URLSession.shared.data(for: request) else { return }
         Server.shared.noteStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
@@ -162,8 +142,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
+    /// iOS's token for plain notifications (not the VoIP one).
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        OfferCenter.shared.register(deviceToken: deviceToken)
+        Task { await PushTokens.shared.received(deviceToken, kind: .alert) }
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {

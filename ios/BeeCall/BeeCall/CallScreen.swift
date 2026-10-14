@@ -23,7 +23,8 @@ struct CallScreen: View {
                         .foregroundStyle(.secondary)
                 }
                 if !calls.isInCall && !calls.ringStatus.isEmpty {
-                    Text(calls.ringsWhenClosed ? "\(calls.ringStatus), also while the app is closed" : calls.ringStatus)
+                    Text(PushTokens.shared.voipRegistered ? "\(calls.ringStatus), also while the app is closed"
+                                                         : calls.ringStatus)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

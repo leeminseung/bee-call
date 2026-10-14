@@ -188,7 +188,7 @@ final class Server {
     /// Push tokens and settings belong to the person, so they go to the server again after a sign-in.
     private func afterSignIn() async {
         bee.forgetHandledSwitch()
-        await OfferCenter.shared.sendToken(again: true)
+        await PushTokens.shared.signedIn()
         await syncSettings()
     }
 

@@ -16,7 +16,6 @@ final class CallManager: NSObject {
     private(set) var isInCall = false
     private(set) var isRinging = false // the AI's call, until it is answered or ends
     private(set) var isEnding = false
-    private(set) var ringsWhenClosed = false // the token server has this phone's VoIP push token
     let liveKit = LiveKitClient()
 
     @ObservationIgnored private let provider: CXProvider
@@ -30,7 +29,6 @@ final class CallManager: NSObject {
     @ObservationIgnored private var ringTimeout: Task<Void, Never>?
     // VoIP pushes ring the AI's calls while the app is closed or the phone is locked.
     @ObservationIgnored private let pushRegistry = PKPushRegistry(queue: .main)
-    @ObservationIgnored private var voipToken: String?
     // A call the user starts rings until the AI picks up (it reads Bee first, at most about 8 s).
     @ObservationIgnored private var pickUpTimeout: Task<Void, Never>?
     @ObservationIgnored private var pickedUp = false
@@ -117,7 +115,7 @@ final class CallManager: NSObject {
                 try await RingStream.read(from: url, onOpen: {
                     ringStatus = "Waiting for calls"
                     delay = 1
-                    Task { await sendVoipToken(tokenServerURL: tokenServerURL) } // the address may be new
+                    Task { await PushTokens.shared.deliver(.voip) } // the address may be new
                 }, onRing: {
                     ringPhone(for: $0, tokenServerURL: tokenServerURL)
                 })
@@ -200,15 +198,6 @@ final class CallManager: NSObject {
     }
 
     // MARK: - VoIP push
-
-    /// Gives the token server this phone's VoIP push token, so the AI's calls ring while the app is closed.
-    private func sendVoipToken(tokenServerURL: String) async {
-        guard let token = voipToken,
-              let request = Server.request("/voip", method: "POST",
-                                           json: ["token": token, "environment": Server.pushEnvironment]) else { return }
-        let response = try? await URLSession.shared.data(for: request)
-        ringsWhenClosed = (response?.1 as? HTTPURLResponse)?.statusCode == 204
-    }
 
     /// iOS ends an app that does not report a call to CallKit for every VoIP push, and may stop its pushes, so
     /// this reports one at once, before anything else: also for a ring that expired, rang already, or cannot ring.
@@ -375,13 +364,12 @@ private struct Handed: @unchecked Sendable {
 
 extension CallManager: PKPushRegistryDelegate {
     func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
-        voipToken = pushCredentials.token.map { String(format: "%02x", $0) }.joined()
-        Task { await sendVoipToken(tokenServerURL: Server.tokenURL) }
+        let token = pushCredentials.token
+        Task { await PushTokens.shared.received(token, kind: .voip) }
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
-        voipToken = nil
-        ringsWhenClosed = false
+        PushTokens.shared.invalidated(.voip)
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload,
