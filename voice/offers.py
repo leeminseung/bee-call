@@ -8,10 +8,15 @@ out loud in a call (the coordinator's book_call tool). The notification also sho
 Apple Watch, and the app lists open offers on its first screen, so a missed notification can still be answered.
 
 One offer is one file, workspace/state/offers/<id>.json, and moves through these states:
-  asked -> now | booked -> calling -> called    the user said yes
-  asked -> declined | expired                    no call
-  booked (agreed in a call) -> calling -> called
-  calling -> failed                              the call could not be placed
+  asked -> now | booked -> calling -> placing -> called    the user said yes
+  asked -> declined | expired                              no call
+  booked (agreed in a call) -> calling -> placing -> called
+  booked | calling -> declined                             a booked call called off before its room exists
+  calling | placing -> failed                              the call could not be placed
+"calling" means a runner claimed the offer and prepares the call (up to BOOKED_AHEAD early for a booked time);
+"placing" means it is creating the call's room right now, after checking once more that the offer is still
+wanted. Only the runner holding the claim (a Claim) can move it on, so the room is opened only for a yes that
+still stands (voice/dispatch.py place_call).
 voice/token_server.py takes the app's answers (POST /offers/<id>) and lists open offers (GET /offers);
 voice/outbound.py sends new offers and places the calls that are due.
 """
@@ -34,8 +39,8 @@ from voice.language import CallLanguage
 CALL_TIME = "21:00"  # the time an offer suggests when CALL_TIME is unset (arbitrary default; a setting later)
 MIN_LEAD = timedelta(minutes=10)  # closer than this to today's call time, an offer suggests tomorrow (arbitrary)
 LATE_BY = timedelta(minutes=10)  # a booked call this late is not placed any more (arbitrary)
-STUCK = timedelta(minutes=5)  # "calling" for longer than this means the placing process died (arbitrary)
-OPEN = ("asked", "now", "booked", "calling")
+STUCK = timedelta(minutes=5)  # "calling" or "placing" this long means the placing process died (arbitrary)
+OPEN = ("asked", "now", "booked", "calling", "placing")
 ANSWERS = {"now": "now", "later": "booked", "decline": "declined"}
 OFFER_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 
@@ -56,6 +61,7 @@ class Offer:
     conversation_ids: list[int] = field(default_factory=list)
     continue_from: str | None = None  # the call it was agreed in (voice/continuation.py)
     room: str | None = None
+    claim: str | None = None  # the runner's claim while it is calling or placing (Claim.token)
     error: str | None = None
     notified_at: str | None = None  # when its notification went out; None while held (quiet hours, daily limit)
     history: list[dict[str, str]] = field(default_factory=list)  # [{"at": ISO, "state": ...}]
@@ -83,6 +89,15 @@ def call_time(now: datetime, at: str | None = None) -> datetime:
 
 def _iso(moment: datetime) -> str:
     return moment.isoformat(timespec="seconds")
+
+
+@dataclass(frozen=True)
+class Claim:
+    """A due offer one runner moved to "calling" (OfferStore.claim). Only its holder can place the call, and only
+    while the offer is still claimed with this token."""
+    offer: Offer
+    token: str
+    before: str  # the state it was claimed from, "now" or "booked"
 
 
 class OfferStore:
@@ -148,18 +163,38 @@ class OfferStore:
                 return None
             return self._save(self._set(offer, state, now, **changes))
 
-    def claim(self, offer_id: str, now: datetime) -> Offer | None:
+    def _move_claimed(self, claim: Claim, now: datetime, came_from: tuple[str, ...], state: str,
+                      **changes: Any) -> Offer | None:
+        """A move only the claim's holder makes: None when the offer was called off or is no longer this claim's."""
+        with self._lock():
+            offer = self.get(claim.offer.id)
+            if offer is None or offer.state not in came_from or offer.claim != claim.token:
+                return None
+            return self._save(self._set(offer, state, now, **changes))
+
+    def claim(self, offer_id: str, now: datetime) -> Claim | None:
         """Moves a due offer to "calling" if it is still due; None if it changed meanwhile (called off, or claimed
-        by another runner). Only the claimant places the call."""
-        return self._move(offer_id, now, ("now", "booked"), "calling")
+        by another runner). Only the claim's holder can place the call."""
+        token = secrets.token_hex(8)
+        with self._lock():
+            offer = self.get(offer_id)
+            if offer is None or offer.state not in ("now", "booked"):
+                return None
+            before = offer.state
+            return Claim(self._save(self._set(offer, "calling", now, claim=token)), token, before)
 
-    def placed(self, offer_id: str, now: datetime, room: str) -> Offer | None:
+    def begin_placing(self, claim: Claim, now: datetime) -> Offer | None:
+        """Right before the call's room is created: the last check that the user still wants the call. From here
+        on it can no longer be called off. None: it was called off (or is no longer this claim's)."""
+        return self._move_claimed(claim, now, ("calling",), "placing")
+
+    def placed(self, claim: Claim, now: datetime, room: str) -> Offer | None:
         """The call's room exists and the phone rings."""
-        return self._move(offer_id, now, ("calling",), "called", room=room)
+        return self._move_claimed(claim, now, ("placing",), "called", room=room)
 
-    def fail(self, offer_id: str, now: datetime, error: str) -> Offer | None:
+    def fail(self, claim: Claim, now: datetime, error: str) -> Offer | None:
         """The claimed call could not be placed; `error` says why."""
-        return self._move(offer_id, now, ("calling",), "failed", error=error)
+        return self._move_claimed(claim, now, ("calling", "placing"), "failed", error=error)
 
     def call_off(self, offer_id: str, now: datetime, why: str) -> Offer | None:
         """A call booked in a call is moved or called off in that call (voice/coordinator.py)."""
@@ -207,7 +242,8 @@ class OfferStore:
 
     def answer(self, offer_id: str, choice: str, now: datetime) -> Offer:
         """The user's answer from a notification button or the app. KeyError: no such offer. ValueError: the
-        offer is no longer waiting for an answer, or the choice is unknown."""
+        offer is no longer waiting for an answer, or the choice is unknown. "decline" also calls off a booked
+        call (the app's "Call off"), until its room is being made: also while a runner prepares it."""
         if choice not in ANSWERS:
             raise ValueError(f"choice must be one of {', '.join(ANSWERS)}")
         with self._lock():
@@ -215,8 +251,8 @@ class OfferStore:
             offer = self.get(offer_id)
             if offer is None:
                 raise KeyError(offer_id)
-            if offer.state == "booked" and choice == "decline":  # a booked call can still be called off
-                return self._save(self._set(offer, "declined", now))
+            if choice == "decline" and booked_call(offer) and offer.state in ("booked", "calling"):
+                return self._save(self._set(offer, "declined", now, claim=None))
             if offer.state != "asked":
                 raise ValueError(f"the offer is {offer.state}")
             state = ANSWERS[choice]
@@ -230,7 +266,7 @@ class OfferStore:
                 self._save(self._set(offer, "expired", now))
             elif offer.state in ("now", "booked") and call_at and now > call_at + LATE_BY:
                 self._save(self._set(offer, "expired", now, error="the call could not be placed in time"))
-            elif offer.state == "calling" and offer.history and \
+            elif offer.state in ("calling", "placing") and offer.history and \
                     now - datetime.fromisoformat(offer.history[-1]["at"]) > STUCK:
                 self._save(self._set(offer, "failed", now, error="placing the call did not finish"))
 
@@ -250,6 +286,11 @@ class OfferStore:
         return [o for o in self.all() if o.state in ("now", "booked") and o.at("call_at") and o.at("call_at") <= until]
 
 
+def booked_call(offer: Offer) -> bool:
+    """A call agreed for a time (the suggested time, or a time booked in a call), not "Call me now"."""
+    return not any(h["state"] == "now" for h in offer.history)
+
+
 def plan_of(offer: Offer) -> Plan:
     """The plan voice/outbound.py places the call with."""
     return Plan(call=True, reason=offer.reason, inbox_dir=Path(offer.inbox) if offer.inbox else None,
@@ -263,7 +304,7 @@ def agreed(offer: Offer) -> str:
     when = datetime.fromisoformat(said).strftime("%H:%M") if said else "earlier"
     if offer.source == "call":
         return f"the user asked for this call back during an earlier call, at {when}"
-    if offer.state in ("now", "calling") and offer.call_at == said:
+    if any(h["state"] == "now" for h in offer.history):
         return f"the user tapped \"Call me now\" on your notification at {when}"
     return f"at {when} the user accepted the time your notification suggested"
 

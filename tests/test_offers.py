@@ -16,7 +16,7 @@ from voice.language import call_language
 from voice.offers import LATE_BY, OfferStore, agreed, call_time, notification, plan_of
 from voice.outbound import call_due, handle, saved_trigger
 from voice.prep import Prep
-from tests.helpers import signed_in
+from tests.helpers import fake_livekit, placing, signed_in
 from tests.test_outbound import inbox
 
 NOW = datetime(2026, 10, 14, 18, 30)
@@ -102,12 +102,8 @@ def test_the_watcher_asks_instead_of_calling(tmp_path, monkeypatch):
         placed.append(a)
         return "room"
 
-    async def fake_prepare(plan, **kw):
-        return Prep(note="n", opening="o")
-
     monkeypatch.setattr(voip_push, "alert", fake_alert)
     monkeypatch.setattr(outbound, "place_call", fake_place)
-    monkeypatch.setattr(outbound, "prepare_outbound", fake_prepare)
     monkeypatch.setattr(outbound, "quiet", lambda now: False)  # the test may run at night
     me = signed_in(tmp_path)
     planner = RulePlanner(me.workspace)
@@ -118,10 +114,6 @@ def test_the_watcher_asks_instead_of_calling(tmp_path, monkeypatch):
     # The planner counts the question like a call: no second question right away.
     again = planner.decide(saved_trigger(inbox(tmp_path / "second")))
     assert not again.call and "minutes apart" in again.reason
-    # --direct (tests only) still calls at once.
-    other = me.people.person("jiwoo")
-    assert asyncio.run(handle(saved_trigger(inbox(tmp_path / "third")), RulePlanner(other.workspace), False, other,
-                              direct=True)) == "room"
 
 
 def test_a_yes_is_called_with_how_the_user_agreed(tmp_path):
@@ -129,21 +121,20 @@ def test_a_yes_is_called_with_how_the_user_agreed(tmp_path):
     store = OfferStore(me.workspace)
     offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)  # at a fixed time it would have closed
     store.answer(offer.id, "now", datetime.now())
-    prepared, placed = [], []
+    prepared, requests = [], []
 
     async def fake_prepare(plan, extra=None, deadline_s=None):
         prepared.append((plan.topic, extra, deadline_s))
         return Prep(note="note", opening="Hi, calling as you asked.")
 
-    async def fake_place(plan, ws, prep=None, continue_from=None, agreed=None):
-        placed.append((plan.conversation_ids, prep["opening"], agreed))
-        return "call-1"
-
-    assert asyncio.run(call_due(me.person, prepare=fake_prepare, place=fake_place)) == ["call-1"]
+    place = placing(requests)
+    (room,) = asyncio.run(call_due(me.person, prepare=fake_prepare, place=place))
     (topic, extra, deadline), = prepared
     assert topic == "Planned a Saturday hike with Dana" and "Call me now" in extra["agreed"] and deadline < 20
-    assert placed[0][1] == "Hi, calling as you asked." and store.get(offer.id).state == "called"
-    assert asyncio.run(call_due(me.person, prepare=fake_prepare, place=fake_place)) == []  # called once
+    meta = json.loads(requests[0].agents[0].metadata)
+    assert meta["prep"]["opening"] == "Hi, calling as you asked." and meta["agreed"] == extra["agreed"]
+    assert meta["conversation_ids"] == [5121] and store.get(offer.id).state == "called" and room == requests[0].name
+    assert asyncio.run(call_due(me.person, prepare=fake_prepare, place=place)) == []  # called once
 
 
 def test_a_call_that_cannot_be_placed_is_marked_failed(tmp_path):
@@ -246,7 +237,7 @@ def test_only_one_runner_places_a_call_and_a_call_off_wins(tmp_path):
     me = signed_in(tmp_path)
     store = OfferStore(me.workspace)
     claimed = store.book("claimed", datetime.now() - timedelta(seconds=3), datetime.now())
-    assert store.claim(claimed.id, datetime.now()).state == "calling"
+    assert store.claim(claimed.id, datetime.now()).offer.state == "calling"
     assert store.claim(claimed.id, datetime.now()) is None  # a second runner gets nothing
     first = store.book("first", datetime.now() - timedelta(seconds=2), datetime.now())
     second = store.book("second", datetime.now() - timedelta(seconds=1), datetime.now())
@@ -257,8 +248,8 @@ def test_only_one_runner_places_a_call_and_a_call_off_wins(tmp_path):
         store.answer(other.id, "decline", datetime.now())  # "Call off" while the other call is prepared
         return Prep()
 
-    async def place(plan, ws, prep=None, continue_from=None, agreed=None):
-        placed.append(plan.topic)
+    async def place(claim, person, prep=None):
+        placed.append(claim.offer.topic)
         return f"room-{len(placed)}"
 
     asyncio.run(call_due(me.person, prepare=prepare, place=place))
@@ -339,3 +330,104 @@ def test_notifications_wait_for_morning_and_for_tomorrow_after_four(tmp_path, mo
         asyncio.run(send_offer(o, me.person, morning + timedelta(minutes=i + 1)))
     fifth = store.ask(plan, morning + timedelta(minutes=10))
     assert asyncio.run(send_offer(fifth, me.person, morning + timedelta(minutes=10))).startswith("held: 4 notifications")
+
+
+# ---------- the offers gate: a call rings only after the user's yes (server review findings 2, 5, 8, 15) ----------
+
+def test_a_booked_call_called_off_while_it_is_prepared_never_rings(tmp_path):
+    me = signed_in(tmp_path)
+    store = OfferStore(me.workspace)
+    offer = store.book("the interview", datetime.now() + timedelta(seconds=1), datetime.now())
+    answers, rooms = [], []
+
+    async def prepare(plan, **kw):  # the user taps "Call off" while the call is prepared
+        try:
+            answers.append(store.answer(offer.id, "decline", datetime.now()).state)
+        except ValueError as exc:
+            answers.append(f"refused: {exc}")
+        return Prep(note="n", opening="o")
+
+    assert asyncio.run(call_due(me.person, prepare=prepare, place=placing(rooms))) == []
+    assert answers == ["declined"] and rooms == [] and store.get(offer.id).state == "declined"
+    assert not (me.workspace / "state" / "outbound.jsonl").exists()  # no ring line either
+
+
+def test_a_booked_call_called_off_while_it_waits_for_its_time_never_rings(tmp_path):
+    me = signed_in(tmp_path)
+    store = OfferStore(me.workspace)
+    offer = store.book("the interview", datetime.now() + timedelta(seconds=1.5), datetime.now())
+    rooms, answers = [], []
+
+    async def main():
+        runner = asyncio.create_task(call_due(me.person, prepare=prepared_quickly, place=placing(rooms)))
+        await asyncio.sleep(0.5)  # prepared, waiting for the booked time
+        try:
+            answers.append(store.answer(offer.id, "decline", datetime.now()).state)
+        except ValueError as exc:
+            answers.append(f"refused: {exc}")
+        return await runner
+
+    assert asyncio.run(main()) == [] and answers == ["declined"] and rooms == []
+    with pytest.raises(ValueError):  # once declined, it stays declined
+        store.answer(offer.id, "now", datetime.now())
+
+
+async def prepared_quickly(plan, **kw):
+    return Prep(note="n", opening="o")
+
+
+def test_once_the_room_exists_the_call_can_no_longer_be_called_off(tmp_path):
+    me = signed_in(tmp_path)
+    store = OfferStore(me.workspace)
+    offer = store.book("the interview", datetime.now() - timedelta(seconds=1), datetime.now())
+    rooms = []
+    assert asyncio.run(call_due(me.person, prepare=prepared_quickly, place=placing(rooms))) == [r.name for r in rooms]
+    assert len(rooms) == 1 and store.get(offer.id).state == "called" and store.get(offer.id).room == rooms[0].name
+    with pytest.raises(ValueError):
+        store.answer(offer.id, "decline", datetime.now())
+
+
+def test_only_a_claimed_offer_still_wanted_reaches_a_room(tmp_path):
+    from voice.dispatch import place_call
+
+    me = signed_in(tmp_path)
+    store = OfferStore(me.workspace)
+    offer = store.book("the interview", datetime.now(), datetime.now())
+    claim = store.claim(offer.id, datetime.now())
+    assert claim is not None and store.claim(offer.id, datetime.now()) is None  # a second runner gets nothing
+    store.answer(offer.id, "decline", datetime.now())  # called off after the claim
+    rooms = []
+    assert asyncio.run(place_call(claim, me.person, prep=None, lk=fake_livekit(rooms))) is None
+    assert rooms == [] and store.get(offer.id).state == "declined"
+    again = store.book("the dentist", datetime.now(), datetime.now())
+    mine = store.claim(again.id, datetime.now())
+    room = asyncio.run(place_call(mine, me.person, prep=None, lk=fake_livekit(rooms)))
+    assert [r.name for r in rooms] == [room] and store.get(again.id).state == "called"
+    assert asyncio.run(place_call(mine, me.person, prep=None, lk=fake_livekit(rooms))) is None  # a claim places once
+
+
+def test_a_test_call_from_the_mac_rings_no_phone(tmp_path, monkeypatch):
+    from voice.dispatch import open_test_call
+
+    async def no_push(*a, **kw):
+        raise AssertionError("a test call must not push")
+
+    monkeypatch.setattr(voip_push, "ring", no_push)
+    me = signed_in(tmp_path)
+    plan = plan_of(store_offer := OfferStore(me.workspace).book("x", datetime.now(), datetime.now()))
+    rooms = []
+    room = asyncio.run(open_test_call(plan, me.person, prep=None, lk=fake_livekit(rooms)))
+    assert [r.name for r in rooms] == [room] and room.startswith("fake-")  # never a room the app would answer
+    meta = json.loads(rooms[0].agents[0].metadata)
+    assert (meta["direction"], meta["person"]) == ("outbound", "matt")
+    assert not (me.workspace / "state" / "outbound.jsonl").exists()
+    assert OfferStore(me.workspace).get(store_offer.id).state == "booked"  # no offer was used up
+
+
+def test_the_rules_path_has_no_switch_that_calls_without_asking():
+    import subprocess
+    import sys
+
+    out = subprocess.run([sys.executable, "-m", "voice.outbound", "--rules", "--direct"], capture_output=True,
+                         text=True, timeout=60)
+    assert out.returncode == 2 and "unrecognized arguments: --direct" in out.stderr

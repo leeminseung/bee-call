@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from aiohttp.test_utils import TestClient, TestServer
 
 from meta.session import add_event, quiet
-from tests.helpers import signed_in
+from tests.helpers import placing, signed_in
 from tests.test_offers import asked
 from voice import outbound, voip_push
 from voice.offers import OfferStore
@@ -27,15 +27,11 @@ async def prepared(plan, **kw):
 
 
 def test_quiet_hours_hold_only_offer_notifications_and_agreed_calls_ring_at_their_time(tmp_path, monkeypatch):
-    sent, placed = [], []
+    sent, rooms = [], []
 
     async def alert(payload, person, **kw):
         sent.append(payload)
         return "apns-1"
-
-    async def place(plan, person, **kw):
-        placed.append(plan.topic)
-        return f"call-{len(placed)}"
 
     monkeypatch.setattr(voip_push, "alert", alert)
     me = signed_in(tmp_path)
@@ -44,8 +40,8 @@ def test_quiet_hours_hold_only_offer_notifications_and_agreed_calls_ring_at_thei
     question, _ = asked(tmp_path, now=NIGHT, workspace=me.workspace)
     assert asyncio.run(send_offer(question, me.person, NIGHT)).startswith("held: quiet hours")
     booked = store.book("the interview", NIGHT, NIGHT - timedelta(hours=2))
-    assert asyncio.run(call_due(me.person, NIGHT, prepare=prepared, place=place)) == ["call-1"]
-    assert sent == [] and placed == ["the interview"] and store.get(booked.id).state == "called"
+    assert asyncio.run(call_due(me.person, NIGHT, prepare=prepared, place=placing(rooms))) == [rooms[0].name]
+    assert sent == [] and store.get(booked.id).state == "called" and store.get(question.id).state == "asked"
 
 
 def spend(workspace, usd: float, now: datetime) -> None:
@@ -137,11 +133,7 @@ def test_an_unanswered_offer_closes_at_its_suggested_time(tmp_path):
 def test_tapping_now_twice_places_one_call(tmp_path):
     me = signed_in(tmp_path)
     offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
-    placed = []
-
-    async def place(plan, person, **kw):
-        placed.append(plan.topic)
-        return "call-matt-20261014-210000"
+    rooms = []
 
     async def main():
         async with TestClient(TestServer(make_app("wss://example", "APIkey", "s" * 32, me.people)),
@@ -152,8 +144,8 @@ def test_tapping_now_twice_places_one_call(tmp_path):
 
     assert asyncio.run(main()) == (200, 409)
     for _ in range(2):
-        asyncio.run(call_due(me.person, prepare=prepared, place=place))
-    assert len(placed) == 1
+        asyncio.run(call_due(me.person, prepare=prepared, place=placing(rooms)))
+    assert len(rooms) == 1 and OfferStore(me.workspace).get(offer.id).state == "called"
 
 
 def test_the_fifth_offer_of_a_day_shows_only_in_the_app_list(tmp_path, monkeypatch):

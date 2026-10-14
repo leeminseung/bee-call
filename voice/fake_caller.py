@@ -8,7 +8,8 @@ prints the transcript and the timing metrics from the newest session folder.
 
 By default the fake caller starts the call, the way the app does. With
 --outbound INBOX the AI starts it instead: the planner decides on that saved
-Bee change, voice/dispatch.py places the call, and the fake caller answers.
+Bee change, voice/dispatch.py opens a test call (no phone rings, no offer is
+used), and the fake caller answers.
 
 Run (voice server already running: uv run python -m voice.agent dev):
     uv run python -m voice.fake_caller
@@ -30,7 +31,7 @@ from dotenv import load_dotenv
 
 from beelink.planner import RulePlanner
 from voice.aws_session import aws_session
-from voice.dispatch import open_inbound_room, place_call
+from voice.dispatch import open_inbound_room, open_test_call
 from voice.outbound import saved_trigger
 from voice.people import People, dev_person
 from beelink import cli as bee
@@ -137,7 +138,7 @@ def main() -> None:
                 return
             prep = asyncio.run(prepare_outbound(plan))
             print(f"prepared in {prep.seconds} s: " + (f"opening {prep.opening!r}" if prep.note else f"no note ({prep.error})"))
-            room = asyncio.run(place_call(plan, people.person(person), prep=prep.to_meta()))
+            room = asyncio.run(open_test_call(plan, people.person(person), prep=prep.to_meta()))
             print(f"the AI is calling in room {room}; answering in {args.ring:.0f}s")
             time.sleep(args.ring)
         else:

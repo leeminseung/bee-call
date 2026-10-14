@@ -5,6 +5,7 @@ No network: APNs is an httpx mock transport, and the signing key is made up for 
 
 import asyncio
 import json
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from beelink.planner import RulePlanner
 from voice import voip_push
 from voice.dispatch import place_call
 from voice.outbound import saved_trigger
+from voice.offers import OfferStore
 from voice.people import People
 from voice.voip_push import ApnsConfig, PushError, load_device_token, provider_token, save_device_token
 from tests.test_outbound import inbox
@@ -148,7 +150,10 @@ def test_placing_a_call_pushes_its_ring_line_and_a_failed_push_does_not_stop_it(
 
     monkeypatch.setattr(voip_push, "ring", fake_ring)
     plan = RulePlanner(person.workspace).decide(saved_trigger(inbox(tmp_path)))
-    room = asyncio.run(place_call(plan, person, SimpleNamespace(room=SimpleNamespace(create_room=create_room))))
+    store = OfferStore(person.workspace)
+    store.answer(store.ask(plan, datetime.now()).id, "now", datetime.now())
+    claim = store.claim(store.due(datetime.now())[0].id, datetime.now())
+    room = asyncio.run(place_call(claim, person, lk=SimpleNamespace(room=SimpleNamespace(create_room=create_room))))
     (line,) = pushed
     assert line["room"] == room and line["topic"] == plan.topic
     written = json.loads((person.workspace / "state" / "outbound.jsonl").read_text().splitlines()[-1])

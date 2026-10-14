@@ -9,7 +9,6 @@ For one person on a Mac (--person, or BEE_CALL_DEV_PERSON):
                                                        # (<their folder>/inbox/...), then waits for any offer it made
     uv run python -m voice.outbound --rules            # the old rule-based planner decides instead
     uv run python -m voice.outbound --rules --dry-run  # rules, writing plans but never asking or calling
-    uv run python -m voice.outbound --rules --direct   # rules, calling without asking (tests only)
 
 The meta agent (meta/agent.py) wakes for events in workspace/meta/events.jsonl: a Bee change from this watcher,
 a call that ended (the voice server), the user's answer to an offer (the token server), and a booked call coming
@@ -62,21 +61,12 @@ NOW_PREP_S = OPENING_BY_S + 2.0  # "Call me now": ring soon; the note gets this 
 PEOPLE_CHECK_S = 10.0  # how often the list of people and their settings is read again (arbitrary)
 
 
-async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, person: Person,
-                 direct: bool = False) -> str | None:
-    """Decides; a call decision asks the user (returns the offer id), or with `direct` calls at once (returns
-    the room)."""
+async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, person: Person) -> str | None:
+    """Decides; a call decision asks the user. Returns the offer id."""
     plan = planner.decide(trigger)
     print(f"plan: {'CALL' if plan.call else 'no call'} - {plan.reason} ({plan.path})", flush=True)
     if not plan.call or dry_run:
         return None
-    if direct:
-        prep = await prepare_outbound(plan)
-        print(f"prepared in {prep.seconds} s: " + (f"opening {prep.opening!r}" if prep.note else
-                                                    f"no note ({prep.error})"), flush=True)
-        room = await place_call(plan, person, prep=prep.to_meta())
-        print(f"calling: room {room}", flush=True)
-        return room
     now = planner.now()
     offer = OfferStore(planner.workspace).ask(plan, now)
     await send_offer(offer, person, now)
@@ -126,7 +116,9 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
     """Places a call the user said yes to: "Call me now", an accepted time that has come (prepared up to
     BOOKED_AHEAD early), or a time booked in a call. One call per round, and none while another call is going on
     or ringing; the others wait for a later round and close if they are more than LATE_BY late. Returns the
-    room, or nothing. Past the person's daily budget the call is not placed, and the offer says why."""
+    room, or nothing. Past the person's daily budget the call is not placed, and the offer says why. The user
+    can call the call off until its room is being made: `place` (voice/dispatch.py place_call) checks the claim
+    once more right before that, and places nothing for a call that was called off."""
     workspace = person.workspace
     store = OfferStore(workspace)
     now = now or datetime.now()
@@ -134,29 +126,30 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
         if busy(workspace, now):
             return []
         right_now = offer.state == "now"
-        if store.claim(offer.id, now) is None:  # called off meanwhile, or another runner has it
+        claim = store.claim(offer.id, now)
+        if claim is None:  # called off meanwhile, or another runner has it
             continue
         if over_budget is not None and over_budget(now):
-            store.fail(offer.id, now, "today's budget is used up; ask again tomorrow")
+            store.fail(claim, now, "today's budget is used up; ask again tomorrow")
             log.info("offer %s not called: over today's budget", offer.id)
             continue
         try:
-            extra = {"agreed": agreed(offer), "meta_notes": meta_notes(workspace)}
+            extra = {"agreed": agreed(claim.offer), "meta_notes": meta_notes(workspace)}
             if offer.continue_from:
                 extra["earlier_call"] = earlier_call(workspace, offer.continue_from)
-            plan = plan_of(offer)
-            prep = await prepare(plan, extra=extra, deadline_s=NOW_PREP_S if right_now else NOTE_SECONDS,
+            prep = await prepare(plan_of(claim.offer), extra=extra,
+                                 deadline_s=NOW_PREP_S if right_now else NOTE_SECONDS,
                                  **({"language": language} if language else {}))
             wait = (offer.at("call_at") - datetime.now()).total_seconds()
             if wait > 0:  # prepared early for a booked time
                 await asyncio.sleep(wait)
-            room = await place(plan, person, prep=prep.to_meta(), continue_from=offer.continue_from,
-                               agreed=extra["agreed"])
+            room = await place(claim, person, prep=prep.to_meta())
         except Exception as exc:
-            store.fail(offer.id, datetime.now(), f"{type(exc).__name__}: {exc}"[:300])
+            store.fail(claim, datetime.now(), f"{type(exc).__name__}: {exc}"[:300])
             log.exception("could not place the call for offer %s", offer.id)
             continue
-        store.placed(offer.id, datetime.now(), room)
+        if room is None:  # called off while it was prepared
+            continue
         print(f"calling for offer {offer.id}: room {room}", flush=True)
         return [room]
     return []
@@ -300,7 +293,6 @@ async def main() -> None:
     parser.add_argument("--once", type=Path, help="decide for one saved inbox folder, then exit")
     parser.add_argument("--no-cooldown", action="store_true", help="ignore the gap between calls (testing)")
     parser.add_argument("--any-age", action="store_true", help="also call about old conversations (testing)")
-    parser.add_argument("--direct", action="store_true", help="with --rules: call without asking (tests only)")
     parser.add_argument("--rules", action="store_true", help="the rule-based planner decides, not the meta agent")
     parser.add_argument("--person", default=None, help="for --once and --rules: whose (default BEE_CALL_DEV_PERSON)")
     args = parser.parse_args()
@@ -334,8 +326,8 @@ async def main() -> None:
     thinker = Thinker(workspace, send=send, call_time=settings.call_time)
     if args.once:
         if args.rules:
-            made = await handle(saved_trigger(args.once), planner, args.dry_run, person, args.direct)
-            if made and not args.direct:
+            made = await handle(saved_trigger(args.once), planner, args.dry_run, person)
+            if made:
                 await serve_offers(person, until=made, language=language)  # wait for the answer
             return
         # The meta agent looks at that change; for any offer it makes, wait for the answer and place the call.
@@ -349,7 +341,7 @@ async def main() -> None:
 
     async def on_trigger(trigger: Trigger) -> None:
         # Errors go back to the watcher, which keeps its cursor so the same change is looked at again.
-        await handle(trigger, planner, args.dry_run, person, args.direct)
+        await handle(trigger, planner, args.dry_run, person)
 
     try:
         loops = [] if args.dry_run else [serve_offers(person, language=language)]

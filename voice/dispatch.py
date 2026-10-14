@@ -12,6 +12,11 @@ Ringing the phone is a separate step. The ring line goes into
 workspace/state/outbound.jsonl, which the token server streams to an open app, and
 to Apple's VoIP push for a closed or locked one (voice/voip_push.py, once its key is
 set up and the app has registered). This module is the only writer of that file.
+
+The phone rings only for an offer the user said yes to (voice/offers.py): place_call
+takes the runner's Claim on that offer and checks it once more under the offers lock
+right before the room is created. Test calls from a Mac (voice/fake_caller.py) use
+open_test_call, which writes no ring line and sends no push.
 """
 
 import json
@@ -26,6 +31,7 @@ from livekit import api
 
 from beelink.planner import OUTBOUND_LOG, Plan
 from voice import voip_push
+from voice.offers import Claim, OfferStore, agreed, plan_of
 from voice.people import Person
 
 log = logging.getLogger("bee-call.dispatch")
@@ -72,21 +78,48 @@ def room_with_agent(room: str, metadata: str, ring_seconds: int = RING_SECONDS) 
                                  agents=[api.RoomAgentDispatch(agent_name=AGENT_NAME, metadata=metadata)])
 
 
-async def place_call(plan: Plan, person: Person, lk: api.LiveKitAPI | None = None,
-                     prep: dict[str, Any] | None = None, *, continue_from: str | None = None,
-                     agreed: str | None = None) -> str:
-    """Opens the room for an AI-initiated call to `person` and records it for the ring. Returns the room name.
-    `prep` is the call prep note (voice/prep.py Prep.to_meta()), made before this call; `agreed` says how the
-    user agreed to it (voice/offers.py), and `continue_from` the earlier call it continues."""
-    room = room_name(person.id)
+async def create_room(room: str, metadata: str, lk: api.LiveKitAPI | None = None) -> None:
     own = lk is None
     lk = lk or api.LiveKitAPI()  # LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET from the environment
     try:
-        await lk.room.create_room(room_with_agent(room, call_metadata("outbound", plan, prep, continue_from,
-                                                                      agreed, person.id)))
+        await lk.room.create_room(room_with_agent(room, metadata))
     finally:
         if own:
             await lk.aclose()
+
+
+async def place_call(claim: Claim, person: Person, prep: dict[str, Any] | None = None, *,
+                     lk: api.LiveKitAPI | None = None) -> str | None:
+    """Places the AI's call for an offer the caller claimed (voice/offers.py): checks under the offers lock that the
+    user still wants it, opens the room with the voice server, marks the offer called, and rings the phone.
+    Returns the room name, or None when the call was called off meanwhile (then nothing rings). `prep` is the
+    call prep note (voice/prep.py Prep.to_meta()), made before this call."""
+    store = OfferStore(person.workspace)
+    offer = store.begin_placing(claim, datetime.now())
+    if offer is None:
+        log.info("offer %s was called off before its room was made; not calling", claim.offer.id)
+        return None
+    plan = plan_of(offer)
+    room = room_name(person.id)
+    try:
+        await create_room(room, call_metadata("outbound", plan, prep, offer.continue_from, agreed(claim.offer),
+                                              person.id), lk)
+    except Exception as exc:
+        store.fail(claim, datetime.now(), f"{type(exc).__name__}: {exc}"[:300])
+        raise
+    store.placed(claim, datetime.now(), room)
+    line = write_ring_line(person, room, plan)
+    try:
+        pushed = await voip_push.ring(line, person)
+        if pushed:
+            log.info("VoIP push sent for room %s (apns-id %s)", room, pushed)
+    except Exception as exc:  # an open app still hears the ring stream
+        log.warning("VoIP push for room %s failed: %s", room, exc)
+    return room
+
+
+def write_ring_line(person: Person, room: str, plan: Plan) -> dict[str, Any]:
+    """The ring line an open app hears on the token server's /ring stream, and the VoIP push carries."""
     path = person.workspace / OUTBOUND_LOG
     path.parent.mkdir(parents=True, exist_ok=True)
     placed = datetime.now()
@@ -99,21 +132,19 @@ async def place_call(plan: Plan, person: Person, lk: api.LiveKitAPI | None = Non
             "plan": str(plan.path) if plan.path else None}
     with path.open("a") as f:
         f.write(json.dumps(line, ensure_ascii=False) + "\n")
-    try:
-        pushed = await voip_push.ring(line, person)
-        if pushed:
-            log.info("VoIP push sent for room %s (apns-id %s)", room, pushed)
-    except Exception as exc:  # an open app still hears the ring stream
-        log.warning("VoIP push for room %s failed: %s", room, exc)
+    return line
+
+
+async def open_test_call(plan: Plan, person: Person, prep: dict[str, Any] | None = None, *,
+                         lk: api.LiveKitAPI | None = None) -> str:
+    """For a test caller on a Mac (voice/fake_caller.py --outbound): the voice server is dispatched as for the AI's
+    call to `person`, but nothing rings, no offer is used and no ring line is written. The fake caller joins the
+    room itself; its fake- name is never one the app would answer."""
+    room = f"fake-{datetime.now():%Y%m%d-%H%M%S}"
+    await create_room(room, call_metadata("outbound", plan, prep, person=person.id), lk)
     return room
 
 
 async def open_inbound_room(room: str, lk: api.LiveKitAPI | None = None) -> None:
     """For test callers that join with their own token: the voice server is dispatched as it is for the app."""
-    own = lk is None
-    lk = lk or api.LiveKitAPI()
-    try:
-        await lk.room.create_room(room_with_agent(room, call_metadata("inbound")))
-    finally:
-        if own:
-            await lk.aclose()
+    await create_room(room, call_metadata("inbound"), lk)
