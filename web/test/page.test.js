@@ -313,3 +313,13 @@ test("a write with no text of its own is named by its Bee item", () => {
     item: { kind: "fact_confirm", fact_id: 8812 }, question: "Bee에 이 사실을 확인할까요?", answer: "응", result: "ok" }]);
   assert.deepEqual([beeItems(page)[0].kind, beeItems(page)[0].text], ["Confirm fact", "Fact #8812"]);
 });
+
+test("a write Bee may have taken without saying so asks the person to check Bee and promises no retry", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed([{ t: 3, type: "bee_write", key: "w1", kind: "todo_create", text: "Note the bug", question: "q",
+    answer: "yes", result: "failed", error: "timed out", may_have_gone_in: true }]);
+  const [todo] = beeItems(page);
+  assert.deepEqual([todo.state, todo.status], ["unknown", "Check Bee"]);
+  assert.match(todo.rest, /may have gone in/);
+  assert.doesNotMatch(todo.rest, /tries again/);
+});

@@ -1073,7 +1073,9 @@
         const earlier = key ? sameKey
           : ev.retried ? items.find((i) => i.state === "failed" && i.kind === kind && i.text === text) : null;
         const item = earlier || this.addWrite(ev, kind, text, key);
-        this.setWriteState(item, ev.result === "ok" ? "saved" : "failed", Boolean(ev.retried));
+        // A write Bee may have taken without saying so (a timeout, a write cut off) is never tried again.
+        const state = ev.result === "ok" ? "saved" : ev.may_have_gone_in ? "unknown" : "failed";
+        this.setWriteState(item, state, Boolean(ev.retried));
       }
       const kept = items.filter((i) => i.state !== "undone");
       const saved = kept.filter((i) => i.state === "saved").length;
@@ -1106,11 +1108,14 @@
       item.status.replaceChildren();
       if (state === "saved") item.status.append(icon("check"), "Saved");
       else if (state === "failed") item.status.append(icon("x"), retried ? "Not saved" : "Not saved yet");
+      else if (state === "unknown") item.status.append("Check Bee");
       else item.status.append("Taken out");
-      item.note.textContent = state !== "failed" ? ""
-        : retried ? "Bee Call tried again after the call, and it did not go through."
-          : "Bee Call tries again after the call.";
-      item.note.hidden = state !== "failed";
+      item.note.textContent = state === "unknown"
+        ? "It may have gone in. Bee did not confirm it, so check Bee. Bee Call does not try it again."
+        : state !== "failed" ? ""
+          : retried ? "Bee Call tried again after the call, and it did not go through."
+            : "Bee Call tries again after the call.";
+      item.note.hidden = state !== "failed" && state !== "unknown";
     }
   }
 
