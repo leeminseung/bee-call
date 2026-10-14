@@ -518,3 +518,16 @@ def test_moving_an_old_workspace_keeps_the_worker_harness_for_everyone(tmp_path,
     assert json.loads((tmp_path / "data" / "harness.json").read_text())["harnessArn"].endswith(":x")
     assert (tmp_path / "data" / "people" / "matt" / "2026-10-14" / "2100").is_dir()
     assert "Bee is not connected for matt yet" in capsys.readouterr().out
+
+
+def test_the_operator_can_mint_a_sign_in_for_an_approved_person_only(tmp_path, capsys):
+    from voice import people as people_module
+
+    data = tmp_path / "data"
+    people_module.main(["--data", str(data), "add", "jiwoo"])
+    capsys.readouterr()
+    people_module.main(["--data", str(data), "session", "jiwoo"])
+    token = capsys.readouterr().out.strip()
+    assert People(data).who(token) == "jiwoo"
+    with pytest.raises(SystemExit, match="not approved"):
+        people_module.main(["--data", str(data), "session", "stranger"])

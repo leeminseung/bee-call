@@ -308,6 +308,8 @@ def main(argv: list[str] | None = None) -> None:
     setting.add_argument("person")
     setting.add_argument("name")
     setting.add_argument("value", help="JSON value: 2, true, \"ko\", null")
+    session = sub.add_parser("session", help="print a new sign-in token for an approved person (tests, support)")
+    session.add_argument("person")
     move = sub.add_parser("move", help="move a single-user workspace's contents into a person's folder")
     move.add_argument("workspace", type=Path)
     move.add_argument("--to", dest="person", required=True)
@@ -337,6 +339,10 @@ def main(argv: list[str] | None = None) -> None:
         settings = people.change_settings(args.person, {args.name: value},
                                           allowed=tuple(f.name for f in fields(Settings)))
         print(json.dumps(asdict(settings), ensure_ascii=False))
+    elif args.command == "session":
+        if not people.known(args.person):
+            sys.exit(f"{args.person} is not approved")
+        print(people.new_session(args.person))
     elif args.command == "move":
         target = people.workspace(args.person)
         source = args.workspace.resolve()

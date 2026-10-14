@@ -43,6 +43,7 @@ uv run python -m voice.people approve 7F3K2A --as jiwoo
 uv run python -m voice.people list                    # approved people and their settings
 uv run python -m voice.people set jiwoo daily_budget_usd 2
 uv run python -m voice.people remove jiwoo            # takes access away; the folder stays
+uv run python -m voice.people session jiwoo           # prints a new sign-in token for jiwoo (black-box tests, support)
 ```
 
 On a Mac, `uv run python -m voice.people add matt` approves a person for use from the Mac alone, and `BEE_CALL_DEV_PERSON=matt` in `.env.local` lets requests made on the Mac without a sign-in act as them when they carry the header `X-Bee-Call-Dev: 1` (curl, `voice.fake_caller`, `voice.agent console`). It is ignored on a server (where `BEE_CALL_PUBLIC_HOST` is set); never set it there anyway. A single-user `workspace/` from before moves in with `uv run python -m voice.people move workspace --to matt`; the worker's `state/harness.json` goes to `data/harness.json`, for everyone. Bee then has to be connected again for that person, since their login now lives in their own folder: turn on Use Bee in the app, or run `curl -X POST http://localhost:8787/bee/connect -H 'X-Bee-Call-Dev: 1'` and open the link it returns on the phone.
