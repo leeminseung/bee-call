@@ -48,6 +48,8 @@ uv run python -m voice.people session jiwoo           # prints a new sign-in tok
 
 On a Mac, `uv run python -m voice.people add matt` approves a person for use from the Mac alone, and `BEE_CALL_DEV_PERSON=matt` in `.env.local` lets requests made on the Mac without a sign-in act as them when they carry the header `X-Bee-Call-Dev: 1` (curl, `voice.fake_caller`, `voice.agent console`). It is ignored on a server (where `BEE_CALL_PUBLIC_HOST` is set); never set it there anyway. A single-user `workspace/` from before moves in with `uv run python -m voice.people move workspace --to matt`; the worker's `state/harness.json` goes to `data/harness.json`, for everyone. Bee then has to be connected again for that person, since their login now lives in their own folder: turn on Use Bee in the app, or run `curl -X POST http://localhost:8787/bee/connect -H 'X-Bee-Call-Dev: 1'` and open the link it returns on the phone.
 
+A person can use Bee Call without Bee (Use Bee off, the default until they connect Bee). Their calls never touch Bee: nothing is read from Bee before or during a call, the call AI has no Bee tools, and nothing the call AI, the prep or the meta agent is told mentions Bee. The AI asks about their day and works from their earlier calls and the meta agent's notes.
+
 Each person's day has a budget (`daily_budget_usd`, 3 USD by default): an estimate from the calls' minutes and model use, background jobs and the meta agent (`voice/costs.py`). Past it, the app's new calls are refused, agreed AI calls are not placed (the offer says why), and the meta agent waits for the next day.
 
 ## Run

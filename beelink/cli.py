@@ -51,6 +51,13 @@ def use_machine_bee() -> None:
     _login.set(BeeLogin(None, machine=True))
 
 
+def connected() -> bool:
+    """Whether the work in this task has a Bee to read: a person's login (or this machine's) was chosen. For a
+    person with Use Bee off it is False, and there is nothing to read, rather than a read that failed."""
+    login = _login.get()
+    return login is not None and (login.machine or login.folder is not None)
+
+
 def login_env(folder: Path) -> dict[str, str]:
     return {**os.environ, "BEE_CONFIG_DIR": str(folder), "BEE_FORCE_FILE_STORE": "1"}
 

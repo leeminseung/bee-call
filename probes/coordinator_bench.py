@@ -45,7 +45,7 @@ from livekit.agents import AgentSession, llm  # noqa: E402
 from livekit.plugins import aws  # noqa: E402
 
 import beelink.cli  # noqa: E402
-from voice.coordinator import Coordinator  # noqa: E402
+from voice.coordinator import BeeCoordinator, Coordinator  # noqa: E402
 from voice.recorder import CallRecorder  # noqa: E402
 from worker.runner import JobNotification  # noqa: E402
 
@@ -110,7 +110,7 @@ GARBLED = re.compile(r"[^\x00-\x7F‘’“”–—…°]")
 MARKUP = re.compile(r"(<\s*[|｜/]?\s*[A-Za-z_｜]|function_call|tool_call|DSML)")
 
 
-class BenchCoordinator(Coordinator):
+class BenchCoordinator(BeeCoordinator):
     """The real coordinator, noting when each reply's first spoken words come out of the model."""
 
     def __init__(self, *args, **kwargs) -> None:

@@ -47,6 +47,9 @@ def _clock(ms: int | None) -> str | None:
 
 async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: list[int] | None = None,
                             timeout: float = READ_TIMEOUT_S) -> CallInputs:
+    """Everything a call reads from Bee, or nothing at all for a person with Use Bee off (no reads, no errors)."""
+    if not cli.connected():
+        return CallInputs(inbox_dir=inbox_dir)
     # Each Bee CLI call takes about a second, so everything is read at once.
     ids = (conversation_ids or [])[:MAX_CONVERSATIONS]
     reads = [cli.unconfirmed_facts(timeout=timeout), cli.todo_suggestions(timeout=timeout),

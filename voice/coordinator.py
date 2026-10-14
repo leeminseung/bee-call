@@ -2,6 +2,10 @@
 
 It also tees the caller's audio and the AI's speech into the recorder.
 Slow work goes to the worker through `delegate`; its news comes back as job notifications.
+
+Coordinator is the voice for a person without Bee (Use Bee off): it has no Bee tools and its instructions say
+nothing about Bee. BeeCoordinator, for a person who connected Bee, adds Bee's reads and writes and the rules for
+them. The voice server picks one by the person's setting when the call starts (voice/agent.py).
 """
 
 import asyncio
@@ -36,20 +40,12 @@ How to speak:
 and keep the conversation going while it runs.
 6. Repeat back names and numbers that change the outcome, and ask whether you got them right.
 7. If the user starts talking, stop and listen.
-8. Save things to Bee (facts, todos) only after the user has said yes out loud.
-9. When the user says goodbye or that they are done, say a short goodbye and call end_call.
+8. When the user says goodbye or that they are done, say a short goodbye and call end_call.
 
 Notes from the app arrive as system messages, as <instructions> blocks in a user turn, or as text in \
 parentheses in a user turn, such as "(The phone call has connected.)": job notifications, tool results that came \
 back late, and how much of your last reply the user actually heard. They come from the app, not from the user. \
 Use them, but never read them out word for word.
-The call prep note at the end of these instructions is what was looked up in Bee just before the call. Bring up \
-things from it only when they connect to what the user is talking about, or once the user's own topic is done. \
-Never interrupt the user's topic with them. For more from Bee during the call, use bee_today, bee_conversation \
-and search_bee.
-When the prep note lists unconfirmed Bee facts, check them at a natural moment, for example \
-"I heard your bonus is 15 percent. Is that right?" If the user corrects it, queue a fact_update with the \
-corrected text. If they agree, queue a fact_confirm.
 If the user cut you off, reply to what they said. In the same reply, briefly add anything they missed that \
 answers something they asked, unless they told you to drop it.
 Background jobs: delegate starts a job and returns at once. When the job has news, the app sends a \
@@ -58,6 +54,25 @@ error or the files the job made. When a notification has a summary or an error, 
 or three short sentences (under 50 words) and say the details are in the app. A notification with only files needs \
 no reply. Say a job is done, or give its result, only after its notification has arrived. When the user asks how \
 a job is going, call job_status.
+"""
+# How to use the call prep note, for a person without Bee: it comes from earlier calls and the notes kept between
+# calls (meta/agent.py).
+NOTE_RULES = """\
+The call prep note at the end of these instructions is what you noted just before the call, from your past \
+calls with the user and the notes kept between calls. Bring up things from it only when they connect to what the \
+user is talking about, or once the user's own topic is done. Never interrupt the user's topic with them. Ask about \
+the user's day yourself; what they tell you is all you know of it.
+"""
+# For a person who connected Bee: the note is from Bee, and the call can read and save Bee.
+BEE_NOTE_RULES = """\
+The user wears Bee, a wearable that records and summarizes their conversations. The call prep note at the end of \
+these instructions is what was looked up in Bee just before the call. Bring up things from it only when they \
+connect to what the user is talking about, or once the user's own topic is done. Never interrupt the user's topic \
+with them. For more from Bee during the call, use bee_today, bee_conversation and search_bee.
+When the prep note lists unconfirmed Bee facts, check them at a natural moment, for example \
+"I heard your bonus is 15 percent. Is that right?" If the user corrects it, queue a fact_update with the \
+corrected text. If they agree, queue a fact_confirm.
+Save things to Bee (facts, todos) only after the user has said yes out loud.
 """
 
 BEE_WRITE_KINDS = ("fact_confirm", "fact_update", "todo_create", "todo_accept")
@@ -80,6 +95,11 @@ def job_notification(news: JobNotification) -> str:
 
 
 class Coordinator(Agent):
+    """The voice for a person without Bee: no Bee tools, and nothing about Bee in its instructions."""
+
+    NOTE_RULES = NOTE_RULES
+    NOTE_HEADER = "Call prep note (written just before the call):"
+
     def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *, now: datetime | None = None,
                  prep_note: str | None = None, pending_note: "asyncio.Future[str | None] | None" = None,
                  language: CallLanguage | None = None, earlier_call: str | None = None) -> None:
@@ -90,8 +110,8 @@ class Coordinator(Agent):
         # A call the user continued from an earlier call's record (voice/continuation.py).
         earlier = (f"\nThe user started this call to continue an earlier call with you. That call, as it was "
                    f"recorded:\n{earlier_call.strip()}\n") if earlier_call else ""
-        self._base_instructions = INSTRUCTIONS + rule + earlier + f"\nIt is now {now_text(now)}. Use this for " \
-                                                                  "words like today, tomorrow and this Saturday.\n"
+        self._base_instructions = INSTRUCTIONS + self.NOTE_RULES + rule + earlier + \
+            f"\nIt is now {now_text(now)}. Use this for words like today, tomorrow and this Saturday.\n"
         super().__init__(instructions=self._with_note(prep_note))
         self._recorder = recorder
         self._jobs = jobs
@@ -104,7 +124,7 @@ class Coordinator(Agent):
     def _with_note(self, note: str | None) -> str:
         if not note:
             return self._base_instructions
-        return self._base_instructions + f"\nCall prep note (from Bee, just before the call):\n{note.strip()}\n"
+        return self._base_instructions + f"\n{self.NOTE_HEADER}\n{note.strip()}\n"
 
     async def add_note(self, note: str) -> None:
         """Adds an app note to the conversation in turn order. The Claude adapter sends it as a system
@@ -211,8 +231,6 @@ class Coordinator(Agent):
     async def search_workspace(self, context: RunContext, query: str) -> str:
         """Look up what the user and you said in earlier Bee Call phone calls.
 
-        Not for the user's conversations with other people; use search_bee for those.
-
         Args:
             query: A few keywords to look for.
         """
@@ -227,66 +245,6 @@ class Coordinator(Agent):
                     if len(hits) >= 5:
                         return "\n".join(hits)
         return "\n".join(hits) or "Nothing found in earlier calls."
-
-    @function_tool
-    async def search_bee(self, context: RunContext, query: str) -> str:
-        """Search, by meaning, the user's conversations with other people that their Bee wearable recorded.
-
-        Use it when the user asks what they discussed, planned or agreed with someone.
-
-        Args:
-            query: What to look for, in plain words.
-        """
-        return await reads.search(query)
-
-    @function_tool
-    async def bee_today(self, context: RunContext) -> str:
-        """What the user's Bee wearable has for today: the daily summary, active todos, notes and recent conversations."""
-        return await reads.today()
-
-    @function_tool
-    async def bee_conversation(self, context: RunContext, conversation_id: int) -> str:
-        """One conversation the Bee wearable recorded: its summary and its last lines.
-
-        Args:
-            conversation_id: The Bee conversation id, from the prep note, bee_today or search_bee.
-        """
-        return await reads.conversation(conversation_id)
-
-    @function_tool
-    async def queue_bee_write(self, context: RunContext, kind: str, text: str | None = None,
-                              fact_id: int | None = None, suggestion_id: int | None = None,
-                              alarm_at: str | None = None) -> str:
-        """Queue something the user agreed to out loud, to be saved to Bee after the call.
-
-        Args:
-            kind: One of fact_confirm, fact_update, todo_create, todo_accept.
-            text: The fact or todo text (fact_update, todo_create).
-            fact_id: The Bee fact id (fact_confirm, fact_update).
-            suggestion_id: The Bee todo suggestion id (todo_accept).
-            alarm_at: Optional ISO 8601 time for a todo alarm (todo_create).
-        """
-        if kind not in BEE_WRITE_KINDS:
-            return f"Unknown kind {kind!r}; use one of {', '.join(BEE_WRITE_KINDS)}."
-        item: dict = {"kind": kind}
-        if kind in ("fact_confirm", "fact_update"):
-            if fact_id is None:
-                return "fact_id is required."
-            item["fact_id"] = fact_id
-        if kind in ("fact_update", "todo_create"):
-            if not text:
-                return "text is required."
-            item["text"] = text
-        if kind == "todo_create" and alarm_at:
-            item["alarm_at"] = alarm_at
-        if kind == "todo_accept":
-            if suggestion_id is None:
-                return "suggestion_id is required."
-            item["suggestion_id"] = suggestion_id
-        with (self._recorder.dir / "bee-queue.jsonl").open("a") as f:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        self._recorder.event("bee_write_queued", kind=kind, text=text or "", item=item)
-        return "Queued. It will be saved to Bee after the call."
 
     @function_tool
     async def book_call(self, context: RunContext, topic: str, at: str | None = None,
@@ -348,3 +306,71 @@ class Coordinator(Agent):
         # No reply to this tool: the goodbye is already said, and GLM 5 once answered the tool result
         # by saying "end_call" out loud (2026-10-13).
         raise StopResponse()
+
+
+class BeeCoordinator(Coordinator):
+    """The voice for a person who connected Bee: it reads their Bee during the call and saves to it what the user
+    agrees to."""
+
+    NOTE_RULES = BEE_NOTE_RULES
+    NOTE_HEADER = "Call prep note (from Bee, just before the call):"
+
+    @function_tool
+    async def search_bee(self, context: RunContext, query: str) -> str:
+        """Search, by meaning, the user's conversations with other people that their Bee wearable recorded.
+
+        Use it when the user asks what they discussed, planned or agreed with someone.
+
+        Args:
+            query: What to look for, in plain words.
+        """
+        return await reads.search(query)
+
+    @function_tool
+    async def bee_today(self, context: RunContext) -> str:
+        """What the user's Bee wearable has for today: the daily summary, active todos, notes and recent conversations."""
+        return await reads.today()
+
+    @function_tool
+    async def bee_conversation(self, context: RunContext, conversation_id: int) -> str:
+        """One conversation the Bee wearable recorded: its summary and its last lines.
+
+        Args:
+            conversation_id: The Bee conversation id, from the prep note, bee_today or search_bee.
+        """
+        return await reads.conversation(conversation_id)
+
+    @function_tool
+    async def queue_bee_write(self, context: RunContext, kind: str, text: str | None = None,
+                              fact_id: int | None = None, suggestion_id: int | None = None,
+                              alarm_at: str | None = None) -> str:
+        """Queue something the user agreed to out loud, to be saved to Bee after the call.
+
+        Args:
+            kind: One of fact_confirm, fact_update, todo_create, todo_accept.
+            text: The fact or todo text (fact_update, todo_create).
+            fact_id: The Bee fact id (fact_confirm, fact_update).
+            suggestion_id: The Bee todo suggestion id (todo_accept).
+            alarm_at: Optional ISO 8601 time for a todo alarm (todo_create).
+        """
+        if kind not in BEE_WRITE_KINDS:
+            return f"Unknown kind {kind!r}; use one of {', '.join(BEE_WRITE_KINDS)}."
+        item: dict = {"kind": kind}
+        if kind in ("fact_confirm", "fact_update"):
+            if fact_id is None:
+                return "fact_id is required."
+            item["fact_id"] = fact_id
+        if kind in ("fact_update", "todo_create"):
+            if not text:
+                return "text is required."
+            item["text"] = text
+        if kind == "todo_create" and alarm_at:
+            item["alarm_at"] = alarm_at
+        if kind == "todo_accept":
+            if suggestion_id is None:
+                return "suggestion_id is required."
+            item["suggestion_id"] = suggestion_id
+        with (self._recorder.dir / "bee-queue.jsonl").open("a") as f:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        self._recorder.event("bee_write_queued", kind=kind, text=text or "", item=item)
+        return "Queued. It will be saved to Bee after the call."

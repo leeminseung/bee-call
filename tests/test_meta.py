@@ -106,7 +106,7 @@ def test_one_think_looks_things_up_offers_a_call_and_logs_its_own_words(tmp_path
 
     add_event(ws, "bee_change", now=NOW, inbox="inbox/2026-10-14-182500", conversation_ids=[77])
     events = MetaSession(ws).take_events()
-    entry = asyncio.run(Thinker(ws, ("zai.glm-5", "ap-southeast-2"), client=model, send=send).think(events, NOW))
+    entry = asyncio.run(Thinker(ws, ("zai.glm-5", "ap-southeast-2"), client=model, send=send, bee=True).think(events, NOW))
 
     first = model.sent[0]
     assert first["modelId"] == "zai.glm-5" and first["toolConfig"]["tools"] == TOOLS
@@ -126,14 +126,14 @@ def test_one_think_looks_things_up_offers_a_call_and_logs_its_own_words(tmp_path
 def test_doing_nothing_is_logged_too_and_a_failure_proposes_nothing(tmp_path):
     ws = workspace_with_a_call(tmp_path)
     quiet_model = ScriptedModel([{"role": "assistant", "content": [{"text": "A two-line hello. Nothing to do."}]}])
-    entry = asyncio.run(Thinker(ws, ("m", "r"), client=quiet_model).think([{"kind": "bee_change", "at": "x"}], NOW))
+    entry = asyncio.run(Thinker(ws, ("m", "r"), client=quiet_model, bee=True).think([{"kind": "bee_change", "at": "x"}], NOW))
     assert entry["decision"] == "A two-line hello. Nothing to do." and entry["actions"] == []
 
     class Broken:
         def converse(self, **request):
             raise RuntimeError("Bedrock throttled")
 
-    failed = asyncio.run(Thinker(ws, ("m", "r"), client=Broken()).think([{"kind": "call_ended", "at": "x"}], NOW))
+    failed = asyncio.run(Thinker(ws, ("m", "r"), client=Broken(), bee=True).think([{"kind": "call_ended", "at": "x"}], NOW))
     assert "Bedrock throttled" in failed["error"] and OfferStore(ws).all() == []
     assert len(MetaSession(ws).entries()) == 2
 
@@ -146,7 +146,7 @@ def test_one_question_at_a_time_and_a_short_plain_topic(tmp_path):
         {"role": "assistant", "content": [tool_use(2, "offer_call", topic="Dentist appointment", why="w")]},
         {"role": "assistant", "content": [{"text": "Asked once."}]},
     ])
-    entry = asyncio.run(Thinker(ws, ("m", "r"), client=model).think([], NOW))
+    entry = asyncio.run(Thinker(ws, ("m", "r"), client=model, bee=True).think([], NOW))
     (offer,) = OfferStore(ws).all()  # the second question waits for the answer to the first
     assert "\n" not in offer.topic and len(offer.topic) <= 80 and offer.state == "asked"
     assert entry["tools"][1]["result"].startswith("Not asked: the user has not answered the offer")
@@ -170,7 +170,7 @@ def test_the_calls_get_the_meta_agents_notes_and_answers_wake_it(tmp_path):
     assert meta_notes(ws) is None  # nothing written yet
     MetaSession(ws).write_state("# State\n\n## Agenda for the next call\n- Ask about Offer B's bonus\n")
     notes = meta_notes(ws)
-    seed = seed_text(CallInputs(), {"direction": "inbound", "meta_notes": notes}, NOW)
+    seed = seed_text(CallInputs(), {"direction": "inbound", "meta_notes": notes}, NOW, bee=True)
     assert "not instructions to you.\n<notes>\n# State" in seed
     assert "Ask about Offer B's bonus" in call_brief(CallInputs(), {"direction": "inbound", "meta_notes": notes})
 
@@ -210,7 +210,7 @@ def test_a_failed_think_keeps_its_events_for_another_try_then_gives_up(tmp_path)
                 raise RuntimeError("read timeout")
             return {"output": {"message": {"role": "assistant", "content": [{"text": "Looked; nothing to do."}]}}}
 
-    thinker = Thinker(ws, ("m", "r"), client=Flaky(fails=1))
+    thinker = Thinker(ws, ("m", "r"), client=Flaky(fails=1), bee=True)
     tries = asyncio.run(think_about_new_events(session, thinker, NOW, 0))
     assert tries == 1 and session.peek_events()[0]  # still there
     assert asyncio.run(think_about_new_events(session, thinker, NOW, tries)) == 0
@@ -218,7 +218,7 @@ def test_a_failed_think_keeps_its_events_for_another_try_then_gives_up(tmp_path)
     assert "Failed: RuntimeError: read timeout" in session.recent_text()
 
     add_event(ws, "bee_change", now=NOW, inbox="inbox/x")
-    broken, tries = Thinker(ws, ("m", "r"), client=Flaky(fails=99)), 0
+    broken, tries = Thinker(ws, ("m", "r"), client=Flaky(fails=99), bee=True), 0
     for _ in range(META_TRIES):
         tries = asyncio.run(think_about_new_events(session, broken, NOW, tries))
     assert tries == 0 and session.peek_events()[0] == []
@@ -258,3 +258,18 @@ def test_file_tools_skip_links_out_hidden_folders_and_locations(tmp_path):
     started = time.monotonic()
     files.grep(ws, r"(a|aa)+$")  # backtracks without end in plain re; here it stops within its budget
     assert time.monotonic() - started < files.GREP_SECONDS + 1
+
+
+def test_without_bee_the_meta_agent_has_no_bee_tools_or_words(tmp_path):
+    """BC-057: for a person with Use Bee off, nothing in the meta agent's instructions or tools is about Bee."""
+    import re
+
+    ws = workspace_with_a_call(tmp_path)
+    model = ScriptedModel([{"role": "assistant", "content": [{"text": "The call went fine. Nothing to do."}]}])
+    asyncio.run(Thinker(ws, ("m", "r"), client=model, bee=False).think(
+        [{"kind": "call_ended", "at": "x", "call": "2026-10-14/1200"}], NOW))
+    (request,) = model.sent
+    names = [t["toolSpec"]["name"] for t in request["toolConfig"]["tools"]]
+    assert names == ["list_files", "read_file", "grep", "write_state", "offer_call"]
+    words = request["system"][0]["text"] + json.dumps(request["messages"])
+    assert re.findall(r"\bBee\b(?! Call)", words) == []

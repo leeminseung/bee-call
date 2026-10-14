@@ -16,7 +16,7 @@ import pytest
 from livekit.agents import AgentSession
 
 from beelink.context import CallInputs, fetch_call_inputs
-from voice.coordinator import Coordinator
+from voice.coordinator import BeeCoordinator, Coordinator
 from voice.echo_llm import EchoLLM
 from voice.costs import SpendLog
 from voice.prep import MAX_READS, Prep, Preparation, prepare_call, seed_text
@@ -76,21 +76,21 @@ def inputs(fake_bee) -> CallInputs:
 
 
 def test_the_seed_says_who_calls_why_and_what_bee_has(fake_bee):
-    seed = seed_text(inputs(fake_bee), {"direction": "inbound"}, NOW)
+    seed = seed_text(inputs(fake_bee), {"direction": "inbound"}, NOW, bee=True)
     assert seed.startswith("It is now Tuesday, October 13, 2026, 4:40 PM (Asia/Seoul). The user is calling you")
     assert "The user's first name is Matt." in seed and "They offered 15 percent bonus." in seed
     assert "[todo 51] Reply to the recruiter" in seed and "Calendar: Team offsite planning" in seed
     assert "[conversation 4]" in seed and "[unconfirmed fact 7] Bonus is 15%" in seed
     assert seed.endswith("they called, so let them bring their own topic.")
     out = seed_text(CallInputs(), {"direction": "outbound", "reason": "A Bee conversation just ended.",
-                                   "topic": "Planned a hike"}, NOW)
+                                   "topic": "Planned a hike"}, NOW, bee=True)
     assert "You are about to call the user. Why: A Bee conversation just ended. (topic: Planned a hike)." in out
     assert out.endswith("and ask if they have a minute.")
 
 
 def test_opening_then_note_in_one_answer(fake_bee):
     client = Converse(text(OPENING + "\n" + NOTE))
-    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, spend=SPEND, client=client, now=NOW))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, spend=SPEND, bee=True, client=client, now=NOW))
     assert prep.error is None and prep.reads == [] and prep.model == "zai.glm-5"
     assert prep.opening == "Hi Matt, it's Bee Call. What's on your mind?"
     assert prep.note == "Matt is weighing a job offer with a 15% bonus; fact 7 is unconfirmed."
@@ -102,7 +102,7 @@ def test_opening_then_note_in_one_answer(fake_bee):
 def test_the_opening_is_ready_before_the_note_is_written():
     async def main():
         client = Converse(text(OPENING + " " + NOTE * 4), gap=0.02)  # the note streams for about a second
-        preparation = Preparation(CallInputs(), {}, MODEL, spend=SPEND, client=client, now=NOW).start()
+        preparation = Preparation(CallInputs(), {}, MODEL, spend=SPEND, bee=True, client=client, now=NOW).start()
         started = time.monotonic()
         opening = await preparation.opening(timeout=5)
         ready = time.monotonic() - started
@@ -118,7 +118,7 @@ def test_opening_then_one_round_of_reads_then_the_note(fake_bee):
         [{"text": OPENING}, tool(0, "search_bee", {"query": "hike with Dana"}), tool(1, "bee_day", {"date": "2026-10-12"}),
          tool(2, "bee_conversation", {"conversation_id": 4}), tool(3, "bee_conversation", {"conversation_id": 5})],
         text(NOTE))
-    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, spend=SPEND, client=client, now=NOW))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, spend=SPEND, bee=True, client=client, now=NOW))
     assert prep.note and prep.opening.startswith("Hi Matt") and len(prep.reads) == MAX_READS
     second = client.requests[1]["messages"]
     assert second[1]["content"][0] == {"text": OPENING}  # the first answer goes back as it was
@@ -132,14 +132,14 @@ def test_opening_then_one_round_of_reads_then_the_note(fake_bee):
 
 def test_reads_before_the_opening_still_give_an_opening(fake_bee):
     client = Converse([tool(0, "bee_conversation", {"conversation_id": 5})], text(OPENING + NOTE))
-    prep = asyncio.run(prepare_call(inputs(fake_bee), {}, MODEL, spend=SPEND, client=client, now=NOW))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {}, MODEL, spend=SPEND, bee=True, client=client, now=NOW))
     assert prep.opening and prep.note
     assert client.requests[1]["messages"][-1]["content"][-1] == {"text": "Now write the opening and the note."}
 
 
 @pytest.mark.parametrize("reply,opening", [(text("Sure, I'm ready."), None), (text(OPENING), "Hi Matt")])
 def test_an_answer_without_a_note_gives_no_note(reply, opening):
-    prep = asyncio.run(prepare_call(CallInputs(), {}, MODEL, spend=SPEND, client=Converse(reply), now=NOW))
+    prep = asyncio.run(prepare_call(CallInputs(), {}, MODEL, spend=SPEND, bee=True, client=Converse(reply), now=NOW))
     assert prep.note is None and prep.error == "ValueError: the answer had no <note>"
     assert (prep.opening or "").startswith(opening or "")
 
@@ -147,7 +147,7 @@ def test_an_answer_without_a_note_gives_no_note(reply, opening):
 def test_a_slow_model_is_given_up_at_the_deadline():
     async def main():
         started = time.monotonic()
-        prep = await prepare_call(CallInputs(), {}, MODEL, spend=SPEND, client=Converse(text(OPENING + NOTE * 20), gap=0.05),
+        prep = await prepare_call(CallInputs(), {}, MODEL, spend=SPEND, bee=True, client=Converse(text(OPENING + NOTE * 20), gap=0.05),
                                   deadline_s=1.0, now=NOW)
         return prep, time.monotonic() - started
 
@@ -157,12 +157,12 @@ def test_a_slow_model_is_given_up_at_the_deadline():
 
 
 def test_no_model_in_this_mode_means_no_note_and_no_opening():
-    prep = asyncio.run(prepare_call(CallInputs(), {}, None, spend=SPEND))
+    prep = asyncio.run(prepare_call(CallInputs(), {}, None, spend=SPEND, bee=True))
     assert prep.error == "no model to prepare with in this mode" and prep.opening is None
 
 
 def test_the_opening_is_spoken_text_only():
-    prep = asyncio.run(prepare_call(CallInputs(), {}, MODEL, spend=SPEND, client=Converse(
+    prep = asyncio.run(prepare_call(CallInputs(), {}, MODEL, spend=SPEND, bee=True, client=Converse(
         text("<opening>Hi <b>Matt</b>,\nwhat's up?</opening><note>n</note>")), now=NOW))
     assert prep.opening == "Hi Matt , what's up?"
 
@@ -172,7 +172,7 @@ def test_prep_travels_in_the_dispatch_and_lands_in_the_instructions(tmp_path):
                 opening_s=1.1, model="zai.glm-5")
     assert Prep.from_meta(json.loads(json.dumps(prep.to_meta()))) == prep
     assert Prep.from_meta(None) is None
-    agent = Coordinator(CallRecorder(tmp_path, room="r"), SimpleNamespace(), tmp_path, now=NOW, prep_note=prep.note)
+    agent = BeeCoordinator(CallRecorder(tmp_path, room="r"), SimpleNamespace(), tmp_path, now=NOW, prep_note=prep.note)
     assert agent.instructions.endswith("Call prep note (from Bee, just before the call):\nMatt planned a hike with Dana.\n")
 
 

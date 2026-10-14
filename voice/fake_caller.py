@@ -137,7 +137,7 @@ def main() -> None:
             print(f"plan: {'CALL' if plan.call else 'no call'} - {plan.reason}")
             if not plan.call:
                 return
-            prep = asyncio.run(prepare_outbound(plan, spend=SpendLog(workspace)))
+            prep = asyncio.run(prepare_outbound(plan, spend=SpendLog(workspace), bee=people.settings(person).bee))
             print(f"prepared in {prep.seconds} s: " + (f"opening {prep.opening!r}" if prep.note else f"no note ({prep.error})"))
             room = asyncio.run(open_test_call(plan, people.person(person), prep=prep.to_meta()))
             print(f"the AI is calling in room {room}; answering in {args.ring:.0f}s")

@@ -144,9 +144,12 @@ def test_voice_server_greets_and_briefs_by_who_called(monkeypatch):
     monkeypatch.setattr(agent, "COORDINATOR_LLM", "fake")
     english = call_language("en")
     out = agent.call_meta(json.dumps({"direction": "outbound", "topic": "Planned a Saturday hike with Dana",
-                                      "reason": "A Bee conversation just ended."}))
+                                      "kind": "conversation", "reason": "A Bee conversation just ended."}))
     assert agent.greeting(out, english) == ("Hi, it's Bee Call. I'm calling about your conversation: "
                                             "Planned a Saturday hike with Dana. Do you have a minute?")
+    # A call about something else (a job's result, or anything for a person without Bee) is no "conversation".
+    result = agent.call_meta('{"direction": "outbound", "topic": "the flat prices"}')
+    assert agent.greeting(result, english) == "Hi, it's Bee Call. I'm calling about the flat prices. Do you have a minute?"
     assert agent.greeting(agent.call_meta('{"direction": "inbound"}'), english) == "Hi, it's Bee Call. What's on your mind?"
     note = agent.call_meta('{"direction": "outbound", "kind": "voice note"}')
     assert agent.greeting(note, english) == "Hi, it's Bee Call. I'm calling about your new voice note. Do you have a minute?"

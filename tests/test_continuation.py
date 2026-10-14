@@ -94,11 +94,11 @@ def test_the_app_asks_for_a_continued_call_with_the_record_id(tmp_path):
 def test_the_opening_picks_up_the_earlier_call(tmp_path):
     earlier_session(tmp_path)
     meta = {"direction": "inbound", "continue_from": EARLIER, "earlier_call": earlier_call(tmp_path, EARLIER)}
-    seed = seed_text(CallInputs(), meta, NOW)
+    seed = seed_text(CallInputs(), meta, NOW, bee=True)
     assert "The user is calling you from the app to continue an earlier call with you." in seed
     assert "The earlier call this one continues:\nThe earlier call: Tue Oct 13" in seed
     assert seed.endswith("Then let the user lead.")
-    assert "calling you from the app." in seed_text(CallInputs(), {"direction": "inbound"}, NOW)
+    assert "calling you from the app." in seed_text(CallInputs(), {"direction": "inbound"}, NOW, bee=True)
 
 
 def test_the_coordinator_keeps_the_earlier_call_for_the_whole_call(tmp_path):

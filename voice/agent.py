@@ -50,7 +50,7 @@ from voice.claude_llm import ClaudeBedrockLLM
 from voice.continuation import earlier_call
 from voice.costs import SpendLog, day_budget
 from meta.session import add_event, meta_notes
-from voice.coordinator import Coordinator
+from voice.coordinator import BeeCoordinator, Coordinator
 from voice.dispatch import AGENT_NAME, RING_SECONDS
 from voice.echo_llm import EchoLLM
 from voice.fake_claude import FakeAnthropic
@@ -225,8 +225,8 @@ def greeting(meta: dict, language: CallLanguage) -> str:
     if meta.get("direction") == "outbound":
         if meta.get("kind") == "voice note":
             return lines["voice note"]
-        if meta.get("topic"):
-            return lines["topic"].format(topic=meta["topic"])
+        if meta.get("topic"):  # "your conversation" only when a Bee conversation is behind the call
+            return lines["topic" if meta.get("kind") == "conversation" else "about"].format(topic=meta["topic"])
         return lines["outbound"]
     return lines["inbound"]
 
@@ -290,7 +290,10 @@ async def run_call(ctx: JobContext, people: People) -> None:
     settings = people.settings(person)
     language = call_language(settings.language)
     tts_voice = voice_choice(language, {**os.environ, **settings.voice_env()})
-    bee.use_bee(people.bee_dir(person) if settings.bee else None)  # only this person's Bee, in this call
+    # Only this person's Bee, in this call. Without Bee (Use Bee off) the call reads nothing from Bee, the AI has
+    # no Bee tools, and nothing it is told mentions Bee (BC-057).
+    uses_bee = settings.bee
+    bee.use_bee(people.bee_dir(person) if uses_bee else None)
     if meta.get("continue_from"):  # the user tapped "Continue this call" in an earlier call's record
         meta["earlier_call"] = earlier_call(workspace, meta["continue_from"])
     meta["meta_notes"] = meta_notes(workspace)  # the meta agent's agenda and open threads, for the opening
@@ -344,7 +347,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
         async def get_ready() -> CallInputs:
             nonlocal preparation
             got = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S)
-            preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM), spend=SpendLog(workspace),
+            preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM), spend=SpendLog(workspace), bee=uses_bee,
                                       language=language).start()
             await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - started))
             return got
@@ -373,6 +376,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
               continue_from=meta.get("continue_from") if meta.get("earlier_call") else None)
 
     def keep_inputs(got: CallInputs) -> None:
+        if not uses_bee:
+            return  # nothing was read from Bee, so there is nothing to keep
         try:
             card = save_call_inputs(rec.dir, got)
         except Exception as exc:  # the call goes on without its Bee record
@@ -422,7 +427,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
     # Until (or without) a prep note, the plain Bee context. A note still being written replaces it when it
     # arrives, up to the first reply.
     pending = preparation.done if preparation is not None and not preparation.done.done() else None
-    agent = Coordinator(rec, jobs, workspace, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
+    agent = (BeeCoordinator if uses_bee else Coordinator)(
+        rec, jobs, workspace, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
                         language=language, earlier_call=meta.get("earlier_call"))
 
     async def shutdown() -> None:

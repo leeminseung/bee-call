@@ -94,7 +94,7 @@ async def main() -> None:
         sent.append(offer.topic)
         return "notification sent (probe: not really)"
 
-    thinker = Thinker(ws, send=send)
+    thinker = Thinker(ws, send=send, bee=True)  # the canned Bee reads above stand in for a Bee user's
     moments = [
         ("bee_change", {"inbox": f"inbox/{NOW:%Y-%m-%d-1825}", "conversation_ids": [901]}, NOW),
         ("bee_change", {"inbox": f"inbox/{NOW:%Y-%m-%d-1832}", "conversation_ids": [902]}, NOW + timedelta(minutes=8)),

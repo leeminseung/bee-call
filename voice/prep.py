@@ -58,6 +58,21 @@ day's summary, call up to three tools at once. You get one round of tools.
 threads worth raising later, and the unconfirmed facts and todo suggestions to check, with their Bee ids. Only \
 what the data says.
 """
+# For a person without Bee (Use Bee off): no Bee data and no tools; what is known comes from earlier calls and the
+# notes kept between calls.
+PREP_INSTRUCTIONS_WITHOUT_BEE = """\
+You are the voice of Bee Call, an assistant that talks with the user on the phone. A call is about to start, \
+and the phone is ringing on their side while you get ready. Use these seconds the way a good assistant glances \
+at their notes before answering.
+
+The next message says who is calling whom and why, and what you know from earlier calls and the notes kept \
+between calls.
+1. First write <opening>what you say when you pick up</opening>: {opening}, as the end of the next message \
+asks. The call is answered as soon as this is written.
+2. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to and \
+open threads worth raising later. Only what the message says; when it says little, note that, and plan to ask \
+the user about their day.
+"""
 
 
 def _tool(name: str, description: str, properties: dict[str, Any]) -> dict[str, Any]:
@@ -122,8 +137,9 @@ def bedrock_client(region: str):
                                 config=Config(connect_timeout=3, read_timeout=20, retries={"max_attempts": 1}))
 
 
-def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime | None = None) -> str:
-    """What started the call and the Bee data read for it, ending with what the opening should do."""
+def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime | None = None, *, bee: bool) -> str:
+    """What started the call and the Bee data read for it (`bee`: the person uses Bee), ending with what the
+    opening should do."""
     if meta.get("direction") == "outbound":
         why = f"You are about to call the user. Why: {meta.get('reason') or 'to talk through their day'}"
         if meta.get("topic"):
@@ -154,7 +170,8 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime | None = N
         parts.append("The conversation behind this call:\n" + reads.conversation_text(conv or {"id": conv_id}, lines))
     if inputs.today is not None:
         parts.append(reads.today_text(inputs.today))
-    parts.append(reads.recent_text(inputs.recent))
+    if bee:
+        parts.append(reads.recent_text(inputs.recent))
     if inputs.facts:
         parts.append("Unconfirmed Bee facts:\n" + reads.facts_text(inputs.facts))
     if inputs.suggestions:
@@ -226,7 +243,8 @@ def estimated_tokens(*parts: Any) -> int:
 
 
 async def _stream(client, model_id: str, system: str, messages: list[dict[str, Any]],
-                  on_text: Callable[[str], None], prep: "Prep | None" = None) -> dict[str, Any]:
+                  on_text: Callable[[str], None], prep: "Prep | None" = None,
+                  tools: list[dict[str, Any]] = TOOLS) -> dict[str, Any]:
     """One streamed Converse request: on_text gets the text so far as it grows. Returns the assistant message.
     The request's token use is added to `prep`; when it is cut short after the model started answering, an
     estimate of it."""
@@ -238,7 +256,8 @@ async def _stream(client, model_id: str, system: str, messages: list[dict[str, A
         try:
             response = client.converse_stream(
                 modelId=model_id, system=[{"text": system}], messages=messages,
-                toolConfig={"tools": TOOLS}, inferenceConfig={"maxTokens": 500, "temperature": 0.3})
+                **({"toolConfig": {"tools": tools}} if tools else {}),
+                inferenceConfig={"maxTokens": 500, "temperature": 0.3})
             for event in response["stream"]:
                 if stop.is_set():
                     break
@@ -292,10 +311,12 @@ class Preparation:
     with the note (or None) when the prep ends."""
 
     def __init__(self, inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *, spend: SpendLog,
-                 client=None, now: datetime | None = None, language: CallLanguage | None = None) -> None:
+                 bee: bool, client=None, now: datetime | None = None, language: CallLanguage | None = None) -> None:
         self.prep = Prep(model=model[0] if model else None)
         self._spend = spend  # the person's spend log: the prep's model use goes there when it ends
-        self._system = PREP_INSTRUCTIONS.replace("{opening}", (language or call_language()).opening)
+        self._bee = bee  # the person uses Bee: Bee data, Bee tools and Bee's words; otherwise none of them
+        instructions = PREP_INSTRUCTIONS if bee else PREP_INSTRUCTIONS_WITHOUT_BEE
+        self._system = instructions.replace("{opening}", (language or call_language()).opening)
         self._inputs, self._meta, self._model, self._client, self._now = inputs, meta, model, client, now
         self._opening = asyncio.Event()
         self.done: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
@@ -352,8 +373,10 @@ class Preparation:
 
     async def _run(self, model_id: str, region: str) -> None:
         client = self._client or bedrock_client(region)
-        messages = [{"role": "user", "content": [{"text": seed_text(self._inputs, self._meta, self._now)}]}]
-        reply = await _stream(client, model_id, self._system, messages, self._on_text, self.prep)
+        messages = [{"role": "user", "content": [{"text": seed_text(self._inputs, self._meta, self._now,
+                                                                     bee=self._bee)}]}]
+        tools = TOOLS if self._bee else []
+        reply = await _stream(client, model_id, self._system, messages, self._on_text, self.prep, tools)
         written = "".join(block.get("text", "") for block in reply["content"])
         uses = [block["toolUse"] for block in reply["content"] if "toolUse" in block]
         if uses:
@@ -362,7 +385,7 @@ class Preparation:
             ask = "Now write the note." if self.prep.opening else "Now write the opening and the note."
             messages += [reply, {"role": "user", "content": [*results, {"text": ask}]}]
             reply = await _stream(client, model_id, self._system, messages, lambda text: self._on_text(written + text),
-                                  self.prep)
+                                  self.prep, tools)
             written += "".join(block.get("text", "") for block in reply["content"])
         self.prep.note = parse_note(written)
         if not self.prep.note:
@@ -370,10 +393,10 @@ class Preparation:
 
 
 async def prepare_call(inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *, spend: SpendLog,
-                       deadline_s: float = NOTE_SECONDS, client=None, now: datetime | None = None,
+                       bee: bool, deadline_s: float = NOTE_SECONDS, client=None, now: datetime | None = None,
                        language: CallLanguage | None = None) -> Prep:
     """Runs the prep to the end. Never raises: a Prep without a note says why in `error`."""
-    preparation = Preparation(inputs, meta, model, spend=spend, client=client, now=now,
+    preparation = Preparation(inputs, meta, model, spend=spend, bee=bee, client=client, now=now,
                               language=language).start(deadline_s)
     await preparation.done
     return preparation.prep
@@ -383,15 +406,16 @@ def plan_meta(plan: Plan) -> dict[str, Any]:
     return {"direction": "outbound", "reason": plan.reason, "topic": plan.topic, "kind": plan.kind}
 
 
-async def prepare_outbound(plan: Plan, *, spend: SpendLog, mode: str | None = None,
+async def prepare_outbound(plan: Plan, *, spend: SpendLog, bee: bool, mode: str | None = None,
                            extra: dict[str, Any] | None = None, deadline_s: float = NOTE_SECONDS,
                            language: CallLanguage | None = None) -> Prep:
-    """For voice/outbound.py, before the phone rings: reads Bee for this plan, then prepares. `extra` adds to the
-    call's metadata (agreed, earlier_call); a shorter `deadline_s` rings sooner, with the note given up earlier."""
+    """For voice/outbound.py, before the phone rings: reads Bee for this plan (`bee`: the person uses Bee), then
+    prepares. `extra` adds to the call's metadata (agreed, earlier_call); a shorter `deadline_s` rings sooner,
+    with the note given up earlier."""
     started = time.monotonic()
     inputs = await fetch_call_inputs(plan.inbox_dir, plan.conversation_ids)
     prep = await prepare_call(inputs, {**plan_meta(plan), **(extra or {})},
-                              prep_model(mode or os.environ.get("COORDINATOR_LLM", "bedrock")), spend=spend,
+                              prep_model(mode or os.environ.get("COORDINATOR_LLM", "bedrock")), spend=spend, bee=bee,
                               deadline_s=deadline_s, language=language)
     prep.seconds = round(time.monotonic() - started, 2)
     return prep

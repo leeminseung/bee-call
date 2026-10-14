@@ -689,7 +689,7 @@ def test_a_prep_cut_short_counts_an_estimate_of_what_it_sent(tmp_path):
         client = Converse(text("<opening>Hi Matt, what's up?</opening>" + "<note>" + "x" * 2000 + "</note>"), gap=0.05,
                           usage=(999, 999))
         preparation = Preparation(CallInputs(), {"direction": "inbound"}, MODEL, client=client,
-                                  spend=SpendLog(tmp_path)).start()
+                                  spend=SpendLog(tmp_path), bee=True).start()
         await preparation.opening(timeout=5)
         preparation.cancel()  # the caller hung up while it rang
         await asyncio.gather(preparation.done, return_exceptions=True)
@@ -700,3 +700,31 @@ def test_a_prep_cut_short_counts_an_estimate_of_what_it_sent(tmp_path):
     (entry,) = [json.loads(line) for line in (tmp_path / "state" / "spend.jsonl").read_text().splitlines()]
     assert entry["what"] == "call_prep" and entry["estimated"] and entry["input_tokens"] > 300
     assert costs.spent_today(tmp_path, datetime.now()) > 0
+
+
+def test_without_bee_the_prep_of_an_ai_call_reads_nothing_and_never_mentions_bee(tmp_path, monkeypatch):
+    """BC-057, for the prep voice/outbound.py writes before the AI's call rings."""
+    import re
+    from tests.helpers import placing
+    from tests.test_prep import Converse, text
+    from voice import prep as prep_module
+    from voice.offers import OfferStore
+    from voice.outbound import call_due
+
+    log = tmp_path / "bee-calls.jsonl"
+    monkeypatch.setenv("BEE_BIN", str(FAKE_BEE))
+    monkeypatch.setenv("FAKE_BEE_LOG", str(log))
+    monkeypatch.setenv("COORDINATOR_LLM", "bedrock")
+    client = Converse(text("<opening>Hi!</opening><note>n</note>"))
+    monkeypatch.setattr(prep_module, "bedrock_client", lambda region: client)
+    me = signed_in(tmp_path)
+    OfferStore(me.workspace).book("the flat prices", datetime.now() - timedelta(seconds=1), datetime.now())
+
+    async def as_the_loops_run():
+        cli.use_bee(None)  # what serve_person() does for a person with Use Bee off
+        return await call_due(me.person, place=placing([]))
+
+    assert len(asyncio.run(as_the_loops_run())) == 1 and not log.exists()
+    (request,) = client.requests
+    assert "toolConfig" not in request
+    assert re.findall(r"\bBee\b(?! Call)", request["system"][0]["text"] + json.dumps(request["messages"])) == []

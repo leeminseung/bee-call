@@ -167,3 +167,55 @@ def test_livekit_never_records_a_call_and_audio_follows_the_setting_at_answer_ti
     (folder,) = call_folders(me.workspace)
     assert not (folder / "audio").exists()
     assert next(e for e in events_of(folder) if e["type"] == "coordinator")["audio_on_server"] is False
+
+
+# ---------- people without Bee (BC-057): the mode the user's friend uses ----------
+
+BEE_WORDING = r"\bBee\b(?! Call)"  # "Bee" the wearable; "Bee Call" is the product's own name
+
+
+@pytest.fixture
+def bee_log(tmp_path, monkeypatch):
+    """The fake Bee CLI, keeping every call made to it."""
+    from tests.test_beelink import FAKE_BEE
+
+    log = tmp_path / "bee-calls.jsonl"
+    monkeypatch.setenv("BEE_BIN", str(FAKE_BEE))
+    monkeypatch.setenv("FAKE_BEE_LOG", str(log))
+    return log
+
+
+@pytest.mark.parametrize("direction", ["inbound", "outbound"])
+def test_a_call_without_bee_reads_nothing_from_bee_and_never_mentions_it(tmp_path, monkeypatch, quick, bee_log,
+                                                                         direction):
+    import re
+    from livekit.agents.llm.tool_context import get_fnc_tool_names
+
+    me = signed_in(tmp_path)  # Use Bee is off unless the person connected Bee
+    assert me.people.settings("matt").bee is False
+    client = Converse(text(OPENING + NOTE))
+    with_prep_model(monkeypatch, client)
+    meta = {"direction": direction, "person": "matt"}
+    if direction == "outbound":
+        meta.update(topic="the job offer", reason="The user asked to talk the offer through.",
+                    prep={"note": "Matt is deciding on a job offer.", "opening": "Hi Matt!"})
+    call = FakeCall(me.people, meta)
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        await call.end()
+
+    asyncio.run(main())
+    assert not bee_log.exists()  # the Bee CLI never ran
+    (folder,) = call_folders(me.workspace)
+    assert not (folder / "inputs").exists()
+    assert [e for e in events_of(folder) if e["type"] in ("error", "why_calling")] == []
+    coordinator = call.session.started["agent"]
+    tools = get_fnc_tool_names(coordinator.tools)
+    assert not [t for t in tools if "bee" in t] and {"delegate", "book_call", "end_call"} <= set(tools)
+    assert re.findall(BEE_WORDING, coordinator.instructions) == []
+    for request in client.requests:  # the prep, for the call the user started
+        assert "toolConfig" not in request
+        assert re.findall(BEE_WORDING, request["system"][0]["text"] + json.dumps(request["messages"])) == []

@@ -40,8 +40,8 @@ def test_the_prep_opening_is_in_the_call_language(tmp_path):
     from voice.costs import SpendLog
 
     async def main():
-        return (Preparation(CallInputs(), {}, None, spend=SpendLog(tmp_path), language=call_language("ko"))._system,
-                Preparation(CallInputs(), {}, None, spend=SpendLog(tmp_path), language=call_language("en"))._system)
+        return (Preparation(CallInputs(), {}, None, spend=SpendLog(tmp_path), bee=True, language=call_language("ko"))._system,
+                Preparation(CallInputs(), {}, None, spend=SpendLog(tmp_path), bee=True, language=call_language("en"))._system)
 
     import asyncio
     korean, english = asyncio.run(main())
