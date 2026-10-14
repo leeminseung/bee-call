@@ -344,7 +344,9 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=make_llm(rec),
         tts=make_tts(VOICE, LANGUAGE, REGION),
         vad=ctx.proc.userdata["vad"],
-        turn_handling={"turn_detection": inference.TurnDetector()},
+        # Named rather than left to LiveKit's defaults, which follow the launch mode: `dev` (a Mac) picks LiveKit's
+        # cloud turn detector and adaptive interruptions, `start` (the server) a local model and voice activity only.
+        turn_handling={"turn_detection": inference.TurnDetector(version="v1"), "interruption": {"mode": "adaptive"}},
     )
 
     async def notify(news: JobNotification) -> None:
