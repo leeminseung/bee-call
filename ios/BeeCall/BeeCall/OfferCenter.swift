@@ -36,6 +36,15 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     private(set) var open: [Offer] = []
     private(set) var notificationsOn = false
     private(set) var notice: String? // one line under the list when an answer did not go through
+    @ObservationIgnored private let transport: any HTTPTransport
+    @ObservationIgnored private let noteStatus: (Int) -> Void
+
+    init(transport: any HTTPTransport = URLSession.shared,
+         noteStatus: @escaping (Int) -> Void = { Server.shared.noteStatus($0) }) {
+        self.transport = transport
+        self.noteStatus = noteStatus
+        super.init()
+    }
 
     // The buttons. Two sets of titles, picked by the Mac's call language (CALL_LANGUAGE).
     private static let categories: Set<UNNotificationCategory> = [
@@ -67,9 +76,9 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     func refresh() async {
         await PushTokens.shared.deliverIfNeeded(.alert) // the server may have been unreachable at launch
         guard let request = Server.request("/offers"),
-              let (data, response) = try? await URLSession.shared.data(for: request) else { return }
-        Server.shared.noteStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+              let (data, response) = try? await transport.send(request) else { return }
+        noteStatus(response.httpStatus)
+        guard response.httpStatus == 200 else { return }
         struct Listing: Decodable { let offers: [Offer] }
         guard let listing = try? JSONDecoder().decode(Listing.self, from: data) else { return }
         if listing.offers != open { open = listing.offers }
@@ -91,8 +100,8 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     func answer(_ offerID: String, _ choice: Choice) async -> Bool {
         guard let request = Server.request("/offers/\(offerID)", method: "POST", json: ["choice": choice.rawValue])
         else { return false }
-        let response = try? await URLSession.shared.data(for: request)
-        let code = (response?.1 as? HTTPURLResponse)?.statusCode
+        let response = try? await transport.send(request)
+        let code = response?.1.httpStatus
         let accepted = code == 200
         notice = accepted ? nil : code == nil ? "Couldn't reach Bee Call. Try again from here."
             : "That offer has closed. You can call Bee Call any time."
