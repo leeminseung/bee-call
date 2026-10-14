@@ -207,8 +207,8 @@ def test_people_see_only_their_own_offers_tokens_and_calls(tmp_path):
 
     listed, answer, push, others_room, own_room, continued, new = asyncio.run(main())
     assert listed == {"offers": []} and answer == 404  # matt's offer is not there for jiwoo
-    assert push == 204 and voip_push.load_device_token(matt.workspace, "alert") is None
-    assert voip_push.load_device_token(matt.people.workspace("jiwoo"), "alert")["environment"] == "production"
+    assert push == 204 and voip_push.load_device_token(matt.person, "alert") is None
+    assert voip_push.load_device_token(matt.people.person("jiwoo"), "alert")["environment"] == "production"
     assert (others_room, own_room, continued) == (400, 200, 400)
     claims = jwt.decode(new["token"], options={"verify_signature": False})
     assert new["room"].startswith("call-jiwoo-") and claims["sub"] == "jiwoo"
@@ -394,8 +394,9 @@ def test_over_budget_an_agreed_call_is_not_placed(tmp_path):
     from voice.offers import OfferStore
     from voice.outbound import call_due
 
-    offer, _ = asked(tmp_path, now=datetime.now())
-    store = OfferStore(tmp_path / "workspace")
+    me = signed_in(tmp_path)
+    offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
+    store = OfferStore(me.workspace)
     store.answer(offer.id, "now", datetime.now())
     placed = []
 
@@ -403,7 +404,7 @@ def test_over_budget_an_agreed_call_is_not_placed(tmp_path):
         placed.append(kw)
         return "call-x"
 
-    assert asyncio.run(call_due(tmp_path / "workspace", place=place, over_budget=lambda now: True)) == []
+    assert asyncio.run(call_due(me.person, place=place, over_budget=lambda now: True)) == []
     assert placed == [] and store.get(offer.id).state == "failed" and "budget" in store.get(offer.id).error
 
 
@@ -413,21 +414,21 @@ def test_an_agreed_call_carries_its_person(tmp_path):
     from voice.outbound import call_due
     from voice.prep import Prep
 
-    offer, _ = asked(tmp_path, now=datetime.now())
-    OfferStore(tmp_path / "workspace").answer(offer.id, "now", datetime.now())
+    jiwoo = signed_in(tmp_path, "jiwoo")
+    offer, _ = asked(tmp_path, now=datetime.now(), workspace=jiwoo.workspace)
+    OfferStore(jiwoo.workspace).answer(offer.id, "now", datetime.now())
     seen = {}
 
     async def prepare(plan, extra=None, deadline_s=None, language=None):
         seen["language"] = language.code
         return Prep(note="n", opening="o")
 
-    async def place(plan, ws, prep=None, continue_from=None, agreed=None, person=None):
-        seen["person"] = person
+    async def place(plan, person, prep=None, continue_from=None, agreed=None):
+        seen["person"] = person.id
         return "call-jiwoo-20261014-210000"
 
     from voice.language import call_language
-    rooms = asyncio.run(call_due(tmp_path / "workspace", prepare=prepare, place=place, person="jiwoo",
-                                 language=call_language("ko")))
+    rooms = asyncio.run(call_due(jiwoo.person, prepare=prepare, place=place, language=call_language("ko")))
     assert rooms == ["call-jiwoo-20261014-210000"] and seen == {"language": "ko", "person": "jiwoo"}
 
 

@@ -18,7 +18,8 @@ from beelink.planner import RulePlanner
 from voice import voip_push
 from voice.dispatch import place_call
 from voice.outbound import saved_trigger
-from voice.voip_push import TOKEN_FILE, ApnsConfig, PushError, load_device_token, provider_token, save_device_token
+from voice.people import People
+from voice.voip_push import ApnsConfig, PushError, load_device_token, provider_token, save_device_token
 from tests.test_outbound import inbox
 
 DEVICE = "ab" * 32
@@ -28,6 +29,13 @@ LINE = {"at": "2026-10-13T21:00:00", "room": "call-20261013-210000", "expires_at
 
 
 KEY = ec.generate_private_key(ec.SECP256R1())  # made up for the tests
+
+
+@pytest.fixture
+def person(tmp_path):
+    people = People(tmp_path / "data")
+    people.add("matt")
+    return people.person("matt")
 
 
 @pytest.fixture
@@ -49,28 +57,28 @@ def test_the_provider_token_is_signed_with_the_key_and_shared_for_a_while(config
     assert provider_token(config, now=1_000_000 + 41 * 60, cache=cache) != first
 
 
-def test_the_device_token_is_checked_and_kept(tmp_path):
+def test_the_device_token_is_checked_and_kept(person):
     with pytest.raises(ValueError):
-        save_device_token(tmp_path, "not-hex", "development")
+        save_device_token(person, "not-hex", "development")
     with pytest.raises(ValueError):
-        save_device_token(tmp_path, DEVICE, "staging")
-    assert load_device_token(tmp_path) is None
-    save_device_token(tmp_path, DEVICE.upper(), "development")
-    assert load_device_token(tmp_path)["token"] == DEVICE
+        save_device_token(person, DEVICE, "staging")
+    assert load_device_token(person) is None
+    save_device_token(person, DEVICE.upper(), "development")
+    assert load_device_token(person)["token"] == DEVICE
 
 
-def push(tmp_path, config, status=200, body=b"", headers=None):
+def push(person, config, status=200, body=b"", headers=None):
     requests = []
 
     def apns(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(status, content=body, headers=headers or {})
 
-    result = asyncio.run(voip_push.ring(LINE, tmp_path, config, transport=httpx.MockTransport(apns)))
+    result = asyncio.run(voip_push.ring(LINE, person, config, transport=httpx.MockTransport(apns)))
     return result, requests
 
 
-def test_nothing_is_sent_until_the_key_and_the_phone_are_set_up(tmp_path, config, monkeypatch):
+def test_nothing_is_sent_until_the_key_and_the_phone_are_set_up(person, config, monkeypatch):
     for name in ("APNS_KEY_PATH", "APNS_KEY_ID", "APNS_TEAM_ID"):  # .env.local may hold the real ones
         monkeypatch.delenv(name, raising=False)
 
@@ -78,14 +86,14 @@ def test_nothing_is_sent_until_the_key_and_the_phone_are_set_up(tmp_path, config
         raise AssertionError("nothing should be sent")
 
     offline = httpx.MockTransport(no_network)
-    assert asyncio.run(voip_push.ring(LINE, tmp_path, config, transport=offline)) is None  # no phone registered
-    save_device_token(tmp_path, DEVICE, "development")
-    assert asyncio.run(voip_push.ring(LINE, tmp_path, None, transport=offline)) is None  # no key in the environment
+    assert asyncio.run(voip_push.ring(LINE, person, config, transport=offline)) is None  # no phone registered
+    save_device_token(person, DEVICE, "development")
+    assert asyncio.run(voip_push.ring(LINE, person, None, transport=offline)) is None  # no key in the environment
 
 
-def test_the_push_carries_the_ring_to_the_registered_phone(tmp_path, config):
-    save_device_token(tmp_path, DEVICE, "development")
-    result, (request,) = push(tmp_path, config, headers={"apns-id": "1234-ABCD"})
+def test_the_push_carries_the_ring_to_the_registered_phone(person, config):
+    save_device_token(person, DEVICE, "development")
+    result, (request,) = push(person, config, headers={"apns-id": "1234-ABCD"})
     assert result == "1234-ABCD"
     assert str(request.url) == f"https://api.sandbox.push.apple.com/3/device/{DEVICE}"
     assert request.headers["apns-topic"] == "com.leeminseung.beecall.voip"
@@ -96,18 +104,18 @@ def test_the_push_carries_the_ring_to_the_registered_phone(tmp_path, config):
                                            "expires_epoch": 1791892860}
 
 
-def test_a_token_apple_no_longer_knows_is_dropped(tmp_path, config):
-    save_device_token(tmp_path, DEVICE, "production")
+def test_a_token_apple_no_longer_knows_is_dropped(person, config):
+    save_device_token(person, DEVICE, "production")
     with pytest.raises(PushError, match="410 Unregistered"):
-        push(tmp_path, config, status=410, body=b'{"reason": "Unregistered"}')
-    assert not (tmp_path / TOKEN_FILE).exists()
+        push(person, config, status=410, body=b'{"reason": "Unregistered"}')
+    assert load_device_token(person) is None
 
 
-def test_other_refusals_keep_the_token(tmp_path, config):
-    save_device_token(tmp_path, DEVICE, "production")
+def test_other_refusals_keep_the_token(person, config):
+    save_device_token(person, DEVICE, "production")
     with pytest.raises(PushError, match="403 InvalidProviderToken"):
-        push(tmp_path, config, status=403, body=b'{"reason": "InvalidProviderToken"}')
-    assert load_device_token(tmp_path)
+        push(person, config, status=403, body=b'{"reason": "InvalidProviderToken"}')
+    assert load_device_token(person)
 
 
 def test_the_token_server_keeps_the_app_s_voip_token(tmp_path):
@@ -125,13 +133,13 @@ def test_the_token_server_keeps_the_app_s_voip_token(tmp_path):
             return bad.status, good.status
 
     assert asyncio.run(main()) == (400, 204)
-    assert load_device_token(me.workspace)["environment"] == "development"
+    assert load_device_token(me.person)["environment"] == "development"
 
 
-def test_placing_a_call_pushes_its_ring_line_and_a_failed_push_does_not_stop_it(tmp_path, monkeypatch):
+def test_placing_a_call_pushes_its_ring_line_and_a_failed_push_does_not_stop_it(tmp_path, person, monkeypatch):
     pushed = []
 
-    async def fake_ring(line, workspace):
+    async def fake_ring(line, person):
         pushed.append(line)
         raise PushError("APNs answered 500")
 
@@ -139,10 +147,9 @@ def test_placing_a_call_pushes_its_ring_line_and_a_failed_push_does_not_stop_it(
         pass
 
     monkeypatch.setattr(voip_push, "ring", fake_ring)
-    workspace = tmp_path / "workspace"
-    plan = RulePlanner(workspace).decide(saved_trigger(inbox(tmp_path)))
-    room = asyncio.run(place_call(plan, workspace, SimpleNamespace(room=SimpleNamespace(create_room=create_room))))
+    plan = RulePlanner(person.workspace).decide(saved_trigger(inbox(tmp_path)))
+    room = asyncio.run(place_call(plan, person, SimpleNamespace(room=SimpleNamespace(create_room=create_room))))
     (line,) = pushed
     assert line["room"] == room and line["topic"] == plan.topic
-    written = json.loads((workspace / "state" / "outbound.jsonl").read_text().splitlines()[-1])
+    written = json.loads((person.workspace / "state" / "outbound.jsonl").read_text().splitlines()[-1])
     assert written == line

@@ -43,7 +43,7 @@ from voice.continuation import earlier_call
 from voice.dispatch import RING_SECONDS, place_call
 from voice.costs import spent_today
 from voice.language import CallLanguage, call_language
-from voice.people import People, Settings, dev_person
+from voice.people import People, Person, Settings, dev_person
 from voice.offers import OPEN, Offer, OfferStore, agreed, notification, plan_of
 from voice.prep import NOTE_SECONDS, OPENING_BY_S, prepare_outbound
 from meta.agent import Thinker
@@ -62,8 +62,8 @@ NOW_PREP_S = OPENING_BY_S + 2.0  # "Call me now": ring soon; the note gets this 
 PEOPLE_CHECK_S = 10.0  # how often the list of people and their settings is read again (arbitrary)
 
 
-async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, direct: bool = False,
-                 person: str | None = None) -> str | None:
+async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, person: Person,
+                 direct: bool = False) -> str | None:
     """Decides; a call decision asks the user (returns the offer id), or with `direct` calls at once (returns
     the room)."""
     plan = planner.decide(trigger)
@@ -74,26 +74,26 @@ async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, direct: 
         prep = await prepare_outbound(plan)
         print(f"prepared in {prep.seconds} s: " + (f"opening {prep.opening!r}" if prep.note else
                                                     f"no note ({prep.error})"), flush=True)
-        room = await place_call(plan, planner.workspace, prep=prep.to_meta(), person=person)
+        room = await place_call(plan, person, prep=prep.to_meta())
         print(f"calling: room {room}", flush=True)
         return room
     now = planner.now()
     offer = OfferStore(planner.workspace).ask(plan, now)
-    await send_offer(offer, planner.workspace, now)
+    await send_offer(offer, person, now)
     return offer.id
 
 
-async def send_offer(offer: Offer, workspace: Path, now: datetime, language: CallLanguage | None = None) -> str:
+async def send_offer(offer: Offer, person: Person, now: datetime, language: CallLanguage | None = None) -> str:
     """Sends an offer's notification unless it is quiet time or the day's notifications are used up; then it is
     held (it still shows in the app) and send_held() sends it later. Returns what happened, in words."""
-    store = OfferStore(workspace)
+    store = OfferStore(person.workspace)
     if quiet(now):
         return f"held: quiet hours, the notification goes out at {quiet_ends(now):%H:%M}; it shows in the app now"
     if store.notified_on(now) >= DAILY_NOTIFICATIONS:
         return f"held: {DAILY_NOTIFICATIONS} notifications went out today already; it shows in the app now"
     payload = notification(offer, now, language or call_language())
     try:
-        sent = await voip_push.alert(payload, workspace, collapse_id=offer.id,
+        sent = await voip_push.alert(payload, person, collapse_id=offer.id,
                                      expires_epoch=int(offer.at("expires_at").timestamp()))
     except Exception as exc:  # the offer still waits in the app's list
         print(f"asked: offer {offer.id}, but the notification failed: {exc}", flush=True)
@@ -105,10 +105,10 @@ async def send_offer(offer: Offer, workspace: Path, now: datetime, language: Cal
     return f"notification sent: {payload['aps']['alert']['body']}"
 
 
-async def send_held(workspace: Path, now: datetime, language: CallLanguage | None = None) -> None:
+async def send_held(person: Person, now: datetime, language: CallLanguage | None = None) -> None:
     """Sends notifications held by quiet hours or the daily limit, once they may go out."""
-    for offer in OfferStore(workspace).unsent(now):
-        result = await send_offer(offer, workspace, now, language)
+    for offer in OfferStore(person.workspace).unsent(now):
+        result = await send_offer(offer, person, now, language)
         if result.startswith("held") or result.startswith("no notification"):
             return
 
@@ -120,13 +120,14 @@ def busy(workspace: Path, now: datetime) -> bool:
         placed is not None and timedelta(0) <= now - placed < timedelta(seconds=RING_SECONDS + 30))
 
 
-async def call_due(workspace: Path, now: datetime | None = None, prepare=prepare_outbound, place=place_call, *,
-                   person: str | None = None, language: CallLanguage | None = None,
+async def call_due(person: Person, now: datetime | None = None, prepare=prepare_outbound, place=place_call, *,
+                   language: CallLanguage | None = None,
                    over_budget: Callable[[datetime], bool] | None = None) -> list[str]:
     """Places a call the user said yes to: "Call me now", an accepted time that has come (prepared up to
     BOOKED_AHEAD early), or a time booked in a call. One call per round, and none while another call is going on
     or ringing; the others wait for a later round and close if they are more than LATE_BY late. Returns the
     room, or nothing. Past the person's daily budget the call is not placed, and the offer says why."""
+    workspace = person.workspace
     store = OfferStore(workspace)
     now = now or datetime.now()
     for offer in store.due(now, ahead=BOOKED_AHEAD):
@@ -139,7 +140,6 @@ async def call_due(workspace: Path, now: datetime | None = None, prepare=prepare
             store.mark(offer.id, "failed", now, error="today's budget is used up; ask again tomorrow")
             log.info("offer %s not called: over today's budget", offer.id)
             continue
-        mine = {"person": person} if person else {}  # whose call: only then, so older stand-ins keep working
         try:
             extra = {"agreed": agreed(offer), "meta_notes": meta_notes(workspace)}
             if offer.continue_from:
@@ -150,8 +150,8 @@ async def call_due(workspace: Path, now: datetime | None = None, prepare=prepare
             wait = (offer.at("call_at") - datetime.now()).total_seconds()
             if wait > 0:  # prepared early for a booked time
                 await asyncio.sleep(wait)
-            room = await place(plan, workspace, prep=prep.to_meta(), continue_from=offer.continue_from,
-                               agreed=extra["agreed"], **mine)
+            room = await place(plan, person, prep=prep.to_meta(), continue_from=offer.continue_from,
+                               agreed=extra["agreed"])
         except Exception as exc:
             store.mark(offer.id, "failed", datetime.now(), error=f"{type(exc).__name__}: {exc}"[:300])
             log.exception("could not place the call for offer %s", offer.id)
@@ -162,13 +162,13 @@ async def call_due(workspace: Path, now: datetime | None = None, prepare=prepare
     return []
 
 
-async def serve_offers(workspace: Path, until: str | None = None, **for_person) -> None:
+async def serve_offers(person: Person, until: str | None = None, **for_person) -> None:
     """Checks for due calls every OFFER_CHECK_S; with `until`, stops once that offer is no longer open.
-    `for_person` goes on to call_due (person, language, over_budget)."""
-    store = OfferStore(workspace)
+    `for_person` goes on to call_due (language, over_budget)."""
+    store = OfferStore(person.workspace)
     while True:
         try:
-            await call_due(workspace, **for_person)
+            await call_due(person, **for_person)
         except Exception:
             log.exception("checking offers failed")
         if until is not None:
@@ -207,11 +207,12 @@ async def think_about_new_events(session: MetaSession, thinker: Thinker, now: da
     return 0
 
 
-async def serve_meta(workspace: Path, thinker: Thinker, until_offer_closes: bool = False,
+async def serve_meta(person: Person, thinker: Thinker, until_offer_closes: bool = False,
                      language: CallLanguage | None = None, over_budget: Callable[[datetime], bool] | None = None) -> None:
     """Wakes the meta agent for new events, tells it about booked calls coming up, and sends held notifications
     once they may go out. With until_offer_closes (for --once), stops when no offer is open any more. Past the
     person's daily budget it does not think; the events wait for the next day."""
+    workspace = person.workspace
     session, store, announced, tries = MetaSession(workspace), OfferStore(workspace), set(), 0
     while True:
         now = datetime.now()
@@ -224,7 +225,7 @@ async def serve_meta(workspace: Path, thinker: Thinker, until_offer_closes: bool
                     add_event(workspace, "booked_soon", offer=offer.id, call_at=offer.call_at, topic=offer.topic)
             if over_budget is None or not over_budget(now):
                 tries = await think_about_new_events(session, thinker, now, tries)
-            await send_held(workspace, now, language)
+            await send_held(person, now, language)
         except Exception:
             log.exception("the meta loop failed")
         if until_offer_closes and not store.open(datetime.now()):
@@ -239,17 +240,18 @@ def saved_trigger(inbox: Path) -> Trigger:
     return Trigger(reason="saved", inbox_dir=inbox, conversation_ids=ids, counts=counts)
 
 
-async def serve_person(people: People, person: str, settings: Settings) -> None:
+async def serve_person(people: People, person_id: str, settings: Settings) -> None:
     """One person's loops between calls, reading only their Bee (beelink/cli.py use_bee)."""
-    workspace = people.workspace(person)
+    person = people.person(person_id)
+    workspace = person.workspace
     language = call_language(settings.language)
-    bee.use_bee(people.bee_dir(person) if settings.bee else None)  # this task and the loops it starts
+    bee.use_bee(people.bee_dir(person_id) if settings.bee else None)  # this task and the loops it starts
 
     def over_budget(now: datetime) -> bool:
-        return spent_today(workspace, now) >= people.settings(person).daily_budget_usd
+        return spent_today(workspace, now) >= people.settings(person_id).daily_budget_usd
 
     async def send(offer: Offer, ws: Path, now: datetime) -> str:
-        return await send_offer(offer, ws, now, language)
+        return await send_offer(offer, person, now, language)
 
     async def on_trigger(trigger: Trigger) -> None:
         add_event(workspace, "bee_change", **bee_event(trigger, workspace))
@@ -258,8 +260,8 @@ async def serve_person(people: People, person: str, settings: Settings) -> None:
     # A TaskGroup: if one loop fails, the others stop too, so serve_people() never starts a second set beside
     # survivors of the first.
     async with asyncio.TaskGroup() as group:
-        group.create_task(serve_offers(workspace, person=person, language=language, over_budget=over_budget))
-        group.create_task(serve_meta(workspace, thinker, language=language, over_budget=over_budget))
+        group.create_task(serve_offers(person, language=language, over_budget=over_budget))
+        group.create_task(serve_meta(person, thinker, language=language, over_budget=over_budget))
         if settings.bee:
             group.create_task(BeeWatcher(workspace, on_trigger).run())
 
@@ -316,40 +318,41 @@ async def main() -> None:
             pass
         return
 
-    person = args.person or dev_person()
-    if not person or not people.known(person):
+    person_id = args.person or dev_person()
+    if not person_id or not people.known(person_id):
         raise SystemExit("--once and --rules work for one approved person: pass --person or set BEE_CALL_DEV_PERSON")
-    workspace, settings = people.workspace(person), people.settings(person)
+    person = people.person(person_id)
+    workspace, settings = person.workspace, person.settings()
     language = call_language(settings.language)
-    bee.use_bee(people.bee_dir(person) if settings.bee else None)
+    bee.use_bee(people.bee_dir(person_id) if settings.bee else None)
     planner = RulePlanner(workspace, cooldown=timedelta(0) if args.no_cooldown else COOLDOWN,
                           max_age=timedelta(days=3650) if args.any_age else MAX_AGE)
 
     async def send(offer: Offer, ws: Path, now: datetime) -> str:
-        return await send_offer(offer, ws, now, language)
+        return await send_offer(offer, person, now, language)
 
     thinker = Thinker(workspace, send=send, call_time=settings.call_time)
     if args.once:
         if args.rules:
-            made = await handle(saved_trigger(args.once), planner, args.dry_run, args.direct, person)
+            made = await handle(saved_trigger(args.once), planner, args.dry_run, person, args.direct)
             if made and not args.direct:
-                await serve_offers(workspace, until=made, person=person, language=language)  # wait for the answer
+                await serve_offers(person, until=made, language=language)  # wait for the answer
             return
         # The meta agent looks at that change; for any offer it makes, wait for the answer and place the call.
         add_event(workspace, "bee_change", **bee_event(saved_trigger(args.once), workspace))
-        placing = asyncio.create_task(serve_offers(workspace, person=person, language=language))
+        placing = asyncio.create_task(serve_offers(person, language=language))
         try:
-            await serve_meta(workspace, thinker, until_offer_closes=True, language=language)
+            await serve_meta(person, thinker, until_offer_closes=True, language=language)
         finally:
             placing.cancel()
         return
 
     async def on_trigger(trigger: Trigger) -> None:
         # Errors go back to the watcher, which keeps its cursor so the same change is looked at again.
-        await handle(trigger, planner, args.dry_run, args.direct, person)
+        await handle(trigger, planner, args.dry_run, person, args.direct)
 
     try:
-        loops = [] if args.dry_run else [serve_offers(workspace, person=person, language=language)]
+        loops = [] if args.dry_run else [serve_offers(person, language=language)]
         await asyncio.gather(BeeWatcher(workspace, on_trigger).run(), *loops)
     except asyncio.CancelledError:
         pass

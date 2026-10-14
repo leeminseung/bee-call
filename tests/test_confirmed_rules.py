@@ -29,22 +29,22 @@ async def prepared(plan, **kw):
 def test_quiet_hours_hold_only_offer_notifications_and_agreed_calls_ring_at_their_time(tmp_path, monkeypatch):
     sent, placed = [], []
 
-    async def alert(payload, workspace, **kw):
+    async def alert(payload, person, **kw):
         sent.append(payload)
         return "apns-1"
 
-    async def place(plan, workspace, **kw):
+    async def place(plan, person, **kw):
         placed.append(plan.topic)
         return f"call-{len(placed)}"
 
     monkeypatch.setattr(voip_push, "alert", alert)
-    workspace = tmp_path / "workspace"
-    store = OfferStore(workspace)
+    me = signed_in(tmp_path)
+    store = OfferStore(me.workspace)
     assert quiet(NIGHT)
-    question, _ = asked(tmp_path, now=NIGHT)
-    assert asyncio.run(send_offer(question, workspace, NIGHT)).startswith("held: quiet hours")
+    question, _ = asked(tmp_path, now=NIGHT, workspace=me.workspace)
+    assert asyncio.run(send_offer(question, me.person, NIGHT)).startswith("held: quiet hours")
     booked = store.book("the interview", NIGHT, NIGHT - timedelta(hours=2))
-    assert asyncio.run(call_due(workspace, NIGHT, prepare=prepared, place=place)) == ["call-1"]
+    assert asyncio.run(call_due(me.person, NIGHT, prepare=prepared, place=place)) == ["call-1"]
     assert sent == [] and placed == ["the interview"] and store.get(booked.id).state == "called"
 
 
@@ -73,7 +73,8 @@ def test_spend_equal_to_the_budget_counts_as_over(tmp_path):
 
 
 def test_the_meta_agent_skips_thinking_while_over_budget_and_catches_up_the_next_day(tmp_path, monkeypatch):
-    workspace = tmp_path / "workspace"
+    me = signed_in(tmp_path)
+    workspace = me.workspace
     thought: list[list[str]] = []
 
     class Thinker:
@@ -86,7 +87,7 @@ def test_the_meta_agent_skips_thinking_while_over_budget_and_catches_up_the_next
 
     async def main():
         add_event(workspace, "call_ended", call="2026-10-14/2000")
-        loop = asyncio.create_task(serve_meta(workspace, Thinker(), over_budget=lambda now: over["today"]))
+        loop = asyncio.create_task(serve_meta(me.person, Thinker(), over_budget=lambda now: over["today"]))
         await asyncio.sleep(0.1)
         waited = list(thought)
         over["today"] = False  # the next day: the spend starts again from zero
@@ -99,7 +100,8 @@ def test_the_meta_agent_skips_thinking_while_over_budget_and_catches_up_the_next
 
 
 def test_the_meta_agent_wakes_only_for_events(tmp_path, monkeypatch):
-    workspace = tmp_path / "workspace"
+    me = signed_in(tmp_path)
+    workspace = me.workspace
     store = OfferStore(workspace)
     thought: list[list[str]] = []
 
@@ -109,12 +111,12 @@ def test_the_meta_agent_wakes_only_for_events(tmp_path, monkeypatch):
             return {"seconds": 0.0, "decision": "nothing to do"}
 
     monkeypatch.setattr(outbound, "META_CHECK_S", 0.01)
-    question, _ = asked(tmp_path, now=datetime.now())  # an open question is no event
+    question, _ = asked(tmp_path, now=datetime.now(), workspace=workspace)  # an open question is no event
     soon = store.book("the interview", datetime.now() + timedelta(minutes=9), datetime.now())
     later = store.book("the dentist", datetime.now() + timedelta(minutes=30), datetime.now())
 
     async def main():
-        loop = asyncio.create_task(serve_meta(workspace, Thinker(), over_budget=lambda now: False))
+        loop = asyncio.create_task(serve_meta(me.person, Thinker(), over_budget=lambda now: False))
         await asyncio.sleep(0.15)
         loop.cancel()
         await asyncio.gather(loop, return_exceptions=True)
@@ -137,7 +139,7 @@ def test_tapping_now_twice_places_one_call(tmp_path):
     offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
     placed = []
 
-    async def place(plan, workspace, **kw):
+    async def place(plan, person, **kw):
         placed.append(plan.topic)
         return "call-matt-20261014-210000"
 
@@ -150,14 +152,14 @@ def test_tapping_now_twice_places_one_call(tmp_path):
 
     assert asyncio.run(main()) == (200, 409)
     for _ in range(2):
-        asyncio.run(call_due(me.workspace, prepare=prepared, place=place, person="matt"))
+        asyncio.run(call_due(me.person, prepare=prepared, place=place))
     assert len(placed) == 1
 
 
 def test_the_fifth_offer_of_a_day_shows_only_in_the_app_list(tmp_path, monkeypatch):
     sent = []
 
-    async def alert(payload, workspace, **kw):
+    async def alert(payload, person, **kw):
         sent.append(payload["offer"])
         return "apns"
 
@@ -168,12 +170,12 @@ def test_the_fifth_offer_of_a_day_shows_only_in_the_app_list(tmp_path, monkeypat
     question, plan = asked(tmp_path, now=morning, workspace=me.workspace)
     for i in range(4):
         offer = question if i == 0 else store.ask(plan, morning + timedelta(minutes=i))
-        assert asyncio.run(send_offer(offer, me.workspace, morning + timedelta(minutes=i))).startswith("notification sent")
+        assert asyncio.run(send_offer(offer, me.person, morning + timedelta(minutes=i))).startswith("notification sent")
     fifth = store.ask(plan, morning + timedelta(minutes=10))
-    assert asyncio.run(send_offer(fifth, me.workspace, morning + timedelta(minutes=10))).startswith("held: 4 notifications")
+    assert asyncio.run(send_offer(fifth, me.person, morning + timedelta(minutes=10))).startswith("held: 4 notifications")
     assert [o.id for o in store.open(morning + timedelta(minutes=11))] == [fifth.id]  # what the app lists
     for moment in (morning + timedelta(hours=3), datetime(2026, 10, 16, 8, 0)):
-        asyncio.run(send_held(me.workspace, moment))
+        asyncio.run(send_held(me.person, moment))
     assert fifth.id not in sent and len(sent) == 4
 
 

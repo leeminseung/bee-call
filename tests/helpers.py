@@ -11,5 +11,5 @@ def signed_in(root: Path, person: str = "matt") -> SimpleNamespace:
     people = People(root / "data")
     people.add(person)
     token = people.new_session(person)
-    return SimpleNamespace(people=people, person=person, token=token, workspace=people.workspace(person),
-                           headers={"Authorization": f"Bearer {token}"})
+    return SimpleNamespace(people=people, id=person, person=people.person(person), token=token,
+                           workspace=people.workspace(person), headers={"Authorization": f"Bearer {token}"})

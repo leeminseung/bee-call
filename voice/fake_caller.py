@@ -137,7 +137,7 @@ def main() -> None:
                 return
             prep = asyncio.run(prepare_outbound(plan))
             print(f"prepared in {prep.seconds} s: " + (f"opening {prep.opening!r}" if prep.note else f"no note ({prep.error})"))
-            room = asyncio.run(place_call(plan, workspace, prep=prep.to_meta(), person=person))
+            room = asyncio.run(place_call(plan, people.person(person), prep=prep.to_meta()))
             print(f"the AI is calling in room {room}; answering in {args.ring:.0f}s")
             time.sleep(args.ring)
         else:

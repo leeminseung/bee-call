@@ -19,7 +19,6 @@ import logging
 import os
 from collections.abc import Mapping
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
@@ -27,6 +26,7 @@ from livekit import api
 
 from beelink.planner import OUTBOUND_LOG, Plan
 from voice import voip_push
+from voice.people import Person
 
 log = logging.getLogger("bee-call.dispatch")
 
@@ -72,22 +72,22 @@ def room_with_agent(room: str, metadata: str, ring_seconds: int = RING_SECONDS) 
                                  agents=[api.RoomAgentDispatch(agent_name=AGENT_NAME, metadata=metadata)])
 
 
-async def place_call(plan: Plan, workspace: Path, lk: api.LiveKitAPI | None = None,
+async def place_call(plan: Plan, person: Person, lk: api.LiveKitAPI | None = None,
                      prep: dict[str, Any] | None = None, *, continue_from: str | None = None,
-                     agreed: str | None = None, person: str | None = None) -> str:
+                     agreed: str | None = None) -> str:
     """Opens the room for an AI-initiated call to `person` and records it for the ring. Returns the room name.
     `prep` is the call prep note (voice/prep.py Prep.to_meta()), made before this call; `agreed` says how the
     user agreed to it (voice/offers.py), and `continue_from` the earlier call it continues."""
-    room = room_name(person) if person else f"call-{datetime.now():%Y%m%d-%H%M%S}"
+    room = room_name(person.id)
     own = lk is None
     lk = lk or api.LiveKitAPI()  # LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET from the environment
     try:
         await lk.room.create_room(room_with_agent(room, call_metadata("outbound", plan, prep, continue_from,
-                                                                      agreed, person)))
+                                                                      agreed, person.id)))
     finally:
         if own:
             await lk.aclose()
-    path = workspace / OUTBOUND_LOG
+    path = person.workspace / OUTBOUND_LOG
     path.parent.mkdir(parents=True, exist_ok=True)
     placed = datetime.now()
     # expires_at: after this the voice server has given up, so an app must not try to answer. It is this Mac's
@@ -100,7 +100,7 @@ async def place_call(plan: Plan, workspace: Path, lk: api.LiveKitAPI | None = No
     with path.open("a") as f:
         f.write(json.dumps(line, ensure_ascii=False) + "\n")
     try:
-        pushed = await voip_push.ring(line, workspace)
+        pushed = await voip_push.ring(line, person)
         if pushed:
             log.info("VoIP push sent for room %s (apns-id %s)", room, pushed)
     except Exception as exc:  # an open app still hears the ring stream

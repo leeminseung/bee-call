@@ -21,6 +21,7 @@ from voice.language import call_language
 from voice.prep import Prep, call_brief
 from voice.outbound import saved_trigger
 from voice.token_server import make_token, recent_calls
+from tests.helpers import signed_in
 
 FIXTURE = Path(__file__).parent / "fixtures" / "inbox" / "changed.json"
 
@@ -99,11 +100,12 @@ def test_place_call_opens_a_room_with_the_voice_server_and_records_the_ring(tmp_
     async def create_room(request):
         requests.append(request)
 
-    workspace = tmp_path / "workspace"
+    me = signed_in(tmp_path)
+    workspace = me.workspace
     plan = RulePlanner(workspace).decide(saved_trigger(inbox(tmp_path)))
     lk = SimpleNamespace(room=SimpleNamespace(create_room=create_room))
     prep = Prep(note="Matt planned a hike with Dana.", opening="Hi Matt, it's Bee Call. Got a minute about Saturday?")
-    room = asyncio.run(place_call(plan, workspace, lk, prep=prep.to_meta()))
+    room = asyncio.run(place_call(plan, me.person, lk, prep=prep.to_meta()))
     (request,) = requests
     assert request.name == room and room.startswith("call-")
     assert [a.agent_name for a in request.agents] == [AGENT_NAME]

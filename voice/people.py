@@ -111,6 +111,21 @@ class Settings:
 APP_SETTINGS = ("language", "call_time", "record_on_server", "record_on_phone")  # what the app may change
 
 
+@dataclass(frozen=True)
+class Person:
+    """One approved person, as the code working for them needs them: whose folder, settings and phone. Made by
+    People.person(); everything that acts for one person takes this rather than a bare id or folder."""
+    people: "People"
+    id: str
+
+    @property
+    def workspace(self) -> Path:
+        return self.people.workspace(self.id)
+
+    def settings(self) -> Settings:
+        return self.people.settings(self.id)
+
+
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -161,6 +176,10 @@ class People:
         folder = self.folder(person)
         folder.mkdir(parents=True, exist_ok=True)
         return folder
+
+    def person(self, person: str) -> Person:
+        self.folder(person)  # checks the id
+        return Person(self, person)
 
     def bee_dir(self, person: str) -> Path:
         self.folder(person)  # checks the id

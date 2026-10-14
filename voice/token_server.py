@@ -63,7 +63,7 @@ from voice.continuation import session_dir
 from voice.costs import spent_today
 from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata, room_name
 from voice.offers import OfferStore
-from voice.people import People, dev_person, waiting_code
+from voice.people import People, Person, dev_person, waiting_code
 from voice.session_server import local_host
 
 load_dotenv(".env.local")
@@ -136,6 +136,11 @@ def person(request: web.Request) -> str:
 
 def workspace(request: web.Request) -> Path:
     return request.app[PEOPLE].workspace(person(request))
+
+
+def someone(request: web.Request) -> Person:
+    """The signed-in person, for what acts on their behalf (their phone's push tokens)."""
+    return request.app[PEOPLE].person(person(request))
 
 
 # ---------- signing in ----------
@@ -295,7 +300,7 @@ async def ring(request: web.Request) -> web.StreamResponse:
 async def voip_token(request: web.Request) -> web.Response:
     try:
         body = await request.json()
-        voip_push.save_device_token(workspace(request), str(body["token"]), str(body["environment"]))
+        voip_push.save_device_token(someone(request), str(body["token"]), str(body["environment"]))
     except (ValueError, KeyError, TypeError) as exc:
         raise web.HTTPBadRequest(text=f"expected a VoIP token: {exc}")
     log.info("VoIP push token saved for %s (%s)", person(request), body["environment"])
@@ -306,7 +311,7 @@ async def alert_token(request: web.Request) -> web.Response:
     """The app's token for plain notifications (the offers that ask before a call)."""
     try:
         body = await request.json()
-        voip_push.save_device_token(workspace(request), str(body["token"]), str(body["environment"]), "alert")
+        voip_push.save_device_token(someone(request), str(body["token"]), str(body["environment"]), "alert")
     except (ValueError, KeyError, TypeError) as exc:
         raise web.HTTPBadRequest(text=f"expected a notification token: {exc}")
     log.info("notification token saved for %s (%s)", person(request), body["environment"])
