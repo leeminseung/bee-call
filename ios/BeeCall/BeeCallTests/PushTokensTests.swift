@@ -54,11 +54,20 @@ final class PushTokensTests: XCTestCase {
         XCTAssertFalse(tokens.voipRegistered)
     }
 
-    @MainActor func testASignInSendsTheAlertTokenAgain() async {
+    /// The tokens belong to the person who signed in: the server moves them to that person (contract section 3).
+    @MainActor func testASignInSendsBothTokensAgain() async throws {
         let server = FakeServer()
         let tokens = PushTokens(transport: server, environment: "development")
         await tokens.received(alertToken, kind: .alert)
+        await tokens.received(voipToken, kind: .voip)
         await tokens.signedIn()
-        XCTAssertEqual(server.sent, ["POST /push", "POST /push"])
+        XCTAssertEqual(server.sent, ["POST /push", "POST /voip", "POST /push", "POST /voip"])
+        XCTAssertEqual(try server.body(of: "POST /voip")["token"] as? String, "cd02")
+    }
+
+    @MainActor func testASignInBeforeAnyTokenSendsNothing() async {
+        let server = FakeServer()
+        await PushTokens(transport: server, environment: "development").signedIn()
+        XCTAssertEqual(server.sent, [])
     }
 }

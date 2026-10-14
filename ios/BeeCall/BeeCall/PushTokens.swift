@@ -55,8 +55,10 @@ final class PushTokens {
         if kind == .voip { voipRegistered = accepted }
     }
 
-    /// After a sign-in: the tokens belong to the person who signed in.
+    /// After every sign-in, both tokens go again: the server gives each token to the person who sends it, so
+    /// offers and AI calls follow the person now signed in on this phone (contract section 3).
     func signedIn() async {
         await deliver(.alert)
+        await deliver(.voip)
     }
 }
