@@ -8,7 +8,10 @@ import PushKit
 /// call-priority audio, AirPods and lock-screen controls, the green call indicator.
 @Observable
 final class CallManager: NSObject {
-    private(set) var status = "Ready"
+    private(set) var status = "Ready" // what the call is doing
+    private(set) var isReconnecting = false // LiveKit is getting a dropped connection back
+    /// The line the call screen shows: "Reconnecting…" while LiveKit reconnects, then the call's status again.
+    var statusLine: String { isReconnecting ? "Reconnecting…" : status }
     private(set) var ringStatus = "" // whether the app can hear the AI's calls; empty while not listening
     private(set) var isInCall = false
     private(set) var isRinging = false // the AI's call, until it is answered or ends
@@ -49,9 +52,8 @@ final class CallManager: NSObject {
         AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
         try? AudioManager.shared.setEngineAvailability(.none)
 
-        liveKit.onUnexpectedDisconnect = { [weak self] error in
-            let ending = CallEnding.afterDisconnect(error)
-            self?.hangUp(ending.reason, ending.message)
+        liveKit.onLinkChange = { [weak self] link in
+            self?.linkChanged(link)
         }
         pushRegistry.delegate = self
         pushRegistry.desiredPushTypes = [.voIP]
@@ -319,6 +321,19 @@ final class CallManager: NSObject {
         status = "Connected"
     }
 
+    private func linkChanged(_ link: CallLink) {
+        switch link {
+        case .reconnecting:
+            isReconnecting = true
+        case .reconnected:
+            isReconnecting = false
+        case .lost(let error):
+            isReconnecting = false
+            let ending = CallEnding.afterDisconnect(error)
+            hangUp(ending.reason, ending.message)
+        }
+    }
+
     /// Ends the call from our side. CallKit sends no end action for these, so we clean up here.
     private func hangUp(_ reason: CXCallEndedReason, _ message: String) {
         guard let id = callID, !isEnding else { return }
@@ -345,6 +360,7 @@ final class CallManager: NSObject {
         isInCall = false
         isRinging = false
         isEnding = false
+        isReconnecting = false
         status = message
     }
 }

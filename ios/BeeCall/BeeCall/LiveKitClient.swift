@@ -18,8 +18,8 @@ final class LiveKitClient: NSObject {
     nonisolated static let stateAttribute = "bee_call.state"
 
     private(set) var captions: [Caption] = []
-    /// LiveKit left the room without being asked to, with its reason (nil when it gave none).
-    @ObservationIgnored var onUnexpectedDisconnect: ((LiveKitError?) -> Void)?
+    /// The room's connection dropped, came back, or ended without the app asking.
+    @ObservationIgnored var onLinkChange: ((CallLink) -> Void)?
     @ObservationIgnored var onAgentAnswered: (() -> Void)?
     @ObservationIgnored private var room: Room?
     @ObservationIgnored private var microphoneOn = true // a mute that arrives before the mic is published
@@ -150,12 +150,26 @@ final class LiveKitClient: NSObject {
 }
 
 extension LiveKitClient: RoomDelegate {
+    nonisolated func roomIsReconnecting(_ room: Room) {
+        Task { @MainActor in
+            guard room === self.room else { return } // an earlier call's room
+            self.onLinkChange?(.reconnecting)
+        }
+    }
+
+    nonisolated func roomDidReconnect(_ room: Room) {
+        Task { @MainActor in
+            guard room === self.room else { return }
+            self.onLinkChange?(.reconnected)
+        }
+    }
+
     nonisolated func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
         Task { @MainActor in
             guard room === self.room else { return } // we left on purpose
             self.room = nil
             self.phoneRecorder.stop()
-            self.onUnexpectedDisconnect?(error)
+            self.onLinkChange?(.lost(error))
         }
     }
 

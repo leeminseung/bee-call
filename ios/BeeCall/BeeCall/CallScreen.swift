@@ -13,7 +13,7 @@ struct CallScreen: View {
             Text("Bee Call")
                 .font(.largeTitle.bold())
             VStack(spacing: 4) {
-                Text(calls.status)
+                Text(calls.statusLine)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
