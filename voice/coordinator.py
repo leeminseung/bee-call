@@ -443,7 +443,7 @@ class BeeCoordinator(Coordinator):
         write = await self._bee_writes.begin(found.item, question, answer)
         try:
             await self._bee_writes.apply(write)
-        finally:  # also when the call ends mid-write: the record shows the write, and that Bee may have it
+        finally:  # also when the tool is cut off mid-write: the record shows the write, and that Bee may have it
             self._recorder.event("bee_write", **event_fields(write))
         what = label(write, ENGLISH)
         if write.status == "ok":

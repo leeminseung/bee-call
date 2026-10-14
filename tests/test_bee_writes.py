@@ -387,7 +387,8 @@ def test_a_write_bee_did_not_confirm_is_never_written_again(tmp_path, fake_bee, 
 
 
 def test_a_write_cut_off_by_the_end_of_the_call_is_kept_as_maybe_written(tmp_path, fake_bee, monkeypatch):
-    """The call ended while Bee was writing: LiveKit cancels the tool. Bee may have it, so it is not written again."""
+    """The tool was cancelled while Bee was writing (LiveKit cancels a session's tools when it tears the session
+    down; a session that drains waits for them instead). Bee may have it, so it is not written again."""
     monkeypatch.setenv("FAKE_BEE_SLOW", "todos create 3")
 
     async def main():

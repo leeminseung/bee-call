@@ -10,7 +10,7 @@ A write's state is its latest line. "failed" means the Bee CLI ended with an err
 and tried once more after it (retry_failed). The CLI ends with an error for any answer that is not a success,
 also when Bee stored a todo and only its answer was lost (a gateway error, a dropped connection), so before a todo
 is written again Bee is asked whether it has it already (in_bee_after_all). "unknown" means Bee may have it: the
-CLI did not answer in time, its answer could not be read, the write was cut off (the call ended mid-write), or Bee
+CLI did not answer in time, its answer could not be read, the write was cut off (its task cancelled), or Bee
 could not be asked before a retry. Such a write, like one still "applying" because the process stopped, is never
 written again by itself, since a todo must not be created twice; the user is told to check Bee. After the call,
 one notification says what went into Bee (summary_notification).
@@ -173,7 +173,7 @@ class BeeWrites:
             response = await apply_one(write.item)
         except cli.BeeOutcomeUnknown as exc:
             return self._ended(write, "unknown", str(exc)[:300])
-        except asyncio.CancelledError:  # the call ended mid-write, or the retry after it ran out of time
+        except asyncio.CancelledError:  # cut off: the session tore its tools down, or the retry ran out of time
             self._ended(write, "unknown", "cut off before Bee answered")
             raise
         except Exception as exc:
