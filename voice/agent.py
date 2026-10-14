@@ -223,7 +223,8 @@ def write_usage(rec: CallRecorder, session: AgentSession) -> None:
 
 async def wait_for_answer(ctx: JobContext, workspace: Path) -> str:
     """The AI's call rings: "answered" when the phone joins, "declined" when the user declined it in the app
-    (voice/dispatch.py decline_ring), "missed" after RING_SECONDS."""
+    (voice/dispatch.py decline_ring), "missed" after RING_SECONDS, or when the room went away first (LiveKit's
+    wait_for_participant raises then)."""
     joined = asyncio.ensure_future(ctx.wait_for_participant())
     deadline = time.monotonic() + RING_SECONDS
     try:
@@ -234,6 +235,8 @@ async def wait_for_answer(ctx: JobContext, workspace: Path) -> str:
             if left <= 0:
                 return "missed"
             await asyncio.wait({joined}, timeout=min(DECLINE_CHECK_S, left))
+        if joined.cancelled() or joined.exception() is not None:
+            return "declined" if declined(workspace, ctx.room.name) else "missed"
         return "answered"
     finally:
         joined.cancel()

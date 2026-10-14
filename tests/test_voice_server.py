@@ -347,3 +347,27 @@ def test_after_a_bee_call_failed_writes_are_tried_again_and_one_notification_say
     ((payload, whose),) = sent
     assert whose == "matt" and payload["aps"]["alert"]["body"] == "Added to Bee: todo 'Note the bug'"
     assert payload["aps"]["thread-id"] == "bee"
+
+
+def test_an_ai_call_whose_room_drops_while_it_rings_is_missed_not_answered(tmp_path, monkeypatch, quick):
+    """livekit-agents raises from wait_for_participant when the room disconnects; that is no answer."""
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(agent, "RING_SECONDS", 30)
+    monkeypatch.setattr(agent, "DECLINE_CHECK_S", 0.05)
+    call = FakeCall(me.people, {"direction": "outbound", "person": "matt", "topic": "the interview"})
+    use_fakes(monkeypatch, call)
+
+    async def dropped():
+        await asyncio.sleep(0.1)
+        raise RuntimeError("room disconnected while waiting for participant")
+
+    call.wait_for_participant = dropped
+
+    async def main():
+        await asyncio.wait_for(agent.run_call(call, me.people), 2)
+        await call.end()
+
+    asyncio.run(main())
+    assert call.session.started is None and call_folders(me.workspace) == []
+    (event,) = MetaSession(me.workspace).take_events()
+    assert event["kind"] == "call_missed"
