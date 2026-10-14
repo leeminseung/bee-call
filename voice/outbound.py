@@ -1,14 +1,18 @@
-"""Lets the AI call first, after asking: Bee watcher -> planner -> offer -> the user's yes -> call.
+"""Bee Call between calls: Bee watcher -> meta agent -> offer -> the user's yes -> call.
 
 Run next to the voice server and the token server:
-    uv run python -m voice.outbound                    # watch Bee; ask when the planner says a call is worth it
-    uv run python -m voice.outbound --dry-run          # watch and write plans, never ask or call
-    uv run python -m voice.outbound --once INBOX_DIR   # decide for one saved Bee change (workspace/inbox/...),
-                                                       # then wait until that offer is answered and called
-    uv run python -m voice.outbound --direct           # call without asking (tests only)
+    uv run python -m voice.outbound                    # watch Bee; the meta agent decides what to propose
+    uv run python -m voice.outbound --once INBOX_DIR   # the meta agent looks at one saved Bee change
+                                                       # (workspace/inbox/...), then waits for any offer it made
+    uv run python -m voice.outbound --rules            # the old rule-based planner decides instead
+    uv run python -m voice.outbound --rules --dry-run  # rules, writing plans but never asking or calling
+    uv run python -m voice.outbound --rules --direct   # rules, calling without asking (tests only)
 
-The planner is the rule-based stand-in (beelink/planner.py) until Claude makes this
-decision. Each decision is written to plan.md in the inbox folder, call or not.
+The meta agent (meta/agent.py) wakes for events in workspace/meta/events.jsonl: a Bee change from this watcher,
+a call that ended (the voice server), the user's answer to an offer (the token server), and a booked call coming
+up (this process). Every time it thinks, the meta session records why it woke, what it looked at and what it
+decided, in its own words. The rule-based planner (beelink/planner.py) is kept for comparison: with --rules,
+each decision is written to plan.md in the inbox folder, call or not.
 A "call" decision becomes an offer (voice/offers.py): a notification asks the user, and
 this process places the call when they tap "Call me now" or when the time they accepted
 comes, and also for calls the user booked out loud in a call.
@@ -35,6 +39,8 @@ from voice.dispatch import RING_SECONDS, place_call
 from voice.language import call_language
 from voice.offers import OPEN, Offer, OfferStore, agreed, notification, plan_of
 from voice.prep import NOTE_SECONDS, OPENING_BY_S, prepare_outbound
+from meta.agent import Thinker
+from meta.session import DAILY_NOTIFICATIONS, MetaSession, add_event, meta_notes, quiet, quiet_ends
 
 load_dotenv(".env.local")
 log = logging.getLogger("bee-call.outbound")
@@ -42,6 +48,8 @@ WORKSPACE = Path("workspace")
 
 
 OFFER_CHECK_S = 5.0  # how often answered and booked offers are checked (arbitrary)
+META_CHECK_S = 3.0  # how often the meta agent's inbox is checked; events that come together are seen together
+BOOKED_NOTICE = timedelta(minutes=10)  # the meta agent hears of a booked call this early, to set its agenda
 BOOKED_AHEAD = timedelta(seconds=30)  # a booked call is prepared this early, so it rings on time
 NOW_PREP_S = OPENING_BY_S + 2.0  # "Call me now": ring soon; the note gets this long (GLM 5 needed 4.5-7.7 s)
 
@@ -66,16 +74,34 @@ async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, direct: 
     return offer.id
 
 
-async def send_offer(offer: Offer, workspace: Path, now: datetime) -> None:
+async def send_offer(offer: Offer, workspace: Path, now: datetime) -> str:
+    """Sends an offer's notification unless it is quiet time or the day's notifications are used up; then it is
+    held (it still shows in the app) and send_held() sends it later. Returns what happened, in words."""
+    store = OfferStore(workspace)
+    if quiet(now):
+        return f"held: quiet hours, the notification goes out at {quiet_ends(now):%H:%M}; it shows in the app now"
+    if store.notified_on(now) >= DAILY_NOTIFICATIONS:
+        return f"held: {DAILY_NOTIFICATIONS} notifications went out today already; it shows in the app now"
     payload = notification(offer, now, call_language())
     try:
         sent = await voip_push.alert(payload, workspace, collapse_id=offer.id,
                                      expires_epoch=int(offer.at("expires_at").timestamp()))
     except Exception as exc:  # the offer still waits in the app's list
         print(f"asked: offer {offer.id}, but the notification failed: {exc}", flush=True)
-        return
-    note = f"apns-id {sent}" if sent else "no notification (no APNs key or no alert token yet); it waits in the app"
-    print(f"asked: offer {offer.id}, {payload['aps']['alert']['body']!r} ({note})", flush=True)
+        return f"the notification failed ({exc}); it shows in the app"
+    if not sent:
+        return "no notification (no APNs key, or the app has not sent its token yet); it shows in the app"
+    store.mark_notified(offer.id, now)
+    print(f"asked: offer {offer.id}, {payload['aps']['alert']['body']!r} (apns-id {sent})", flush=True)
+    return f"notification sent: {payload['aps']['alert']['body']}"
+
+
+async def send_held(workspace: Path, now: datetime) -> None:
+    """Sends notifications held by quiet hours or the daily limit, once they may go out."""
+    for offer in OfferStore(workspace).unsent(now):
+        result = await send_offer(offer, workspace, now)
+        if result.startswith("held") or result.startswith("no notification"):
+            return
 
 
 def busy(workspace: Path, now: datetime) -> bool:
@@ -99,7 +125,7 @@ async def call_due(workspace: Path, now: datetime | None = None, prepare=prepare
         if store.claim(offer.id, now) is None:  # called off meanwhile, or another runner has it
             continue
         try:
-            extra = {"agreed": agreed(offer)}
+            extra = {"agreed": agreed(offer), "meta_notes": meta_notes(workspace)}
             if offer.continue_from:
                 extra["earlier_call"] = earlier_call(workspace, offer.continue_from)
             plan = plan_of(offer)
@@ -135,6 +161,41 @@ async def serve_offers(workspace: Path, until: str | None = None) -> None:
         await asyncio.sleep(OFFER_CHECK_S)
 
 
+def bee_event(trigger: Trigger, workspace: Path) -> dict:
+    """A Bee change as a meta agent event: the inbox folder relative to the workspace, and what changed."""
+    try:
+        inbox = str(trigger.inbox_dir.resolve().relative_to(workspace.resolve()))
+    except ValueError:
+        inbox = str(trigger.inbox_dir)
+    return {"inbox": inbox, "conversation_ids": trigger.conversation_ids, "counts": trigger.counts,
+            "reason": trigger.reason}
+
+
+async def serve_meta(workspace: Path, thinker: Thinker, until_offer_closes: bool = False) -> None:
+    """Wakes the meta agent for new events, tells it about booked calls coming up, and sends held notifications
+    once they may go out. With until_offer_closes (for --once), stops when no offer is open any more."""
+    session, store, announced = MetaSession(workspace), OfferStore(workspace), set()
+    while True:
+        now = datetime.now()
+        try:
+            for offer in store.open(now):
+                call_at = offer.at("call_at")
+                if offer.state == "booked" and call_at and timedelta(0) < call_at - now <= BOOKED_NOTICE \
+                        and offer.id not in announced:
+                    announced.add(offer.id)
+                    add_event(workspace, "booked_soon", offer=offer.id, call_at=offer.call_at, topic=offer.topic)
+            events = session.take_events()
+            if events:
+                entry = await thinker.think(events, now)
+                print(f"meta agent ({entry['seconds']} s): {entry.get('decision') or entry.get('error')}", flush=True)
+            await send_held(workspace, now)
+        except Exception:
+            log.exception("the meta loop failed")
+        if until_offer_closes and not store.open(datetime.now()):
+            return
+        await asyncio.sleep(META_CHECK_S)
+
+
 def saved_trigger(inbox: Path) -> Trigger:
     changed = json.loads((inbox / "changed.json").read_text())
     ids = [c["id"] for c in changed.get("conversations", []) if "id" in c]
@@ -148,27 +209,41 @@ async def main() -> None:
     parser.add_argument("--once", type=Path, help="decide for one saved inbox folder, then exit")
     parser.add_argument("--no-cooldown", action="store_true", help="ignore the gap between calls (testing)")
     parser.add_argument("--any-age", action="store_true", help="also call about old conversations (testing)")
-    parser.add_argument("--direct", action="store_true", help="call without asking first (tests only)")
+    parser.add_argument("--direct", action="store_true", help="with --rules: call without asking (tests only)")
+    parser.add_argument("--rules", action="store_true", help="the rule-based planner decides, not the meta agent")
     args = parser.parse_args()
     planner = RulePlanner(WORKSPACE, cooldown=timedelta(0) if args.no_cooldown else COOLDOWN,
                           max_age=timedelta(days=3650) if args.any_age else MAX_AGE)
+    thinker = Thinker(WORKSPACE, send=send_offer)
     if args.once:
-        made = await handle(saved_trigger(args.once), planner, args.dry_run, args.direct)
-        if made and not args.direct:
-            await serve_offers(WORKSPACE, until=made)  # wait for the answer, then call
+        if args.rules:
+            made = await handle(saved_trigger(args.once), planner, args.dry_run, args.direct)
+            if made and not args.direct:
+                await serve_offers(WORKSPACE, until=made)  # wait for the answer, then call
+            return
+        # The meta agent looks at that change; for any offer it makes, wait for the answer and place the call.
+        add_event(WORKSPACE, "bee_change", **bee_event(saved_trigger(args.once), WORKSPACE))
+        placing = asyncio.create_task(serve_offers(WORKSPACE))
+        try:
+            await serve_meta(WORKSPACE, thinker, until_offer_closes=True)
+        finally:
+            placing.cancel()
         return
 
     async def on_trigger(trigger: Trigger) -> None:
         # Errors go back to the watcher, which keeps its cursor so the same change is looked at again.
-        await handle(trigger, planner, args.dry_run, args.direct)
+        if args.rules:
+            await handle(trigger, planner, args.dry_run, args.direct)
+        else:
+            add_event(WORKSPACE, "bee_change", **bee_event(trigger, WORKSPACE))
 
     task = asyncio.current_task()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, task.cancel)
     try:
-        await asyncio.gather(BeeWatcher(WORKSPACE, on_trigger).run(),
-                             *([] if args.dry_run else [serve_offers(WORKSPACE)]))
+        loops = [] if args.dry_run else [serve_offers(WORKSPACE)] + ([] if args.rules else [serve_meta(WORKSPACE, thinker)])
+        await asyncio.gather(BeeWatcher(WORKSPACE, on_trigger).run(), *loops)
     except asyncio.CancelledError:
         pass
 

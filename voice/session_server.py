@@ -15,6 +15,7 @@ GET /api/sessions/<date>/<time>/events         Server-Sent Events: every line of
                                                (SSE id = line number, so a reconnect resumes),
                                                then new lines as they are written, until call_ended
 GET /api/sessions/<date>/<time>/files/<path>   one file inside that session folder, never audio/ or inputs/
+GET /api/meta                                  the meta agent's session (newest first) and its notes
 
 Development only: anyone on the same network can read transcripts and job files. Raw call audio
 (audio/) and raw Bee data (inputs/, which carries places and coordinates) are never served.
@@ -326,6 +327,33 @@ INDEX = web.AppKey("index", SessionIndex)
 STOPPING = web.AppKey("stopping", asyncio.Event)
 
 
+META_ENTRIES = 100  # the newest entries the timeline shows (arbitrary)
+
+
+async def meta_session(request: web.Request) -> web.Response:
+    """What the meta agent saw and decided between calls, as it wrote it (meta/session.py). Read here directly,
+    so this server stays a standalone script."""
+    folder = request.app[WORKSPACE] / "meta"
+    entries = []
+    try:
+        lines = (folder / "session.jsonl").read_text(errors="replace").splitlines()[-META_ENTRIES:]
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    try:
+        state = (folder / "state.md").read_text(errors="replace").strip() or None
+    except OSError:
+        state = None
+    return web.json_response({"entries": list(reversed(entries)), "state": state},
+                             dumps=lambda data: json.dumps(data, ensure_ascii=False, default=str))
+
+
 def make_app(workspace: Path) -> web.Application:
     app = web.Application(middlewares=[local_hosts_only])
     app[WORKSPACE] = workspace
@@ -337,6 +365,7 @@ def make_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/sessions", list_sessions)
     app.router.add_get("/api/sessions/{date}/{time}/events", stream_events, allow_head=False)
     app.router.add_get("/api/sessions/{date}/{time}/files/{path:.+}", session_file)
+    app.router.add_get("/api/meta", meta_session)
     app.router.add_static("/static/", WEB_DIR)
     return app
 

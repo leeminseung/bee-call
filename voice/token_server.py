@@ -39,6 +39,7 @@ from livekit import api
 from beelink.planner import OUTBOUND_LOG
 from voice import voip_push
 from voice.continuation import session_dir
+from meta.session import add_event
 from voice.offers import OfferStore
 from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata
 
@@ -184,6 +185,7 @@ async def answer_offer(request: web.Request) -> web.Response:
     except ValueError as exc:
         raise web.HTTPConflict(text=f"{exc}\n")
     print(f"offer {offer.id}: {choice} -> {offer.state}", flush=True)
+    add_event(request.app["workspace"], "offer_answered", offer=offer.id, choice=choice, topic=offer.topic)
     return web.json_response({"offer": offer.view()})
 
 

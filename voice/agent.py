@@ -43,6 +43,7 @@ from livekit.plugins.aws.stt import Credentials
 from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
 from voice.claude_llm import ClaudeBedrockLLM
 from voice.continuation import earlier_call
+from meta.session import add_event, meta_notes
 from voice.coordinator import Coordinator
 from voice.dispatch import AGENT_NAME, RING_SECONDS
 from voice.echo_llm import EchoLLM
@@ -224,6 +225,7 @@ async def entrypoint(ctx: JobContext) -> None:
     started = time.monotonic()
     if meta.get("continue_from"):  # the user tapped "Continue this call" in an earlier call's record
         meta["earlier_call"] = earlier_call(WORKSPACE, meta["continue_from"])
+    meta["meta_notes"] = meta_notes(WORKSPACE)  # the meta agent's agenda and open threads, for the opening
     inbox = Path(meta["inbox"]) if meta.get("inbox") else None
     conversation_ids = meta.get("conversation_ids") or []
     backend = {"search": SearchWorker, "harness": HarnessWorker}.get(WORKER, FakeWorker)()
@@ -365,6 +367,9 @@ async def entrypoint(ctx: JobContext) -> None:
             (rec.dir / "claude-history.json").write_text(json.dumps(
                 {"system": session.llm.system_prompt, "messages": session.llm.history}, ensure_ascii=False, indent=1))
         rec.close()
+        # The meta agent looks at every call once it is over (meta/agent.py).
+        add_event(WORKSPACE, "call_ended", call=f"{rec.dir.parent.name}/{rec.dir.name}",
+                  direction=meta.get("direction", "inbound"))
 
     ctx.add_shutdown_callback(shutdown)
     wire_events(session, rec)

@@ -106,6 +106,7 @@ def test_the_watcher_asks_instead_of_calling(tmp_path, monkeypatch):
     monkeypatch.setattr(voip_push, "alert", fake_alert)
     monkeypatch.setattr(outbound, "place_call", fake_place)
     monkeypatch.setattr(outbound, "prepare_outbound", fake_prepare)
+    monkeypatch.setattr(outbound, "quiet", lambda now: False)  # the test may run at night
     planner = RulePlanner(tmp_path / "workspace")
     offer_id = asyncio.run(handle(saved_trigger(inbox(tmp_path)), planner, dry_run=False))
     assert placed == [] and OfferStore(tmp_path / "workspace").get(offer_id).state == "asked"
@@ -304,3 +305,30 @@ def test_looking_ahead_for_booked_calls_does_not_close_questions_early(tmp_path)
     offer, _ = asked(tmp_path, now=datetime(2026, 10, 14, 20, 0))  # suggests 21:00
     store.due(datetime(2026, 10, 14, 20, 59, 45), ahead=timedelta(seconds=30))
     assert store.answer(offer.id, "later", datetime(2026, 10, 14, 20, 59, 50)).state == "booked"
+
+
+
+def test_notifications_wait_for_morning_and_for_tomorrow_after_four(tmp_path, monkeypatch):
+    from voice.outbound import send_held, send_offer
+
+    sent = []
+
+    async def fake_alert(payload, workspace, **kw):
+        sent.append(payload["offer"])
+        return f"apns-{len(sent)}"
+
+    monkeypatch.setattr(voip_push, "alert", fake_alert)
+    workspace = tmp_path / "workspace"
+    store = OfferStore(workspace)
+    night = datetime(2026, 10, 14, 23, 30)
+    offer, plan = asked(tmp_path, now=night)
+    assert asyncio.run(send_offer(offer, workspace, night)).startswith("held: quiet hours, the notification goes out at 08:00")
+    assert [o.id for o in store.unsent(night)] == [offer.id] and sent == []
+    morning = datetime(2026, 10, 15, 8, 0)
+    asyncio.run(send_held(workspace, morning))
+    assert sent == [offer.id] and store.get(offer.id).notified_at == "2026-10-15T08:00:00"
+    for i in range(3):  # three more today: four in all
+        o = store.ask(plan, morning + timedelta(minutes=i + 1))
+        asyncio.run(send_offer(o, workspace, morning + timedelta(minutes=i + 1)))
+    fifth = store.ask(plan, morning + timedelta(minutes=10))
+    assert asyncio.run(send_offer(fifth, workspace, morning + timedelta(minutes=10))).startswith("held: 4 notifications")

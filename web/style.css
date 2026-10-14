@@ -359,3 +359,18 @@ h1 {
 .continue-call .icon { width: 17px; height: 17px; }
 .continue-slot .card-note { margin-top: 8px; }
 .row-link { color: inherit; }
+
+.meta-link { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 18px;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  color: var(--text); text-decoration: none; font-weight: 600; }
+.meta-link .icon { width: 14px; height: 14px; color: var(--muted); }
+.meta-intro { color: var(--muted); font-size: 14px; margin: 0 0 14px; }
+.meta-state-text, .meta-decision { white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0 0; }
+.meta-state-text { font-size: 14px; }
+.meta-entry { margin-bottom: 12px; }
+.meta-events { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+.meta-tools { margin-top: 10px; font-size: 14px; }
+.meta-tools summary { cursor: pointer; color: var(--muted); }
+.meta-tool { margin-top: 8px; }
+.meta-tool-name { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.meta-tool pre { white-space: pre-wrap; max-height: 220px; overflow: auto; }

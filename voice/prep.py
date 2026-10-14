@@ -140,6 +140,8 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime | None = N
     parts = [f"It is now {now_text(now)}. {why}.{name}"]
     if meta.get("earlier_call"):
         parts.append("The earlier call this one continues:\n" + str(meta["earlier_call"]))
+    if meta.get("meta_notes"):  # meta/agent.py, between calls: open threads and the agenda for this call
+        parts.append("Notes from between calls (open threads, and the agenda for this call):\n" + str(meta["meta_notes"]))
     for conv_id, conv, lines in inputs.conversations:
         parts.append("The conversation behind this call:\n" + reads.conversation_text(conv or {"id": conv_id}, lines))
     if inputs.today is not None:
@@ -166,6 +168,8 @@ def call_brief(inputs: CallInputs, meta: dict[str, Any]) -> str | None:
     for conv_id, conv, _ in inputs.conversations[:1]:
         if conv.get("short_summary"):
             lines.append(f"Latest Bee conversation (id {conv_id}): {conv['short_summary']}")
+    if meta.get("meta_notes"):
+        lines.append(f"Notes from between calls:\n{meta['meta_notes']}")
     lines += [f"Unconfirmed Bee fact (id {f.get('id')}): {f.get('text')}" for f in inputs.facts[:10]]
     lines += [f"Bee todo suggestion (id {s.get('id')}): {s.get('text')}" for s in inputs.suggestions[:10]]
     return "\n".join(lines) if lines else None

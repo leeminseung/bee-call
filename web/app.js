@@ -1,5 +1,6 @@
 // Live session screen for Bee Call. Plain JS, no build step.
-// Routes: #/ follows the newest call, #/calls lists all calls, #/s/<date>/<time> opens one call.
+// Routes: #/ follows the newest call, #/calls lists all calls, #/s/<date>/<time> opens one call,
+// #/meta shows what the meta agent noticed and decided between calls.
 // A call is rendered from its events.jsonl lines, which arrive over Server-Sent Events.
 (() => {
   "use strict";
@@ -242,6 +243,13 @@
 
   // ---------- list of calls ----------
 
+  function metaLink() {
+    const link = el("a", "meta-link");
+    link.href = "#/meta";
+    link.append(el("span", null, "Between calls: what Bee Call noticed"), icon("chevron"));
+    return link;
+  }
+
   class ListPage {
     constructor() {
       setHeader("Calls", false);
@@ -258,12 +266,13 @@
       if (key === this.shown) return;
       this.shown = key;
       if (sessions === null) showNote(UNREACHABLE);
-      else if (!sessions.length) showNote(NO_CALLS);
+      else if (!sessions.length) view.replaceChildren(metaLink(), el("p", "empty", NO_CALLS));
       else this.render(sessions);
     }
 
     render(sessions) {
       const frag = document.createDocumentFragment();
+      frag.append(metaLink());
       let group = null;
       let label = null;
       for (const s of sessions) {
@@ -286,6 +295,107 @@
         group.append(item);
       }
       view.replaceChildren(frag);
+    }
+
+    close() {
+      this.closed = true;
+      clearInterval(this.timer);
+    }
+  }
+
+  // ---------- between calls: the meta agent's session ----------
+
+  const EVENT_TEXT = {
+    bee_change: (e) => `Bee saved something new (${e.inbox || "inbox"})`,
+    call_ended: (e) => `A call ended (${e.call || ""})`,
+    offer_answered: (e) => `You answered an offer about “${e.topic || ""}”: ${e.choice || ""}`,
+    booked_soon: (e) => `A booked call is coming up at ${atLabel(e.call_at)}: “${e.topic || ""}”`,
+  };
+
+  class MetaPage {
+    constructor() {
+      setHeader("Between calls", true);
+      setStatus(null);
+      this.shown = "";
+      this.load();
+      this.timer = setInterval(() => this.load(), LIST_POLL_MS);
+    }
+
+    async load() {
+      let data = null;
+      try {
+        const response = await fetch(`${API.replace(/\/sessions$/, "")}/meta`, { cache: "no-store" });
+        if (response.ok) data = await response.json();
+      } catch { /* shown below */ }
+      if (this.closed) return;
+      const key = JSON.stringify(data);
+      if (key === this.shown) return;
+      this.shown = key;
+      if (data === null) showNote(UNREACHABLE);
+      else this.render(data);
+    }
+
+    render(data) {
+      const frag = document.createDocumentFragment();
+      frag.append(el("p", "meta-intro", "Bee Call looks at your day between calls. It only proposes; nothing happens until you say yes. "
+        + "Every time it looked, its own words are below."));
+      if (data.state) {
+        const card = el("section", "card meta-state");
+        const head = el("div", "card-head");
+        head.append(icon("bookmark"), el("span", null, "What it keeps track of"));
+        card.append(head, el("p", "meta-state-text", data.state));
+        frag.append(card);
+      }
+      const entries = Array.isArray(data.entries) ? data.entries : [];
+      if (!entries.length) frag.append(el("p", "empty", "Nothing yet. Bee Call looks when Bee saves something new or a call ends."));
+      for (const entry of entries) frag.append(this.entry(entry));
+      view.replaceChildren(frag);
+    }
+
+    entry(entry) {
+      const card = el("section", "card meta-entry");
+      const when = parseDate(entry.at);
+      const head = el("div", "card-head");
+      head.append(icon("search"), el("span", null, when ? `${dayLabel(when)} · ${hhmm(when)}` : String(entry.at || "")));
+      card.append(head);
+      const events = Array.isArray(entry.events) ? entry.events : [];
+      if (events.length) {
+        const list = el("ul", "meta-events");
+        for (const e of events) {
+          const text = (EVENT_TEXT[e.kind] || ((x) => String(x.kind || "event")))(e);
+          const item = el("li");
+          if (e.kind === "call_ended" && e.call) {
+            const link = el("a", null, text);
+            link.href = `#/s/${e.call}`;
+            item.append(link);
+          } else item.textContent = text;
+          list.append(item);
+        }
+        card.append(list);
+      }
+      if (entry.error) card.append(el("p", "job-error", `It could not finish: ${entry.error}`));
+      if (entry.decision) card.append(el("p", "meta-decision", entry.decision));
+      const actions = Array.isArray(entry.actions) ? entry.actions : [];
+      for (const a of actions) {
+        const text = a.tool === "offer_call" ? `Asked you about a call: “${a.topic}”. ${a.result || ""}`
+          : a.tool === "write_state" ? "Updated what it keeps track of" : `${a.tool}: ${a.result || ""}`;
+        card.append(el("p", "card-note", text));
+      }
+      const tools = Array.isArray(entry.tools) ? entry.tools : [];
+      if (tools.length) {
+        const details = el("details", "meta-tools");
+        details.append(el("summary", null, `What it looked at (${tools.length})`));
+        for (const t of tools) {
+          const block = el("div", "meta-tool");
+          block.append(el("p", "meta-tool-name", `${t.name} ${t.input && Object.keys(t.input).length ? JSON.stringify(t.input) : ""}`),
+            el("pre", "json", String(t.result || "")));
+          details.append(block);
+        }
+        card.append(details);
+      }
+      const foot = [entry.model, typeof entry.seconds === "number" ? `${entry.seconds.toFixed(1)} s` : null].filter(Boolean);
+      if (foot.length) card.append(el("p", "card-note", foot.join(", ")));
+      return card;
     }
 
     close() {
@@ -891,6 +1001,7 @@
     const hash = location.hash.replace(/^#/, "");
     const m = /^\/s\/(\d{4}-\d{2}-\d{2})\/(\d{4}(?:-\d+)?)$/.exec(hash);
     if (hash === "/calls") page = new ListPage();
+    else if (hash === "/meta") page = new MetaPage();
     else if (m) page = new SessionPage(`${m[1]}/${m[2]}`);
     else page = new FollowPage();
   }

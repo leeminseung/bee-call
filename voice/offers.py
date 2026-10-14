@@ -57,6 +57,7 @@ class Offer:
     continue_from: str | None = None  # the call it was agreed in (voice/continuation.py)
     room: str | None = None
     error: str | None = None
+    notified_at: str | None = None  # when its notification went out; None while held (quiet hours, daily limit)
     history: list[dict[str, str]] = field(default_factory=list)  # [{"at": ISO, "state": ...}]
 
     def at(self, name: str) -> datetime | None:
@@ -151,6 +152,22 @@ class OfferStore:
             if offer is None or offer.state not in ("now", "booked"):
                 return None
             return self._save(self._set(offer, "calling", now))
+
+    def mark_notified(self, offer_id: str, now: datetime) -> None:
+        with self._lock():
+            offer = self.get(offer_id)
+            if offer is not None:
+                offer.notified_at = _iso(now)
+                self._save(offer)
+
+    def notified_on(self, day: datetime) -> int:
+        """How many offer notifications went out on that day."""
+        prefix = day.date().isoformat()
+        return sum(1 for o in self.all() if o.notified_at and o.notified_at.startswith(prefix))
+
+    def unsent(self, now: datetime) -> list[Offer]:
+        """Open questions whose notification is still held."""
+        return [o for o in self.open(now) if o.state == "asked" and not o.notified_at]
 
     def ask(self, plan: Plan, now: datetime, at: str | None = None) -> Offer:
         """A plan the planner wants to call about becomes a question. An older question still unanswered is
