@@ -13,7 +13,9 @@ final class CallButtonTests: XCTestCase {
         XCTAssertEqual(CallButton.end.title, "End")
     }
 
-    @MainActor func testWhileTheAICallRingsItDeclines() {
-        XCTAssertEqual(CallButton.shown(isRinging: true, isInCall: true), .decline)
+    /// CallKit's own screen has Decline and Accept, so the app shows no button of its own while it rings
+    /// (the owner's decision of 2026-10-15).
+    @MainActor func testWhileTheAICallRingsThereIsNoButton() {
+        XCTAssertNil(CallButton.shown(isRinging: true, isInCall: true))
     }
 }

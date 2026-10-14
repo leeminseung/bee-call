@@ -150,17 +150,18 @@ struct CallScreen: View {
 
 /// The big button at the bottom of the call screen.
 enum CallButton: Equatable {
-    case call, end, decline
+    case call, end
 
+    /// None while the AI's call rings: CallKit's own screen has Decline and Accept (the owner's decision of
+    /// 2026-10-15, preferring the platform's controls).
     static func shown(isRinging: Bool, isInCall: Bool) -> CallButton? {
-        isRinging ? .decline : isInCall ? .end : .call
+        isRinging ? nil : isInCall ? .end : .call
     }
 
     var title: String {
         switch self {
         case .call: "Call"
         case .end: "End"
-        case .decline: "Decline"
         }
     }
 }
