@@ -227,14 +227,14 @@ private struct OfferRow: View {
             Text(offer.title)
                 .font(.headline)
                 .lineLimit(2)
-            Text(status)
+            Text(offer.status)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 switch offer.state {
                 case "asked":
                     if let at = offer.suggestedEpoch {
-                        Button("At \(Self.time(at))") { answer(.later) }.buttonStyle(.borderedProminent)
+                        Button("At \(OfferCenter.Offer.time(at))") { answer(.later) }.buttonStyle(.borderedProminent)
                     }
                     Button("Now") { answer(.now) }.buttonStyle(.bordered)
                     Button("Not now", role: .destructive) { answer(.decline) }.buttonStyle(.bordered)
@@ -251,21 +251,24 @@ private struct OfferRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 12))
     }
+}
 
-    private var status: String {
-        switch offer.state {
+extension OfferCenter.Offer {
+    /// The line under the offer's title in the app's list.
+    var status: String {
+        switch state {
         case "asked":
-            return offer.suggestedEpoch.map { "Bee Call asks: a 5-minute call \(Self.day($0)) at \(Self.time($0))?" }
+            return suggestedEpoch.map { "Bee Call asks: a 5-minute call \(Self.day($0)) at \(Self.time($0))?" }
                 ?? "Bee Call asks for a 5-minute call"
         case "booked":
-            let who = offer.source == "call" ? "You asked for a call back" : "You said yes"
-            return offer.callAtEpoch.map { "\(who): \(Self.day($0)) at \(Self.time($0))" } ?? who
+            let who = source == "call" ? "You asked for a call back" : "You said yes"
+            return callAtEpoch.map { "\(who): \(Self.day($0)) at \(Self.time($0))" } ?? who
         default:
             return "Calling you now…"
         }
     }
 
-    private static func time(_ epoch: Int) -> String {
+    static func time(_ epoch: Int) -> String {
         Date(timeIntervalSince1970: TimeInterval(epoch)).formatted(date: .omitted, time: .shortened)
     }
 
