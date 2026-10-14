@@ -50,11 +50,11 @@ final class Server {
     nonisolated static var tokenURL: String { api.isEmpty ? "" : api + "/token" }
 
     /// The call record page (voice/session_server.py). In a Debug build: the same host as the token server,
-    /// port 8788.
+    /// port 8788, with ?debug=1, the only address on which the page offers its debug events (web/app.js).
     nonisolated static var recordsURL: URL? {
         #if DEBUG
         if let host = URLComponents(string: api)?.host {
-            return URL(string: "http://\(host):8788/")
+            return URL(string: "http://\(host):8788/?debug=1")
         }
         #endif
         return URL(string: Bundle.main.object(forInfoDictionaryKey: "BeeCallRecords") as? String ?? "")

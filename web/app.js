@@ -16,6 +16,9 @@
   const BEE_KIND = {
     fact_confirm: "Confirm fact", fact_update: "Update fact", todo_create: "New to-do", todo_accept: "Accept to-do",
   };
+  // The debug toggle, and the debug events behind it, exist only with ?debug=1 in the address, which the iPhone
+  // app adds in its Debug builds. A call record otherwise shows the conversation, why the AI called, and its jobs.
+  const DEBUG_ALLOWED = /(?:^\?|&)debug=1(?:&|$)/.test(location.search);
 
   const $ = (id) => document.getElementById(id);
   const view = $("view");
@@ -440,7 +443,7 @@
   class SessionPage {
     constructor(id) {
       this.id = id;
-      this.debug = readPref("debug") === "1";
+      this.debug = DEBUG_ALLOWED && readPref("debug") === "1";
       this.events = [];
       this.ready = false; // the backlog has arrived
       this.reconnecting = false;
@@ -469,6 +472,7 @@
       this.footNote = el("span", "foot-note");
       this.debugButton = el("button", "link-button");
       this.debugButton.type = "button";
+      this.debugButton.hidden = !DEBUG_ALLOWED;
       this.debugButton.addEventListener("click", () => this.toggleDebug());
       foot.append(this.footNote, this.debugButton);
       this.root.append(this.whySlot, this.prepSlot, this.timeline, this.dock, this.beeSlot, this.continueSlot, foot);
