@@ -80,10 +80,13 @@ WORKSPACE = Path("workspace")
 log = logging.getLogger("bee-call")
 
 
-def transcribe_credentials(session: boto3.Session) -> Credentials:
-    # The Transcribe plugin does not read ~/.aws profiles, so hand it the keys in memory, asked for at the start
-    # of every call: an instance role's keys expire after a few hours, and the session renews them before that.
-    # Nothing is printed or written to disk.
+def transcribe_credentials(session: boto3.Session | None) -> Credentials | None:
+    # The Transcribe plugin finds environment keys and an EC2 instance role by itself, afresh for every stream it
+    # opens, but it does not read ~/.aws profiles. On EC2 (no session) it is left to do that, so even a stream
+    # reopened late in a long call has current keys. With a profile (a Mac) it gets the profile's keys in memory,
+    # as they are at the start of each call. Nothing is printed or written to disk.
+    if session is None:
+        return None
     found = session.get_credentials()
     if found is None:
         raise RuntimeError("no AWS credentials: set AWS_PROFILE, or run with an instance role")
@@ -218,8 +221,9 @@ async def read_by(task: asyncio.Task, seconds: float) -> CallInputs | None:
 def prewarm(proc: JobProcess) -> None:
     # Done once per worker process, before any call, so calls start without a stall.
     proc.userdata["vad"] = silero.VAD.load()
-    proc.userdata["aws"] = aws_session()
-    proc.userdata["aws"].get_credentials()  # finds them now, so a call does not wait for the instance metadata
+    proc.userdata["aws"] = aws_session() if PROFILE else None  # a Mac's profile; none on EC2, see transcribe_credentials
+    if proc.userdata["aws"] is not None:
+        proc.userdata["aws"].get_credentials()  # read the profile now rather than at the first call
 
 
 server = AgentServer(setup_fnc=prewarm, num_idle_processes=1)
@@ -337,7 +341,7 @@ async def entrypoint(ctx: JobContext) -> None:
             (rec.dir / "prep.md").write_text(f"# Call prep note\n\n{prep.note}\n\nOpening: {prep.opening}\n")
 
     prep_recorder = asyncio.create_task(record_prep())
-    # The keys as they are at this call's start: an instance role's keys expire after a few hours.
+    # Never keys frozen at prewarm: an instance role's keys expire after a few hours.
     ctx.proc.userdata["transcribe_credentials"] = transcribe_credentials(ctx.proc.userdata["aws"])
     session = AgentSession(
         stt=aws.STT(region=REGION, language=LANGUAGE.transcribe, credentials=ctx.proc.userdata["transcribe_credentials"]),

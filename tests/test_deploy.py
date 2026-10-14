@@ -90,6 +90,8 @@ def test_transcribe_gets_the_keys_as_they_are_at_the_start_of_each_call():
     first, second = agent.transcribe_credentials(session), agent.transcribe_credentials(session)
     assert (first.access_key_id, first.session_token) == ("AKIA1", "token1")
     assert (second.access_key_id, second.secret_access_key, second.session_token) == ("ASIA2", "secret2", "token2")
+    # On EC2 there is no profile: the plugin reads the instance role itself, afresh for every stream it opens.
+    assert agent.transcribe_credentials(None) is None
 
 
 # ---------- the services' environment, from SSM ----------
