@@ -120,3 +120,82 @@ test("when the records cannot be reached, no page says it is the Mac", async () 
     assert.doesNotMatch(note, /\bMac\b/, hash);
   }
 });
+
+// ---------- Bee writes during the call (contract sections 6 and 8) ----------
+
+const beeItems = (page) => page.all("bee-item").map((item) => ({
+  state: item.dataset.state,
+  kind: page.text(item.children.find((c) => c.classList.contains("bee-kind"))),
+  text: page.text(item.children.find((c) => c.classList.contains("bee-text"))),
+  status: page.text(item.children.find((c) => c.classList.contains("bee-status"))),
+  rest: page.text(item),
+}));
+
+test("each Bee write shows what was written, the question and the answer, and its result", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(fixture(AI_CALL));
+  const card = page.one("bee");
+  assert.match(page.text(card), /^Saved in Bee/);
+  const [todo, fact] = beeItems(page);
+  assert.equal(beeItems(page).length, 2);
+  assert.deepEqual([todo.kind, todo.text], ["New to-do", "Text Dana the trail plan"]);
+  assert.match(todo.rest, /Asked: “Shall I put "Text Dana the trail plan" in Bee as a to-do\?” · You said: “Yes please\.”/);
+  assert.deepEqual([fact.kind, fact.text, fact.state], ["Update fact", "Dana prefers easy routes while her knee heals", "failed"]);
+  assert.equal(fact.status, "Not saved yet");
+  assert.match(fact.rest, /Bee Call tries again after the call\./);
+});
+
+test("a write the person took back in the call shows as taken out", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(fixture(AI_CALL));
+  const [todo] = beeItems(page);
+  assert.equal(todo.state, "undone");
+  assert.equal(todo.status, "Taken out");
+  assert.equal(page.text(page.one("bee").children[0]), "Saved in Bee 0 of 1 saved");
+});
+
+test("a saved write counts as saved", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed([{ t: 3, type: "bee_write", kind: "todo_create", text: "Note the bug", question: "Bee에 할 일로 넣을까요?",
+    answer: "응", result: "ok" }]);
+  const [todo] = beeItems(page);
+  assert.equal(todo.state, "saved");
+  assert.equal(todo.status, "Saved");
+  assert.match(todo.rest, /Asked: “Bee에 할 일로 넣을까요\?” · You said: “응”/);
+  assert.equal(page.text(page.one("bee").children[0]), "Saved in Bee 1 saved");
+});
+
+test("taking out with no item named takes out the last saved write", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed([
+    { t: 3, type: "bee_write", kind: "todo_create", text: "First", question: "q1", answer: "yes", result: "ok" },
+    { t: 5, type: "bee_write", kind: "todo_create", text: "Second", question: "q2", answer: "yes", result: "ok" },
+    { t: 6, type: "bee_write_undone" },
+  ]);
+  assert.deepEqual(beeItems(page).map((item) => [item.text, item.state]), [["First", "saved"], ["Second", "undone"]]);
+});
+
+test("a failed write that is saved later becomes one saved item", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed([
+    { t: 3, type: "bee_write", kind: "fact_update", text: "Dana likes easy trails", question: "q", answer: "yes",
+      result: "failed" },
+    { t: 30, type: "bee_write", kind: "fact_update", text: "Dana likes easy trails", result: "ok" },
+  ]);
+  assert.deepEqual(beeItems(page).map((item) => [item.text, item.state]), [["Dana likes easy trails", "saved"]]);
+});
+
+test("a write of a kind the page does not know is still shown", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed([{ t: 3, type: "bee_write", kind: "memory_note", text: "Likes window seats", question: "q", answer: "sure",
+    result: "ok" }]);
+  assert.equal(beeItems(page)[0].kind, "Memory note");
+});
+
+test("an older record's writes after the call keep their To save in Bee card", () => {
+  const page = loadPage({ hash: "#/s/2026-10-11/1930" });
+  page.feed(fixture(HIKE_CALL));
+  const card = page.one("bee");
+  assert.match(page.text(card), /^To save in Bee 2 of 2 saved/);
+  assert.deepEqual(beeItems(page).map((item) => item.status), ["Saved", "Saved"]);
+});

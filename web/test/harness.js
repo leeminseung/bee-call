@@ -387,8 +387,10 @@ function loadPage({ hash = "#/", search = "", fetch, bridge = false, prefs = {} 
       return root.childNodes.map((node) => (node instanceof FakeElement ? page.visibleText(node) : node.textContent))
         .join("");
     },
+    /** A node's text as a reader takes it in: separate elements are separate words. */
     text(node) {
-      return node.textContent.replace(/\s+/g, " ").trim();
+      const words = (n) => (n instanceof FakeElement ? n.childNodes.map(words).filter(Boolean).join(" ") : n.textContent);
+      return words(node).replace(/\s+/g, " ").trim();
     },
   };
   return page;

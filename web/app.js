@@ -494,7 +494,8 @@
       this.beeSlot.replaceChildren();
       this.continueSlot.replaceChildren();
       this.jobs = new Map();
-      this.bee = null;
+      this.bee = null; // writes queued for after the call (records before 2026-10-15)
+      this.writes = null; // writes made during the call
       this.pending = [];
       this.agentState = null;
       this.endT = null;
@@ -641,6 +642,7 @@
           this.updateJob(ev, t);
           break;
         case "bee_write_queued": case "bee_write_done": this.updateBee(ev); break;
+        case "bee_write": case "bee_write_undone": this.beeWrite(ev); break;
         case "error": this.addError(ev, t); break;
         case "session_closed": case "call_ended": this.end(ev, t); break;
         case "screen_signal": break; // meant for the AI, nothing to show
@@ -961,7 +963,7 @@
         head.append(icon("bookmark"), el("span", null, "To save in Bee"), count);
         const list = el("ul", "bee-list");
         card.append(head, list);
-        this.beeSlot.replaceChildren(card);
+        this.beeSlot.append(card);
         this.bee = { count, list, items: [] };
       }
       const kind = String(ev.kind || "");
@@ -992,6 +994,66 @@
       const saved = this.bee.items.filter((i) => i.state === "saved").length;
       const total = this.bee.items.length;
       this.bee.count.textContent = saved ? `${saved} of ${total} saved` : `${total} queued`;
+    }
+
+    // ---------- Bee writes during the call ----------
+
+    // The AI asks ("Shall I put ... in Bee as a to-do?"), writes right after the person's yes, and takes the last
+    // write out again when asked to (bee_write_undone). A failed write is tried again after the call.
+    beeWrite(ev) {
+      if (!this.writes) {
+        const card = el("section", "card bee");
+        const head = el("div", "card-head");
+        const count = el("span", "pill");
+        head.append(icon("bookmark"), el("span", null, "Saved in Bee"), count);
+        const list = el("ul", "bee-list");
+        card.append(head, list);
+        this.beeSlot.append(card);
+        this.writes = { count, list, items: [] };
+      }
+      const items = this.writes.items;
+      const kind = String(ev.kind || "");
+      const text = ownText(ev);
+      if (ev.type === "bee_write_undone") {
+        const named = (item) => (!kind || item.kind === kind) && (!text || item.text === text);
+        const item = [...items].reverse().find((i) => i.state === "saved" && named(i));
+        if (item) this.setWriteState(item, "undone");
+      } else {
+        // A later result for a write that failed (its retry) updates the same line.
+        const retried = items.find((i) => i.state === "failed" && i.kind === kind && i.text === text);
+        this.setWriteState(retried || this.addWrite(ev, kind, text), ev.result === "ok" ? "saved" : "failed");
+      }
+      const kept = items.filter((i) => i.state !== "undone");
+      const saved = kept.filter((i) => i.state === "saved").length;
+      this.writes.count.textContent = !kept.length ? "Taken out"
+        : saved === kept.length ? `${saved} saved` : `${saved} of ${kept.length} saved`;
+    }
+
+    addWrite(ev, kind, text) {
+      const row = el("li", "bee-item");
+      const status = el("span", "bee-status");
+      row.append(el("span", "bee-kind", BEE_KIND[kind] || humanize(kind) || "Item"),
+        el("span", "bee-text", text || "(no text)"), status);
+      const question = ownText({ text: ev.question });
+      const answer = ownText({ text: ev.answer });
+      const asked = [question && `Asked: “${question}”`, answer && `You said: “${answer}”`].filter(Boolean).join(" · ");
+      if (asked) row.append(el("p", "bee-asked", asked));
+      const note = el("p", "bee-note", "Bee Call tries again after the call.");
+      row.append(note);
+      const item = { kind, text, row, status, note, state: null };
+      this.writes.items.push(item);
+      this.writes.list.append(row);
+      return item;
+    }
+
+    setWriteState(item, state) {
+      item.state = state;
+      item.row.dataset.state = state;
+      item.note.hidden = state !== "failed";
+      item.status.replaceChildren();
+      if (state === "saved") item.status.append(icon("check"), "Saved");
+      else if (state === "failed") item.status.append(icon("x"), "Not saved yet");
+      else item.status.append("Taken out");
     }
   }
 

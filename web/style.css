@@ -300,6 +300,9 @@ h1 {
 .bee-status .icon { width: 13px; height: 13px; stroke-width: 2.5; }
 .bee-item[data-state="saved"] .bee-status { color: var(--green); }
 .bee-item[data-state="failed"] .bee-status { color: var(--red); }
+.bee-item[data-state="undone"] .bee-text { color: var(--muted); text-decoration: line-through; }
+.bee-asked, .bee-note { grid-column: 1; margin: 3px 0 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.bee-note { color: var(--red); }
 
 .session-foot {
   margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line);
