@@ -333,7 +333,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
     """One call, from the dispatch to the AI's first words; the rest runs in the session and its shutdown."""
     meta = call_meta(ctx.job.metadata)
     started = time.monotonic()
-    room = ctx.job.room.name  # ctx.room has no name until the job connects to it
+    room = ctx.job.room.name  # the job's room (LiveKit gives ctx.room this name before the entrypoint runs)
     person = person_for_call(meta, people)
     if person is None:
         log.error("call in room %s is for no approved person (%r); not answering", room, meta.get("person"))

@@ -40,11 +40,12 @@ class FakeLocalParticipant:
 
 
 class FakeRoom(FakeEmitter):
-    """Like rtc.Room, it has no name until the job connects to it."""
+    """Like the job's rtc.Room, it carries the room's name from the start: LiveKit names it from the job before the
+    entrypoint runs (livekit/agents/ipc/job_proc_lazy_main.py), not when the job connects."""
 
-    def __init__(self) -> None:
+    def __init__(self, name: str) -> None:
         super().__init__()
-        self.name = ""
+        self.name = name
         self.local_participant = FakeLocalParticipant()
 
 
@@ -85,7 +86,7 @@ class FakeCall:
                  session: FakeSession | None = None) -> None:
         self.people = people
         self.room_name = room
-        self.room = FakeRoom()
+        self.room = FakeRoom(room)
         self.session = session or FakeSession()
         self.caller = SimpleNamespace(identity=meta.get("person") or "caller", kind=0)
         self.joined = asyncio.Event()
@@ -99,7 +100,7 @@ class FakeCall:
     # ---------- JobContext ----------
 
     async def connect(self) -> None:
-        self.room.name = self.room_name
+        pass
 
     async def wait_for_participant(self):
         await self.joined.wait()
@@ -116,8 +117,8 @@ class FakeCall:
         self.shutdown_reason = reason
 
     def delete_room(self, room_name: str | None = None):
-        """As JobContext.delete_room: the room named, or the connected room (no name before connecting)."""
-        self.deleted = room_name or self.room.name or "(a room with no name)"
+        """As JobContext.delete_room: the room named, or the job's room."""
+        self.deleted = room_name or self.room.name
         done = asyncio.get_running_loop().create_future()
         done.set_result(None)
         return done
