@@ -245,10 +245,11 @@ def test_a_call_me_now_that_was_never_placed_closes(tmp_path):
 def test_only_one_runner_places_a_call_and_a_call_off_wins(tmp_path):
     me = signed_in(tmp_path)
     store = OfferStore(me.workspace)
+    claimed = store.book("claimed", datetime.now() - timedelta(seconds=3), datetime.now())
+    assert store.claim(claimed.id, datetime.now()).state == "calling"
+    assert store.claim(claimed.id, datetime.now()) is None  # a second runner gets nothing
     first = store.book("first", datetime.now() - timedelta(seconds=2), datetime.now())
     second = store.book("second", datetime.now() - timedelta(seconds=1), datetime.now())
-    assert store.claim(first.id, datetime.now()).state == "calling"
-    assert store.claim(first.id, datetime.now()) is None  # a second runner gets nothing
     placed = []
 
     async def prepare(plan, extra=None, deadline_s=None):
@@ -260,7 +261,6 @@ def test_only_one_runner_places_a_call_and_a_call_off_wins(tmp_path):
         placed.append(plan.topic)
         return f"room-{len(placed)}"
 
-    store.mark(first.id, "booked", datetime.now())  # back to due for the run below
     asyncio.run(call_due(me.person, prepare=prepare, place=place))
     asyncio.run(call_due(me.person, prepare=prepare, place=place))
     assert len(placed) == 1  # one call; the other was called off before its turn

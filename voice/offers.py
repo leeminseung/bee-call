@@ -138,20 +138,32 @@ class OfferStore:
         offer.history.append({"at": _iso(now), "state": state})
         return offer
 
-    def mark(self, offer_id: str, state: str, now: datetime, **changes: Any) -> Offer | None:
-        """Sets an offer's state on the latest copy of its file."""
+    def _move(self, offer_id: str, now: datetime, came_from: tuple[str, ...], state: str,
+              **changes: Any) -> Offer | None:
+        """The one way an offer's state changes once it exists: on the latest copy of its file, under the lock,
+        and only from the states the transition allows. None when the offer is gone or in another state."""
         with self._lock():
             offer = self.get(offer_id)
-            return self._save(self._set(offer, state, now, **changes)) if offer else None
+            if offer is None or offer.state not in came_from:
+                return None
+            return self._save(self._set(offer, state, now, **changes))
 
     def claim(self, offer_id: str, now: datetime) -> Offer | None:
         """Moves a due offer to "calling" if it is still due; None if it changed meanwhile (called off, or claimed
         by another runner). Only the claimant places the call."""
-        with self._lock():
-            offer = self.get(offer_id)
-            if offer is None or offer.state not in ("now", "booked"):
-                return None
-            return self._save(self._set(offer, "calling", now))
+        return self._move(offer_id, now, ("now", "booked"), "calling")
+
+    def placed(self, offer_id: str, now: datetime, room: str) -> Offer | None:
+        """The call's room exists and the phone rings."""
+        return self._move(offer_id, now, ("calling",), "called", room=room)
+
+    def fail(self, offer_id: str, now: datetime, error: str) -> Offer | None:
+        """The claimed call could not be placed; `error` says why."""
+        return self._move(offer_id, now, ("calling",), "failed", error=error)
+
+    def call_off(self, offer_id: str, now: datetime, why: str) -> Offer | None:
+        """A call booked in a call is moved or called off in that call (voice/coordinator.py)."""
+        return self._move(offer_id, now, ("booked",), "declined", error=why)
 
     def mark_notified(self, offer_id: str, now: datetime) -> None:
         with self._lock():

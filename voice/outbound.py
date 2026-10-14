@@ -137,7 +137,7 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
         if store.claim(offer.id, now) is None:  # called off meanwhile, or another runner has it
             continue
         if over_budget is not None and over_budget(now):
-            store.mark(offer.id, "failed", now, error="today's budget is used up; ask again tomorrow")
+            store.fail(offer.id, now, "today's budget is used up; ask again tomorrow")
             log.info("offer %s not called: over today's budget", offer.id)
             continue
         try:
@@ -153,10 +153,10 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
             room = await place(plan, person, prep=prep.to_meta(), continue_from=offer.continue_from,
                                agreed=extra["agreed"])
         except Exception as exc:
-            store.mark(offer.id, "failed", datetime.now(), error=f"{type(exc).__name__}: {exc}"[:300])
+            store.fail(offer.id, datetime.now(), f"{type(exc).__name__}: {exc}"[:300])
             log.exception("could not place the call for offer %s", offer.id)
             continue
-        store.mark(offer.id, "called", datetime.now(), room=room)
+        store.placed(offer.id, datetime.now(), room)
         print(f"calling for offer {offer.id}: room {room}", flush=True)
         return [room]
     return []

@@ -309,7 +309,7 @@ class Coordinator(Agent):
         if when > now + timedelta(days=7):
             return "Calls can be booked at most a week ahead."
         store = OfferStore(self._workspace)
-        moved = self._booked is not None and store.mark(self._booked, "declined", now, error="moved to a new time")
+        moved = self._booked is not None and store.call_off(self._booked, now, "moved to a new time") is not None
         session = f"{self._recorder.dir.parent.name}/{self._recorder.dir.name}"  # the booked call continues this one
         offer = store.book(topic.strip() or "a call back", when, now, continue_from=session)
         self._booked = offer.id  # one call back per call: booking again moves it
@@ -320,10 +320,10 @@ class Coordinator(Agent):
     @function_tool
     async def cancel_call(self, context: RunContext) -> str:
         """Call off the call back booked in this call, when the user no longer wants it."""
-        offer = OfferStore(self._workspace).get(self._booked) if self._booked else None
-        if offer is None or offer.state != "booked":
+        offer = OfferStore(self._workspace).call_off(self._booked, datetime.now(), "called off in the call") \
+            if self._booked else None
+        if offer is None:
             return "No call back is booked in this call."
-        OfferStore(self._workspace).mark(offer.id, "declined", datetime.now(), error="called off in the call")
         self._booked = None
         self._recorder.event("call_cancelled", offer=offer.id)
         return "Called off. Tell the user in a few words."
