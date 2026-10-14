@@ -18,13 +18,32 @@ if fail_once and os.path.exists(fail_once) and " ".join(cmd).startswith(open(fai
     os.remove(fail_once)
     print("Bee is unavailable right now", file=sys.stderr)
     sys.exit(1)
+# A command that always fails: FAKE_BEE_DOWN holds the command's start ("todos list").
+down = os.environ.get("FAKE_BEE_DOWN")
+if down and " ".join(cmd).startswith(down):
+    print("Request failed with status 503", file=sys.stderr)
+    sys.exit(1)
 # A command Bee carries out but answers late: FAKE_BEE_SLOW holds the command's start and the seconds it takes
 # ("todos create 3"). The call is already in the log (Bee has it) when the wait starts.
 slow = os.environ.get("FAKE_BEE_SLOW")
 if slow and " ".join(cmd).startswith(slow.rsplit(" ", 1)[0]):
     time.sleep(float(slow.rsplit(" ", 1)[1]))
+# A command Bee carries out and then fails once, as a gateway error after Bee stored the todo does:
+# FAKE_BEE_FAIL_AFTER_ONCE names a file holding the command's start, as FAKE_BEE_FAIL_ONCE does.
+fail_after = os.environ.get("FAKE_BEE_FAIL_AFTER_ONCE")
+failing_after = bool(fail_after and os.path.exists(fail_after)
+                     and " ".join(cmd).startswith(open(fail_after).read().strip()))
+# The todos Bee has, kept in the file FAKE_BEE_TODOS names (none when it is not set).
+todos_file = os.environ.get("FAKE_BEE_TODOS")
+
+def stored():
+    return json.load(open(todos_file)) if todos_file and os.path.exists(todos_file) else []
 
 def out(obj):
+    if failing_after:
+        os.remove(fail_after)
+        print("Request failed with status 504", file=sys.stderr)
+        sys.exit(1)
     print(json.dumps(obj))
     sys.exit(0)
 
@@ -92,7 +111,12 @@ def made(todo):
     out(todo if os.environ.get("FAKE_BEE_BARE_TODO") else {"todo": todo})
 
 if cmd[:2] == ["todos", "create"]:
-    made({"id": 99, "text": cmd[cmd.index("--text") + 1], "created_at": now_ms, "completed": False})
+    todo = {"id": 99 + len(stored()), "text": cmd[cmd.index("--text") + 1], "created_at": now_ms, "completed": False}
+    if todos_file:
+        json.dump(stored() + [todo], open(todos_file, "w"))
+    made(todo)
+if cmd[:2] == ["todos", "list"]:
+    out({"todos": stored(), "next_cursor": None, "timezone": "Asia/Seoul"})
 if cmd[:2] == ["todos", "accept-suggestion"]:
     made({"id": 100, "text": "Ask about bonus terms", "created_at": now_ms, "completed": False})
 if cmd[:2] == ["todos", "delete"]:

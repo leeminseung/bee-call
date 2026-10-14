@@ -312,6 +312,58 @@ def test_a_failed_write_is_said_and_retried_after_the_call(tmp_path, fake_bee, m
     assert writes_to_bee(fake_bee) == [["todos", "create"], ["todos", "create"]]  # one failed, one went in
 
 
+def test_a_todo_bee_stored_before_its_error_is_not_written_again(tmp_path, fake_bee, monkeypatch):
+    """Second review of this round's fixes, finding 2: the Bee CLI exits with an error for any answer that is not a
+    success, also a gateway error after Bee stored the todo. The retry after the call looks for it first."""
+    monkeypatch.setenv("FAKE_BEE_TODOS", str(tmp_path / "todos.json"))
+    (tmp_path / "fail-after").write_text("todos create")
+    monkeypatch.setenv("FAKE_BEE_FAIL_AFTER_ONCE", str(tmp_path / "fail-after"))
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        said = await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
+        return said, await BeeWrites(rec.dir).retry_failed(), rec
+
+    said, retried, rec = asyncio.run(main())
+    assert "did not go through" in said
+    assert [w.status for w in retried] == ["ok"] and [w.status for w in BeeWrites(rec.dir).all()] == ["ok"]
+    assert writes_to_bee(fake_bee) == [["todos", "create"]]  # written once
+    assert [t["text"] for t in json.loads((tmp_path / "todos.json").read_text())] == ["Note the bug"]
+
+
+def test_a_refused_todo_bee_cannot_be_asked_about_is_left_to_the_user(tmp_path, fake_bee, monkeypatch):
+    fail_once(tmp_path, monkeypatch, "todos create")
+    monkeypatch.setenv("FAKE_BEE_DOWN", "todos list")
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
+        return await BeeWrites(rec.dir).retry_failed(), rec
+
+    retried, rec = asyncio.run(main())
+    assert [w.status for w in BeeWrites(rec.dir).all()] == ["unknown"]
+    assert writes_to_bee(fake_bee) == [["todos", "create"]]  # not written again
+    body = writer.summary_notification(BeeWrites(rec.dir).all(), call_language("en"))["aps"]["alert"]["body"]
+    assert body == "Not sure it went in, check Bee: todo 'Note the bug'"
+
+
+@pytest.mark.parametrize("suggestion,tries", [(34, 2), (35, 1)])  # still suggested; no longer suggested
+def test_a_refused_accept_is_tried_again_only_while_bee_still_suggests_it(tmp_path, fake_bee, monkeypatch,
+                                                                         suggestion, tries):
+    fail_once(tmp_path, monkeypatch, "todos accept-suggestion")
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await saved(agent, "Bee suggested the todo 'Ask about bonus terms'. Shall I add it?", "Yes.",
+                    kind="todo_accept", suggestion_id=suggestion, text="Ask about bonus terms")
+        await BeeWrites(rec.dir).retry_failed()
+        return rec
+
+    rec = asyncio.run(main())
+    assert writes_to_bee(fake_bee) == [["todos", "accept-suggestion"]] * tries
+    assert [w.status for w in BeeWrites(rec.dir).all()] == (["ok"] if tries == 2 else ["unknown"])
+
+
 def test_a_write_bee_did_not_confirm_is_never_written_again(tmp_path, fake_bee, monkeypatch):
     """Review of this round's fixes, finding 5: Bee took the todo but answered after the write stopped waiting.
     Retrying it would make the same todo twice, so it is said as maybe written and left to the user."""

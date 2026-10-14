@@ -6,12 +6,14 @@ folder, in bee-writes.jsonl, one line per step and only appended to:
   {"key": "w1", "status": "applying", "item": {...}, "question": ..., "answer": ..., "before": ..., "at": ...}
   {"key": "w1", "status": "ok", "response": {...}, "at": ...}          or "failed" / "unknown" with "error"
   {"key": "w1", "status": "undone", "at": ...}                          the user said "take it out" (or "undo_failed")
-A write's state is its latest line. "failed" means Bee said no, so the item is not there: it is said out loud in
-the call and tried once more after it (retry_failed). "unknown" means Bee may have it: the CLI did not answer in
-time, its answer could not be read, or the write was cut off (the call ended mid-write). Such a write, like one
-still "applying" because the process stopped, is never written again by itself, since a todo must not be created
-twice; the user is told to check Bee. After the call, one notification says what went into Bee
-(summary_notification).
+A write's state is its latest line. "failed" means the Bee CLI ended with an error: it is said out loud in the call
+and tried once more after it (retry_failed). The CLI ends with an error for any answer that is not a success,
+also when Bee stored a todo and only its answer was lost (a gateway error, a dropped connection), so before a todo
+is written again Bee is asked whether it has it already (in_bee_after_all). "unknown" means Bee may have it: the
+CLI did not answer in time, its answer could not be read, the write was cut off (the call ended mid-write), or Bee
+could not be asked before a retry. Such a write, like one still "applying" because the process stopped, is never
+written again by itself, since a todo must not be created twice; the user is told to check Bee. After the call,
+one notification says what went into Bee (summary_notification).
 
 Items:
   {"kind": "fact_confirm", "fact_id": 12}
@@ -29,18 +31,23 @@ they are listed and never written.
 import argparse
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
 from beelink import cli
+from beelink.clock import parse_time
 from voice.language import CallLanguage
+
+log = logging.getLogger("beelink.writer")
 
 WRITES = "bee-writes.jsonl"
 OLD_QUEUE = "bee-queue.jsonl"
 KINDS = ("fact_confirm", "fact_update", "todo_create", "todo_accept")
 MAYBE_WRITTEN = ("unknown", "applying")  # Bee may or may not have the item; never written again by itself
+CLOCK_SLACK_S = 120  # Bee's clock and this machine's may differ; a todo made this much before a write is older
 
 
 @dataclass
@@ -53,6 +60,7 @@ class BeeWrite:
     response: dict[str, Any] | None = None
     before: dict[str, Any] | None = None  # the fact as it was, so an update can be taken back
     error: str | None = None
+    began: float | None = None  # when it was first recorded, epoch seconds
 
     @property
     def kind(self) -> str:
@@ -129,7 +137,7 @@ class BeeWrites:
                 if not isinstance(line.get("item"), dict):
                     continue
                 writes[key] = BeeWrite(key, line["item"], line.get("question"), line.get("answer"), line["status"],
-                                       before=line.get("before"))
+                                       before=line.get("before"), began=_epoch(line.get("at")))
             write = writes[key]
             write.status = line.get("status", write.status)
             if "response" in line:
@@ -139,7 +147,7 @@ class BeeWrites:
         return list(writes.values())
 
     def _append(self, line: dict[str, Any]) -> None:
-        line = {**line, "at": datetime.now().isoformat(timespec="seconds")}
+        line = {**line, "at": datetime.now().astimezone().isoformat(timespec="seconds")}
         with self.path.open("a") as f:
             f.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
 
@@ -194,20 +202,71 @@ class BeeWrites:
         return write
 
     async def retry_failed(self, done: Callable[[BeeWrite], None] | None = None) -> list[BeeWrite]:
-        """Tries each failed write once more (after the call); `done` hears each one as it ends, also one cut off.
-        A write Bee may have ("unknown", or "applying" because the process stopped) is left alone."""
+        """Tries each failed write once more (after the call), unless Bee has it already or cannot say; `done` hears
+        each one as it ends, also one cut off. A write Bee may have ("unknown", or "applying" because the process
+        stopped) is left alone."""
         retried = []
         for write in self.all():
             if write.status != "failed":
                 continue
-            self._append({"key": write.key, "status": "applying"})
-            write.status = "applying"
             try:
-                retried.append(await self.apply(write))
-            finally:
-                if done is not None:
-                    done(write)
+                found = await in_bee_after_all(write)
+            except Exception as exc:
+                log.warning("could not ask Bee whether %s is there: %s", write.key, exc)
+                found = None
+            if found is None:  # writing it again could make it twice
+                self._ended(write, "unknown", f"{write.error}; Bee could not be asked whether it has it")
+            elif found:
+                write.response, write.status, write.error = found, "ok", None
+                self._append({"key": write.key, "status": "ok", "response": found, "found_later": True})
+            else:
+                self._append({"key": write.key, "status": "applying"})
+                write.status = "applying"
+                try:
+                    await self.apply(write)
+                finally:
+                    if done is not None:
+                        done(write)
+                retried.append(write)
+                continue
+            retried.append(write)
+            if done is not None:
+                done(write)
         return retried
+
+
+async def in_bee_after_all(write: BeeWrite) -> dict[str, Any] | bool | None:
+    """Whether Bee has a write the CLI reported as failed: what Bee shows of it (it went in after all), False (it
+    did not), or None (it cannot be told, so it must not be written again)."""
+    if write.kind == "todo_create":
+        todos = (await cli.todos()).get("todos")
+        if not isinstance(todos, list):
+            return None
+        for todo in todos:
+            if not isinstance(todo, dict) or _plain(todo.get("text")) != _plain(write.text):
+                continue
+            made = todo.get("created_at")
+            if isinstance(made, (int, float)) and write.began is not None and made / 1000 < write.began - CLOCK_SLACK_S:
+                continue  # an older todo of the same name
+            return {"todo": todo}
+        return False
+    if write.kind == "todo_accept":
+        pending = await cli.todo_suggestions(limit=50)
+        if any(isinstance(s, dict) and s.get("id") == write.item.get("suggestion_id") for s in pending):
+            return False  # still suggested: not accepted yet
+        return None  # accepted, or dismissed in the Bee app meanwhile
+    return False  # a fact set to a value: setting it again changes nothing
+
+
+def _plain(text: Any) -> str:
+    return " ".join(str(text or "").split()).casefold()
+
+
+def _epoch(at: Any) -> float | None:
+    try:
+        return parse_time(str(at)).timestamp()
+    except ValueError:
+        return None
 
 
 # ---------- what the user reads during and after the call ----------
@@ -268,7 +327,7 @@ def summary_notification(writes: list[BeeWrite], language: CallLanguage) -> dict
 # ---------- by hand ----------
 
 async def run(session_dir: Path, apply: bool) -> list[BeeWrite]:
-    """Prints the call's Bee writes; with `apply`, tries the failed ones again. Returns the writes tried."""
+    """Prints the call's Bee writes; with `apply`, tries the failed ones again (retry_failed). Returns them."""
     writes = BeeWrites(session_dir)
     for write in writes.all():
         heard = f'asked "{write.question}", heard "{write.answer}"'
@@ -284,7 +343,8 @@ async def run(session_dir: Path, apply: bool) -> list[BeeWrite]:
         return []
     retried = await writes.retry_failed()
     for write in retried:
-        print(f"{'ok' if write.status == 'ok' else 'FAILED'}: {write.kind} {write.text}")
+        print(f"{write.status}: {write.kind} {write.text}"
+              + (" - Bee may have it: check before writing it again" if write.status in MAYBE_WRITTEN else ""))
     return retried
 
 

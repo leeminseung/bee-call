@@ -159,6 +159,11 @@ async def fact(fact_id: int) -> dict[str, Any]:
     return await run_json("facts", "get", str(fact_id))
 
 
+async def todos(limit: int = 50, timeout: float = TIMEOUT) -> dict[str, Any]:
+    """The newest todos, open and completed: {"todos": [{"id", "text", "created_at" (ms), "completed"}, ...]}."""
+    return await run_json("todos", "list", "--limit", str(limit), timeout=timeout)
+
+
 # ---------- writes (only beelink.writer calls these) ----------
 
 async def confirm_fact(fact_id: int) -> dict[str, Any]:
