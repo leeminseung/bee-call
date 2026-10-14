@@ -668,8 +668,8 @@ def test_missed_and_declined_ai_calls_hold_offers_too(tmp_path, monkeypatch):
     log = me.workspace / OUTBOUND_LOG
     log.parent.mkdir(parents=True)
     log.write_text("".join(json.dumps({"at": at, "room": room}) + "\n" for at, room in (
-        ("2026-10-15T19:00:00", "call-matt-20261015-190000"),  # missed: it rang its 60 s
-        ("2026-10-15T20:00:00", "call-matt-20261015-200000"))))  # declined 20 s in
+        ("2026-10-15T19:00:00+09:00", "call-matt-20261015-190000"),  # missed: it rang its 60 s
+        ("2026-10-15T20:00:00+09:00", "call-matt-20261015-200000"))))  # declined 20 s in
     decline_ring(me.person, "call-matt-20261015-200000", datetime(2026, 10, 15, 20, 0, 20, tzinfo=SEOUL))
     offer, _ = asked(tmp_path, now=datetime(2026, 10, 15, 20, 10, tzinfo=SEOUL), workspace=me.workspace)
     assert "20:30" in asyncio.run(send_offer(offer, me.person, datetime(2026, 10, 15, 20, 30, 10, tzinfo=SEOUL)))  # held

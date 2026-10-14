@@ -431,8 +431,8 @@ def test_spend_counts_calls_prep_jobs_searches_and_meta_thinks_of_today(tmp_path
         STTModelUsage(provider="Amazon Transcribe", model="en-US", audio_duration=6000.0).model_dump()]}))
     (ws / "meta").mkdir()
     (ws / "meta" / "session.jsonl").write_text("\n".join(json.dumps(e) for e in [
-        {"at": "2026-10-14T19:00:00", "model": "zai.glm-5", "usage": {"input_tokens": 500_000, "output_tokens": 0}},
-        {"at": "2026-10-13T19:00:00", "model": "zai.glm-5", "usage": {"input_tokens": 9_000_000, "output_tokens": 0}},
+        {"at": "2026-10-14T19:00:00+09:00", "model": "zai.glm-5", "usage": {"input_tokens": 500_000, "output_tokens": 0}},
+        {"at": "2026-10-13T19:00:00+09:00", "model": "zai.glm-5", "usage": {"input_tokens": 9_000_000, "output_tokens": 0}},
     ]) + "\n")
     call = 1.00 + 600 * costs.STT_USD_PER_SECOND + 10_000 * costs.POLLY_USD_PER_CHAR["neural"]  # ElevenLabs: 0
     prep, job = 0.10, 3.20 + 2 * costs.WEB_SEARCH_USD
