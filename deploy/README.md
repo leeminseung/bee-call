@@ -87,8 +87,12 @@ uv run python scripts/deploy_server.py ship --yes
 ```bash
 uv run python scripts/deploy_server.py status             # services, their memory, the voice server's jobs
 uv run python scripts/deploy_server.py logs agent         # token, session, agent, outbound, caddy, env, boot
+uv run python scripts/deploy_server.py people waiting     # sign-ins waiting for approval
+uv run python scripts/deploy_server.py people approve CODE --as jiwoo
 uv run python scripts/deploy_server.py down --yes
 ```
+
+`people` runs `python -m voice.people` on the instance as `bee-call`, with the server's data root, so approving someone who signed in with Apple works as it does on a Mac.
 
 `down` deletes the A record (so the name never points at an address that is no longer yours) and `/bee-call/BEE_CALL_PUBLIC_HOST`, terminates the instance, releases the Elastic IP and deletes the security group. The instance's disk goes with it, with every call record and Bee login on it. The other parameters stay for the next `up`; after it, run `dns` again for the new address.
 

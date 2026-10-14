@@ -8,6 +8,7 @@ Run from this Mac with the AWS profile bee-call; deploy/README.md has the order 
     uv run python scripts/deploy_server.py ship                        pull main, uv sync, restart
     uv run python scripts/deploy_server.py status
     uv run python scripts/deploy_server.py logs agent [--lines 300]    token, session, agent, outbound, caddy, env, boot
+    uv run python scripts/deploy_server.py people waiting              python -m voice.people on the server
     uv run python scripts/deploy_server.py down                        terminate, release the IP, delete the rest
 
 A command that changes AWS prints what it would do, and does it only with --yes. Settings and keys are shown by
@@ -17,6 +18,7 @@ name and length, never by value. Commands on the server go through SSM Run Comma
 import argparse
 import base64
 import json
+import shlex
 import sys
 import tempfile
 import time
@@ -446,6 +448,18 @@ def cmd_logs(args) -> None:
     print(run_on_server(s.client("ssm"), instance_id, script, timeout=60, comment="Bee Call logs"))
 
 
+def cmd_people(args) -> None:
+    """voice.people on the server, as the services' user and with their data root: who may use the server."""
+    if not args.args:
+        raise SystemExit("people wants voice.people's own arguments, for example: people waiting")
+    s = session()
+    instance_id = running_instance(s.client("ec2"))
+    script = ("cd /opt/bee-call/app && exec runuser -u bee-call -- env HOME=/var/lib/bee-call TZ=Asia/Seoul "
+              "BEE_CALL_DATA=/var/lib/bee-call BEE_BIN=/opt/bee-call/bin/bee BEE_FORCE_FILE_STORE=1 "
+              ".venv/bin/python -m voice.people " + " ".join(shlex.quote(a) for a in args.args))
+    print(run_on_server(s.client("ssm"), instance_id, script, timeout=60, comment="Bee Call people"), end="")
+
+
 def cmd_down(args) -> None:
     s = session()
     ec2, ssm, route53 = s.client("ec2"), s.client("ssm"), s.client("route53")
@@ -522,10 +536,13 @@ def main() -> None:
     p = sub.add_parser("logs", help="a service's journal, or the first boot's output")
     p.add_argument("service", choices=[*UNITS, "boot"])
     p.add_argument("--lines", type=int, default=200)
+    p = sub.add_parser("people", help="python -m voice.people on the server: waiting, approve CODE --as ID, list")
+    p.add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("down", parents=[changes], help="terminate, release the IP, delete the group and the A record")
     args = parser.parse_args()
     command = {"deploy-key": cmd_deploy_key, "secrets": cmd_secrets, "up": cmd_up, "dns": cmd_dns,
-               "ship": cmd_ship, "status": cmd_status, "logs": cmd_logs, "down": cmd_down}[args.command]
+               "ship": cmd_ship, "status": cmd_status, "logs": cmd_logs, "people": cmd_people,
+               "down": cmd_down}[args.command]
     try:
         command(args)
     except (ClientError, WaiterError) as exc:
