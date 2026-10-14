@@ -8,7 +8,7 @@
 
 A parameter named like an environment variable (/bee-call/LIVEKIT_URL) becomes one. Lowercase names are files:
 apns-key is written next to the environment for the services to read, github-deploy-key is only for
-deploy/bootstrap.sh. /run is in memory, so the settings and keys are never on the instance's disk.
+deploy/bootstrap.sh. /run is in memory, so no settings or keys are written to the instance's disk.
 """
 
 import argparse
