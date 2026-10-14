@@ -44,6 +44,7 @@ enum RingStream {
         // The server sends a keepalive every 15 s, so 40 s of silence means the connection is gone.
         var request = URLRequest(url: url, timeoutInterval: 40)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        Server.authorize(&request)
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else { throw BadStatus(code: code) }

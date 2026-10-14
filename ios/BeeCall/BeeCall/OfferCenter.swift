@@ -73,23 +73,23 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         Task { await sendToken() }
     }
 
-    /// Sent at launch, and again on each refresh until the token server has it (it may be off at launch).
-    private func sendToken() async {
-        guard let token = deviceToken, !tokenSent, let url = endpoint("/push") else { return }
-        var request = URLRequest(url: url, timeoutInterval: 10)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Builds run from Xcode get pushes from Apple's development service, like the VoIP push.
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token, "environment": "development"])
+    /// Sent at launch, after a sign-in (the token belongs to the person), and again on each refresh until the
+    /// server has it (it may be unreachable at launch).
+    func sendToken(again: Bool = false) async {
+        if again { tokenSent = false }
+        guard let token = deviceToken, !tokenSent,
+              let request = Server.request("/push", method: "POST",
+                                           json: ["token": token, "environment": Server.pushEnvironment]) else { return }
         let response = try? await URLSession.shared.data(for: request)
         tokenSent = (response?.1 as? HTTPURLResponse)?.statusCode == 204
     }
 
     func refresh() async {
         await sendToken()
-        guard let url = endpoint("/offers"),
-              let (data, response) = try? await URLSession.shared.data(from: url),
-              (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+        guard let request = Server.request("/offers"),
+              let (data, response) = try? await URLSession.shared.data(for: request) else { return }
+        Server.shared.noteStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
         struct Listing: Decodable { let offers: [Offer] }
         guard let listing = try? JSONDecoder().decode(Listing.self, from: data) else { return }
         if listing.offers != open { open = listing.offers }
@@ -109,15 +109,12 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     /// Sends the answer; false when the token server refused it (the offer had closed) or could not be reached.
     @discardableResult
     func answer(_ offerID: String, _ choice: Choice) async -> Bool {
-        guard let url = endpoint("/offers/\(offerID)") else { return false }
-        var request = URLRequest(url: url, timeoutInterval: 10)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["choice": choice.rawValue])
+        guard let request = Server.request("/offers/\(offerID)", method: "POST", json: ["choice": choice.rawValue])
+        else { return false }
         let response = try? await URLSession.shared.data(for: request)
         let code = (response?.1 as? HTTPURLResponse)?.statusCode
         let accepted = code == 200
-        notice = accepted ? nil : code == nil ? "Couldn't reach your Mac. Try again from here."
+        notice = accepted ? nil : code == nil ? "Couldn't reach Bee Call. Try again from here."
             : "That offer has closed. You can call Bee Call any time."
         await refresh()
         return accepted
@@ -130,10 +127,6 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         content.body = notice ?? "That answer did not go through."
         try? await UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: "answer-failed", content: content, trigger: nil))
-    }
-
-    private func endpoint(_ path: String) -> URL? {
-        RingStream.endpoint(path, tokenServerURL: UserDefaults.standard.string(forKey: "tokenServerURL") ?? "")
     }
 
     // MARK: - UNUserNotificationCenterDelegate

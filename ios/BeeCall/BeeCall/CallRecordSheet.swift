@@ -1,9 +1,10 @@
 import SwiftUI
 import WebKit
 
-/// The session screen from the Mac (voice/session_server.py): the live or latest call, and the list
+/// The session screen from the server (voice/session_server.py): the live or latest call, and the list
 /// of earlier calls. Only a web page, so it can stay open during a call; CallKit keeps the audio.
 /// An ended call's record has "Continue this call", which the page sends here with the record's id.
+/// The page asks the server for the signed-in person's calls with the sign-in cookie set before it loads.
 struct CallRecordSheet: View {
     let url: URL
     let onContinue: (String) -> Void
@@ -11,17 +12,6 @@ struct CallRecordSheet: View {
     @State private var failed = false
     @State private var attempt = 0
 
-    /// The session screen runs on the token server's Mac, on port 8788. Nil if the address has no host.
-    static func url(tokenServerURL: String) -> URL? {
-        let address = tokenServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let host = URLComponents(string: address)?.host, !host.isEmpty else { return nil }
-        var page = URLComponents()
-        page.scheme = "http"
-        page.host = host
-        page.port = 8788
-        page.path = "/"
-        return page.url
-    }
 
     var body: some View {
         NavigationStack {
@@ -31,7 +21,7 @@ struct CallRecordSheet: View {
                         ContentUnavailableView {
                             Label("Call record unavailable", systemImage: "desktopcomputer")
                         } description: {
-                            Text("The session screen server is not running on the Mac. Start it with `uv run python voice/session_server.py`.")
+                            Text("The call record could not be loaded from the server.")
                         } actions: {
                             Button("Try again") {
                                 failed = false
@@ -82,7 +72,14 @@ private struct SessionPage: UIViewRepresentable {
     func updateUIView(_ view: WKWebView, context: Context) {
         guard context.coordinator.loadedAttempt != attempt else { return }
         context.coordinator.loadedAttempt = attempt
-        view.load(URLRequest(url: url, timeoutInterval: 10))
+        let request = URLRequest(url: url, timeoutInterval: 10)
+        guard let token = Server.savedToken(), let host = url.host,
+              let cookie = HTTPCookie(properties: [.name: "bee_call_session", .value: token, .domain: host, .path: "/",
+                                                   .secure: url.scheme == "https"]) else {
+            view.load(request)
+            return
+        }
+        view.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { view.load(request) }
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {

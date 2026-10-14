@@ -117,6 +117,7 @@ final class CallManager: NSObject {
                     ringPhone(for: $0, tokenServerURL: tokenServerURL)
                 })
             } catch let error as RingStream.BadStatus {
+                Server.shared.noteStatus(error.code) // 401: the sign-in ended
                 problem = "The token server answered \(error.code) to the ring stream."
             } catch {
                 problem = "Can't reach the token server for calls."
@@ -197,12 +198,9 @@ final class CallManager: NSObject {
 
     /// Gives the token server this phone's VoIP push token, so the AI's calls ring while the app is closed.
     private func sendVoipToken(tokenServerURL: String) async {
-        guard let token = voipToken, let url = RingStream.endpoint("/voip", tokenServerURL: tokenServerURL) else { return }
-        var request = URLRequest(url: url, timeoutInterval: 10)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Builds run from Xcode get pushes from Apple's development service; a TestFlight build would not.
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token, "environment": "development"])
+        guard let token = voipToken,
+              let request = Server.request("/voip", method: "POST",
+                                           json: ["token": token, "environment": Server.pushEnvironment]) else { return }
         let response = try? await URLSession.shared.data(for: request)
         ringsWhenClosed = (response?.1 as? HTTPURLResponse)?.statusCode == 204
     }
@@ -221,7 +219,7 @@ final class CallManager: NSObject {
             provider.reportNewIncomingCall(with: rung, update: update) { _ in done.call() }
             return
         }
-        let address = UserDefaults.standard.string(forKey: "tokenServerURL") ?? ""
+        let address = Server.tokenURL
         guard let ring, rungRooms[ring.room] == nil, answerBy(ring) > .now, !isInCall, !address.isEmpty else {
             // Unreadable, already rung and over, expired, during another call, or no token server set.
             let id = UUID()
@@ -353,8 +351,7 @@ private struct Handed: @unchecked Sendable {
 extension CallManager: PKPushRegistryDelegate {
     func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
         voipToken = pushCredentials.token.map { String(format: "%02x", $0) }.joined()
-        let address = UserDefaults.standard.string(forKey: "tokenServerURL") ?? ""
-        Task { await sendVoipToken(tokenServerURL: address) }
+        Task { await sendVoipToken(tokenServerURL: Server.tokenURL) }
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {

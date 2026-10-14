@@ -2,7 +2,8 @@ import SwiftUI
 
 struct CallScreen: View {
     let calls: CallManager
-    @AppStorage("tokenServerURL") private var tokenServerURL = "http://localhost:8787/token"
+    @AppStorage("tokenServerURL") private var typedServerURL = "" // development builds only
+    private let server = Server.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var showsCallRecord = false
     private let offers = OfferCenter.shared
@@ -16,6 +17,11 @@ struct CallScreen: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                if !server.beeStatus.isEmpty {
+                    Text(server.beeStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if !calls.isInCall && !calls.ringStatus.isEmpty {
                     Text(calls.ringsWhenClosed ? "\(calls.ringStatus), also while the app is closed" : calls.ringStatus)
                         .font(.caption)
@@ -30,17 +36,20 @@ struct CallScreen: View {
 
             captions
 
+            #if DEBUG
+            // Development builds only: the Mac's address changes with the Wi-Fi. TestFlight builds have theirs built in.
             VStack(alignment: .leading, spacing: 4) {
-                Text("Token server")
+                Text("Token server (development)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextField("http://<Mac IP>:8787/token", text: $tokenServerURL)
+                TextField("http://<Mac IP>:8787/token", text: $typedServerURL)
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .disabled(calls.isInCall)
             }
+            #endif
 
             Button {
                 showsCallRecord = true
@@ -56,7 +65,7 @@ struct CallScreen: View {
                     if calls.isInCall {
                         await calls.endCall()
                     } else {
-                        await calls.startCall(tokenServerURL: tokenServerURL)
+                        await calls.startCall(tokenServerURL: Server.tokenURL)
                     }
                 }
             } label: {
@@ -75,7 +84,7 @@ struct CallScreen: View {
                 CallRecordSheet(url: callRecordURL) { earlierCall in
                     guard !calls.isInCall else { return } // one call at a time; the record stays open
                     showsCallRecord = false
-                    Task { await calls.startCall(tokenServerURL: tokenServerURL, continuing: earlierCall) }
+                    Task { await calls.startCall(tokenServerURL: Server.tokenURL, continuing: earlierCall) }
                 }
             }
         }
@@ -99,11 +108,11 @@ struct CallScreen: View {
     /// Where to listen for the AI's calls: the token server while the app is in the foreground, else
     /// nowhere. Inactive still counts as foreground; the incoming-call banner makes the app inactive.
     private var ringSource: String {
-        scenePhase == .background ? "" : tokenServerURL
+        scenePhase == .background ? "" : Server.tokenURL
     }
 
     private var callRecordURL: URL? {
-        CallRecordSheet.url(tokenServerURL: tokenServerURL)
+        Server.recordsURL
     }
 
     private var captions: some View {

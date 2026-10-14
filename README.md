@@ -100,7 +100,9 @@ uv run pytest
 
 ### iPhone app
 
-Open `ios/BeeCall/BeeCall.xcodeproj`, pick your team under Signing, run on a device on the same Wi-Fi as the Mac, and set the token server URL in the app to `http://<Mac LAN IP>:8787/token`.
+Open `ios/BeeCall/BeeCall.xcodeproj` and pick your team under Signing. The server address comes with the build: the target's `BEE_CALL_SERVER` and `BEE_CALL_RECORDS` build settings fill `BeeCallServer` and `BeeCallRecords` in `Info.plist`. A Debug build talks to the Mac (run it on a device on the same Wi-Fi; the first screen has a field for the Mac's address, `http://<Mac LAN IP>:8787/token`, and the call record comes from port 8788 on the same host). A Release build, the one TestFlight gets, talks to the cloud server only, with no field.
+
+The app signs in with Apple (`SignInView.swift`, `Server.swift`) and keeps the server's sign-in token in the Keychain; a new person sees a code to send to whoever runs the server. The rest of the person's choices live on the Bee Call page of the iOS Settings app (`Settings.bundle`): call language, evening call time, whether call audio is saved on the server and on the iPhone, and "Use Bee". The app sends them to the server whenever it comes to the foreground, and turning on "Use Bee" opens Bee's approval page for the person's own Bee account. With "Save on this iPhone" on, the app records the call itself (LiveKit's `AudioMixRecorder`: the microphone and the AI's voice in one file) into the Files app under On My iPhone, Bee Call.
 
 ## Privacy
 
