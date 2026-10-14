@@ -33,7 +33,7 @@ enum OfferAnswer: Equatable {
 }
 
 /// The AI asks before it calls (voice/offers.py on the Mac): a notification such as "About “Planned a Saturday
-/// hike”: free for a 5-minute call at 9:00 PM today?" with three buttons, which also show on the lock screen and
+/// hike”: free for a quick call at 9:00 PM today?" with three buttons, which also show on the lock screen and
 /// Apple Watch. A button sends the answer to the token server, even while the app is closed; the Mac then calls
 /// at once, at the accepted time, or not at all. Offers still open are listed on the app's first screen too, so
 /// a missed notification can still be answered there.
@@ -258,8 +258,8 @@ extension OfferCenter.Offer {
     var status: String {
         switch state {
         case "asked":
-            return suggestedEpoch.map { "Bee Call asks: a 5-minute call \(Self.day($0)) at \(Self.time($0))?" }
-                ?? "Bee Call asks for a 5-minute call"
+            return suggestedEpoch.map { "Bee Call asks: a quick call \(Self.day($0)) at \(Self.time($0))?" }
+                ?? "Bee Call asks for a quick call"
         case "booked":
             let who = source == "call" ? "You asked for a call back" : "You said yes"
             return callAtEpoch.map { "\(who): \(Self.day($0)) at \(Self.time($0))" } ?? who

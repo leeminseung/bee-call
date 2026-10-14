@@ -12,13 +12,14 @@ final class OfferTextTests: XCTestCase {
                           source: source, suggestedEpoch: suggested, callAtEpoch: callAt)
     }
 
+    /// No promised length: the server's notification says "a quick call" too (the owner's decision of 2026-10-15).
     @MainActor func testAQuestionWithASuggestedTime() {
         XCTAssertEqual(offer("asked", suggested: noon).status,
-                       "Bee Call asks: a 5-minute call today at \(OfferCenter.Offer.time(noon))?")
+                       "Bee Call asks: a quick call today at \(OfferCenter.Offer.time(noon))?")
     }
 
     @MainActor func testAQuestionWithoutATime() {
-        XCTAssertEqual(offer("asked").status, "Bee Call asks for a 5-minute call")
+        XCTAssertEqual(offer("asked").status, "Bee Call asks for a quick call")
     }
 
     @MainActor func testABookedCall() {
