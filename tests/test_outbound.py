@@ -11,7 +11,6 @@ import shutil
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 from beelink.context import CallInputs
 from beelink.planner import OUTBOUND_LOG, RulePlanner
