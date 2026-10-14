@@ -14,8 +14,9 @@ from meta import files
 from meta.agent import TOOLS, Thinker, context
 from meta.session import MetaSession, add_event, quiet, quiet_ends
 from voice.offers import OfferStore
+from tests.helpers import SEOUL
 
-NOW = datetime(2026, 10, 14, 18, 30)
+NOW = datetime(2026, 10, 14, 18, 30, tzinfo=SEOUL)
 
 
 def workspace_with_a_call(tmp_path: Path) -> Path:
@@ -54,10 +55,10 @@ def test_events_are_taken_once_and_the_session_reads_back(tmp_path):
 
 
 def test_quiet_time_runs_from_eleven_to_eight():
-    assert quiet(datetime(2026, 10, 14, 23, 0)) and quiet(datetime(2026, 10, 15, 7, 59))
-    assert not quiet(datetime(2026, 10, 15, 8, 0)) and not quiet(NOW)
-    assert quiet_ends(datetime(2026, 10, 14, 23, 30)) == datetime(2026, 10, 15, 8, 0)
-    assert quiet_ends(datetime(2026, 10, 15, 2, 0)) == datetime(2026, 10, 15, 8, 0)
+    assert quiet(datetime(2026, 10, 14, 23, 0, tzinfo=SEOUL)) and quiet(datetime(2026, 10, 15, 7, 59, tzinfo=SEOUL))
+    assert not quiet(datetime(2026, 10, 15, 8, 0, tzinfo=SEOUL)) and not quiet(NOW)
+    assert quiet_ends(datetime(2026, 10, 14, 23, 30, tzinfo=SEOUL)) == datetime(2026, 10, 15, 8, 0, tzinfo=SEOUL)
+    assert quiet_ends(datetime(2026, 10, 15, 2, 0, tzinfo=SEOUL)) == datetime(2026, 10, 15, 8, 0, tzinfo=SEOUL)
 
 
 def test_the_file_tools_read_the_workspace_and_nothing_else(tmp_path):
@@ -155,7 +156,7 @@ def test_one_question_at_a_time_and_a_short_plain_topic(tmp_path):
 def test_the_context_shows_limits_open_offers_notes_and_the_change(tmp_path):
     ws = workspace_with_a_call(tmp_path)
     text = context(ws, [{"kind": "bee_change", "at": "2026-10-14T18:25:00", "inbox": "inbox/2026-10-14-182500"}],
-                   datetime(2026, 10, 14, 23, 30))
+                   datetime(2026, 10, 14, 23, 30, tzinfo=SEOUL))
     assert "Notifications left today: 4 of 4. It is quiet time: a notification waits until 08:00." in text
     assert "Open offers:\nnone" in text and "## Agenda for the next call" in text
     assert "conversation 77 (14 utterances, COMPLETED): Weighing two job offers" in text
@@ -180,7 +181,7 @@ def test_the_calls_get_the_meta_agents_notes_and_answers_wake_it(tmp_path):
     from voice.token_server import make_app
 
     me = signed_in(tmp_path)
-    offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
+    offer, _ = asked(tmp_path, now=datetime.now(SEOUL), workspace=me.workspace)
 
     async def main():
         app = make_app("wss://example", "APIkey", "s" * 32, me.people, room_exists=None)

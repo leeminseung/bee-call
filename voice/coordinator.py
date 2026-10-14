@@ -12,7 +12,7 @@ import asyncio
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import AsyncIterable
+from typing import AsyncIterable, Callable
 
 from livekit import rtc
 from livekit.agents import Agent, ModelSettings, RunContext, function_tool, llm
@@ -106,18 +106,21 @@ class Coordinator(Agent):
     NOTE_RULES = NOTE_RULES
     NOTE_HEADER = "Call prep note (written just before the call):"
 
-    def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *, now: datetime | None = None,
+    def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *, clock: Callable[[], datetime],
                  prep_note: str | None = None, pending_note: "asyncio.Future[str | None] | None" = None,
                  language: CallLanguage | None = None, earlier_call: str | None = None) -> None:
+        # `clock` is the person's clock (Person.now): the time the call starts goes into the instructions, and
+        # book_call reads it again when the user books.
         # The date and the prep note go into the instructions before the call's first reply, and stay as they
         # are after it (Claude checks its earlier thinking against them). A note still being written when the
         # AI picks up (pending_note) replaces prep_note, the plain Bee context, if it arrives before that.
+        self._clock = clock
         rule = f"\n{language.rule}\n" if language and language.rule else ""
         # A call the user continued from an earlier call's record (voice/continuation.py).
         earlier = (f"\nThe user started this call to continue an earlier call with you. That call, as it was "
                    f"recorded:\n{earlier_call.strip()}\n") if earlier_call else ""
         self._base_instructions = INSTRUCTIONS + self.NOTE_RULES + rule + earlier + \
-            f"\nIt is now {now_text(now)}. Use this for words like today, tomorrow and this Saturday.\n"
+            f"\nIt is now {now_text(clock())}. Use this for words like today, tomorrow and this Saturday.\n"
         super().__init__(instructions=self._with_note(prep_note))
         self._recorder = recorder
         self._jobs = jobs
@@ -266,7 +269,7 @@ class Coordinator(Agent):
             at: For a clock time: the local date and time to call, in ISO 8601, like 2026-10-15T08:00.
             in_minutes: For a time from now, like "in ten minutes" (10) or "in an hour" (60): minutes from now.
         """
-        now = datetime.now()  # the clock now, not the time this call started
+        now = self._clock()  # the person's clock now, not the time this call started
         if (at is None) == (in_minutes is None):
             return "Give the time one way: in_minutes for a time from now, or at for a clock time."
         if in_minutes is not None:
@@ -276,8 +279,8 @@ class Coordinator(Agent):
                 when = datetime.fromisoformat(at.strip())
             except ValueError:
                 return "Give the time in ISO 8601, like 2026-10-15T08:00."
-            if when.tzinfo is not None:
-                when = when.astimezone().replace(tzinfo=None)  # this Mac's local time, like the rest of the workspace
+            # A time without a zone is the user's own; one with a zone is the same moment on their clock.
+            when = when.replace(tzinfo=now.tzinfo) if when.tzinfo is None else when.astimezone(now.tzinfo)
         if when < now + timedelta(minutes=1):
             return "That time has passed. Ask the user for a later time."
         if when > now + timedelta(days=7):
@@ -297,7 +300,7 @@ class Coordinator(Agent):
     @function_tool
     async def cancel_call(self, context: RunContext) -> str:
         """Call off the call back booked in this call, when the user no longer wants it."""
-        offer = OfferStore(self._workspace).call_off(self._booked, datetime.now(), "called off in the call") \
+        offer = OfferStore(self._workspace).call_off(self._booked, self._clock(), "called off in the call") \
             if self._booked else None
         if offer is None:
             return "No call back is booked in this call."
@@ -340,7 +343,7 @@ class BeeCoordinator(Coordinator):
     @function_tool
     async def bee_today(self, context: RunContext) -> str:
         """What the user's Bee wearable has for today: the daily summary, active todos, notes and recent conversations."""
-        return await reads.today()
+        return await reads.today(self._clock().tzinfo)
 
     @function_tool
     async def bee_conversation(self, context: RunContext, conversation_id: int) -> str:
@@ -349,7 +352,7 @@ class BeeCoordinator(Coordinator):
         Args:
             conversation_id: The Bee conversation id, from the prep note, bee_today or search_bee.
         """
-        return await reads.conversation(conversation_id)
+        return await reads.conversation(conversation_id, self._clock().tzinfo)
 
     @function_tool
     async def save_to_bee(self, context: RunContext, kind: str, text: str | None = None, fact_id: int | None = None,

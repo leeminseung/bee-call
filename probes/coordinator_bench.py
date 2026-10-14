@@ -194,7 +194,7 @@ async def run_once(model_id: str, workspace: Path, cut_off_style: str = "none", 
     requests: list[dict] = []
     model.on("metrics_collected", lambda m: requests.append(
         {"ttft": m.ttft, "duration": m.duration, "in": m.prompt_tokens, "out": m.completion_tokens}))
-    agent = BenchCoordinator(CallRecorder(workspace, room="bench"), StubJobs(), workspace, now=NOW)
+    agent = BenchCoordinator(CallRecorder(workspace, room="bench", now=NOW), StubJobs(), workspace, clock=lambda: NOW)
     results = []
     heard: set[str] = set()  # halves of the job result the caller has heard
     missed_topic = None  # the half the caller missed when they cut the result off, until it is said

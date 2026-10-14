@@ -1,16 +1,15 @@
 """Bee data as short text for a model: before a call (voice/prep.py) and during it (the coordinator's tools).
 
 The reads never raise: a failed read comes back as a line that says so, and the model carries on
-without it. Times are in the user's time zone.
+without it. Times are in the user's time zone (`zone`, from the person's settings: voice/people.py).
 """
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, tzinfo
 from typing import Any
 
 from beelink import cli
-from beelink.clock import USER_TIMEZONE
 
 # Under LiveKit's 5 s wait for tools after an interruption, so a read is not lost (see voice/coordinator.py).
 READ_TIMEOUT_S = 4.0
@@ -18,10 +17,10 @@ MAX_CHARS = 2500  # per read, so one read cannot crowd out the rest of a prompt 
 LAST_LINES = 12  # transcript lines shown for one conversation (arbitrary)
 
 
-def clock(ms: int | None) -> str:
+def clock(ms: int | None, zone: tzinfo) -> str:
     if not ms:
         return "time unknown"
-    return datetime.fromtimestamp(ms / 1000, USER_TIMEZONE).strftime("%a %b %-d, %-I:%M %p")
+    return datetime.fromtimestamp(ms / 1000, zone).strftime("%a %b %-d, %-I:%M %p")
 
 
 def text_of(item: Any) -> str:
@@ -40,12 +39,13 @@ def cap(text: str, limit: int = MAX_CHARS) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + " (cut short)"
 
 
-def conversation_line(c: dict[str, Any]) -> str:
+def conversation_line(c: dict[str, Any], zone: tzinfo) -> str:
     lines = f" ({c['utterances_count']} lines)" if c.get("utterances_count") else ""
-    return f"[conversation {c.get('id')}] {clock(c.get('start_time'))}: {c.get('short_summary') or 'no summary yet'}{lines}"
+    return (f"[conversation {c.get('id')}] {clock(c.get('start_time'), zone)}: "
+            f"{c.get('short_summary') or 'no summary yet'}{lines}")
 
 
-def today_text(data: dict[str, Any]) -> str:
+def today_text(data: dict[str, Any], zone: tzinfo) -> str:
     lines = [f"Today ({data.get('date') or 'date unknown'}) in Bee:"]
     if data.get("dailySummary"):
         lines.append(f"Daily summary: {text_of(data['dailySummary'])}")
@@ -57,20 +57,21 @@ def today_text(data: dict[str, Any]) -> str:
     for note in data.get("recentNotes") or []:
         lines.append(f"[note {note.get('id')}] {text_of(note)}")
     for conversation in data.get("recentConversations") or []:
-        lines.append(conversation_line(conversation))
+        lines.append(conversation_line(conversation, zone))
     if len(lines) == 1:
         lines.append("Nothing recorded today yet.")
     return cap("\n".join(lines))
 
 
-def recent_text(conversations: list[dict[str, Any]]) -> str:
+def recent_text(conversations: list[dict[str, Any]], zone: tzinfo) -> str:
     if not conversations:
         return "Recent Bee conversations: none."
-    return cap("Recent Bee conversations, newest first:\n" + "\n".join(conversation_line(c) for c in conversations))
+    return cap("Recent Bee conversations, newest first:\n"
+               + "\n".join(conversation_line(c, zone) for c in conversations))
 
 
-def conversation_text(conversation: dict[str, Any], utterances: list[dict[str, Any]]) -> str:
-    lines = [conversation_line(conversation)]
+def conversation_text(conversation: dict[str, Any], utterances: list[dict[str, Any]], zone: tzinfo) -> str:
+    lines = [conversation_line(conversation, zone)]
     if conversation.get("summary"):
         lines.append(f"Summary: {conversation['summary']}")
     if utterances:
@@ -87,27 +88,27 @@ def suggestions_text(suggestions: list[dict[str, Any]]) -> str:
     return "\n".join(f"[todo suggestion {s.get('id')}] {s.get('text')}" for s in suggestions[:10])
 
 
-async def today() -> str:
+async def today(zone: tzinfo) -> str:
     try:
-        return today_text(await cli.today_context(timeout=READ_TIMEOUT_S))
+        return today_text(await cli.today_context(timeout=READ_TIMEOUT_S), zone)
     except Exception as exc:
         return f"Bee read failed: {exc}"
 
 
-async def recent_conversations(limit: int = 8) -> str:
+async def recent_conversations(zone: tzinfo, limit: int = 8) -> str:
     try:
-        return recent_text(await cli.conversations(limit, timeout=READ_TIMEOUT_S))
+        return recent_text(await cli.conversations(limit, timeout=READ_TIMEOUT_S), zone)
     except Exception as exc:
         return f"Bee read failed: {exc}"
 
 
-async def conversation(conversation_id: int) -> str:
+async def conversation(conversation_id: int, zone: tzinfo) -> str:
     try:
         got, said = await asyncio.gather(cli.conversation(conversation_id, timeout=READ_TIMEOUT_S),
                                          cli.transcript(conversation_id, timeout=READ_TIMEOUT_S))
     except Exception as exc:
         return f"Bee read failed: {exc}"
-    return conversation_text(got.get("conversation") or {"id": conversation_id}, said.get("transcript") or [])
+    return conversation_text(got.get("conversation") or {"id": conversation_id}, said.get("transcript") or [], zone)
 
 
 async def day(date: str) -> str:

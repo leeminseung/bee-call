@@ -386,7 +386,8 @@ class HarnessWorker:
     async def run(self, job: Job, progress: Callable[[str], None], relay: Callable[[str], Awaitable[None]]) -> str:
         session_id = await self._take_session(job.job_id)
         # The worker has no clock; relative dates in the task ("this Saturday") need today's date.
-        messages = [{"role": "user", "content": [{"text": f"Job {job.job_id} (it is now {now_text()}; read today, tomorrow and weekdays against this): {job.task}"}]}]
+        messages = [{"role": "user", "content": [{"text": f"Job {job.job_id} (it is now {now_text(job.now)}; read today, "
+                                                         f"tomorrow and weekdays against this): {job.task}"}]}]
         # What the job used so far, in usage.json after every round, so the daily budget counts a job that fails or
         # is cancelled when the call ends as well as one that finishes (voice/costs.py).
         usage: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0, "stop_reason": None, "status": "running",

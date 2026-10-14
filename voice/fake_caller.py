@@ -132,12 +132,13 @@ def main() -> None:
         build_track(lines, voice, lead, [float(g) for g in args.gap.split(",")], args.tail, track, engine)
         if args.outbound:
             # A test: ignore the gap between calls and the age of the saved conversation.
-            plan = RulePlanner(workspace, cooldown=timedelta(0), max_age=timedelta(days=3650)) \
-                .decide(saved_trigger(args.outbound))
+            plan = RulePlanner(workspace, cooldown=timedelta(0), max_age=timedelta(days=3650),
+                               now=people.person(person).now).decide(saved_trigger(args.outbound))
             print(f"plan: {'CALL' if plan.call else 'no call'} - {plan.reason}")
             if not plan.call:
                 return
-            prep = asyncio.run(prepare_outbound(plan, spend=SpendLog(workspace), bee=people.settings(person).bee))
+            prep = asyncio.run(prepare_outbound(plan, spend=SpendLog(workspace), bee=people.settings(person).bee,
+                                                now=people.person(person).now()))
             print(f"prepared in {prep.seconds} s: " + (f"opening {prep.opening!r}" if prep.note else f"no note ({prep.error})"))
             room = asyncio.run(open_test_call(plan, people.person(person), prep=prep.to_meta()))
             print(f"the AI is calling in room {room}; answering in {args.ring:.0f}s")

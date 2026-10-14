@@ -17,6 +17,7 @@ import json
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -24,7 +25,7 @@ from beelink import cli, reads
 from meta.agent import Thinker
 from meta.session import MetaSession, add_event
 
-NOW = datetime.now().replace(hour=18, minute=40, second=0, microsecond=0)
+NOW = datetime.now(ZoneInfo("Asia/Seoul")).replace(hour=18, minute=40, second=0, microsecond=0)
 
 
 def scratch_workspace(root: Path) -> Path:

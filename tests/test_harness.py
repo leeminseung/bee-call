@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import datetime
 
 import pytest
 
@@ -9,6 +10,7 @@ from voice.costs import SpendLog
 from worker.harness import INLINE_FUNCTIONS, HarnessWorker, harness_definition, read_round
 from worker.runner import Job
 from worker.web_search import SearchResult
+from tests.helpers import SEOUL
 
 
 def assistant(*blocks, stop="tool_use"):
@@ -89,7 +91,7 @@ def test_worker_serves_inline_functions_until_the_agent_finishes(tmp_path):
     ])
 
     async def main():
-        job = Job(job_id="01", dir=tmp_path, task="Compare the trails")
+        job = Job(job_id="01", dir=tmp_path, now=datetime.now(SEOUL), task="Compare the trails")
         progress, relayed = [], []
 
         async def relay(text):
@@ -124,7 +126,8 @@ def run_job(tmp_path, rounds, search=fake_search):
 
     async def main():
         runner = JobRunner(tmp_path, lambda name, **f: events.append((name, f)),
-                           HarnessWorker("arn:harness", client=FakeHarness(rounds), search=search), on_notify)
+                           HarnessWorker("arn:harness", client=FakeHarness(rounds), search=search), on_notify,
+                           clock=lambda: datetime.now(SEOUL))
         runner.start("Compare the trails")
         await asyncio.gather(*runner.tasks.values())
 
@@ -177,7 +180,7 @@ def test_save_chart_draws_svg_and_file_names_are_checked(tmp_path):
     ])
 
     async def main():
-        job = Job(job_id="01", dir=tmp_path, task="chart")
+        job = Job(job_id="01", dir=tmp_path, now=datetime.now(SEOUL), task="chart")
         (tmp_path / "request.md").write_text("original")
 
         async def relay(text):
@@ -203,7 +206,7 @@ def test_a_call_to_a_tool_that_does_not_exist_gets_an_error_and_the_job_goes_on(
         async def relay(text):
             pass
 
-        job = Job(job_id="01", dir=tmp_path, task="What day is Saturday?")
+        job = Job(job_id="01", dir=tmp_path, now=datetime.now(SEOUL), task="What day is Saturday?")
         return await HarnessWorker("arn:harness", client=harness, search=fake_search).run(job, lambda t: None, relay)
 
     assert asyncio.run(main()) == "Finished without the date tool."
@@ -225,7 +228,7 @@ def test_a_warm_session_is_ready_before_the_first_job_and_the_job_uses_it(tmp_pa
             await asyncio.sleep(0.01)
         async def relay(text):
             pass
-        summary = await worker.run(Job(job_id="01", dir=tmp_path, task="Anything"), lambda t: None, relay)
+        summary = await worker.run(Job(job_id="01", dir=tmp_path, now=datetime.now(SEOUL), task="Anything"), lambda t: None, relay)
         warm.cancel()
         await warm
         return summary
@@ -268,7 +271,7 @@ def run_in_a_call(tmp_path, harness, cancel_after: float | None = None) -> str:
     from datetime import datetime
     from worker.runner import JobRunner
 
-    call = tmp_path / datetime.now().strftime("%Y-%m-%d") / "0100"
+    call = tmp_path / datetime.now(SEOUL).strftime("%Y-%m-%d") / "0100"
     call.mkdir(parents=True)
 
     async def main():
@@ -276,7 +279,7 @@ def run_in_a_call(tmp_path, harness, cancel_after: float | None = None) -> str:
             pass
 
         runner = JobRunner(call, lambda *a, **k: None, HarnessWorker("arn:harness", client=harness, search=fake_search),
-                           notify)
+                           notify, clock=lambda: datetime.now(SEOUL))
         runner.start("research something")
         if cancel_after is not None:
             await asyncio.sleep(cancel_after)
@@ -294,7 +297,7 @@ def test_a_failed_job_still_counts_what_it_used(tmp_path):
     rounds = searching_rounds(5) + [assistant(("text", "Still going"), stop="max_iterations_exceeded")]
     assert run_in_a_call(tmp_path, FakeHarness(rounds)) == "failed"
     rounds_cost = 5 * 1.00 + 5 * WEB_SEARCH_USD + (100 / 1_000_000) * 1.00 + (10 / 1_000_000) * 3.20  # the last round
-    assert spent_today(tmp_path, datetime.now()) == pytest.approx(rounds_cost)
+    assert spent_today(tmp_path, datetime.now(SEOUL)) == pytest.approx(rounds_cost)
 
 
 class SlowHarness(FakeHarness):
@@ -311,5 +314,5 @@ def test_a_job_cancelled_when_the_call_ends_still_counts_its_rounds_so_far(tmp_p
     from voice.costs import WEB_SEARCH_USD, spent_today
 
     assert run_in_a_call(tmp_path, SlowHarness(searching_rounds(10)), cancel_after=0.5) == "cancelled"
-    spent = spent_today(tmp_path, datetime.now())
+    spent = spent_today(tmp_path, datetime.now(SEOUL))
     assert spent >= 1.00 + WEB_SEARCH_USD  # at least the rounds that finished before the call ended

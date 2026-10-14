@@ -104,10 +104,11 @@ def test_the_opening_picks_up_the_earlier_call(tmp_path):
 def test_the_coordinator_keeps_the_earlier_call_for_the_whole_call(tmp_path):
     earlier_session(tmp_path)
     text = earlier_call(tmp_path, EARLIER)
-    agent = Coordinator(CallRecorder(tmp_path, room="r"), SimpleNamespace(), tmp_path, now=NOW, earlier_call=text)
+    agent = Coordinator(CallRecorder(tmp_path, room="r", now=NOW), SimpleNamespace(), tmp_path, clock=lambda: NOW,
+                        earlier_call=text)
     assert "The user started this call to continue an earlier call with you." in agent.instructions
     assert text in agent.instructions
-    plain = Coordinator(CallRecorder(tmp_path, room="r2"), SimpleNamespace(), tmp_path, now=NOW)
+    plain = Coordinator(CallRecorder(tmp_path, room="r2", now=NOW), SimpleNamespace(), tmp_path, clock=lambda: NOW)
     assert "earlier call" not in plain.instructions
 
 

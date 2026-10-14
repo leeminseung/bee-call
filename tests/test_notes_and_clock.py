@@ -22,7 +22,7 @@ def test_notes_stay_in_turn_order_for_converse_models(tmp_path):
     when = datetime(2026, 10, 13, 16, 40, tzinfo=ZoneInfo("Asia/Seoul"))
 
     async def main():
-        agent = Coordinator(CallRecorder(tmp_path, room="r"), SimpleNamespace(), tmp_path, now=when)
+        agent = Coordinator(CallRecorder(tmp_path, room="r", now=when), SimpleNamespace(), tmp_path, clock=lambda: when)
         chat = agent.chat_ctx.copy()
         chat.add_message(role="assistant", content="Hi, it's Bee Call. What's on your mind?")
         chat.add_message(role="user", content="Can you check the weather?")

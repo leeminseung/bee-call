@@ -33,6 +33,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from beelink.clock import parse_time
 from beelink.planner import OFFERS_DIR, Plan
 from voice.language import CallLanguage
 
@@ -61,9 +62,10 @@ class Offer:
     topic: str | None = None
     kind: str | None = None  # "conversation" or "voice note" (from the plan); None for a call agreed in a call
     source: str = "bee"  # "bee": asked by notification; "call": agreed out loud in a call
-    suggested_at: str | None = None  # local time the notification suggests (ISO)
-    call_at: str | None = None  # when to call, once the user said yes (ISO)
-    expires_at: str | None = None  # an unanswered offer closes here (ISO)
+    # Times are ISO with the person's time zone (voice/people.py Person.now); older offers' carry none (parse_time).
+    suggested_at: str | None = None  # the time the notification suggests
+    call_at: str | None = None  # when to call, once the user said yes
+    expires_at: str | None = None  # an unanswered offer closes here
     inbox: str | None = None
     plan: str | None = None
     conversation_ids: list[int] = field(default_factory=list)
@@ -83,7 +85,7 @@ class Offer:
 
     def at(self, name: str) -> datetime | None:
         value = getattr(self, name)
-        return datetime.fromisoformat(value) if value else None
+        return parse_time(value) if value else None
 
     def view(self) -> dict[str, Any]:
         """What the app shows: the times also as epochs, for a phone in another time zone."""
@@ -95,8 +97,8 @@ class Offer:
 
 
 def call_time(now: datetime, at: str | None = None) -> datetime:
-    """Today's call time, or tomorrow's when today's is past or too close. CALL_TIME is read here, after the
-    processes have loaded .env.local."""
+    """Today's call time, or tomorrow's when today's is past or too close, on the person's clock (`now` is their
+    time). CALL_TIME is read here, after the processes have loaded .env.local."""
     hour, minute = (int(x) for x in (at or os.environ.get("CALL_TIME") or CALL_TIME).split(":"))
     today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     return today if today - now >= MIN_LEAD else today + timedelta(days=1)
@@ -247,9 +249,10 @@ class OfferStore:
                 self._save(offer)
 
     def notified_on(self, day: datetime) -> int:
-        """How many offer notifications went out on that day (counted from the moment they started to go out)."""
-        prefix = day.date().isoformat()
-        return sum(1 for o in self.all() if o.notified_at and o.notified_at.startswith(prefix))
+        """How many offer notifications went out on that day of the person's (`day` is their time), counted from
+        the moment they started to go out."""
+        return sum(1 for o in self.all()
+                   if o.notified_at and o.at("notified_at").astimezone(day.tzinfo).date() == day.date())
 
     def last_notified(self) -> datetime | None:
         """When the latest offer notification went out."""
@@ -313,7 +316,7 @@ class OfferStore:
                 self._save(self._set(offer, "expired", now, error="the call could not be placed in time",
                                      not_placed="late"))
             elif offer.state in ("calling", "placing") and offer.history and \
-                    now - datetime.fromisoformat(offer.history[-1]["at"]) > STUCK:
+                    now - parse_time(offer.history[-1]["at"]) > STUCK:
                 self._save(self._set(offer, "failed", now, error="placing the call did not finish",
                                      not_placed="failed"))
 
@@ -362,7 +365,7 @@ def plan_of(offer: Offer) -> Plan:
 def agreed(offer: Offer) -> str:
     """How the user agreed to this call, for the AI's opening."""
     said = next((h["at"] for h in offer.history if h["state"] in ("now", "booked")), None)
-    when = datetime.fromisoformat(said).strftime("%H:%M") if said else "earlier"
+    when = parse_time(said).strftime("%H:%M") if said else "earlier"
     if offer.source == "call":
         return f"the user asked for this call back during an earlier call, at {when}"
     if any(h["state"] == "now" for h in offer.history):
@@ -380,6 +383,7 @@ def clock_label(moment: datetime, language: CallLanguage) -> str:
 
 
 def when_label(moment: datetime, now: datetime, language: CallLanguage) -> str:
+    moment = moment.astimezone(now.tzinfo)  # on the person's clock now
     tomorrow = moment.date() != now.date()
     if language.code == "ko":
         return f"{'내일' if tomorrow else '오늘'} {clock_label(moment, language)}"

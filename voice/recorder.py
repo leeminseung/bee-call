@@ -50,8 +50,8 @@ class WavSink:
 
 
 class CallRecorder:
-    def __init__(self, workspace: Path, room: str, keep_audio: bool = True) -> None:
-        now = datetime.now()
+    def __init__(self, workspace: Path, room: str, keep_audio: bool = True, *, now: datetime) -> None:
+        """`now`: when the call started, on the person's clock (Person.now()); the folder is named by it."""
         base = workspace / now.strftime("%Y-%m-%d") / now.strftime("%H%M")
         self.dir = base
         n = 2

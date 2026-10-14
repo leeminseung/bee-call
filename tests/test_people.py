@@ -13,7 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from beelink import cli
-from tests.helpers import signed_in
+from tests.helpers import SEOUL, signed_in
 from voice import apple_signin, costs, session_server, token_server, voip_push
 from voice.people import People, Settings, waiting_code
 from voice.recorder import CallRecorder
@@ -73,7 +73,7 @@ def test_settings_are_checked_and_the_app_changes_only_its_own(tmp_path):
 
 def test_sign_ins_wait_for_approval_and_end_when_the_person_is_removed(tmp_path):
     people = People(tmp_path)
-    now = datetime(2026, 10, 14, 21, 0)
+    now = datetime(2026, 10, 14, 21, 0, tzinfo=SEOUL)
     assert people.sign_in("001234.abcd", "friend@example.com", now) is None
     (waiting,) = people.waiting()
     assert waiting["code"] == waiting_code("001234.abcd") and waiting["email"] == "friend@example.com"
@@ -189,7 +189,7 @@ def test_people_see_only_their_own_offers_tokens_and_calls(tmp_path):
     matt = signed_in(tmp_path, "matt")
     jiwoo_token = (matt.people.add("jiwoo"), matt.people.new_session("jiwoo"))[1]
     jiwoo = {"Authorization": f"Bearer {jiwoo_token}"}
-    offer, _ = asked(tmp_path, now=datetime.now(), workspace=matt.workspace)
+    offer, _ = asked(tmp_path, now=datetime.now(SEOUL), workspace=matt.workspace)
     (matt.workspace / "2026-10-14" / "2100").mkdir(parents=True)
     (matt.workspace / "2026-10-14" / "2100" / "events.jsonl").write_text('{"t": 0, "type": "call_started"}\n')
 
@@ -404,7 +404,7 @@ def test_spend_counts_calls_prep_jobs_searches_and_meta_thinks_of_today(tmp_path
     from livekit.agents.metrics.usage import LLMModelUsage, STTModelUsage, TTSModelUsage
 
     ws = tmp_path
-    now = datetime(2026, 10, 14, 21, 0)
+    now = datetime(2026, 10, 14, 21, 0, tzinfo=SEOUL)
     done = ws / "2026-10-14" / "2000"
     (done / "jobs" / "01").mkdir(parents=True)
     # What voice/agent.py writes: LiveKit's own usage entries, with the providers as its plugins name them.
@@ -443,7 +443,7 @@ def test_spend_counts_calls_prep_jobs_searches_and_meta_thinks_of_today(tmp_path
 def test_a_new_call_waits_for_tomorrow_once_the_budget_is_spent(tmp_path):
     me = signed_in(tmp_path)
     me.people.change_settings("matt", {"daily_budget_usd": 0.5}, allowed=("daily_budget_usd",))
-    call = me.workspace / datetime.now().strftime("%Y-%m-%d") / "0001"
+    call = me.workspace / datetime.now(SEOUL).strftime("%Y-%m-%d") / "0001"
     call.mkdir(parents=True)
     (call / "usage.json").write_text(json.dumps({"models": [
         {"type": "llm_usage", "provider": "aws", "model": "zai.glm-5", "input_tokens": 1_000_000}]}))
@@ -462,9 +462,9 @@ def test_over_budget_an_agreed_call_is_not_placed(tmp_path):
 
     me = signed_in(tmp_path)
     me.people.change_settings("matt", {"daily_budget_usd": 0}, allowed=("daily_budget_usd",))  # nothing left
-    offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
+    offer, _ = asked(tmp_path, now=datetime.now(SEOUL), workspace=me.workspace)
     store = OfferStore(me.workspace)
-    store.answer(offer.id, "now", datetime.now())
+    store.answer(offer.id, "now", datetime.now(SEOUL))
     placed = []
 
     async def place(*a, **kw):
@@ -477,7 +477,7 @@ def test_over_budget_an_agreed_call_is_not_placed(tmp_path):
 
 def spend_today(workspace: Path, usd: float) -> None:
     """A finished call today that cost `usd` (GLM 5 input: 1.00 USD per million tokens)."""
-    call = workspace / datetime.now().strftime("%Y-%m-%d") / "0001"
+    call = workspace / datetime.now(SEOUL).strftime("%Y-%m-%d") / "0001"
     call.mkdir(parents=True, exist_ok=True)
     (call / "usage.json").write_text(json.dumps({"models": [
         {"type": "llm_usage", "provider": "aws", "model": "zai.glm-5", "input_tokens": int(usd * 1_000_000)}]}))
@@ -499,9 +499,9 @@ def test_every_path_to_an_agreed_call_checks_the_budget(tmp_path):
     async def prepare(plan, **kw):
         return Prep(note="n", opening="o")
 
-    first = store.book("check in", datetime.now() - timedelta(seconds=1), datetime.now())
+    first = store.book("check in", datetime.now(SEOUL) - timedelta(seconds=1), datetime.now(SEOUL))
     assert asyncio.run(call_due(me.person, prepare=prepare, place=placing(rooms))) == []
-    second = store.book("the interview", datetime.now() - timedelta(seconds=1), datetime.now())
+    second = store.book("the interview", datetime.now(SEOUL) - timedelta(seconds=1), datetime.now(SEOUL))
     asyncio.run(asyncio.wait_for(serve_offers(me.person, until=second.id, prepare=prepare, place=placing(rooms)), 10))
     assert rooms == [] and [store.get(o.id).state for o in (first, second)] == ["failed", "failed"]
     assert all("budget" in store.get(o.id).error for o in (first, second))
@@ -514,7 +514,7 @@ def test_the_meta_agent_s_own_loop_checks_the_budget(tmp_path, monkeypatch):
     me = signed_in(tmp_path)
     me.people.change_settings("matt", {"daily_budget_usd": 0.5}, allowed=("daily_budget_usd",))
     spend_today(me.workspace, 0.5)
-    add_event(me.workspace, "call_ended", call="2026-10-14/2000")
+    add_event(me.workspace, "call_ended", now=me.person.now(), call="2026-10-14/2000")
     thought = []
 
     class Thinker:
@@ -541,8 +541,8 @@ def test_an_agreed_call_carries_its_person(tmp_path):
     from voice.prep import Prep
 
     jiwoo = signed_in(tmp_path, "jiwoo")
-    offer, _ = asked(tmp_path, now=datetime.now(), workspace=jiwoo.workspace)
-    OfferStore(jiwoo.workspace).answer(offer.id, "now", datetime.now())
+    offer, _ = asked(tmp_path, now=datetime.now(SEOUL), workspace=jiwoo.workspace)
+    OfferStore(jiwoo.workspace).answer(offer.id, "now", datetime.now(SEOUL))
     seen = {}
 
     async def prepare(plan, extra=None, deadline_s=None, language=None, **kw):
@@ -561,11 +561,11 @@ def test_an_agreed_call_carries_its_person(tmp_path):
 # ---------- recording ----------
 
 def test_a_call_can_skip_keeping_its_audio(tmp_path):
-    rec = CallRecorder(tmp_path, "call-x", keep_audio=False)
+    rec = CallRecorder(tmp_path, "call-x", keep_audio=False, now=datetime.now(SEOUL))
     rec.line("AI", "hello")
     rec.close()
     assert (rec.dir / "transcript.md").exists() and not (rec.dir / "audio").exists()
-    kept = CallRecorder(tmp_path, "call-y")
+    kept = CallRecorder(tmp_path, "call-y", now=datetime.now(SEOUL))
     kept.close()
     assert (kept.dir / "audio").is_dir()
 
@@ -672,11 +672,11 @@ def test_the_prep_of_an_ai_call_counts_where_it_runs_even_if_nobody_answers(tmp_
     monkeypatch.setenv("COORDINATOR_LLM", "bedrock")
     monkeypatch.setattr(prep_module, "bedrock_client",
                         lambda region: Converse(text("<opening>Hi!</opening><note>n</note>"), usage=(100_000, 0)))
-    OfferStore(me.workspace).book("the interview", datetime.now() - timedelta(seconds=1), datetime.now())
+    OfferStore(me.workspace).book("the interview", datetime.now(SEOUL) - timedelta(seconds=1), datetime.now(SEOUL))
     rooms = []
     assert len(asyncio.run(call_due(me.person, place=placing(rooms)))) == 1  # placed; the phone is never answered
     assert [p for p in me.workspace.glob("*/*/events.jsonl")] == []  # no call record: the voice server never answered
-    assert costs.spent_today(me.workspace, datetime.now()) == pytest.approx(0.10)  # GLM 5: 100,000 input tokens
+    assert costs.spent_today(me.workspace, datetime.now(SEOUL)) == pytest.approx(0.10)  # GLM 5: 100,000 input tokens
 
 
 def test_a_prep_cut_short_counts_an_estimate_of_what_it_sent(tmp_path):
@@ -689,7 +689,7 @@ def test_a_prep_cut_short_counts_an_estimate_of_what_it_sent(tmp_path):
         client = Converse(text("<opening>Hi Matt, what's up?</opening>" + "<note>" + "x" * 2000 + "</note>"), gap=0.05,
                           usage=(999, 999))
         preparation = Preparation(CallInputs(), {"direction": "inbound"}, MODEL, client=client,
-                                  spend=SpendLog(tmp_path), bee=True).start()
+                                  spend=SpendLog(tmp_path), bee=True, now=datetime.now(SEOUL)).start()
         await preparation.opening(timeout=5)
         preparation.cancel()  # the caller hung up while it rang
         await asyncio.gather(preparation.done, return_exceptions=True)
@@ -699,7 +699,7 @@ def test_a_prep_cut_short_counts_an_estimate_of_what_it_sent(tmp_path):
     asyncio.run(main())
     (entry,) = [json.loads(line) for line in (tmp_path / "state" / "spend.jsonl").read_text().splitlines()]
     assert entry["what"] == "call_prep" and entry["estimated"] and entry["input_tokens"] > 300
-    assert costs.spent_today(tmp_path, datetime.now()) > 0
+    assert costs.spent_today(tmp_path, datetime.now(SEOUL)) > 0
 
 
 def test_without_bee_the_prep_of_an_ai_call_reads_nothing_and_never_mentions_bee(tmp_path, monkeypatch):
@@ -718,7 +718,7 @@ def test_without_bee_the_prep_of_an_ai_call_reads_nothing_and_never_mentions_bee
     client = Converse(text("<opening>Hi!</opening><note>n</note>"))
     monkeypatch.setattr(prep_module, "bedrock_client", lambda region: client)
     me = signed_in(tmp_path)
-    OfferStore(me.workspace).book("the flat prices", datetime.now() - timedelta(seconds=1), datetime.now())
+    OfferStore(me.workspace).book("the flat prices", datetime.now(SEOUL) - timedelta(seconds=1), datetime.now(SEOUL))
 
     async def as_the_loops_run():
         cli.use_bee(None)  # what serve_person() does for a person with Use Bee off
@@ -746,4 +746,4 @@ def test_the_app_sets_the_person_s_time_zone_and_their_clock_follows_it(tmp_path
     assert asyncio.run(main()) == [400, 400, 400, 400, 200]
     now = me.person.now()
     assert now.tzinfo is not None and str(now.tzinfo) == "America/New_York"
-    assert abs((now - datetime.now().astimezone()).total_seconds()) < 5  # the same moment, in their zone
+    assert abs((now - datetime.now(SEOUL).astimezone()).total_seconds()) < 5  # the same moment, in their zone

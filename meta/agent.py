@@ -201,9 +201,9 @@ class Thinker:
                 return await asyncio.to_thread(files.grep, ws, str(args["pattern"]), str(args.get("path") or "."),
                                                str(args.get("glob") or "*"))
             if name == "bee_today":
-                return await reads.today()
+                return await reads.today(now.tzinfo)
             if name == "bee_conversation":
-                return await reads.conversation(int(args["conversation_id"]))
+                return await reads.conversation(int(args["conversation_id"]), now.tzinfo)
             if name == "search_bee":
                 return await reads.search(str(args.get("query", "")))
             if name == "bee_day":
@@ -257,9 +257,9 @@ class Thinker:
                                        messages=messages, toolConfig={"tools": self.tools},
                                        inferenceConfig={"maxTokens": 2000})
 
-    async def think(self, events: list[dict[str, Any]], now: datetime | None = None) -> dict[str, Any]:
-        """Thinks once about these events and logs the entry in the meta session. Never raises."""
-        now = now or datetime.now()
+    async def think(self, events: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
+        """Thinks once about these events and logs the entry in the meta session. Never raises. `now` is the
+        person's time (Person.now())."""
         started = time.monotonic()
         entry: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "events": events, "model": self.model[0],
                                  "tools": [], "actions": [], "decision": "",

@@ -26,7 +26,7 @@ class SearchWorker:
         # One search, counted in the daily budget from the moment it is sent (voice/costs.py job_cost).
         write_usage(job, {"input_tokens": 0, "output_tokens": 0, "steps": [{"calls": [{"name": "web_search"}]}]})
         # The search model has no clock either; give it today's date for relative dates.
-        result = await self.search(f"{job.task} (It is now {now_text()}.)")
+        result = await self.search(f"{job.task} (It is now {now_text(job.now)}.)")
         (job.dir / "report.md").write_text(f"# Report for job {job.job_id}\n\nTask: {job.task}\n\n{result.markdown()}")
         progress(f"Read {len(result.sources)} sources")
         await relay(result.summary or "The web search found nothing useful.")

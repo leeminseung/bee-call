@@ -28,9 +28,9 @@ def test_english_is_the_default_and_korean_is_one_setting(monkeypatch):
 
 
 def test_the_coordinator_speaks_the_call_language(tmp_path):
-    korean = Coordinator(CallRecorder(tmp_path, room="r"), SimpleNamespace(), tmp_path, now=NOW,
+    korean = Coordinator(CallRecorder(tmp_path, room="r", now=NOW), SimpleNamespace(), tmp_path, clock=lambda: NOW,
                          language=call_language("ko"))
-    english = Coordinator(CallRecorder(tmp_path, room="r2"), SimpleNamespace(), tmp_path, now=NOW,
+    english = Coordinator(CallRecorder(tmp_path, room="r2", now=NOW), SimpleNamespace(), tmp_path, clock=lambda: NOW,
                           language=call_language("en"))
     assert call_language("ko").rule in korean.instructions and korean.instructions.startswith(INSTRUCTIONS)
     assert "Korean" not in english.instructions
@@ -40,8 +40,10 @@ def test_the_prep_opening_is_in_the_call_language(tmp_path):
     from voice.costs import SpendLog
 
     async def main():
-        return (Preparation(CallInputs(), {}, None, spend=SpendLog(tmp_path), bee=True, language=call_language("ko"))._system,
-                Preparation(CallInputs(), {}, None, spend=SpendLog(tmp_path), bee=True, language=call_language("en"))._system)
+        return (Preparation(CallInputs(), {}, None, spend=SpendLog(tmp_path), bee=True, now=NOW,
+                            language=call_language("ko"))._system,
+                Preparation(CallInputs(), {}, None, spend=SpendLog(tmp_path), bee=True, now=NOW,
+                            language=call_language("en"))._system)
 
     import asyncio
     korean, english = asyncio.run(main())

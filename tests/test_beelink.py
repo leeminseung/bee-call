@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from beelink import context
+from tests.helpers import SEOUL
 from beelink.watcher import BeeWatcher, parse_stream_line
 
 FAKE_BEE = Path(__file__).parent / "fakebee" / "bee"
@@ -99,7 +100,7 @@ def test_context_saves_inputs_and_card(tmp_path, fake_bee):
     inputs = asyncio.run(context.fetch_call_inputs(conversation_ids=[5]))
     assert inputs.errors == [] and inputs.first_name == "Matt" and inputs.today["activeTodos"][0]["id"] == 51
     assert inputs.facts[0]["id"] == 7 and inputs.suggestions[0]["id"] == 34 and [c["id"] for c in inputs.recent] == [5, 4]
-    card = context.save_call_inputs(session, inputs)
+    card = context.save_call_inputs(session, inputs, SEOUL)
     names = sorted(p.name for p in (session / "inputs").iterdir())
     assert names == ["conversation-5.json", "recent_conversations.json", "today.json", "todo_suggestions.json",
                      "transcript-5.json", "unconfirmed_facts.json"]
@@ -113,7 +114,7 @@ def test_a_conversation_bee_returns_as_null_does_not_break_a_call(tmp_path, fake
 
     inputs = asyncio.run(context.fetch_call_inputs(conversation_ids=[999]))
     assert inputs.conversations == [(999, {}, [])] and inputs.errors == []
-    card = context.save_call_inputs(tmp_path, inputs)
+    card = context.save_call_inputs(tmp_path, inputs, SEOUL)
     assert card["conversation_id"] == 999 and card["summary"] is None
     assert call_brief(inputs, {"direction": "outbound", "reason": "A Bee conversation just ended."})
 

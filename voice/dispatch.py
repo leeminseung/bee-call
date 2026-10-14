@@ -74,7 +74,7 @@ def decline_ring(person: Person, room: str, now: datetime | None = None) -> None
     path = person.workspace / DECLINES
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
-        f.write(json.dumps({"at": (now or datetime.now()).isoformat(timespec="seconds"), "room": room}) + "\n")
+        f.write(json.dumps({"at": (now or person.now()).isoformat(timespec="seconds"), "room": room}) + "\n")
 
 
 def declined_rooms(workspace: Path) -> set[str]:
@@ -137,7 +137,7 @@ async def place_call(claim: Claim, person: Person, prep: dict[str, Any] | None =
     Returns the room name, or None when the call was called off meanwhile (then nothing rings). `prep` is the
     call prep note (voice/prep.py Prep.to_meta()), made before this call."""
     store = OfferStore(person.workspace)
-    offer = store.begin_placing(claim, datetime.now())
+    offer = store.begin_placing(claim, person.now())
     if offer is None:
         log.info("offer %s was called off before its room was made; not calling", claim.offer.id)
         return None
@@ -147,9 +147,9 @@ async def place_call(claim: Claim, person: Person, prep: dict[str, Any] | None =
         await create_room(room, call_metadata("outbound", plan, prep, offer.continue_from, agreed(claim.offer),
                                               person.id), lk)
     except Exception as exc:
-        store.fail(claim, datetime.now(), f"{type(exc).__name__}: {exc}"[:300], why="failed")
+        store.fail(claim, person.now(), f"{type(exc).__name__}: {exc}"[:300], why="failed")
         raise
-    store.placed(claim, datetime.now(), room)
+    store.placed(claim, person.now(), room)
     line = write_ring_line(person, room, plan)
     try:
         pushed = await voip_push.ring(line, person)
@@ -164,9 +164,9 @@ def write_ring_line(person: Person, room: str, plan: Plan) -> dict[str, Any]:
     """The ring line an open app hears on the token server's /ring stream, and the VoIP push carries."""
     path = person.workspace / OUTBOUND_LOG
     path.parent.mkdir(parents=True, exist_ok=True)
-    placed = datetime.now()
-    # expires_at: after this the voice server has given up, so an app must not try to answer. It is this Mac's
-    # local time; expires_epoch is the same moment for a phone in another time zone.
+    placed = person.now()
+    # expires_at: after this the voice server has given up, so an app must not try to answer. It carries the
+    # person's time zone; expires_epoch is the same moment as seconds, which the app reads.
     expires = placed + timedelta(seconds=RING_SECONDS)
     line = {"at": placed.isoformat(timespec="seconds"), "room": room,
             "expires_at": expires.isoformat(timespec="seconds"), "expires_epoch": int(expires.timestamp()),

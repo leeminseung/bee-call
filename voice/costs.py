@@ -34,6 +34,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from beelink.clock import parse_time
 from voice.people import Person
 
 STT_USD_PER_SECOND = 0.0001667
@@ -108,7 +109,17 @@ def job_cost(usage: dict[str, Any]) -> float:
     return llm_cost(model, usage.get("input_tokens"), usage.get("output_tokens")) + WEB_SEARCH_USD * searches
 
 
+def on_day(at: Any, day: datetime) -> bool:
+    """Whether a stored time falls on the person's day (`day` is their time, so their time zone decides)."""
+    try:
+        return parse_time(str(at)).astimezone(day.tzinfo).date() == day.date()
+    except ValueError:
+        return False
+
+
 def spent_today(workspace: Path, now: datetime) -> float:
+    """What the person's day has cost so far; `now` is their time (Person.now()), so the day is theirs: their call
+    folders are named by their own dates."""
     total = 0.0
     day = workspace / now.strftime("%Y-%m-%d")
     if day.is_dir():
@@ -125,13 +136,12 @@ def spent_today(workspace: Path, now: datetime) -> float:
         lines = (workspace / "meta" / "session.jsonl").read_text(errors="replace").splitlines()
     except OSError:
         lines = []
-    today = now.strftime("%Y-%m-%d")
     for line in lines:
         try:
             entry = json.loads(line)
         except ValueError:
             continue
-        if isinstance(entry, dict) and str(entry.get("at", "")).startswith(today) and isinstance(entry.get("usage"), dict):
+        if isinstance(entry, dict) and isinstance(entry.get("usage"), dict) and on_day(entry.get("at"), now):
             total += llm_cost(entry.get("model"), entry["usage"].get("input_tokens"), entry["usage"].get("output_tokens"))
     return total + SpendLog(workspace).spent_on(now)
 
@@ -151,7 +161,8 @@ class SpendLog:
             **about: Any) -> None:
         """One use: an LLM's tokens (model, input_tokens, output_tokens), or a session's LiveKit usage entries
         (models). `estimated`: counted from what was sent, because the provider's own count never came."""
-        entry = {"at": (now or datetime.now()).isoformat(timespec="seconds"), "what": what, "model": model,
+        # The moment, with its zone; spent_on() places it on the person's own day when it reads it.
+        entry = {"at": (now or datetime.now().astimezone()).isoformat(timespec="seconds"), "what": what, "model": model,
                  "input_tokens": input_tokens, "output_tokens": output_tokens, "estimated": estimated, **about}
         if models is not None:
             entry["models"] = models
@@ -164,13 +175,13 @@ class SpendLog:
             lines = self.path.read_text(errors="replace").splitlines()
         except OSError:
             return 0.0
-        total, prefix = 0.0, day.strftime("%Y-%m-%d")
+        total = 0.0
         for line in lines:
             try:
                 entry = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(entry, dict) or not str(entry.get("at", "")).startswith(prefix):
+            if not isinstance(entry, dict) or not on_day(entry.get("at"), day):
                 continue
             total += llm_cost(entry.get("model"), entry.get("input_tokens"), entry.get("output_tokens"))
             if isinstance(entry.get("models"), list):

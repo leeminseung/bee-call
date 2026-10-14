@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from beelink.calls import our_call_windows
+from beelink.clock import parse_time
 from beelink.watcher import Trigger
 
 MIN_UTTERANCES = 4  # arbitrary: shorter exchanges are usually small talk
@@ -62,7 +63,7 @@ def last_outbound(workspace: Path) -> datetime | None:
     if not log.exists():
         return None
     lines = [l for l in log.read_text().splitlines() if l.strip()]
-    return datetime.fromisoformat(json.loads(lines[-1])["at"]) if lines else None
+    return parse_time(json.loads(lines[-1])["at"]) if lines else None
 
 
 def last_offer(workspace: Path) -> datetime | None:
@@ -71,7 +72,7 @@ def last_offer(workspace: Path) -> datetime | None:
     for path in (workspace / OFFERS_DIR).glob("*.json"):
         try:
             history = json.loads(path.read_text()).get("history") or []
-            asked += [datetime.fromisoformat(h["at"]) for h in history if h.get("state") == "asked"]
+            asked += [parse_time(h["at"]) for h in history if h.get("state") == "asked"]
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             continue
     return max(asked) if asked else None
@@ -84,7 +85,7 @@ def last_call(workspace: Path) -> datetime | None:
     for moment in (last_outbound(workspace), last_offer(workspace)):
         if moment is not None:
             times.append(moment.timestamp())
-    return datetime.fromtimestamp(max(times)) if times else None
+    return datetime.fromtimestamp(max(times)).astimezone() if times else None
 
 
 def journal_text(journal: dict[str, Any]) -> str:
@@ -94,8 +95,9 @@ def journal_text(journal: dict[str, Any]) -> str:
 class RulePlanner:
     """The rule-based stand-in for the worker's decision."""
 
-    def __init__(self, workspace: Path, cooldown: timedelta = COOLDOWN, max_age: timedelta = MAX_AGE,
-                 now: Callable[[], datetime] = datetime.now) -> None:
+    def __init__(self, workspace: Path, cooldown: timedelta = COOLDOWN, max_age: timedelta = MAX_AGE, *,
+                 now: Callable[[], datetime]) -> None:
+        """`now`: the person's clock (voice/people.py Person.now)."""
         self.workspace = workspace
         self.cooldown = cooldown
         self.max_age = max_age
@@ -117,11 +119,11 @@ class RulePlanner:
         if call_in_progress(self.workspace, now):
             plan.reason = "A call is already in progress."
         elif last is not None and now - last < self.cooldown:
-            plan.reason = (f"The last call was at {last:%H:%M}; calls are at least "
+            plan.reason = (f"The last call was at {last.astimezone(now.tzinfo):%H:%M}; calls are at least "
                            f"{int(self.cooldown.total_seconds() // 60)} minutes apart.")
         elif talks:
             latest = max(talks, key=lambda c: c.get("end_time") or 0)
-            ended = datetime.fromtimestamp((latest.get("end_time") or latest.get("start_time")) / 1000)
+            ended = datetime.fromtimestamp((latest.get("end_time") or latest.get("start_time")) / 1000, now.tzinfo)
             plan.call, plan.kind = True, "conversation"
             plan.conversation_ids = [c["id"] for c in talks]
             plan.topic = latest.get("short_summary") or None

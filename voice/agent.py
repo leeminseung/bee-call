@@ -35,7 +35,6 @@ import logging
 import os
 import shutil
 import time
-from datetime import datetime
 from pathlib import Path
 
 import boto3
@@ -334,8 +333,9 @@ async def run_call(ctx: JobContext, people: People) -> None:
         log.error("call in room %s is for no approved person (%r); not answering", ctx.room.name, meta.get("person"))
         ctx.shutdown(reason="no approved person for this call")
         return
+    someone = people.person(person)  # their folder, settings, phone and clock (someone.now)
     if meta.get("direction") != "outbound":  # the AI's own calls were checked before they were placed
-        budget = day_budget(people.person(person), datetime.now())
+        budget = day_budget(someone, someone.now())
         if budget.used_up:  # the app's pass to the room lasts two hours; the budget is checked as the call starts
             log.info("not answering the call in room %s: %s", ctx.room.name, budget.why())
             await ctx.delete_room()  # ends the call on the phone
@@ -368,7 +368,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
         answer = await wait_for_answer(ctx, workspace)
         if answer != "answered":
             log.info("the call in room %s was %s", ctx.room.name, answer)
-            add_event(workspace, f"call_{answer}", room=ctx.room.name, topic=meta.get("topic"),
+            add_event(workspace, f"call_{answer}", now=someone.now(), room=ctx.room.name, topic=meta.get("topic"),
                       reason=meta.get("reason"))
             inputs_task.cancel()
             if keep_warm:
@@ -404,7 +404,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
             nonlocal preparation
             got = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S)
             preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM), spend=SpendLog(workspace), bee=uses_bee,
-                                      language=language).start()
+                                      now=someone.now(), language=language).start()
             await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - started))
             return got
 
@@ -425,7 +425,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
         prep = preparation.prep
     # The phone sends the person's settings as it answers (contract section 1): whether audio is kept is read now.
     settings = people.settings(person)
-    rec = CallRecorder(workspace, ctx.job.room.name, keep_audio=settings.record_on_server)
+    rec = CallRecorder(workspace, ctx.job.room.name, keep_audio=settings.record_on_server, now=someone.now())
     rec.event("coordinator", llm=COORDINATOR_LLM, language=language.code, voice=tts_voice.describe(), person=person,
               audio_on_server=settings.record_on_server, audio_on_phone=settings.record_on_phone)
     rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"),
@@ -435,7 +435,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
         if not uses_bee:
             return  # nothing was read from Bee, so there is nothing to keep
         try:
-            card = save_call_inputs(rec.dir, got)
+            card = save_call_inputs(rec.dir, got, settings.zone())
         except Exception as exc:  # the call goes on without its Bee record
             rec.event("error", source="bee_context", error=f"saving the Bee inputs failed: {exc}")
             return
@@ -479,12 +479,12 @@ async def run_call(ctx: JobContext, people: People) -> None:
         if await agent.tell_job(news):
             session.generate_reply()
 
-    jobs = JobRunner(rec.dir, rec.event, backend, notify)
+    jobs = JobRunner(rec.dir, rec.event, backend, notify, clock=someone.now)
     # Until (or without) a prep note, the plain Bee context. A note still being written replaces it when it
     # arrives, up to the first reply.
     pending = preparation.done if preparation is not None and not preparation.done.done() else None
     agent = (BeeCoordinator if uses_bee else Coordinator)(
-        rec, jobs, workspace, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
+        rec, jobs, workspace, clock=someone.now, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
                         language=language, earlier_call=meta.get("earlier_call"))
 
     abandoned = False  # the caller hung up before the AI's first words: the call leaves no record
@@ -504,7 +504,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
             shutil.rmtree(rec.dir, ignore_errors=True)
             return
         if uses_bee:
-            await after_bee_writes(rec, people.person(person), language)
+            await after_bee_writes(rec, someone, language)
         if isinstance(session.llm, ClaudeBedrockLLM):
             session.llm.settle()  # a last reply may still be waiting to be committed
             # Exactly what Claude was sent, for checking a call afterwards.
@@ -513,7 +513,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
         write_usage(rec, session)
         rec.close()
         # The meta agent looks at every call once it is over (meta/agent.py).
-        add_event(workspace, "call_ended", call=f"{rec.dir.parent.name}/{rec.dir.name}",
+        add_event(workspace, "call_ended", now=someone.now(), call=f"{rec.dir.parent.name}/{rec.dir.name}",
                   direction=meta.get("direction", "inbound"))
 
     ctx.add_shutdown_callback(shutdown)

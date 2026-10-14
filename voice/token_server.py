@@ -64,6 +64,7 @@ from dotenv import load_dotenv
 from livekit import api
 
 from beelink import cli as bee
+from beelink.clock import parse_time
 from beelink.planner import OUTBOUND_LOG
 from meta.session import add_event
 from voice import apple_signin, voip_push
@@ -189,7 +190,7 @@ async def sign_out(request: web.Request) -> web.Response:
 async def me(request: web.Request) -> web.Response:
     settings = request.app[PEOPLE].settings(person(request))
     return web.json_response({"person": person(request), "settings": asdict(settings),
-                              "spent_today_usd": round(day_budget(someone(request), datetime.now()).spent, 2),
+                              "spent_today_usd": round(day_budget(someone(request), someone(request).now()).spent, 2),
                               "bee_connecting": person(request) in request.app[BEE_LOGINS]})
 
 
@@ -248,7 +249,7 @@ async def token(request: web.Request) -> web.Response:
     if continue_from is not None and (answer or session_dir(workspace(request), continue_from) is None):
         raise web.HTTPBadRequest(text="continue= needs the id of an earlier call, like 2026-10-14/0055\n")
     if not answer:
-        budget = day_budget(someone(request), datetime.now())
+        budget = day_budget(someone(request), someone(request).now())
         if budget.used_up:
             raise web.HTTPTooManyRequests(text=f"{budget.why()}\n")
     if answer and not await request.app[ROOM_EXISTS](request.app, room):
@@ -270,7 +271,7 @@ def recent_calls(log_path: Path, now: datetime) -> tuple[list[str], int]:
     for line in data[:end].decode(errors="replace").splitlines():
         try:
             ring_line = json.loads(line)
-            placed = datetime.fromisoformat(ring_line["at"])
+            placed = parse_time(ring_line["at"])
         except (ValueError, KeyError, TypeError):
             continue
         if (now - placed).total_seconds() < RING_SECONDS and ring_line.get("room") not in declined:
@@ -283,7 +284,7 @@ async def ring(request: web.Request) -> web.StreamResponse:
     resp = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache",
                                        "X-Accel-Buffering": "no"})
     await resp.prepare(request)
-    lines, pos = recent_calls(log_path, datetime.now())
+    lines, pos = recent_calls(log_path, someone(request).now())
     last_write = time.monotonic()
     try:
         while True:
@@ -347,7 +348,7 @@ async def alert_token(request: web.Request) -> web.Response:
 async def list_offers(request: web.Request) -> web.Response:
     """The offers still waiting for an answer or a call, for the app's first screen."""
     store = OfferStore(workspace(request))
-    return web.json_response({"offers": [o.view() for o in store.open(datetime.now())]})
+    return web.json_response({"offers": [o.view() for o in store.open(someone(request).now())]})
 
 
 async def answer_offer(request: web.Request) -> web.Response:
@@ -358,8 +359,9 @@ async def answer_offer(request: web.Request) -> web.Response:
     except (ValueError, KeyError, TypeError):
         raise web.HTTPBadRequest(text='expected {"choice": "now" | "later" | "decline"}\n')
     store = OfferStore(workspace(request))
+    now = someone(request).now()
     try:
-        offer = store.answer(request.match_info["offer_id"], choice, datetime.now())
+        offer = store.answer(request.match_info["offer_id"], choice, now)
     except KeyError:
         raise web.HTTPNotFound(text="no such offer\n")
     except UnknownChoice as exc:
@@ -367,7 +369,7 @@ async def answer_offer(request: web.Request) -> web.Response:
     except OfferClosed as exc:
         raise web.HTTPConflict(text=f"{exc}\n")
     log.info("offer %s of %s: %s -> %s", offer.id, person(request), choice, offer.state)
-    add_event(workspace(request), "offer_answered", offer=offer.id, choice=choice, topic=offer.topic)
+    add_event(workspace(request), "offer_answered", now=now, offer=offer.id, choice=choice, topic=offer.topic)
     return web.json_response({"offer": offer.view()})
 
 

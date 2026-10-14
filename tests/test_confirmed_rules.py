@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from aiohttp.test_utils import TestClient, TestServer
 
 from meta.session import add_event, quiet
-from tests.helpers import placing, signed_in
+from tests.helpers import SEOUL, placing, signed_in
 from tests.test_offers import asked
 from voice import outbound, voip_push
 from voice.offers import OfferStore
@@ -19,7 +19,7 @@ from voice.outbound import call_due, send_held, send_offer, serve_meta
 from voice.prep import Prep
 from voice.token_server import make_app
 
-NIGHT = datetime(2026, 10, 14, 23, 30)
+NIGHT = datetime(2026, 10, 14, 23, 30, tzinfo=SEOUL)
 
 
 async def prepared(plan, **kw):
@@ -57,8 +57,8 @@ def test_spend_equal_to_the_budget_counts_as_over(tmp_path):
 
     me = signed_in(tmp_path)
     me.people.change_settings("matt", {"daily_budget_usd": 0.5}, allowed=("daily_budget_usd",))
-    spend(me.workspace, 0.5, datetime.now())
-    assert spent_today(me.workspace, datetime.now()) == 0.5  # exactly the budget
+    spend(me.workspace, 0.5, datetime.now(SEOUL))
+    assert spent_today(me.workspace, datetime.now(SEOUL)) == 0.5  # exactly the budget
 
     async def main():
         async with TestClient(TestServer(make_app("wss://example", "APIkey", "s" * 32, me.people)),
@@ -69,10 +69,15 @@ def test_spend_equal_to_the_budget_counts_as_over(tmp_path):
 
 
 def test_the_meta_agent_skips_thinking_while_over_budget_and_catches_up_the_next_day(tmp_path, monkeypatch):
+    from voice.people import Person
+
     me = signed_in(tmp_path)
     workspace = me.workspace
     me.people.change_settings("matt", {"daily_budget_usd": 0.5}, allowed=("daily_budget_usd",))
-    spend(workspace, 0.5, datetime.now())
+    today = datetime(2026, 10, 15, 14, 0, tzinfo=SEOUL)
+    spend(workspace, 0.5, today)
+    clock = {"now": today}
+    monkeypatch.setattr(Person, "now", lambda self: clock["now"])  # the person's clock, which the loop reads
     thought: list[list[str]] = []
 
     class Thinker:
@@ -83,12 +88,11 @@ def test_the_meta_agent_skips_thinking_while_over_budget_and_catches_up_the_next
     monkeypatch.setattr(outbound, "META_CHECK_S", 0.01)
 
     async def main():
-        add_event(workspace, "call_ended", call="2026-10-14/2000")
+        add_event(workspace, "call_ended", now=today, call="2026-10-15/1300")
         loop = asyncio.create_task(serve_meta(me.person, Thinker()))
         await asyncio.sleep(0.1)
         waited = list(thought)
-        for usage in workspace.glob("*/*/usage.json"):  # the next day: today's spend is yesterday's
-            usage.unlink()
+        clock["now"] = today + timedelta(days=1)  # the next day: nothing spent yet
         await asyncio.sleep(0.1)
         loop.cancel()
         await asyncio.gather(loop, return_exceptions=True)
@@ -109,9 +113,9 @@ def test_the_meta_agent_wakes_only_for_events(tmp_path, monkeypatch):
             return {"seconds": 0.0, "decision": "nothing to do"}
 
     monkeypatch.setattr(outbound, "META_CHECK_S", 0.01)
-    question, _ = asked(tmp_path, now=datetime.now(), workspace=workspace)  # an open question is no event
-    soon = store.book("the interview", datetime.now() + timedelta(minutes=9), datetime.now())
-    later = store.book("the dentist", datetime.now() + timedelta(minutes=30), datetime.now())
+    question, _ = asked(tmp_path, now=datetime.now(SEOUL), workspace=workspace)  # an open question is no event
+    soon = store.book("the interview", datetime.now(SEOUL) + timedelta(minutes=9), datetime.now(SEOUL))
+    later = store.book("the dentist", datetime.now(SEOUL) + timedelta(minutes=30), datetime.now(SEOUL))
 
     async def main():
         loop = asyncio.create_task(serve_meta(me.person, Thinker()))
@@ -127,14 +131,14 @@ def test_the_meta_agent_wakes_only_for_events(tmp_path, monkeypatch):
 
 def test_an_unanswered_offer_closes_at_its_suggested_time(tmp_path):
     store = OfferStore(tmp_path / "workspace")
-    offer, _ = asked(tmp_path, now=datetime(2026, 10, 14, 18, 30))  # suggests 21:00
-    assert [o.id for o in store.open(datetime(2026, 10, 14, 20, 59, 59))] == [offer.id]
-    assert store.open(datetime(2026, 10, 14, 21, 0)) == [] and store.get(offer.id).state == "expired"
+    offer, _ = asked(tmp_path, now=datetime(2026, 10, 14, 18, 30, tzinfo=SEOUL))  # suggests 21:00
+    assert [o.id for o in store.open(datetime(2026, 10, 14, 20, 59, 59, tzinfo=SEOUL))] == [offer.id]
+    assert store.open(datetime(2026, 10, 14, 21, 0, tzinfo=SEOUL)) == [] and store.get(offer.id).state == "expired"
 
 
 def test_tapping_now_twice_places_one_call(tmp_path):
     me = signed_in(tmp_path)
-    offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
+    offer, _ = asked(tmp_path, now=datetime.now(SEOUL), workspace=me.workspace)
     rooms = []
 
     async def main():
@@ -160,7 +164,7 @@ def test_the_fifth_offer_of_a_day_shows_only_in_the_app_list(tmp_path, monkeypat
     monkeypatch.setattr(voip_push, "alert", alert)
     me = signed_in(tmp_path)
     store = OfferStore(me.workspace)
-    morning = datetime(2026, 10, 15, 8, 0)
+    morning = datetime(2026, 10, 15, 8, 0, tzinfo=SEOUL)
     question, plan = asked(tmp_path, now=morning, workspace=me.workspace)
     for i in range(4):  # 40 minutes apart: a notification waits 30 minutes after the last one (2026-10-15)
         at = morning + timedelta(minutes=40 * i)
@@ -169,7 +173,7 @@ def test_the_fifth_offer_of_a_day_shows_only_in_the_app_list(tmp_path, monkeypat
     fifth = store.ask(plan, morning + timedelta(hours=3))
     assert asyncio.run(send_offer(fifth, me.person, morning + timedelta(hours=3))).startswith("held: 4 notifications")
     assert [o.id for o in store.open(morning + timedelta(hours=3, minutes=1))] == [fifth.id]  # what the app lists
-    for moment in (morning + timedelta(hours=3), datetime(2026, 10, 16, 8, 0)):
+    for moment in (morning + timedelta(hours=3), datetime(2026, 10, 16, 8, 0, tzinfo=SEOUL)):
         asyncio.run(send_held(me.person, moment))
     assert fifth.id not in sent and len(sent) == 4
 
@@ -188,7 +192,8 @@ def test_a_background_job_fails_after_forty_rounds(tmp_path):
             news.append((n.status, n.error))
 
         runner = JobRunner(tmp_path, lambda name, **f: None,
-                           HarnessWorker("arn:harness", client=FakeHarness(rounds), search=fake_search), on_notify)
+                           HarnessWorker("arn:harness", client=FakeHarness(rounds), search=fake_search), on_notify,
+                           clock=lambda: datetime.now(SEOUL))
         runner.start("Never finishes")
         await asyncio.gather(*runner.tasks.values())
         return runner.jobs["01"].status

@@ -14,6 +14,7 @@ import pytest
 
 from beelink import writer
 from beelink.writer import BeeWrites
+from tests.helpers import seoul_now
 from tests.test_beelink import FAKE_BEE, WRITE_COMMANDS, calls
 from voice.coordinator import BeeCoordinator
 from voice.language import call_language
@@ -44,8 +45,9 @@ def events(rec: CallRecorder) -> list[dict]:
 
 async def in_a_call(tmp_path, said: list[tuple[str, str]], language: str = "en"):
     """A Bee person's call after these turns (role, text)."""
-    rec = CallRecorder(tmp_path / "workspace", room="call-matt-20261015-210000")
-    agent = BeeCoordinator(rec, SimpleNamespace(), tmp_path / "workspace", language=call_language(language))
+    rec = CallRecorder(tmp_path / "workspace", room="call-matt-20261015-210000", now=seoul_now())
+    agent = BeeCoordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now,
+                           language=call_language(language))
     chat = agent.chat_ctx.copy()
     for role, text in said:
         chat.add_message(role=role, content=text)

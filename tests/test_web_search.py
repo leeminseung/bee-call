@@ -2,6 +2,8 @@
 
 import asyncio
 
+from tests.helpers import seoul_now
+
 from worker.runner import Job
 from worker.search import SearchWorker
 from worker.web_search import SearchResult, parse_response
@@ -45,7 +47,7 @@ def test_search_worker_writes_the_report_and_relays_the_summary(tmp_path):
         return parse_response(question, NOVA1_SHAPE)
 
     async def main():
-        job = Job(job_id="01", dir=tmp_path, task="Will it rain in Seoul on Saturday?")
+        job = Job(job_id="01", dir=tmp_path, now=seoul_now(), task="Will it rain in Seoul on Saturday?")
         progress, relayed = [], []
 
         async def relay(text):

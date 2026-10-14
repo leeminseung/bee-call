@@ -24,6 +24,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
@@ -36,6 +37,7 @@ class Job:
     job_id: str
     dir: Path
     task: str
+    now: datetime  # when it started, on the person's clock (Person.now()): the worker reads dates against it
     status: str = "running"  # then completed, failed or cancelled
     started_at: float = field(default_factory=time.monotonic)
     ended_at: float | None = None
@@ -73,8 +75,11 @@ def short(text: str, limit: int = 200) -> str:
 
 
 class JobRunner:
-    def __init__(self, session_dir: Path, emit: EmitEvent, backend: Backend, on_notify: NotifyHandler) -> None:
+    def __init__(self, session_dir: Path, emit: EmitEvent, backend: Backend, on_notify: NotifyHandler, *,
+                 clock: Callable[[], datetime]) -> None:
+        """`clock`: the person's clock (Person.now), for the date each job is told."""
         self.session_dir = session_dir
+        self.clock = clock
         self.emit = emit
         self.backend = backend
         self.on_notify = on_notify
@@ -85,7 +90,7 @@ class JobRunner:
         jobs = self.session_dir / "jobs"
         jobs.mkdir(exist_ok=True)
         n = len([p for p in jobs.iterdir() if p.is_dir()]) + 1
-        job = Job(job_id=f"{n:02d}", dir=jobs / f"{n:02d}", task=task)
+        job = Job(job_id=f"{n:02d}", dir=jobs / f"{n:02d}", task=task, now=self.clock())
         job.dir.mkdir()
         (job.dir / "request.md").write_text(f"# Job {job.job_id}\n\n{task}\n")
         return job

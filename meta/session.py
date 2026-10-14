@@ -33,12 +33,11 @@ STATE_TEMPLATE = """# State
 """
 
 
-def add_event(workspace: Path, kind: str, now: datetime | None = None, **data: Any) -> None:
-    """For any process: tell the meta agent something happened."""
+def add_event(workspace: Path, kind: str, *, now: datetime, **data: Any) -> None:
+    """For any process: tell the meta agent something happened, at `now` (the person's time, Person.now())."""
     folder = workspace / META_DIR
     folder.mkdir(parents=True, exist_ok=True)
-    line = json.dumps({"at": (now or datetime.now()).isoformat(timespec="seconds"), "kind": kind, **data},
-                      ensure_ascii=False, default=str)
+    line = json.dumps({"at": now.isoformat(timespec="seconds"), "kind": kind, **data}, ensure_ascii=False, default=str)
     with open(folder / "events.jsonl", "a") as f:
         f.write(line + "\n")
 
@@ -53,16 +52,17 @@ def meta_notes(workspace: Path) -> str | None:
 
 
 def quiet(moment: datetime) -> bool:
+    """Quiet hours, on the person's own clock (`moment` is their time, Person.now())."""
     clock = moment.time()
     return clock >= QUIET_FROM or clock < QUIET_UNTIL
 
 
 def quiet_ends(moment: datetime) -> datetime:
-    """When notifications may go out again after `moment`."""
+    """When notifications may go out again after `moment`, in its time zone."""
     if not quiet(moment):
         return moment
     day = moment.date() if moment.time() < QUIET_UNTIL else moment.date() + timedelta(days=1)
-    return datetime.combine(day, QUIET_UNTIL)
+    return datetime.combine(day, QUIET_UNTIL, tzinfo=moment.tzinfo)
 
 
 @dataclass

@@ -22,6 +22,7 @@ from voice.outbound import saved_trigger
 from voice.offers import OfferStore
 from voice.people import People
 from voice.voip_push import ApnsConfig, PushError, load_device_token, provider_token, save_device_token
+from tests.helpers import SEOUL
 from tests.test_outbound import inbox
 
 DEVICE = "ab" * 32
@@ -149,10 +150,10 @@ def test_placing_a_call_pushes_its_ring_line_and_a_failed_push_does_not_stop_it(
         pass
 
     monkeypatch.setattr(voip_push, "ring", fake_ring)
-    plan = RulePlanner(person.workspace).decide(saved_trigger(inbox(tmp_path)))
+    plan = RulePlanner(person.workspace, now=person.now).decide(saved_trigger(inbox(tmp_path)))
     store = OfferStore(person.workspace)
-    store.answer(store.ask(plan, datetime.now()).id, "now", datetime.now())
-    claim = store.claim(store.due(datetime.now())[0].id, datetime.now())
+    store.answer(store.ask(plan, datetime.now(SEOUL)).id, "now", datetime.now(SEOUL))
+    claim = store.claim(store.due(datetime.now(SEOUL))[0].id, datetime.now(SEOUL))
     room = asyncio.run(place_call(claim, person, lk=SimpleNamespace(room=SimpleNamespace(create_room=create_room))))
     (line,) = pushed
     assert line["room"] == room and line["topic"] == plan.topic

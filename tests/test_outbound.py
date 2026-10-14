@@ -21,7 +21,7 @@ from voice.language import call_language
 from voice.prep import Prep, call_brief
 from voice.outbound import saved_trigger
 from voice.token_server import make_token, recent_calls
-from tests.helpers import fake_livekit, signed_in
+from tests.helpers import SEOUL, fake_livekit, seoul_now, signed_in
 
 FIXTURE = Path(__file__).parent / "fixtures" / "inbox" / "changed.json"
 
@@ -40,7 +40,7 @@ def inbox(tmp_path: Path, ended_minutes_ago: float = 5, **changes) -> Path:
 
 def test_planner_calls_about_a_finished_conversation_and_writes_the_plan(tmp_path):
     folder = inbox(tmp_path)
-    plan = RulePlanner(tmp_path / "workspace").decide(saved_trigger(folder))
+    plan = RulePlanner(tmp_path / "workspace", now=seoul_now).decide(saved_trigger(folder))
     assert plan.call and plan.conversation_ids == [5121]  # the 2-utterance hello is not worth a call
     assert plan.topic == "Planned a Saturday hike with Dana"
     text = (folder / "plan.md").read_text()
@@ -49,18 +49,18 @@ def test_planner_calls_about_a_finished_conversation_and_writes_the_plan(tmp_pat
 
 def test_planner_stays_quiet_without_something_to_talk_about(tmp_path):
     folder = inbox(tmp_path, conversations=[])
-    plan = RulePlanner(tmp_path / "workspace").decide(saved_trigger(folder))
+    plan = RulePlanner(tmp_path / "workspace", now=seoul_now).decide(saved_trigger(folder))
     assert not plan.call and "- Decision: no call" in (folder / "plan.md").read_text()
 
 
 def test_planner_does_not_call_about_last_nights_conversation(tmp_path):
     folder = inbox(tmp_path, ended_minutes_ago=9 * 60)  # caught up in the morning
-    assert not RulePlanner(tmp_path / "workspace").decide(saved_trigger(folder)).call
+    assert not RulePlanner(tmp_path / "workspace", now=seoul_now).decide(saved_trigger(folder)).call
 
 
 def test_planner_calls_about_a_new_voice_note(tmp_path):
     folder = inbox(tmp_path, conversations=[], journals=[{"id": 9, "text": "Remind me to compare the two offers."}])
-    plan = RulePlanner(tmp_path / "workspace").decide(saved_trigger(folder))
+    plan = RulePlanner(tmp_path / "workspace", now=seoul_now).decide(saved_trigger(folder))
     assert plan.call and plan.kind == "voice note" and "compare the two offers" in plan.reason
 
 
@@ -69,15 +69,15 @@ def test_planner_keeps_calls_apart_and_never_interrupts_a_call(tmp_path):
     folder = inbox(tmp_path)
     log = workspace / OUTBOUND_LOG
     log.parent.mkdir(parents=True)
-    log.write_text(json.dumps({"at": (datetime.now() - timedelta(minutes=5)).isoformat(timespec="seconds")}) + "\n")
-    assert not RulePlanner(workspace).decide(saved_trigger(folder)).call
-    assert RulePlanner(workspace, cooldown=timedelta(0)).decide(saved_trigger(folder)).call
+    log.write_text(json.dumps({"at": (datetime.now(SEOUL) - timedelta(minutes=5)).isoformat(timespec="seconds")}) + "\n")
+    assert not RulePlanner(workspace, now=seoul_now).decide(saved_trigger(folder)).call
+    assert RulePlanner(workspace, cooldown=timedelta(0), now=seoul_now).decide(saved_trigger(folder)).call
     live = workspace / "2026-10-11" / "1850"
     live.mkdir(parents=True)
-    started = (datetime.now() - timedelta(minutes=3)).isoformat(timespec="seconds")
+    started = (datetime.now(SEOUL) - timedelta(minutes=3)).isoformat(timespec="seconds")
     (live / "events.jsonl").write_text(json.dumps({"t": 0.0, "type": "call_started", "started_at": started}) + "\n")
     os.utime(live / "events.jsonl", (time.time() - 600, time.time() - 600))  # a caller quiet for ten minutes
-    plan = RulePlanner(workspace, cooldown=timedelta(0)).decide(saved_trigger(folder))
+    plan = RulePlanner(workspace, cooldown=timedelta(0), now=seoul_now).decide(saved_trigger(folder))
     assert not plan.call and plan.reason == "A call is already in progress."
 
 
@@ -86,11 +86,11 @@ def test_cooldown_counts_calls_the_user_started(tmp_path):
     folder = inbox(tmp_path)
     done = workspace / "2026-10-11" / "1900"
     done.mkdir(parents=True)
-    started = (datetime.now() - timedelta(minutes=12)).isoformat(timespec="seconds")
+    started = (datetime.now(SEOUL) - timedelta(minutes=12)).isoformat(timespec="seconds")
     lines = [{"t": 0.0, "type": "call_started", "started_at": started}, {"t": 300.0, "type": "call_ended"},
              {"t": 5000.0, "type": "bee_write_done"}]  # a Bee write long after the call does not extend it
     (done / "events.jsonl").write_text("".join(json.dumps(l) + "\n" for l in lines))
-    plan = RulePlanner(workspace).decide(saved_trigger(folder))
+    plan = RulePlanner(workspace, now=seoul_now).decide(saved_trigger(folder))
     assert not plan.call and "calls are at least 30 minutes apart" in plan.reason
 
 
@@ -100,10 +100,10 @@ def test_place_call_opens_a_room_with_the_voice_server_and_records_the_ring(tmp_
     requests = []
     me = signed_in(tmp_path)
     workspace = me.workspace
-    plan = RulePlanner(workspace).decide(saved_trigger(inbox(tmp_path)))
+    plan = RulePlanner(workspace, now=seoul_now).decide(saved_trigger(inbox(tmp_path)))
     store = OfferStore(workspace)
-    store.answer(store.ask(plan, datetime.now()).id, "now", datetime.now())
-    claim = store.claim(store.due(datetime.now())[0].id, datetime.now())
+    store.answer(store.ask(plan, datetime.now(SEOUL)).id, "now", datetime.now(SEOUL))
+    claim = store.claim(store.due(datetime.now(SEOUL))[0].id, datetime.now(SEOUL))
     prep = Prep(note="Matt planned a hike with Dana.", opening="Hi Matt, it's Bee Call. Got a minute about Saturday?")
     room = asyncio.run(place_call(claim, me.person, prep=prep.to_meta(), lk=fake_livekit(requests)))
     (request,) = requests
@@ -132,7 +132,7 @@ def test_tokens_dispatch_the_voice_server_only_for_calls_the_user_starts():
 
 def test_ring_stream_starts_with_calls_placed_in_the_last_minute(tmp_path):
     log = tmp_path / "outbound.jsonl"
-    now = datetime.now()
+    now = datetime.now(SEOUL)
     old = {"at": (now - timedelta(minutes=10)).isoformat(timespec="seconds"), "room": "call-old"}
     new = {"at": (now - timedelta(seconds=5)).isoformat(timespec="seconds"), "room": "call-new"}
     log.write_text(json.dumps(old) + "\n" + json.dumps(new) + "\n")
@@ -194,11 +194,11 @@ def test_declining_the_ai_s_call_is_kept_and_the_ring_is_never_replayed(tmp_path
     from voice.token_server import make_app
 
     me = signed_in(tmp_path)
-    room = f"call-matt-{datetime.now():%Y%m%d-%H%M%S}"
+    room = f"call-matt-{datetime.now(SEOUL):%Y%m%d-%H%M%S}"
     log = me.workspace / OUTBOUND_LOG
     log.parent.mkdir(parents=True)
-    log.write_text(json.dumps({"at": datetime.now().isoformat(timespec="seconds"), "room": room}) + "\n")
-    assert [json.loads(l)["room"] for l in recent_calls(log, datetime.now())[0]] == [room]
+    log.write_text(json.dumps({"at": datetime.now(SEOUL).isoformat(timespec="seconds"), "room": room}) + "\n")
+    assert [json.loads(l)["room"] for l in recent_calls(log, datetime.now(SEOUL))[0]] == [room]
 
     async def main():
         app = make_app("wss://example", "APIkey", "s" * 32, me.people, room_exists=None)
@@ -211,4 +211,4 @@ def test_declining_the_ai_s_call_is_kept_and_the_ring_is_never_replayed(tmp_path
                     await decline({})]
 
     assert asyncio.run(main()) == [204, 204, 400, 400, 400]
-    assert recent_calls(log, datetime.now())[0] == []  # an app that starts again does not ring it again
+    assert recent_calls(log, datetime.now(SEOUL))[0] == []  # an app that starts again does not ring it again

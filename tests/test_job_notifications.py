@@ -10,6 +10,7 @@ from livekit.agents import AgentSession, llm
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.voice.io import TextOutput
 
+from tests.helpers import seoul_now
 from voice.coordinator import Coordinator, job_notification
 from voice.recorder import CallRecorder
 from worker.runner import JobNotification, JobRunner
@@ -41,7 +42,7 @@ def run_one_job(tmp_path, worker) -> tuple[JobRunner, list[JobNotification]]:
         news.append(n)
 
     async def main() -> JobRunner:
-        runner = JobRunner(tmp_path, lambda name, **f: None, worker, on_notify)
+        runner = JobRunner(tmp_path, lambda name, **f: None, worker, on_notify, clock=seoul_now)
         runner.start(TASK)
         await asyncio.gather(*runner.tasks.values())
         return runner
@@ -94,7 +95,7 @@ def test_job_status_shows_the_latest_step_of_a_running_job(tmp_path):
         async def ignore(n):
             pass
 
-        runner = JobRunner(tmp_path, lambda name, **f: None, Slow(), ignore)
+        runner = JobRunner(tmp_path, lambda name, **f: None, Slow(), ignore, clock=seoul_now)
         assert runner.status_text() == "No background jobs in this call."
         runner.start("Check Busan")
         await started.wait()
@@ -113,7 +114,8 @@ def test_the_notification_reads_as_the_app_and_reaches_the_model_in_turn_order(t
     assert "<summary>Saturday looks dry.</summary>" in note and "<files>" not in note
 
     async def main() -> Coordinator:
-        agent = Coordinator(CallRecorder(tmp_path, room="r"), SimpleNamespace(), tmp_path)
+        agent = Coordinator(CallRecorder(tmp_path, room="r", now=seoul_now()), SimpleNamespace(), tmp_path,
+                            clock=seoul_now)
         chat = agent.chat_ctx.copy()
         chat.add_message(role="user", content="Can you check the weather?")
         await agent.update_chat_ctx(chat)
@@ -181,7 +183,8 @@ def test_a_cut_off_reply_keeps_only_the_heard_words_and_nothing_is_added(tmp_pat
     (probes/coordinator_bench.py, 2026-10-13)."""
 
     async def main():
-        agent = Coordinator(CallRecorder(tmp_path, room="r"), SimpleNamespace(), tmp_path)
+        agent = Coordinator(CallRecorder(tmp_path, room="r", now=seoul_now()), SimpleNamespace(), tmp_path,
+                            clock=seoul_now)
         async with AgentSession(llm=Words()) as session:
             await session.start(agent)
             captions = SlowCaptions()

@@ -157,7 +157,7 @@ def test_a_slow_model_is_given_up_at_the_deadline():
 
 
 def test_no_model_in_this_mode_means_no_note_and_no_opening():
-    prep = asyncio.run(prepare_call(CallInputs(), {}, None, spend=SPEND, bee=True))
+    prep = asyncio.run(prepare_call(CallInputs(), {}, None, spend=SPEND, bee=True, now=NOW))
     assert prep.error == "no model to prepare with in this mode" and prep.opening is None
 
 
@@ -172,7 +172,8 @@ def test_prep_travels_in_the_dispatch_and_lands_in_the_instructions(tmp_path):
                 opening_s=1.1, model="zai.glm-5")
     assert Prep.from_meta(json.loads(json.dumps(prep.to_meta()))) == prep
     assert Prep.from_meta(None) is None
-    agent = BeeCoordinator(CallRecorder(tmp_path, room="r"), SimpleNamespace(), tmp_path, now=NOW, prep_note=prep.note)
+    agent = BeeCoordinator(CallRecorder(tmp_path, room="r", now=NOW), SimpleNamespace(), tmp_path, clock=lambda: NOW,
+                           prep_note=prep.note)
     assert agent.instructions.endswith("Call prep note (from Bee, just before the call):\nMatt planned a hike with Dana.\n")
 
 
@@ -185,7 +186,7 @@ def late_note_turn(tmp_path, arrives_after: float):
         loop = asyncio.get_running_loop()
         note: asyncio.Future = loop.create_future()
         loop.call_later(arrives_after, note.set_result, "Matt is weighing a job offer.")
-        agent = Coordinator(CallRecorder(tmp_path, room="r"), SimpleNamespace(), tmp_path, now=NOW,
+        agent = Coordinator(CallRecorder(tmp_path, room="r", now=NOW), SimpleNamespace(), tmp_path, clock=lambda: NOW,
                             prep_note="The user called you from the app.", pending_note=note)
         async with AgentSession(llm=EchoLLM()) as session:
             await session.start(agent)

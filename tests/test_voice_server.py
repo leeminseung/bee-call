@@ -10,7 +10,7 @@ import pytest
 
 from meta.session import MetaSession
 from tests.fake_call import FakeCall, FakeSession, use_fakes
-from tests.helpers import signed_in
+from tests.helpers import SEOUL, signed_in
 from tests.test_prep import Converse, text
 from voice import agent, prep as prep_module
 from voice.ringback import STATE_ATTRIBUTE
@@ -97,7 +97,7 @@ def test_an_ai_call_unanswered_in_time_is_missed_and_not_called_again(tmp_path, 
 
 
 def spend_today(workspace, usd: float) -> None:
-    call = workspace / datetime.now().strftime("%Y-%m-%d") / "0001"
+    call = workspace / datetime.now(SEOUL).strftime("%Y-%m-%d") / "0001"
     call.mkdir(parents=True, exist_ok=True)
     (call / "usage.json").write_text(json.dumps({"models": [
         {"type": "llm_usage", "provider": "aws", "model": "zai.glm-5", "input_tokens": int(usd * 1_000_000)}]}))

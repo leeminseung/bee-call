@@ -6,8 +6,9 @@ overlap one of our calls are skipped.
 """
 
 import json
-from datetime import datetime
 from pathlib import Path
+
+from beelink.clock import parse_time
 
 MARGIN_SECONDS = 60.0
 
@@ -21,7 +22,7 @@ def our_call_windows(workspace: Path) -> list[tuple[float, float]]:
         first = json.loads(lines[0])
         if first.get("type") != "call_started" or "started_at" not in first:
             continue
-        start = datetime.fromisoformat(first["started_at"]).timestamp()
+        start = parse_time(first["started_at"]).timestamp()
         # The call ends at call_ended; lines after it (Bee write results) come later and are not the call.
         events_seen = [json.loads(line) for line in lines if line.strip()]
         ended = [e.get("t", 0.0) for e in events_seen if e.get("type") == "call_ended"]

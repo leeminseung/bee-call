@@ -1,10 +1,19 @@
 """Shared test helpers."""
 
 import functools
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from voice.people import People
+
+SEOUL = ZoneInfo("Asia/Seoul")  # the default time zone of a person (voice/people.py)
+
+
+def seoul_now() -> datetime:
+    """A person's clock when their time zone is the default (Person.now())."""
+    return datetime.now(SEOUL)
 
 
 def signed_in(root: Path, person: str = "matt") -> SimpleNamespace:

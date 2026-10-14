@@ -12,7 +12,7 @@ import asyncio
 import json
 import shutil
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -41,8 +41,8 @@ def _write(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1))
 
 
-def _clock(ms: int | None) -> str | None:
-    return datetime.fromtimestamp(ms / 1000).strftime("%H:%M") if ms else None
+def _clock(ms: int | None, zone: tzinfo) -> str | None:
+    return datetime.fromtimestamp(ms / 1000, zone).strftime("%H:%M") if ms else None
 
 
 async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: list[int] | None = None,
@@ -77,8 +77,9 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
     return inputs
 
 
-def save_call_inputs(session_dir: Path, inputs: CallInputs) -> dict[str, Any]:
-    """Writes the raw inputs into <session>/inputs/ and returns the "why I'm calling" card."""
+def save_call_inputs(session_dir: Path, inputs: CallInputs, zone: tzinfo) -> dict[str, Any]:
+    """Writes the raw inputs into <session>/inputs/ and returns the "why I'm calling" card, its times in `zone`
+    (the person's)."""
     folder = session_dir / "inputs"
     folder.mkdir(parents=True, exist_ok=True)
     inbox_dir = inputs.inbox_dir
@@ -101,7 +102,8 @@ def save_call_inputs(session_dir: Path, inputs: CallInputs) -> dict[str, Any]:
             card["conversation_id"] = conv_id
             card["summary"] = conv.get("short_summary")
             card["utterances"] = [
-                {"at": _clock(u.get("spoken_at") or u.get("start")), "speaker": u.get("speaker"), "text": u.get("text")}
+                {"at": _clock(u.get("spoken_at") or u.get("start"), zone), "speaker": u.get("speaker"),
+                 "text": u.get("text")}
                 for u in lines[-CARD_UTTERANCES:]
             ]
     return card
