@@ -53,7 +53,7 @@ from voice.continuation import earlier_call
 from voice.costs import SpendLog, day_budget
 from meta.session import add_event, meta_notes
 from voice.coordinator import BeeCoordinator, Coordinator
-from voice.dispatch import AGENT_NAME, RING_SECONDS
+from voice.dispatch import AGENT_NAME, RING_SECONDS, declined
 from voice.echo_llm import EchoLLM
 from voice.fake_claude import FakeAnthropic
 from voice.language import CallLanguage, call_language
@@ -79,6 +79,7 @@ COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "zai.glm-5")
 WORKER = os.environ.get("WORKER", "fake")
 FIRST_WORDS_WAIT_S = 6.0  # ringing stops when the AI starts to speak, or after this long anyway (arbitrary)
 CALLER_WAIT_S = 5.0  # how long a call the user started waits to see the caller in the room (arbitrary)
+DECLINE_CHECK_S = 1.0  # how often a ringing AI call looks whether the user declined it (arbitrary)
 # After the user answers an AI call, its prepared opening does not wait longer than this for the Bee read
 # that only feeds the call record (arbitrary).
 OUTBOUND_INPUTS_WAIT_S = 0.5
@@ -216,6 +217,24 @@ def write_usage(rec: CallRecorder, session: AgentSession) -> None:
                                                        default=str))
 
 
+async def wait_for_answer(ctx: JobContext, workspace: Path) -> str:
+    """The AI's call rings: "answered" when the phone joins, "declined" when the user declined it in the app
+    (voice/dispatch.py decline_ring), "missed" after RING_SECONDS."""
+    joined = asyncio.ensure_future(ctx.wait_for_participant())
+    deadline = time.monotonic() + RING_SECONDS
+    try:
+        while not joined.done():
+            if declined(workspace, ctx.room.name):
+                return "declined"
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return "missed"
+            await asyncio.wait({joined}, timeout=min(DECLINE_CHECK_S, left))
+        return "answered"
+    finally:
+        joined.cancel()
+
+
 def the_caller(participant) -> bool:
     """Anyone in a call's room but a voice server is the person on the phone."""
     return getattr(participant, "kind", None) != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
@@ -324,11 +343,11 @@ async def run_call(ctx: JobContext, people: People) -> None:
     if meta.get("direction") == "outbound":
         # Prepared before the phone rang (voice/outbound.py). Bee is read again for the call's record meanwhile.
         inputs_task = asyncio.create_task(fetch_call_inputs(inbox, conversation_ids))
-        try:
-            await asyncio.wait_for(ctx.wait_for_participant(), RING_SECONDS)
-        except asyncio.TimeoutError:
-            log.info("no answer within %ss in room %s", RING_SECONDS, ctx.room.name)
-            add_event(workspace, "call_missed", room=ctx.room.name, topic=meta.get("topic"), reason=meta.get("reason"))
+        answer = await wait_for_answer(ctx, workspace)
+        if answer != "answered":
+            log.info("the call in room %s was %s", ctx.room.name, answer)
+            add_event(workspace, f"call_{answer}", room=ctx.room.name, topic=meta.get("topic"),
+                      reason=meta.get("reason"))
             inputs_task.cancel()
             if keep_warm:
                 keep_warm.cancel()

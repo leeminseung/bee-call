@@ -1,7 +1,8 @@
 """The meta agent: Bee Call's background coordinator between calls.
 
-It wakes only for events (a Bee change, a call that ended, the user's answer to an offer, a booked call coming
-up), looks at what changed with read-only tools (the workspace's files and Bee), and decides the user's next step.
+It wakes only for events (a Bee change, a call that ended, an AI call missed or declined, the user's answer to an
+offer, a booked call coming up), looks at what changed with read-only tools (the workspace's files and Bee), and
+decides the user's next step.
 It only proposes: a call offer is a question the user answers, its notes (state.md) are for the next call, and
 Bee changes wait for the user's yes in a call. Every time it thinks, the events, each tool it used and its own
 words go into the meta session (meta/session.py), which the app shows as they are.
@@ -144,6 +145,8 @@ def _event_line(workspace: Path, event: dict[str, Any]) -> str:
         return f"[{at}] The user answered offer {event.get('offer')} about \"{event.get('topic')}\": {event.get('choice')}"
     if kind == "call_missed":
         return f"[{at}] An AI call was not answered: \"{event.get('topic')}\""
+    if kind == "call_declined":
+        return f"[{at}] The user declined an AI call while it rang: \"{event.get('topic')}\""
     if kind == "booked_soon":
         return f"[{at}] A booked call is coming up at {event.get('call_at')}: \"{event.get('topic')}\""
     return f"[{at}] {kind}: {json.dumps({k: v for k, v in event.items() if k not in ('at', 'kind')}, ensure_ascii=False)}"

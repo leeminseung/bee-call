@@ -185,3 +185,30 @@ def test_answering_a_call_that_already_ended_is_refused(tmp_path):
 
     asyncio.run(main())
 
+
+
+# ---------- declining the AI's call while it rings (contract section 2) ----------
+
+def test_declining_the_ai_s_call_is_kept_and_the_ring_is_never_replayed(tmp_path):
+    from aiohttp.test_utils import TestClient, TestServer
+    from voice.token_server import make_app
+
+    me = signed_in(tmp_path)
+    room = f"call-matt-{datetime.now():%Y%m%d-%H%M%S}"
+    log = me.workspace / OUTBOUND_LOG
+    log.parent.mkdir(parents=True)
+    log.write_text(json.dumps({"at": datetime.now().isoformat(timespec="seconds"), "room": room}) + "\n")
+    assert [json.loads(l)["room"] for l in recent_calls(log, datetime.now())[0]] == [room]
+
+    async def main():
+        app = make_app("wss://example", "APIkey", "s" * 32, me.people, room_exists=None)
+        async with TestClient(TestServer(app), headers=me.headers) as client:
+            async def decline(body):
+                return (await client.post("/calls/decline", json=body)).status
+
+            return [await decline({"room": room}), await decline({"room": room}),  # once more: still fine
+                    await decline({"room": "call-jiwoo-20261015-090000"}), await decline({"room": "../x"}),
+                    await decline({})]
+
+    assert asyncio.run(main()) == [204, 204, 400, 400, 400]
+    assert recent_calls(log, datetime.now())[0] == []  # an app that starts again does not ring it again

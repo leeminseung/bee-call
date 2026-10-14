@@ -24,8 +24,12 @@ GET  /token?room=R&answer=1              a token to answer the AI's call in room
                                          the room is gone (the voice server gave up after RING_SECONDS)
 GET  /token?continue=D/T                 a new call that continues the earlier call D/T (voice/continuation.py)
 GET  /ring                               Server-Sent Events: one "ring" event per call the AI places for this
-                                         person (calls placed in the last RING_SECONDS, then new ones): how an
-                                         open app learns the AI is calling without VoIP push
+                                         person (calls placed in the last RING_SECONDS and not declined, then new
+                                         ones): how an open app learns the AI is calling without VoIP push
+POST /calls/decline {"room": R}          the user declined the AI's call in room R while it rang: 204 (also once
+                                         it is over, and again), 400 for a room that is not this person's. The
+                                         voice server stops waiting and records it as declined; /ring never
+                                         replays it
 POST /voip  {"token": hex, "environment": "development"|"production"}
                                          the app's VoIP push token, so an AI call rings a closed app too. It
                                          belongs to the signed-in person alone from then on (another person who
@@ -49,7 +53,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import time
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -65,7 +68,8 @@ from meta.session import add_event
 from voice import apple_signin, voip_push
 from voice.continuation import session_dir
 from voice.costs import day_budget
-from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata, room_name
+from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata, call_room_of, decline_ring, declined_rooms, \
+    room_name
 from voice.offers import OfferClosed, OfferStore, UnknownChoice
 from voice.people import People, Person, dev_person, waiting_code
 from voice.session_server import local_host
@@ -235,7 +239,7 @@ async def token(request: web.Request) -> web.Response:
     room = request.query.get("room")
     if answer:
         # Only a room the AI opened for this person: the name carries the person (voice/dispatch.py room_name).
-        if not room or not re.fullmatch(rf"call-{re.escape(who)}-\d{{8}}-\d{{6}}", room):
+        if not call_room_of(who, room):
             raise web.HTTPBadRequest(text="answer=1 needs the room of the AI's call to you\n")
     else:
         room = room_name(who)
@@ -254,18 +258,21 @@ async def token(request: web.Request) -> web.Response:
 
 
 def recent_calls(log_path: Path, now: datetime) -> tuple[list[str], int]:
-    """Lines for calls placed in the last RING_SECONDS, and the file offset to follow from."""
+    """Lines for calls placed in the last RING_SECONDS that the user did not decline, and the file offset to follow
+    from. The log is workspace/state/outbound.jsonl (voice/dispatch.py)."""
     if not log_path.exists():
         return [], 0
     data = log_path.read_bytes()
     end = data.rfind(b"\n") + 1
+    declined = declined_rooms(log_path.parent.parent)
     lines = []
     for line in data[:end].decode(errors="replace").splitlines():
         try:
-            placed = datetime.fromisoformat(json.loads(line)["at"])
+            ring_line = json.loads(line)
+            placed = datetime.fromisoformat(ring_line["at"])
         except (ValueError, KeyError, TypeError):
             continue
-        if (now - placed).total_seconds() < RING_SECONDS:
+        if (now - placed).total_seconds() < RING_SECONDS and ring_line.get("room") not in declined:
             lines.append(line)
     return lines, end
 
@@ -297,6 +304,20 @@ async def ring(request: web.Request) -> web.StreamResponse:
     except (ConnectionResetError, asyncio.CancelledError):
         pass
     return resp
+
+
+async def decline_call(request: web.Request) -> web.Response:
+    """The user declined the AI's call while it rang (the CallKit end action before answering)."""
+    try:
+        body = await request.json()
+        room = body["room"] if isinstance(body, dict) else None
+    except (ValueError, KeyError, TypeError):
+        room = None
+    if not isinstance(room, str) or not call_room_of(person(request), room):
+        raise web.HTTPBadRequest(text='expected {"room": the room of the AI\'s call to you}\n')
+    decline_ring(someone(request), room)
+    log.info("%s declined the call in room %s", person(request), room)
+    return web.Response(status=204)
 
 
 async def voip_token(request: web.Request) -> web.Response:
@@ -408,6 +429,7 @@ def make_app(url: str, key: str, secret: str, people: People, room_exists=liveki
     app.router.add_put("/settings", change_settings)
     app.router.add_get("/token", token)
     app.router.add_get("/ring", ring)
+    app.router.add_post("/calls/decline", decline_call)
     app.router.add_post("/voip", voip_token)
     app.router.add_post("/push", alert_token)
     app.router.add_get("/offers", list_offers)

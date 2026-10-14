@@ -272,3 +272,27 @@ def test_a_caller_seen_late_is_still_watched_while_it_rings(tmp_path, monkeypatc
 
     asyncio.run(main())
     assert call_folders(me.workspace) == [] and call.shutdown_reason == "the caller hung up while it rang"
+
+
+def test_an_ai_call_declined_while_it_rings_is_declined_not_missed(tmp_path, monkeypatch, quick):
+    """Contract section 2: after POST /calls/decline the voice server stops waiting within a few seconds and the
+    meta agent hears of a declined call, not a missed one."""
+    from voice.dispatch import decline_ring
+
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(agent, "RING_SECONDS", 30)
+    monkeypatch.setattr(agent, "DECLINE_CHECK_S", 0.05)
+    call = FakeCall(me.people, {"direction": "outbound", "person": "matt", "topic": "the interview"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        waiting = asyncio.create_task(agent.run_call(call, me.people))
+        await asyncio.sleep(0.1)
+        decline_ring(me.person, call.room.name)  # what the token server does for the app
+        await asyncio.wait_for(waiting, 2)
+        await call.end()
+
+    asyncio.run(main())
+    assert call.deleted and call.session.started is None and call_folders(me.workspace) == []
+    (event,) = MetaSession(me.workspace).take_events()
+    assert (event["kind"], event["topic"]) == ("call_declined", "the interview")

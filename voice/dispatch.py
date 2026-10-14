@@ -17,13 +17,19 @@ The phone rings only for an offer the user said yes to (voice/offers.py): place_
 takes the runner's Claim on that offer and checks it once more under the offers lock
 right before the room is created. Test calls from a Mac (voice/fake_caller.py) use
 open_test_call, which writes no ring line and sends no push.
+
+A ring the user declines (the app's POST /calls/decline) is kept in
+workspace/state/declined.jsonl: the token server never replays it, and the voice
+server stops waiting for that call and records it as declined.
 """
 
 import json
 import logging
 import os
+import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
@@ -48,9 +54,45 @@ AGENT_NAME = agent_name()
 RING_SECONDS = 60  # how long the voice server waits for the phone to answer (arbitrary)
 
 
+DECLINES = Path("state") / "declined.jsonl"  # under the workspace: the AI calls the user declined while they rang
+
+
 def room_name(person: str, now: datetime | None = None) -> str:
     """A call's room carries its person, so the token server can tell whose call a room is (answer=1)."""
     return f"call-{person}-{(now or datetime.now()):%Y%m%d-%H%M%S}"
+
+
+def call_room_of(person: str, room: str | None) -> bool:
+    """Whether `room` is a call room of this person's (room_name)."""
+    return bool(room) and re.fullmatch(rf"call-{re.escape(person)}-\d{{8}}-\d{{6}}", room) is not None
+
+
+def decline_ring(person: Person, room: str, now: datetime | None = None) -> None:
+    """The user declined the AI's call in `room` while it rang (or after it ended: then nothing changes)."""
+    if declined(person.workspace, room):
+        return
+    path = person.workspace / DECLINES
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        f.write(json.dumps({"at": (now or datetime.now()).isoformat(timespec="seconds"), "room": room}) + "\n")
+
+
+def declined_rooms(workspace: Path) -> set[str]:
+    try:
+        lines = (workspace / DECLINES).read_text().splitlines()
+    except OSError:
+        return set()
+    rooms = set()
+    for line in lines:
+        try:
+            rooms.add(json.loads(line)["room"])
+        except (ValueError, KeyError, TypeError):
+            continue
+    return rooms
+
+
+def declined(workspace: Path, room: str) -> bool:
+    return room in declined_rooms(workspace)
 
 
 def call_metadata(direction: str, plan: Plan | None = None, prep: dict[str, Any] | None = None,
