@@ -79,6 +79,10 @@ COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
 COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "zai.glm-5")
 WORKER = os.environ.get("WORKER", "fake")
 FIRST_WORDS_WAIT_S = 6.0  # ringing stops when the AI starts to speak, or after this long anyway (arbitrary)
+# The ways of leaving a room that LiveKit ends the session for (livekit/agents/voice/room_io/types.py
+# DEFAULT_CLOSE_ON_DISCONNECT_REASONS): the caller hung up. Others (a lost network) it waits out.
+HANG_UPS = (rtc.DisconnectReason.CLIENT_INITIATED, rtc.DisconnectReason.ROOM_DELETED,
+            rtc.DisconnectReason.USER_REJECTED)
 CALLER_WAIT_S = 5.0  # how long a call the user started waits to see the caller in the room (arbitrary)
 DECLINE_CHECK_S = 1.0  # how often a ringing AI call looks whether the user declined it (arbitrary)
 # After a call, its failed Bee writes are tried again for at most this long: LiveKit gives a job's shutdown about
@@ -405,9 +409,17 @@ async def run_call(ctx: JobContext, people: People) -> None:
         ctx.add_shutdown_callback(stop_ringing)
         preparation = inputs_task = None
         # The caller hung up before the AI's first words (BC-027): the call then leaves nothing but its cost. This is
-        # watched until the first words, also after the ringing stops.
+        # watched until the first words, also after the ringing stops. A hang-up is a leave LiveKit itself ends the
+        # session for; a phone that lost the network is not one, and a caller who comes back is no longer gone.
         left = asyncio.Event()
-        ctx.room.on("participant_disconnected", lambda p: the_caller(p) and not first_words.is_set() and left.set())
+
+        def caller_left(participant) -> None:
+            if the_caller(participant) and not first_words.is_set() \
+                    and getattr(participant, "disconnect_reason", None) in HANG_UPS:
+                left.set()
+
+        ctx.room.on("participant_disconnected", caller_left)
+        ctx.room.on("participant_connected", lambda participant: the_caller(participant) and left.clear())
         try:
             await asyncio.wait_for(ctx.wait_for_participant(), CALLER_WAIT_S)
         except asyncio.TimeoutError:
@@ -521,9 +533,16 @@ async def run_call(ctx: JobContext, people: People) -> None:
         await asyncio.gather(prep_recorder, *([inputs_saver] if inputs_saver else []), return_exceptions=True)
         await jobs.cancel_all()
         if abandoned():  # nothing of it is kept but what it cost
+            spend = SpendLog(workspace)
             models = session_usage(session)
             if models:
-                SpendLog(workspace).add("call_hung_up_while_ringing", models=models, room=ctx.room.name)
+                spend.add("call_hung_up_while_ringing", models=models, room=ctx.room.name)
+            for usage in sorted((rec.dir / "jobs").glob("*/usage.json")):  # its folder goes, so its jobs' use moves
+                try:
+                    spend.add("job_in_call_left_before_the_ai_spoke", job=json.loads(usage.read_text()),
+                              room=ctx.room.name)
+                except (OSError, ValueError) as exc:
+                    log.warning("the use of %s is lost: %s", usage, exc)
             rec.close()
             shutil.rmtree(rec.dir, ignore_errors=True)
             return

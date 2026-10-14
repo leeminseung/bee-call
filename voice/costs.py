@@ -14,7 +14,8 @@ It is an estimate from what the processes write down, not AWS's bill:
   state/spend.jsonl                use recorded where it happens, outside a call's own record (SpendLog): every
                                    call prep (voice/prep.py, in voice/outbound.py before the AI's call rings and in
                                    the voice server while the user's call rings), also for calls nobody answered
-                                   and calls hung up while they rang, and every worker warm-up
+                                   and calls hung up while they rang, and every worker warm-up; and what a
+                                   call left before the AI spoke used, since its folder goes (voice/agent.py)
 A call still going on has no usage.json yet; it counts by its minutes so far at CALL_USD_PER_MINUTE. A call's
 call_prep event only shows the prep on the call's record; its cost is in state/spend.jsonl.
 
@@ -160,8 +161,9 @@ class SpendLog:
     def add(self, what: str, *, model: str | None = None, input_tokens: int = 0, output_tokens: int = 0,
             models: list[dict[str, Any]] | None = None, estimated: bool = False, now: datetime | None = None,
             **about: Any) -> None:
-        """One use: an LLM's tokens (model, input_tokens, output_tokens), or a session's LiveKit usage entries
-        (models). `estimated`: counted from what was sent, because the provider's own count never came."""
+        """One use: an LLM's tokens (model, input_tokens, output_tokens), a session's LiveKit usage entries
+        (models), or a background job's usage.json (job=...). `estimated`: counted from what was sent, because the
+        provider's own count never came."""
         # The moment, with its zone; spent_on() places it on the person's own day when it reads it.
         entry = {"at": (now or datetime.now().astimezone()).isoformat(timespec="seconds"), "what": what, "model": model,
                  "input_tokens": input_tokens, "output_tokens": output_tokens, "estimated": estimated, **about}
@@ -187,6 +189,8 @@ class SpendLog:
             total += llm_cost(entry.get("model"), entry.get("input_tokens"), entry.get("output_tokens"))
             if isinstance(entry.get("models"), list):
                 total += call_cost({"models": entry["models"]})
+            if isinstance(entry.get("job"), dict):  # a background job's usage.json whose call folder went
+                total += job_cost(entry["job"])
         return total
 
 

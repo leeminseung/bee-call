@@ -324,6 +324,74 @@ def test_a_call_hung_up_after_the_ringing_but_before_the_ai_spoke_leaves_nothing
     assert call_folders(me.workspace) == [] and MetaSession(me.workspace).take_events() == []
 
 
+def test_a_hang_up_after_the_ai_spoke_keeps_the_call(tmp_path, monkeypatch, quick):
+    """Only a hang-up before the AI's first words leaves nothing; after them it is an ordinary end of a call."""
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)  # the AI has spoken
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    (folder,) = call_folders(me.workspace)
+    assert [e["kind"] for e in MetaSession(me.workspace).take_events()] == ["call_ended"]
+
+
+def test_a_caller_whose_phone_drops_and_comes_back_before_the_ai_speaks_keeps_the_call(tmp_path, monkeypatch, quick):
+    """Second review of this round's fixes, finding 3: LiveKit keeps the session through a dropped network and the
+    caller comes back to it; that call is not one hung up while it rang."""
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"}, session=FakeSession(first_words_after=0.8))
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        running = asyncio.create_task(agent.run_call(call, me.people))
+        await asyncio.sleep(0.1)
+        call.drop()
+        await asyncio.sleep(0.1)
+        call.come_back()
+        await running  # the ringing stops before the voice starts
+        await asyncio.sleep(1.0)  # the voice starts
+        await call.end()
+
+    asyncio.run(main())
+    assert call.shutdown_reason is None
+    (folder,) = call_folders(me.workspace)
+    assert [e["kind"] for e in MetaSession(me.workspace).take_events()] == ["call_ended"]
+
+
+def test_the_jobs_of_a_call_left_before_the_ai_spoke_still_count(tmp_path, monkeypatch, quick):
+    """Second review of this round's fixes, finding 3: such a call leaves no folder, so what its background jobs
+    used goes into the spend log first (server review finding 4)."""
+    from voice.costs import day_budget
+
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"}, session=FakeSession(first_words_after=None))
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        (folder,) = call_folders(me.workspace)
+        (folder / "jobs" / "01").mkdir(parents=True)
+        (folder / "jobs" / "01" / "usage.json").write_text(json.dumps(
+            {"input_tokens": 1_000_000, "output_tokens": 0, "status": "cancelled",
+             "steps": [{"round_s": 1.0, "calls": [{"name": "web_search", "s": 1.0}]}]}))
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    assert call_folders(me.workspace) == []
+    (job,) = [e for e in spend_entries(me.workspace) if e["what"] == "job_in_call_left_before_the_ai_spoke"]
+    assert job["job"]["input_tokens"] == 1_000_000
+    assert day_budget(me.person, me.person.now()).spent >= 1.00  # GLM 5 input: 1.00 a million tokens
+
+
 def test_an_ai_call_declined_while_it_rings_is_declined_not_missed(tmp_path, monkeypatch, quick):
     """Contract section 2: after POST /calls/decline the voice server stops waiting within a few seconds and the
     meta agent hears of a declined call, not a missed one."""

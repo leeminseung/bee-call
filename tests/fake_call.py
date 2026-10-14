@@ -14,6 +14,8 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+from livekit import rtc
+
 
 class FakeEmitter:
     def __init__(self) -> None:
@@ -90,7 +92,7 @@ class FakeCall:
         self.room_name = room
         self.room = FakeRoom(room)
         self.session = session or FakeSession()
-        self.caller = SimpleNamespace(identity=meta.get("person") or "caller", kind=0)
+        self.caller = SimpleNamespace(identity=meta.get("person") or "caller", kind=0, disconnect_reason=None)
         self.joined = asyncio.Event()
         self.shutdown_callbacks: list = []
         self.shutdown_reason: str | None = None
@@ -137,7 +139,18 @@ class FakeCall:
         self.joined.set()
 
     def hang_up(self) -> None:
+        """The caller ends the call: the app leaves the room (LiveKit's CLIENT_INITIATED)."""
+        self.caller.disconnect_reason = rtc.DisconnectReason.CLIENT_INITIATED
         self.room.emit("participant_disconnected", self.caller)
+
+    def drop(self) -> None:
+        """The phone loses the network: LiveKit gives the caller up for now (SIGNAL_CLOSE); it may come back."""
+        self.caller.disconnect_reason = rtc.DisconnectReason.SIGNAL_CLOSE
+        self.room.emit("participant_disconnected", self.caller)
+
+    def come_back(self) -> None:
+        self.caller.disconnect_reason = None
+        self.room.emit("participant_connected", self.caller)
 
     async def ring_back(self, room) -> None:
         """voice/ringback.py ring_back, without audio."""
