@@ -747,3 +747,18 @@ def test_the_app_sets_the_person_s_time_zone_and_their_clock_follows_it(tmp_path
     now = me.person.now()
     assert now.tzinfo is not None and str(now.tzinfo) == "America/New_York"
     assert abs((now - datetime.now(SEOUL).astimezone()).total_seconds()) < 5  # the same moment, in their zone
+
+
+def test_a_sign_out_also_takes_the_push_tokens_kept_before_the_registry(tmp_path):
+    """A token read in from the old per-person files has no sign-in of its own. Today's app sends its tokens again
+    only at launch, so signing out must take those away too, or the phone keeps ringing for the person who left."""
+    people = People(tmp_path / "data")
+    people.add("matt")
+    state = people.workspace("matt") / "state"
+    state.mkdir()
+    (state / "voip_token.json").write_text(json.dumps({"token": "ac" * 32, "environment": "production",
+                                                       "at": "2026-10-14T10:00:00"}))
+    sign_in = people.new_session("matt")
+    assert voip_push.load_device_token(people.person("matt"), "voip")["token"] == "ac" * 32
+    people.end_session(sign_in)
+    assert voip_push.load_device_token(people.person("matt"), "voip") is None

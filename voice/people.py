@@ -338,12 +338,16 @@ class People:
 
     def end_session(self, token: str) -> None:
         """Signing out: the sign-in ends, and the push tokens it registered go with it, so the phone it was on
-        no longer gets this person's offers and calls."""
+        no longer gets this person's offers and calls. So do the person's tokens no sign-in registered (kept before
+        the registry, or sent from this Mac without one): today's app sends its tokens again only at launch."""
         with self._lock():
             sessions = self._read("sessions.json")
-            if sessions.pop(_hash(token), None) is not None:
+            ended = sessions.pop(_hash(token), None)
+            if ended is not None:
                 self._write("sessions.json", sessions)
-            self._drop_devices(lambda entry: entry.get("session") == _hash(token))
+            person = ended.get("person") if isinstance(ended, dict) else None
+            self._drop_devices(lambda entry: entry.get("session") == _hash(token)
+                               or (person is not None and entry.get("person") == person and entry.get("session") is None))
 
     # ---------- phones (push tokens) ----------
 
