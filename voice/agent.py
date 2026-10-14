@@ -368,6 +368,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
         else None
     # Join the room at once: an AI call waits here for the phone, and a caller hears ringing from here.
     await ctx.connect()
+    first_words = asyncio.Event()  # the AI's voice has started
     if meta.get("direction") == "outbound":
         # Prepared before the phone rang (voice/outbound.py). Bee is read again for the call's record meanwhile.
         inputs_task = asyncio.create_task(fetch_call_inputs(inbox, conversation_ids))
@@ -398,13 +399,17 @@ async def run_call(ctx: JobContext, people: People) -> None:
 
         ctx.add_shutdown_callback(stop_ringing)
         preparation = inputs_task = None
-        # The caller hung up while it still rang: watched until the AI's first words, whenever they joined (BC-027).
+        # The caller hung up before the AI's first words (BC-027): the call then leaves nothing but its cost. This is
+        # watched until the first words, also after the ringing stops.
         left = asyncio.Event()
-        ctx.room.on("participant_disconnected", lambda p: the_caller(p) and left.set())
+        ctx.room.on("participant_disconnected", lambda p: the_caller(p) and not first_words.is_set() and left.set())
         try:
             await asyncio.wait_for(ctx.wait_for_participant(), CALLER_WAIT_S)
         except asyncio.TimeoutError:
-            pass
+            # The app's join made this room, so a caller not in it has hung up already, and no disconnect will
+            # come. (LiveKit's console mode has no caller in a room.)
+            if not ctx.is_fake_job():
+                left.set()
 
         async def get_ready() -> CallInputs:
             nonlocal preparation
@@ -494,7 +499,9 @@ async def run_call(ctx: JobContext, people: People) -> None:
         rec, jobs, workspace, clock=someone.now, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
         language=language, earlier_call=meta.get("earlier_call"))
 
-    abandoned = False  # the caller hung up before the AI's first words: the call leaves no record
+    def abandoned() -> bool:
+        """The caller hung up before the AI's first words: the call leaves no record."""
+        return left is not None and left.is_set()
 
     async def shutdown() -> None:
         # LiveKit runs this in a task of its own, which does not carry the Bee login chosen above: choose it again,
@@ -506,7 +513,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
             preparation.cancel()  # the prep records its own model use (voice/costs.py SpendLog)
         await asyncio.gather(prep_recorder, *([inputs_saver] if inputs_saver else []), return_exceptions=True)
         await jobs.cancel_all()
-        if abandoned:  # nothing of it is kept but what it cost
+        if abandoned():  # nothing of it is kept but what it cost
             models = session_usage(session)
             if models:
                 SpendLog(workspace).add("call_hung_up_while_ringing", models=models, room=ctx.room.name)
@@ -534,7 +541,6 @@ async def run_call(ctx: JobContext, people: People) -> None:
         # delete_room() schedules itself and returns a future; ending the room ends the phone call.
         ctx.delete_room()
 
-    first_words = asyncio.Event()
     session.on("agent_state_changed", lambda ev: ev.new_state == "speaking" and first_words.set())
     try:
         # LiveKit's own recording (audio, transcript, traces) stays off whatever the LiveKit project says: call
@@ -547,14 +553,13 @@ async def run_call(ctx: JobContext, people: People) -> None:
             spoke.cancel(), gone.cancel()
             if not done:
                 log.warning("no first words within %ss in room %s", FIRST_WORDS_WAIT_S, ctx.room.name)
-            abandoned = left.is_set() and not first_words.is_set()
     finally:
         if ringing is not None:
             ringing.cancel()
             (rang,) = await asyncio.gather(ringing, return_exceptions=True)
             if isinstance(rang, Exception):
                 log.error("ringback failed in room %s: %r", ctx.room.name, rang)
-    if abandoned:
+    if abandoned():
         log.info("the caller hung up while it rang, in room %s", ctx.room.name)
         ctx.shutdown(reason="the caller hung up while it rang")
         return

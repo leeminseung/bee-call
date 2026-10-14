@@ -105,6 +105,10 @@ class FakeCall:
         await self.joined.wait()
         return self.caller
 
+    def is_fake_job(self) -> bool:
+        """LiveKit's console mode (no room, this Mac's mic) is a fake job; a dispatched call is not."""
+        return False
+
     def add_shutdown_callback(self, callback) -> None:
         self.shutdown_callbacks.append(callback)
 

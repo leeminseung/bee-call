@@ -261,24 +261,41 @@ def test_a_call_hung_up_while_it_rings_leaves_nothing_but_its_cost(tmp_path, mon
     assert [m["characters_count"] for e in voice for m in e["models"]] == ([40] if hang_up_after > 0.4 else [])
 
 
-def test_a_caller_seen_late_is_still_watched_while_it_rings(tmp_path, monkeypatch, quick):
+def test_a_caller_gone_before_the_voice_server_joined_leaves_nothing(tmp_path, monkeypatch, quick):
+    """Review of this round's fixes, finding 3: the app's join makes the room the voice server is sent to, so a
+    caller not in it when the voice server looks has hung up already, and no disconnect will be seen."""
     me = signed_in(tmp_path)
-    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE * 30), gap=0.03))
-    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"}, session=FakeSession(first_words_after=None))
+    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
     use_fakes(monkeypatch, call)
-    monkeypatch.setattr(agent, "CALLER_WAIT_S", 0.05)  # the app joins after the voice server looked for it
+    monkeypatch.setattr(agent, "CALLER_WAIT_S", 0.1)
 
     async def main():
-        running = asyncio.create_task(agent.run_call(call, me.people))
-        await asyncio.sleep(0.15)
-        call.join()
-        await asyncio.sleep(0.15)
-        call.hang_up()
-        await running
+        await agent.run_call(call, me.people)  # no one is in the room
         await call.end()
 
     asyncio.run(main())
-    assert call_folders(me.workspace) == [] and call.shutdown_reason == "the caller hung up while it rang"
+    assert call.session.started is None and call_folders(me.workspace) == []
+    assert MetaSession(me.workspace).take_events() == [] and call.shutdown_reason == "the caller hung up while it rang"
+
+
+def test_a_call_hung_up_after_the_ringing_but_before_the_ai_spoke_leaves_nothing(tmp_path, monkeypatch, quick):
+    """Review of this round's fixes, finding 3: the ringing stops after FIRST_WORDS_WAIT_S, but the watch goes on
+    until the AI's first words (BC-027)."""
+    me = signed_in(tmp_path)
+    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"}, session=FakeSession(first_words_after=None))
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)  # the ringing has stopped; the voice has not started
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    assert call.ringing == ["start", "stop"] and call.session.started is not None
+    assert call_folders(me.workspace) == [] and MetaSession(me.workspace).take_events() == []
 
 
 def test_an_ai_call_declined_while_it_rings_is_declined_not_missed(tmp_path, monkeypatch, quick):
