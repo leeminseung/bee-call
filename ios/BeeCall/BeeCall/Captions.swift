@@ -22,6 +22,8 @@ struct Caption: Identifiable {
 
 /// The captions of a call, as the voice server transcribes both sides (topic lk.transcription). An AI line
 /// arrives as one stream in chunks; a user line is re-sent in full as a new stream each time it improves.
+/// Speech recognition cuts continuous speech into several lines, so the user's lines before the AI's next
+/// line make one bubble.
 struct CaptionList {
     static let limit = 30 // bubbles kept on screen
 
@@ -35,7 +37,12 @@ struct CaptionList {
             captions[bubble].lines[line].sentAt = sentAt
             return
         }
-        captions.append(Caption(id: id, isMine: isMine, lines: [Caption.Line(id: id, text: text, sentAt: sentAt)]))
+        let line = Caption.Line(id: id, text: text, sentAt: sentAt)
+        if isMine, let last = captions.indices.last, captions[last].isMine {
+            captions[last].lines.append(line) // the user is still talking: no AI line since their last one
+            return
+        }
+        captions.append(Caption(id: id, isMine: isMine, lines: [line]))
         if captions.count > Self.limit { captions.removeFirst() }
     }
 
