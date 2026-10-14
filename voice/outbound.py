@@ -144,6 +144,9 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
             if wait > 0:  # prepared early for a booked time
                 await asyncio.sleep(wait)
             room = await place(claim, person, prep=prep.to_meta())
+        except asyncio.CancelledError:  # the loops are stopping: a yes not yet placed is not lost
+            store.release(claim, datetime.now())
+            raise
         except Exception as exc:
             store.fail(claim, datetime.now(), f"{type(exc).__name__}: {exc}"[:300])
             log.exception("could not place the call for offer %s", offer.id)

@@ -163,12 +163,12 @@ class OfferStore:
                 return None
             return self._save(self._set(offer, state, now, **changes))
 
-    def _move_claimed(self, claim: Claim, now: datetime, came_from: tuple[str, ...], state: str,
+    def _move_claimed(self, held: Claim, now: datetime, came_from: tuple[str, ...], state: str, /,
                       **changes: Any) -> Offer | None:
         """A move only the claim's holder makes: None when the offer was called off or is no longer this claim's."""
         with self._lock():
-            offer = self.get(claim.offer.id)
-            if offer is None or offer.state not in came_from or offer.claim != claim.token:
+            offer = self.get(held.offer.id)
+            if offer is None or offer.state not in came_from or offer.claim != held.token:
                 return None
             return self._save(self._set(offer, state, now, **changes))
 
@@ -182,6 +182,11 @@ class OfferStore:
                 return None
             before = offer.state
             return Claim(self._save(self._set(offer, "calling", now, claim=token)), token, before)
+
+    def release(self, claim: Claim, now: datetime) -> Offer | None:
+        """The runner stopped before it began placing (its loops were restarted, the process was stopped): the
+        offer goes back to the state it was claimed from, so the call is still placed, by the next runner."""
+        return self._move_claimed(claim, now, ("calling",), claim.before, claim=None)
 
     def begin_placing(self, claim: Claim, now: datetime) -> Offer | None:
         """Right before the call's room is created: the last check that the user still wants the call. From here

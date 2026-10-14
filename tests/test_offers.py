@@ -431,3 +431,26 @@ def test_the_rules_path_has_no_switch_that_calls_without_asking():
     out = subprocess.run([sys.executable, "-m", "voice.outbound", "--rules", "--direct"], capture_output=True,
                          text=True, timeout=60)
     assert out.returncode == 2 and "unrecognized arguments: --direct" in out.stderr
+
+
+def test_a_runner_stopped_before_placing_gives_the_offer_back(tmp_path):
+    me = signed_in(tmp_path)
+    store = OfferStore(me.workspace)
+    offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
+    store.answer(offer.id, "now", datetime.now())  # the user tapped "Call me now"
+    rooms = []
+
+    async def slow_prepare(plan, **kw):
+        await asyncio.sleep(10)
+        return Prep()
+
+    async def main():
+        runner = asyncio.create_task(call_due(me.person, prepare=slow_prepare, place=placing(rooms)))
+        await asyncio.sleep(0.2)
+        runner.cancel()  # a settings change restarts the person's loops; so does a deploy
+        await asyncio.gather(runner, return_exceptions=True)
+
+    asyncio.run(main())
+    assert store.get(offer.id).state == "now" and [o.id for o in store.due(datetime.now())] == [offer.id]
+    (room,) = asyncio.run(call_due(me.person, prepare=prepared_quickly, place=placing(rooms)))
+    assert [r.name for r in rooms] == [room] and store.get(offer.id).state == "called"
