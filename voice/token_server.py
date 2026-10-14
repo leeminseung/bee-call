@@ -64,7 +64,7 @@ from beelink.planner import OUTBOUND_LOG
 from meta.session import add_event
 from voice import apple_signin, voip_push
 from voice.continuation import session_dir
-from voice.costs import spent_today
+from voice.costs import day_budget
 from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata, room_name
 from voice.offers import OfferClosed, OfferStore, UnknownChoice
 from voice.people import People, Person, dev_person, waiting_code
@@ -184,7 +184,7 @@ async def sign_out(request: web.Request) -> web.Response:
 async def me(request: web.Request) -> web.Response:
     settings = request.app[PEOPLE].settings(person(request))
     return web.json_response({"person": person(request), "settings": asdict(settings),
-                              "spent_today_usd": round(spent_today(workspace(request), datetime.now()), 2),
+                              "spent_today_usd": round(day_budget(someone(request), datetime.now()).spent, 2),
                               "bee_connecting": person(request) in request.app[BEE_LOGINS]})
 
 
@@ -243,11 +243,9 @@ async def token(request: web.Request) -> web.Response:
     if continue_from is not None and (answer or session_dir(workspace(request), continue_from) is None):
         raise web.HTTPBadRequest(text="continue= needs the id of an earlier call, like 2026-10-14/0055\n")
     if not answer:
-        settings = request.app[PEOPLE].settings(who)
-        spent = spent_today(workspace(request), datetime.now())
-        if spent >= settings.daily_budget_usd:
-            raise web.HTTPTooManyRequests(text=f"today's budget of {settings.daily_budget_usd:.2f} USD is used up "
-                                               f"(about {spent:.2f} USD so far)\n")
+        budget = day_budget(someone(request), datetime.now())
+        if budget.used_up:
+            raise web.HTTPTooManyRequests(text=f"{budget.why()}\n")
     if answer and not await request.app[ROOM_EXISTS](request.app, room):
         # Joining would create an empty room with no voice server in it.
         raise web.HTTPGone(text="that call has ended\n")

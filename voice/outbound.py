@@ -28,7 +28,6 @@ import asyncio
 import json
 import logging
 import signal
-from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -40,7 +39,7 @@ from beelink.watcher import BeeWatcher, Trigger
 from voice import voip_push
 from voice.continuation import earlier_call
 from voice.dispatch import RING_SECONDS, place_call
-from voice.costs import spent_today
+from voice.costs import day_budget
 from voice.language import CallLanguage, call_language
 from voice.people import People, Person, Settings, dev_person
 from voice.offers import OPEN, Offer, OfferStore, agreed, notification, plan_of
@@ -113,8 +112,7 @@ def busy(workspace: Path, now: datetime) -> bool:
 
 
 async def call_due(person: Person, now: datetime | None = None, prepare=prepare_outbound, place=place_call, *,
-                   language: CallLanguage | None = None,
-                   over_budget: Callable[[datetime], bool] | None = None) -> list[str]:
+                   language: CallLanguage | None = None) -> list[str]:
     """Places a call the user said yes to: "Call me now", an accepted time that has come (prepared up to
     BOOKED_AHEAD early), or a time booked in a call. One call per round, and none while another call is going on
     or ringing; the others wait for a later round and close if they are more than LATE_BY late. Returns the
@@ -131,9 +129,10 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
         claim = store.claim(offer.id, now)
         if claim is None:  # called off meanwhile, or another runner has it
             continue
-        if over_budget is not None and over_budget(now):
-            store.fail(claim, now, "today's budget is used up; ask again tomorrow")
-            log.info("offer %s not called: over today's budget", offer.id)
+        budget = day_budget(person, now)
+        if budget.used_up:
+            store.fail(claim, now, f"{budget.why()}; ask again tomorrow")
+            log.info("offer %s not called: %s", offer.id, budget.why())
             continue
         try:
             extra = {"agreed": agreed(claim.offer), "meta_notes": meta_notes(workspace)}
@@ -162,7 +161,7 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
 
 async def serve_offers(person: Person, until: str | None = None, **for_person) -> None:
     """Checks for due calls every OFFER_CHECK_S; with `until`, stops once that offer is no longer open.
-    `for_person` goes on to call_due (language, over_budget)."""
+    `for_person` goes on to call_due (language; prepare and place in tests)."""
     store = OfferStore(person.workspace)
     while True:
         try:
@@ -206,7 +205,7 @@ async def think_about_new_events(session: MetaSession, thinker: Thinker, now: da
 
 
 async def serve_meta(person: Person, thinker: Thinker, until_offer_closes: bool = False,
-                     language: CallLanguage | None = None, over_budget: Callable[[datetime], bool] | None = None) -> None:
+                     language: CallLanguage | None = None) -> None:
     """Wakes the meta agent for new events, tells it about booked calls coming up, and sends held notifications
     once they may go out. With until_offer_closes (for --once), stops when no offer is open any more. Past the
     person's daily budget it does not think; the events wait for the next day."""
@@ -221,7 +220,7 @@ async def serve_meta(person: Person, thinker: Thinker, until_offer_closes: bool 
                         and offer.id not in announced:
                     announced.add(offer.id)
                     add_event(workspace, "booked_soon", offer=offer.id, call_at=offer.call_at, topic=offer.topic)
-            if over_budget is None or not over_budget(now):
+            if not day_budget(person, now).used_up:
                 tries = await think_about_new_events(session, thinker, now, tries)
             await send_held(person, now, language)
         except Exception:
@@ -245,9 +244,6 @@ async def serve_person(people: People, person_id: str, settings: Settings) -> No
     language = call_language(settings.language)
     bee.use_bee(people.bee_dir(person_id) if settings.bee else None)  # this task and the loops it starts
 
-    def over_budget(now: datetime) -> bool:
-        return spent_today(workspace, now) >= people.settings(person_id).daily_budget_usd
-
     async def send(offer: Offer, ws: Path, now: datetime) -> str:
         return await send_offer(offer, person, now, language)
 
@@ -258,8 +254,8 @@ async def serve_person(people: People, person_id: str, settings: Settings) -> No
     # A TaskGroup: if one loop fails, the others stop too, so serve_people() never starts a second set beside
     # survivors of the first.
     async with asyncio.TaskGroup() as group:
-        group.create_task(serve_offers(person, language=language, over_budget=over_budget))
-        group.create_task(serve_meta(person, thinker, language=language, over_budget=over_budget))
+        group.create_task(serve_offers(person, language=language))
+        group.create_task(serve_meta(person, thinker, language=language))
         if settings.bee:
             group.create_task(BeeWatcher(workspace, on_trigger).run())
 

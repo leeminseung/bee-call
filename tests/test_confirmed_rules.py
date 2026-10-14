@@ -71,6 +71,8 @@ def test_spend_equal_to_the_budget_counts_as_over(tmp_path):
 def test_the_meta_agent_skips_thinking_while_over_budget_and_catches_up_the_next_day(tmp_path, monkeypatch):
     me = signed_in(tmp_path)
     workspace = me.workspace
+    me.people.change_settings("matt", {"daily_budget_usd": 0.5}, allowed=("daily_budget_usd",))
+    spend(workspace, 0.5, datetime.now())
     thought: list[list[str]] = []
 
     class Thinker:
@@ -78,15 +80,15 @@ def test_the_meta_agent_skips_thinking_while_over_budget_and_catches_up_the_next
             thought.append([e["kind"] for e in events])
             return {"seconds": 0.0, "decision": "nothing to do"}
 
-    over = {"today": True}
     monkeypatch.setattr(outbound, "META_CHECK_S", 0.01)
 
     async def main():
         add_event(workspace, "call_ended", call="2026-10-14/2000")
-        loop = asyncio.create_task(serve_meta(me.person, Thinker(), over_budget=lambda now: over["today"]))
+        loop = asyncio.create_task(serve_meta(me.person, Thinker()))
         await asyncio.sleep(0.1)
         waited = list(thought)
-        over["today"] = False  # the next day: the spend starts again from zero
+        for usage in workspace.glob("*/*/usage.json"):  # the next day: today's spend is yesterday's
+            usage.unlink()
         await asyncio.sleep(0.1)
         loop.cancel()
         await asyncio.gather(loop, return_exceptions=True)
@@ -112,7 +114,7 @@ def test_the_meta_agent_wakes_only_for_events(tmp_path, monkeypatch):
     later = store.book("the dentist", datetime.now() + timedelta(minutes=30), datetime.now())
 
     async def main():
-        loop = asyncio.create_task(serve_meta(me.person, Thinker(), over_budget=lambda now: False))
+        loop = asyncio.create_task(serve_meta(me.person, Thinker()))
         await asyncio.sleep(0.15)
         loop.cancel()
         await asyncio.gather(loop, return_exceptions=True)

@@ -454,6 +454,7 @@ def test_over_budget_an_agreed_call_is_not_placed(tmp_path):
     from voice.outbound import call_due
 
     me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"daily_budget_usd": 0}, allowed=("daily_budget_usd",))  # nothing left
     offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
     store = OfferStore(me.workspace)
     store.answer(offer.id, "now", datetime.now())
@@ -463,8 +464,67 @@ def test_over_budget_an_agreed_call_is_not_placed(tmp_path):
         placed.append(kw)
         return "call-x"
 
-    assert asyncio.run(call_due(me.person, place=place, over_budget=lambda now: True)) == []
+    assert asyncio.run(call_due(me.person, place=place)) == []
     assert placed == [] and store.get(offer.id).state == "failed" and "budget" in store.get(offer.id).error
+
+
+def spend_today(workspace: Path, usd: float) -> None:
+    """A finished call today that cost `usd` (GLM 5 input: 1.00 USD per million tokens)."""
+    call = workspace / datetime.now().strftime("%Y-%m-%d") / "0001"
+    call.mkdir(parents=True, exist_ok=True)
+    (call / "usage.json").write_text(json.dumps({"models": [
+        {"type": "llm_usage", "provider": "aws", "model": "zai.glm-5", "input_tokens": int(usd * 1_000_000)}]}))
+
+
+def test_every_path_to_an_agreed_call_checks_the_budget(tmp_path):
+    """Server review finding 3, repro s2: the --once and --rules paths placed agreed calls past the budget."""
+    from tests.helpers import placing
+    from voice.offers import OfferStore
+    from voice.outbound import call_due, serve_offers
+    from voice.prep import Prep
+
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"daily_budget_usd": 0.5}, allowed=("daily_budget_usd",))
+    spend_today(me.workspace, 2.0)
+    store = OfferStore(me.workspace)
+    rooms = []
+
+    async def prepare(plan, **kw):
+        return Prep(note="n", opening="o")
+
+    first = store.book("check in", datetime.now() - timedelta(seconds=1), datetime.now())
+    assert asyncio.run(call_due(me.person, prepare=prepare, place=placing(rooms))) == []
+    second = store.book("the interview", datetime.now() - timedelta(seconds=1), datetime.now())
+    asyncio.run(asyncio.wait_for(serve_offers(me.person, until=second.id, prepare=prepare, place=placing(rooms)), 10))
+    assert rooms == [] and [store.get(o.id).state for o in (first, second)] == ["failed", "failed"]
+    assert all("budget" in store.get(o.id).error for o in (first, second))
+
+
+def test_the_meta_agent_s_own_loop_checks_the_budget(tmp_path, monkeypatch):
+    from meta.session import add_event
+    from voice import outbound
+
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"daily_budget_usd": 0.5}, allowed=("daily_budget_usd",))
+    spend_today(me.workspace, 0.5)
+    add_event(me.workspace, "call_ended", call="2026-10-14/2000")
+    thought = []
+
+    class Thinker:
+        async def think(self, events, now):
+            thought.append(events)
+            return {"seconds": 0.0, "decision": "nothing"}
+
+    monkeypatch.setattr(outbound, "META_CHECK_S", 0.01)
+
+    async def main():
+        loop = asyncio.create_task(outbound.serve_meta(me.person, Thinker()))
+        await asyncio.sleep(0.1)
+        loop.cancel()
+        await asyncio.gather(loop, return_exceptions=True)
+
+    asyncio.run(main())
+    assert thought == []
 
 
 def test_an_agreed_call_carries_its_person(tmp_path):
@@ -482,7 +542,7 @@ def test_an_agreed_call_carries_its_person(tmp_path):
         seen["language"] = language.code
         return Prep(note="n", opening="o")
 
-    async def place(plan, person, prep=None, continue_from=None, agreed=None):
+    async def place(claim, person, prep=None):
         seen["person"] = person.id
         return "call-jiwoo-20261014-210000"
 

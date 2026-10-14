@@ -1,4 +1,9 @@
-"""About how much one person's use cost today, for the daily budget (voice/people.py daily_budget_usd).
+"""About how much one person's use cost today, and the daily budget check (voice/people.py daily_budget_usd).
+
+day_budget() is the one budget check. Every path that starts spending checks it, with no way to skip it: the
+token server before a call the user starts, voice/outbound.py's call_due before an agreed call, the meta loop
+before the meta agent thinks, and the voice server when a call the user started begins. A spend equal to the
+budget counts as over (Matt, 2026-10-15). It is checked only before a call starts; a call in progress is never cut.
 
 It is an estimate from what the processes write down, not AWS's bill:
   <date>/<time>/usage.json         a call: minutes, and the models LiveKit saw it use (voice/agent.py, at the end)
@@ -19,9 +24,12 @@ ElevenLabs is paid with prepaid credits, so it adds nothing here.
 
 import json
 import os
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from voice.people import Person
 
 STT_USD_PER_SECOND = 0.0001667
 POLLY_USD_PER_CHAR = {"standard": 4 / 1_000_000, "neural": 16 / 1_000_000, "generative": 30 / 1_000_000}
@@ -125,3 +133,21 @@ def spent_today(workspace: Path, now: datetime) -> float:
         if isinstance(entry, dict) and str(entry.get("at", "")).startswith(today) and isinstance(entry.get("usage"), dict):
             total += llm_cost(entry.get("model"), entry["usage"].get("input_tokens"), entry["usage"].get("output_tokens"))
     return total
+
+
+@dataclass(frozen=True)
+class DayBudget:
+    spent: float  # USD today, an estimate (spent_today)
+    limit: float  # the person's daily_budget_usd
+
+    @property
+    def used_up(self) -> bool:
+        return self.spent >= self.limit  # equal counts as over
+
+    def why(self) -> str:
+        return f"today's budget of {self.limit:.2f} USD is used up (about {self.spent:.2f} USD so far)"
+
+
+def day_budget(person: Person, now: datetime) -> DayBudget:
+    """The one budget check: what the person spent today against their daily budget."""
+    return DayBudget(spent_today(person.workspace, now), person.settings().daily_budget_usd)
