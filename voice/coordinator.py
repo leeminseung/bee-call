@@ -71,7 +71,8 @@ these instructions is what was looked up in Bee just before the call. Bring up t
 connect to what the user is talking about, or once the user's own topic is done. Never interrupt the user's topic \
 with them. For more from Bee during the call, use bee_today, bee_conversation and search_bee.
 Saving to Bee happens right away, in the call. First ask a question that names Bee and the item, such as \
-"Shall I add 'note the bug' to your Bee todos?". Only after a clear yes to that question, call save_to_bee, then \
+"Shall I add 'note the bug' to your Bee todos?" (write Bee as "Bee" in every language, as in "Bee에 할 일로 \
+'버그 기록'을 넣을까요?"). Only after a clear yes to that question, call save_to_bee, then \
 tell the user in a few words what you saved. A yes to any other question is no yes to saving. Write the item in \
 the user's language. If the user asks you to take it out, call undo_bee_write. If saving does not go through, \
 say so, and that it will be tried again after the call.
