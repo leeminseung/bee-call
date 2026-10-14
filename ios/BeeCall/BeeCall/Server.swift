@@ -27,6 +27,8 @@ final class Server {
     private(set) var problem: String? // the last sign-in failure, in words
     private(set) var beeStatus = "" // shown under the call status when the person uses Bee
     @ObservationIgnored private var nonce: String?
+    @ObservationIgnored let settings = SettingsSync(isSignedIn: { Server.shared.isSignedIn },
+                                                    noteStatus: { Server.shared.noteStatus($0) })
 
     private init() {
         state = Self.savedToken() == nil ? .signedOut : .signedIn(person: UserDefaults.standard.string(forKey: "person") ?? "")
@@ -95,6 +97,10 @@ final class Server {
         if let token = savedToken() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+    }
+
+    var isSignedIn: Bool {
+        if case .signedIn = state { true } else { false }
     }
 
     /// Every answer goes through here: a 401 means the sign-in is gone (expired, or the person was removed).
@@ -190,22 +196,8 @@ final class Server {
     /// Sends the switches from the Settings app to the server, and connects or disconnects Bee to match "Use Bee".
     func syncSettings() async {
         guard case .signedIn = state else { return }
-        let defaults = UserDefaults.standard
-        var settings: [String: Any] = [
-            "language": defaults.string(forKey: "language") ?? "en",
-            "record_on_server": defaults.bool(forKey: "record_on_server"),
-            "record_on_phone": defaults.bool(forKey: "record_on_phone"),
-        ]
-        // A typed time the server would refuse is left out, so it does not hold back the other settings.
-        let time = (defaults.string(forKey: "call_time") ?? "").trimmingCharacters(in: .whitespaces)
-        if time.wholeMatch(of: /([01]\d|2[0-3]):[0-5]\d/) != nil {
-            settings["call_time"] = time
-        }
-        if let request = Self.request("/settings", method: "PUT", json: settings),
-           let (_, response) = try? await URLSession.shared.data(for: request) {
-            noteStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
-        }
-        await syncBee(wanted: defaults.bool(forKey: "use_bee"))
+        await settings.send()
+        await syncBee(wanted: AppSettings(.standard).useBee)
     }
 
     private func syncBee(wanted: Bool) async {

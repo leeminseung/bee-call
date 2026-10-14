@@ -11,8 +11,7 @@ struct BeeCallApp: App {
 
     init() {
         // The Bee Call page in the iOS Settings app (Settings.bundle) shows these until the person changes them.
-        UserDefaults.standard.register(defaults: ["language": "en", "call_time": "21:00", "record_on_server": true,
-                                                  "record_on_phone": false, "use_bee": false])
+        UserDefaults.standard.register(defaults: AppSettings.defaults)
     }
 
     var body: some Scene {
