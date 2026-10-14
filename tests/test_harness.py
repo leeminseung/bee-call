@@ -316,3 +316,20 @@ def test_a_job_cancelled_when_the_call_ends_still_counts_its_rounds_so_far(tmp_p
     assert run_in_a_call(tmp_path, SlowHarness(searching_rounds(10)), cancel_after=0.5) == "cancelled"
     spent = spent_today(tmp_path, datetime.now(SEOUL))
     assert spent >= 1.00 + WEB_SEARCH_USD  # at least the rounds that finished before the call ended
+
+
+def test_the_worker_smoke_test_builds_its_job(monkeypatch, capsys):
+    """scripts/deploy_worker.py --smoke runs one job through the worker (a fake one here)."""
+    from scripts import deploy_worker
+
+    class Worker:
+        def __init__(self, arn):
+            pass
+
+        async def run(self, job, progress, relay):
+            (job.dir / "report.md").write_text("ok")
+            return f"ran at {job.now.tzinfo}"
+
+    monkeypatch.setattr(deploy_worker, "HarnessWorker", Worker)
+    asyncio.run(deploy_worker.smoke("arn:harness"))
+    assert "ran at Asia/Seoul" in capsys.readouterr().out

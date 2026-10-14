@@ -15,7 +15,9 @@ import json
 import sys
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import boto3
 from botocore.exceptions import ClientError
@@ -25,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from worker.harness import (DEFAULT_MODEL, HARNESS_NAME, REGION, STATE_FILE, HarnessWorker,  # noqa: E402
                             harness_definition, update_request)
 from worker.runner import Job  # noqa: E402
+from voice.people import DEFAULT_TIME_ZONE  # noqa: E402
 
 load_dotenv(".env.local")
 ROLE_NAME = "bee-call-worker"
@@ -108,8 +111,9 @@ def ensure_harness(ctl, role_arn: str, model: str) -> dict:
 async def smoke(arn: str) -> None:
     """One tiny job: checks the inline-function round trip and times it."""
     with tempfile.TemporaryDirectory() as tmp:
-        job = Job(job_id="00", dir=Path(tmp), task="Smoke test: call progress once with the text 'checking', then "
-                  "relay_to_user with 'The worker is up.', then save_file report.md with one line, then finish.")
+        job = Job(job_id="00", dir=Path(tmp), now=datetime.now(ZoneInfo(DEFAULT_TIME_ZONE)),
+                  task="Smoke test: call progress once with the text 'checking', then relay_to_user with 'The worker "
+                       "is up.', then save_file report.md with one line, then finish.")
         steps: list[str] = []
         started = time.perf_counter()
 
