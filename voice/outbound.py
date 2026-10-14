@@ -39,7 +39,7 @@ from beelink.watcher import BeeWatcher, Trigger
 from voice import voip_push
 from voice.continuation import earlier_call
 from voice.dispatch import RING_SECONDS, place_call
-from voice.costs import day_budget
+from voice.costs import SpendLog, day_budget
 from voice.language import CallLanguage, call_language
 from voice.people import People, Person, Settings, dev_person
 from voice.offers import OPEN, Offer, OfferStore, agreed, notification, plan_of
@@ -138,7 +138,7 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
             extra = {"agreed": agreed(claim.offer), "meta_notes": meta_notes(workspace)}
             if offer.continue_from:
                 extra["earlier_call"] = earlier_call(workspace, offer.continue_from)
-            prep = await prepare(plan_of(claim.offer), extra=extra,
+            prep = await prepare(plan_of(claim.offer), extra=extra, spend=SpendLog(workspace),
                                  deadline_s=NOW_PREP_S if right_now else NOTE_SECONDS,
                                  **({"language": language} if language else {}))
             wait = (offer.at("call_at") - datetime.now()).total_seconds()

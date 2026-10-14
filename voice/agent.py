@@ -48,7 +48,7 @@ from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
 from voice.aws_session import aws_profile, aws_session
 from voice.claude_llm import ClaudeBedrockLLM
 from voice.continuation import earlier_call
-from voice.costs import day_budget
+from voice.costs import SpendLog, day_budget
 from meta.session import add_event, meta_notes
 from voice.coordinator import Coordinator
 from voice.dispatch import AGENT_NAME, RING_SECONDS
@@ -300,7 +300,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
     conversation_ids = meta.get("conversation_ids") or []
     backend = {"search": SearchWorker, "harness": HarnessWorker}.get(WORKER, FakeWorker)()
     # Wake a cloud worker session now, so the first job does not wait for one to start.
-    keep_warm = asyncio.create_task(backend.keep_warm()) if isinstance(backend, HarnessWorker) else None
+    keep_warm = asyncio.create_task(backend.keep_warm(SpendLog(workspace))) if isinstance(backend, HarnessWorker) \
+        else None
     # Join the room at once: an AI call waits here for the phone, and a caller hears ringing from here.
     await ctx.connect()
     if meta.get("direction") == "outbound":
@@ -343,7 +344,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
         async def get_ready() -> CallInputs:
             nonlocal preparation
             got = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S)
-            preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM), language=language).start()
+            preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM), spend=SpendLog(workspace),
+                                      language=language).start()
             await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - started))
             return got
 

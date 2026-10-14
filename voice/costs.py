@@ -7,10 +7,15 @@ budget counts as over (Matt, 2026-10-15). It is checked only before a call start
 
 It is an estimate from what the processes write down, not AWS's bill:
   <date>/<time>/usage.json         a call: minutes, and the models LiveKit saw it use (voice/agent.py, at the end)
-  <date>/<time>/events.jsonl       the call prep's model use (the call_prep event)
-  <date>/<time>/jobs/*/usage.json  a background job's model tokens and its web searches (worker/harness.py)
+  <date>/<time>/jobs/*/usage.json  a background job's model tokens and its web searches, after every round
+                                   (worker/harness.py)
   meta/session.jsonl               each meta agent think's model tokens (meta/agent.py)
-A call still going on has no usage.json yet; it counts by its minutes so far at CALL_USD_PER_MINUTE.
+  state/spend.jsonl                use recorded where it happens, outside a call's own record (SpendLog): every
+                                   call prep (voice/prep.py, in voice/outbound.py before the AI's call rings and in
+                                   the voice server while the user's call rings), also for calls nobody answered
+                                   and calls hung up while they rang
+A call still going on has no usage.json yet; it counts by its minutes so far at CALL_USD_PER_MINUTE. A call's
+call_prep event only shows the prep on the call's record; its cost is in state/spend.jsonl.
 
 Prices in USD, checked 2026-10-14:
   Amazon Transcribe streaming: 0.0001667 a second (AWS price file, published 2026-09-11)
@@ -78,9 +83,9 @@ def call_cost(usage: dict[str, Any]) -> float:
     return total
 
 
-def _call_events(folder: Path) -> tuple[float, float]:
-    """(minutes so far, the call prep's cost) from the call's events.jsonl."""
-    last, prep = 0.0, 0.0
+def _call_minutes(folder: Path) -> float:
+    """How long the call has gone on, from the call's events.jsonl."""
+    last = 0.0
     try:
         with (folder / "events.jsonl").open("rb") as f:
             for raw in f:
@@ -88,14 +93,11 @@ def _call_events(folder: Path) -> tuple[float, float]:
                     event = json.loads(raw)
                 except ValueError:
                     continue
-                if not isinstance(event, dict):
-                    continue
-                last = max(last, _number(event.get("t")))
-                if event.get("type") == "call_prep":
-                    prep += llm_cost(event.get("model"), event.get("input_tokens"), event.get("output_tokens"))
+                if isinstance(event, dict):
+                    last = max(last, _number(event.get("t")))
     except OSError:
         pass
-    return last / 60, prep
+    return last / 60
 
 
 def job_cost(usage: dict[str, Any]) -> float:
@@ -113,9 +115,8 @@ def spent_today(workspace: Path, now: datetime) -> float:
         for call in day.iterdir():
             if not call.is_dir():
                 continue
-            minutes, prep = _call_events(call)
             usage = _json(call / "usage.json")
-            total += prep + (call_cost(usage) if isinstance(usage, dict) else CALL_USD_PER_MINUTE * minutes)
+            total += call_cost(usage) if isinstance(usage, dict) else CALL_USD_PER_MINUTE * _call_minutes(call)
             for job in (call / "jobs").glob("*/usage.json"):
                 used = _json(job)
                 if isinstance(used, dict):
@@ -132,7 +133,49 @@ def spent_today(workspace: Path, now: datetime) -> float:
             continue
         if isinstance(entry, dict) and str(entry.get("at", "")).startswith(today) and isinstance(entry.get("usage"), dict):
             total += llm_cost(entry.get("model"), entry["usage"].get("input_tokens"), entry["usage"].get("output_tokens"))
-    return total
+    return total + SpendLog(workspace).spent_on(now)
+
+
+SPEND_LOG = Path("state") / "spend.jsonl"  # under the workspace
+
+
+class SpendLog:
+    """state/spend.jsonl: model use recorded where it happens, when it is not in a call's own files. Appending one
+    short line is atomic, so the processes that write it need no lock."""
+
+    def __init__(self, workspace: Path) -> None:
+        self.path = workspace / SPEND_LOG
+
+    def add(self, what: str, *, model: str | None = None, input_tokens: int = 0, output_tokens: int = 0,
+            models: list[dict[str, Any]] | None = None, estimated: bool = False, now: datetime | None = None,
+            **about: Any) -> None:
+        """One use: an LLM's tokens (model, input_tokens, output_tokens), or a session's LiveKit usage entries
+        (models). `estimated`: counted from what was sent, because the provider's own count never came."""
+        entry = {"at": (now or datetime.now()).isoformat(timespec="seconds"), "what": what, "model": model,
+                 "input_tokens": input_tokens, "output_tokens": output_tokens, "estimated": estimated, **about}
+        if models is not None:
+            entry["models"] = models
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+
+    def spent_on(self, day: datetime) -> float:
+        try:
+            lines = self.path.read_text(errors="replace").splitlines()
+        except OSError:
+            return 0.0
+        total, prefix = 0.0, day.strftime("%Y-%m-%d")
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(entry, dict) or not str(entry.get("at", "")).startswith(prefix):
+                continue
+            total += llm_cost(entry.get("model"), entry.get("input_tokens"), entry.get("output_tokens"))
+            if isinstance(entry.get("models"), list):
+                total += call_cost({"models": entry["models"]})
+        return total
 
 
 @dataclass(frozen=True)

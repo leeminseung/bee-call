@@ -5,8 +5,10 @@ A scripted stand-in replaces the Bedrock Converse stream, and the fake `bee` ans
 
 import asyncio
 import json
+import tempfile
 import time
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -16,6 +18,7 @@ from livekit.agents import AgentSession
 from beelink.context import CallInputs, fetch_call_inputs
 from voice.coordinator import Coordinator
 from voice.echo_llm import EchoLLM
+from voice.costs import SpendLog
 from voice.prep import MAX_READS, Prep, Preparation, prepare_call, seed_text
 from voice.recorder import CallRecorder
 from tests.test_beelink import fake_bee  # noqa: F401  (pytest fixture)
@@ -24,6 +27,7 @@ NOW = datetime(2026, 10, 13, 16, 40, tzinfo=ZoneInfo("Asia/Seoul"))
 OPENING = "<opening>Hi Matt, it's Bee Call. What's on your mind?</opening>"
 NOTE = "<note>\nMatt is weighing a job offer with a 15% bonus; fact 7 is unconfirmed.\n</note>"
 MODEL = ("zai.glm-5", "ap-southeast-2")
+SPEND = SpendLog(Path(tempfile.mkdtemp(prefix="prep-spend-")))  # where these preps record their model use
 
 
 def text(t: str) -> list[dict]:
@@ -35,12 +39,14 @@ def tool(n: int, name: str, args: dict) -> dict:
 
 
 class Converse:
-    """Streams each scripted reply as Converse events, with `gap` seconds between events, and keeps the requests."""
+    """Streams each scripted reply as Converse events, with `gap` seconds between events, and keeps the requests.
+    With `usage` (input, output tokens), each reply ends with Bedrock's usage metadata."""
 
-    def __init__(self, *replies: list[dict], gap: float = 0.0) -> None:
+    def __init__(self, *replies: list[dict], gap: float = 0.0, usage: tuple[int, int] | None = None) -> None:
         self.replies = list(replies)
         self.requests: list[dict] = []
         self.gap = gap
+        self.usage = usage
 
     def converse_stream(self, **request):
         self.requests.append(json.loads(json.dumps(request)))
@@ -61,6 +67,8 @@ class Converse:
             yield {"contentBlockStop": {"contentBlockIndex": i}}
         stop = "tool_use" if any("toolUse" in b for b in blocks) else "end_turn"
         yield {"messageStop": {"stopReason": stop}}
+        if self.usage:
+            yield {"metadata": {"usage": {"inputTokens": self.usage[0], "outputTokens": self.usage[1]}}}
 
 
 def inputs(fake_bee) -> CallInputs:
@@ -82,7 +90,7 @@ def test_the_seed_says_who_calls_why_and_what_bee_has(fake_bee):
 
 def test_opening_then_note_in_one_answer(fake_bee):
     client = Converse(text(OPENING + "\n" + NOTE))
-    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, client=client, now=NOW))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, spend=SPEND, client=client, now=NOW))
     assert prep.error is None and prep.reads == [] and prep.model == "zai.glm-5"
     assert prep.opening == "Hi Matt, it's Bee Call. What's on your mind?"
     assert prep.note == "Matt is weighing a job offer with a 15% bonus; fact 7 is unconfirmed."
@@ -94,7 +102,7 @@ def test_opening_then_note_in_one_answer(fake_bee):
 def test_the_opening_is_ready_before_the_note_is_written():
     async def main():
         client = Converse(text(OPENING + " " + NOTE * 4), gap=0.02)  # the note streams for about a second
-        preparation = Preparation(CallInputs(), {}, MODEL, client=client, now=NOW).start()
+        preparation = Preparation(CallInputs(), {}, MODEL, spend=SPEND, client=client, now=NOW).start()
         started = time.monotonic()
         opening = await preparation.opening(timeout=5)
         ready = time.monotonic() - started
@@ -110,7 +118,7 @@ def test_opening_then_one_round_of_reads_then_the_note(fake_bee):
         [{"text": OPENING}, tool(0, "search_bee", {"query": "hike with Dana"}), tool(1, "bee_day", {"date": "2026-10-12"}),
          tool(2, "bee_conversation", {"conversation_id": 4}), tool(3, "bee_conversation", {"conversation_id": 5})],
         text(NOTE))
-    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, client=client, now=NOW))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, spend=SPEND, client=client, now=NOW))
     assert prep.note and prep.opening.startswith("Hi Matt") and len(prep.reads) == MAX_READS
     second = client.requests[1]["messages"]
     assert second[1]["content"][0] == {"text": OPENING}  # the first answer goes back as it was
@@ -124,14 +132,14 @@ def test_opening_then_one_round_of_reads_then_the_note(fake_bee):
 
 def test_reads_before_the_opening_still_give_an_opening(fake_bee):
     client = Converse([tool(0, "bee_conversation", {"conversation_id": 5})], text(OPENING + NOTE))
-    prep = asyncio.run(prepare_call(inputs(fake_bee), {}, MODEL, client=client, now=NOW))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {}, MODEL, spend=SPEND, client=client, now=NOW))
     assert prep.opening and prep.note
     assert client.requests[1]["messages"][-1]["content"][-1] == {"text": "Now write the opening and the note."}
 
 
 @pytest.mark.parametrize("reply,opening", [(text("Sure, I'm ready."), None), (text(OPENING), "Hi Matt")])
 def test_an_answer_without_a_note_gives_no_note(reply, opening):
-    prep = asyncio.run(prepare_call(CallInputs(), {}, MODEL, client=Converse(reply), now=NOW))
+    prep = asyncio.run(prepare_call(CallInputs(), {}, MODEL, spend=SPEND, client=Converse(reply), now=NOW))
     assert prep.note is None and prep.error == "ValueError: the answer had no <note>"
     assert (prep.opening or "").startswith(opening or "")
 
@@ -139,7 +147,7 @@ def test_an_answer_without_a_note_gives_no_note(reply, opening):
 def test_a_slow_model_is_given_up_at_the_deadline():
     async def main():
         started = time.monotonic()
-        prep = await prepare_call(CallInputs(), {}, MODEL, client=Converse(text(OPENING + NOTE * 20), gap=0.05),
+        prep = await prepare_call(CallInputs(), {}, MODEL, spend=SPEND, client=Converse(text(OPENING + NOTE * 20), gap=0.05),
                                   deadline_s=1.0, now=NOW)
         return prep, time.monotonic() - started
 
@@ -149,12 +157,12 @@ def test_a_slow_model_is_given_up_at_the_deadline():
 
 
 def test_no_model_in_this_mode_means_no_note_and_no_opening():
-    prep = asyncio.run(prepare_call(CallInputs(), {}, None))
+    prep = asyncio.run(prepare_call(CallInputs(), {}, None, spend=SPEND))
     assert prep.error == "no model to prepare with in this mode" and prep.opening is None
 
 
 def test_the_opening_is_spoken_text_only():
-    prep = asyncio.run(prepare_call(CallInputs(), {}, MODEL, client=Converse(
+    prep = asyncio.run(prepare_call(CallInputs(), {}, MODEL, spend=SPEND, client=Converse(
         text("<opening>Hi <b>Matt</b>,\nwhat's up?</opening><note>n</note>")), now=NOW))
     assert prep.opening == "Hi Matt , what's up?"
 

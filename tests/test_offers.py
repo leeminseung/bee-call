@@ -123,7 +123,7 @@ def test_a_yes_is_called_with_how_the_user_agreed(tmp_path):
     store.answer(offer.id, "now", datetime.now())
     prepared, requests = [], []
 
-    async def fake_prepare(plan, extra=None, deadline_s=None):
+    async def fake_prepare(plan, extra=None, deadline_s=None, **kw):
         prepared.append((plan.topic, extra, deadline_s))
         return Prep(note="note", opening="Hi, calling as you asked.")
 
@@ -142,7 +142,7 @@ def test_a_call_that_cannot_be_placed_is_marked_failed(tmp_path):
     store = OfferStore(me.workspace)
     booked = store.book("the interview", datetime.now() - timedelta(seconds=1), datetime.now())
 
-    async def fake_prepare(plan, extra=None, deadline_s=None):
+    async def fake_prepare(plan, extra=None, deadline_s=None, **kw):
         return Prep()
 
     async def broken_place(*a, **kw):
@@ -243,7 +243,7 @@ def test_only_one_runner_places_a_call_and_a_call_off_wins(tmp_path):
     second = store.book("second", datetime.now() - timedelta(seconds=1), datetime.now())
     placed = []
 
-    async def prepare(plan, extra=None, deadline_s=None):
+    async def prepare(plan, extra=None, deadline_s=None, **kw):
         other = second if plan.topic == "first" else first
         store.answer(other.id, "decline", datetime.now())  # "Call off" while the other call is prepared
         return Prep()

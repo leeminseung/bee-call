@@ -35,6 +35,7 @@ from botocore.exceptions import EventStreamError
 
 from beelink.clock import now_text
 from voice.aws_session import aws_session
+from voice.costs import SpendLog
 from worker.chart import render_svg
 from worker.runner import Job
 from worker.web_search import SearchResult, web_search
@@ -300,26 +301,35 @@ class HarnessWorker:
         self._ready: str | None = None  # a warm session no job is using
         self._warm_lock = asyncio.Lock()  # one invocation at a time on the warm session
 
-    async def keep_warm(self) -> None:
+    async def keep_warm(self, spend: SpendLog) -> None:
         """Keeps one harness session awake for the next job. Run it as a task for the length of a
-        call and cancel it when the call ends; a job takes the warm session when it starts."""
+        call and cancel it when the call ends; a job takes the warm session when it starts. What each warm-up
+        costs goes into the person's spend log."""
         try:
             while True:
                 async with self._warm_lock:
                     self._ready = self._ready or new_session_id("warm")
+                    used = [0, 0]
                     try:
-                        await self._ping(self._ready)
+                        await self._ping(self._ready, used)
                     except Exception:
                         log.warning("worker warm-up failed", exc_info=True)
                         self._ready = None
+                    finally:
+                        if any(used):
+                            spend.add("worker_warm_up", model=DEFAULT_MODEL, input_tokens=used[0],
+                                      output_tokens=used[1])
                 await asyncio.sleep(KEEP_WARM_S)
         except asyncio.CancelledError:
             pass  # the call ended
 
-    async def _ping(self, session_id: str) -> None:
+    async def _ping(self, session_id: str, used: list[int]) -> None:
+        """One warm-up; `used` gets its tokens (input, output) as they are reported."""
         messages = [{"role": "user", "content": [{"text": WARM_TEXT}]}]
         for _ in range(3):
             found = await asyncio.to_thread(self._invoke, session_id, messages)
+            used[0] += found.input_tokens
+            used[1] += found.output_tokens
             if found.errors:
                 raise RuntimeError("; ".join(found.errors))
             if not found.pending:

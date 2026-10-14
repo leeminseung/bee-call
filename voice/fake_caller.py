@@ -31,6 +31,7 @@ from dotenv import load_dotenv
 
 from beelink.planner import RulePlanner
 from voice.aws_session import aws_session
+from voice.costs import SpendLog
 from voice.dispatch import open_inbound_room, open_test_call
 from voice.outbound import saved_trigger
 from voice.people import People, dev_person
@@ -136,7 +137,7 @@ def main() -> None:
             print(f"plan: {'CALL' if plan.call else 'no call'} - {plan.reason}")
             if not plan.call:
                 return
-            prep = asyncio.run(prepare_outbound(plan))
+            prep = asyncio.run(prepare_outbound(plan, spend=SpendLog(workspace)))
             print(f"prepared in {prep.seconds} s: " + (f"opening {prep.opening!r}" if prep.note else f"no note ({prep.error})"))
             room = asyncio.run(open_test_call(plan, people.person(person), prep=prep.to_meta()))
             print(f"the AI is calling in room {room}; answering in {args.ring:.0f}s")

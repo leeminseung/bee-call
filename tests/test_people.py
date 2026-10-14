@@ -409,8 +409,11 @@ def test_spend_counts_calls_prep_jobs_searches_and_meta_thinks_of_today(tmp_path
               TTSModelUsage(provider="Amazon Polly", model="neural", characters_count=10_000),
               TTSModelUsage(provider="ElevenLabs", model="eleven_v4_turbo", characters_count=5000)]
     (done / "usage.json").write_text(json.dumps({"minutes": 10, "models": [m.model_dump() for m in models]}, default=str))
+    # The prep is counted where it ran (state/spend.jsonl); the call's call_prep event only shows it on the record.
     (done / "events.jsonl").write_text(json.dumps({"t": 1.0, "type": "call_prep", "model": "zai.glm-5",
                                                    "input_tokens": 100_000, "output_tokens": 0}) + "\n")
+    costs.SpendLog(ws).add("call_prep", model="zai.glm-5", input_tokens=100_000, now=now)
+    costs.SpendLog(ws).add("call_prep", model="zai.glm-5", input_tokens=900_000, now=now - timedelta(days=1))
     (done / "jobs" / "01" / "usage.json").write_text(json.dumps({
         "input_tokens": 0, "output_tokens": 1_000_000,
         "steps": [{"round_s": 3.0, "calls": [{"name": "web_search", "s": 9.0}, {"name": "save_file", "s": 0.1}]},
@@ -538,7 +541,7 @@ def test_an_agreed_call_carries_its_person(tmp_path):
     OfferStore(jiwoo.workspace).answer(offer.id, "now", datetime.now())
     seen = {}
 
-    async def prepare(plan, extra=None, deadline_s=None, language=None):
+    async def prepare(plan, extra=None, deadline_s=None, language=None, **kw):
         seen["language"] = language.code
         return Prep(note="n", opening="o")
 
@@ -651,3 +654,45 @@ def test_the_operator_can_mint_a_sign_in_for_an_approved_person_only(tmp_path, c
     assert People(data).who(token) == "jiwoo"
     with pytest.raises(SystemExit, match="not approved"):
         people_module.main(["--data", str(data), "session", "stranger"])
+
+
+def test_the_prep_of_an_ai_call_counts_where_it_runs_even_if_nobody_answers(tmp_path, monkeypatch):
+    """Server review finding 4, BC-102: the prep's model use was counted only once the phone answered."""
+    from tests.helpers import placing
+    from tests.test_prep import Converse, text
+    from voice import prep as prep_module
+    from voice.offers import OfferStore
+    from voice.outbound import call_due
+
+    me = signed_in(tmp_path)
+    monkeypatch.setenv("COORDINATOR_LLM", "bedrock")
+    monkeypatch.setattr(prep_module, "bedrock_client",
+                        lambda region: Converse(text("<opening>Hi!</opening><note>n</note>"), usage=(100_000, 0)))
+    OfferStore(me.workspace).book("the interview", datetime.now() - timedelta(seconds=1), datetime.now())
+    rooms = []
+    assert len(asyncio.run(call_due(me.person, place=placing(rooms)))) == 1  # placed; the phone is never answered
+    assert [p for p in me.workspace.glob("*/*/events.jsonl")] == []  # no call record: the voice server never answered
+    assert costs.spent_today(me.workspace, datetime.now()) == pytest.approx(0.10)  # GLM 5: 100,000 input tokens
+
+
+def test_a_prep_cut_short_counts_an_estimate_of_what_it_sent(tmp_path):
+    """A prep stopped mid-answer never gets Bedrock's usage line; what it sent is counted as an estimate."""
+    from tests.test_prep import Converse, MODEL, text
+    from voice.costs import SpendLog
+    from voice.prep import Preparation
+
+    async def main():
+        client = Converse(text("<opening>Hi Matt, what's up?</opening>" + "<note>" + "x" * 2000 + "</note>"), gap=0.05,
+                          usage=(999, 999))
+        preparation = Preparation(CallInputs(), {"direction": "inbound"}, MODEL, client=client,
+                                  spend=SpendLog(tmp_path)).start()
+        await preparation.opening(timeout=5)
+        preparation.cancel()  # the caller hung up while it rang
+        await asyncio.gather(preparation.done, return_exceptions=True)
+        await asyncio.sleep(0.1)
+
+    from beelink.context import CallInputs
+    asyncio.run(main())
+    (entry,) = [json.loads(line) for line in (tmp_path / "state" / "spend.jsonl").read_text().splitlines()]
+    assert entry["what"] == "call_prep" and entry["estimated"] and entry["input_tokens"] > 300
+    assert costs.spent_today(tmp_path, datetime.now()) > 0

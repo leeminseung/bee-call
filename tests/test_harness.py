@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from voice.costs import SpendLog
 from worker.harness import INLINE_FUNCTIONS, HarnessWorker, harness_definition, read_round
 from worker.runner import Job
 from worker.web_search import SearchResult
@@ -219,7 +220,7 @@ def test_a_warm_session_is_ready_before_the_first_job_and_the_job_uses_it(tmp_pa
 
     async def main():
         worker = HarnessWorker("arn:harness", client=harness, search=fake_search)
-        warm = asyncio.create_task(worker.keep_warm())
+        warm = asyncio.create_task(worker.keep_warm(SpendLog(tmp_path)))
         while not harness.requests:  # the warm-up went out
             await asyncio.sleep(0.01)
         async def relay(text):
@@ -233,6 +234,8 @@ def test_a_warm_session_is_ready_before_the_first_job_and_the_job_uses_it(tmp_pa
     warm_up, job = harness.requests
     assert warm_up["messages"][0]["content"][0]["text"].startswith("Warm-up before a phone call")
     assert warm_up["runtimeSessionId"] == job["runtimeSessionId"]
+    (spent,) = [json.loads(line) for line in (tmp_path / "state" / "spend.jsonl").read_text().splitlines()]
+    assert (spent["what"], spent["input_tokens"], spent["output_tokens"]) == ("worker_warm_up", 100, 10)
 
 
 def test_a_warm_up_that_calls_a_tool_is_told_not_to(tmp_path):
@@ -243,7 +246,7 @@ def test_a_warm_up_that_calls_a_tool_is_told_not_to(tmp_path):
 
     async def main():
         worker = HarnessWorker("arn:harness", client=harness, search=fake_search)
-        await worker._ping("beecall-warm-test-0123456789abcdef0123456789")
+        await worker._ping("beecall-warm-test-0123456789abcdef0123456789", [0, 0])
 
     asyncio.run(main())
     answer = harness.requests[1]["messages"][0]["content"][0]["toolResult"]

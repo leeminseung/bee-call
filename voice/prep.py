@@ -11,6 +11,8 @@ coordinator's instructions before the first reply (voice/coordinator.py). For a 
 voice/outbound.py runs it to the end before the phone rings, and the dispatch carries the result.
 Without a note (no model in this mode, too slow, an answer without one) the call keeps the plain Bee context
 (call_brief), which is in the instructions from the start.
+Wherever it runs, the prep records its own model use in the person's spend log when it ends (voice/costs.py
+SpendLog), also when it is stopped: a call nobody answers and a call hung up while it rang still cost it.
 """
 
 import asyncio
@@ -31,6 +33,7 @@ from beelink.clock import now_text
 from beelink.context import CallInputs, fetch_call_inputs
 from beelink.planner import Plan
 from voice.aws_session import aws_session
+from voice.costs import SpendLog
 from voice.language import CallLanguage, call_language
 
 PREP_SECONDS = 8.0  # the most a caller hears ringing before the AI picks up (agreed with Matt, 2026-10-13)
@@ -85,6 +88,7 @@ class Prep:
     error: str | None = None  # why there is no note
     input_tokens: int = 0  # the prep's model use, for the person's daily budget (voice/costs.py)
     output_tokens: int = 0
+    usage_estimated: bool = False  # a request was cut short before Bedrock counted it; its share is an estimate
 
     def to_meta(self) -> dict[str, Any]:
         return asdict(self)
@@ -93,7 +97,8 @@ class Prep:
     def from_meta(cls, data: Any) -> "Prep | None":
         if not isinstance(data, dict):
             return None
-        names = ("note", "opening", "reads", "seconds", "opening_s", "model", "error", "input_tokens", "output_tokens")
+        names = ("note", "opening", "reads", "seconds", "opening_s", "model", "error", "input_tokens", "output_tokens",
+                 "usage_estimated")
         return cls(**{k: data[k] for k in names if k in data})
 
 
@@ -214,10 +219,17 @@ async def _not_read(use: dict[str, Any]) -> dict[str, Any]:
                            "content": [{"text": f"Not read: at most {MAX_READS} reads."}]}}
 
 
+def estimated_tokens(*parts: Any) -> int:
+    """About how many tokens these are, for a request cut short before Bedrock counted it: four bytes of UTF-8 a
+    token (English runs about four characters a token, Korean about one character)."""
+    return sum(len(json.dumps(part, ensure_ascii=False).encode()) for part in parts) // 4
+
+
 async def _stream(client, model_id: str, system: str, messages: list[dict[str, Any]],
                   on_text: Callable[[str], None], prep: "Prep | None" = None) -> dict[str, Any]:
     """One streamed Converse request: on_text gets the text so far as it grows. Returns the assistant message.
-    The request's token use is added to `prep`."""
+    The request's token use is added to `prep`; when it is cut short after the model started answering, an
+    estimate of it."""
     loop = asyncio.get_running_loop()
     events: asyncio.Queue = asyncio.Queue()
     stop = threading.Event()
@@ -238,10 +250,12 @@ async def _stream(client, model_id: str, system: str, messages: list[dict[str, A
 
     threading.Thread(target=pump, daemon=True, name="prep-stream").start()
     text, uses, tool = "", [], None
+    answering = counted = False  # the model began its answer (the request was read); Bedrock sent its count
     try:
         while (event := await events.get()) is not None:
             if isinstance(event, Exception):
                 raise event
+            answering = True
             if "contentBlockStart" in event and "toolUse" in event["contentBlockStart"].get("start", {}):
                 tool = {**event["contentBlockStart"]["start"]["toolUse"], "input": ""}
             elif "contentBlockDelta" in event:
@@ -255,6 +269,7 @@ async def _stream(client, model_id: str, system: str, messages: list[dict[str, A
                 used = event["metadata"].get("usage") or {}
                 prep.input_tokens += int(used.get("inputTokens") or 0)
                 prep.output_tokens += int(used.get("outputTokens") or 0)
+                counted = True
             elif "contentBlockStop" in event and tool is not None:
                 try:
                     tool["input"] = json.loads(tool["input"] or "{}")
@@ -264,6 +279,10 @@ async def _stream(client, model_id: str, system: str, messages: list[dict[str, A
                 tool = None
     finally:
         stop.set()  # a request given up on (the deadline) stops being read
+        if answering and not counted and prep is not None:
+            prep.input_tokens += estimated_tokens(system, messages)
+            prep.output_tokens += estimated_tokens(text)
+            prep.usage_estimated = True
     content = ([{"text": text}] if text.strip() else []) + [{"toolUse": use} for use in uses]
     return {"role": "assistant", "content": content}
 
@@ -272,9 +291,10 @@ class Preparation:
     """The prep, running in the background: `opening()` returns as soon as the opening is written, `done` resolves
     with the note (or None) when the prep ends."""
 
-    def __init__(self, inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *,
+    def __init__(self, inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *, spend: SpendLog,
                  client=None, now: datetime | None = None, language: CallLanguage | None = None) -> None:
         self.prep = Prep(model=model[0] if model else None)
+        self._spend = spend  # the person's spend log: the prep's model use goes there when it ends
         self._system = PREP_INSTRUCTIONS.replace("{opening}", (language or call_language()).opening)
         self._inputs, self._meta, self._model, self._client, self._now = inputs, meta, model, client, now
         self._opening = asyncio.Event()
@@ -323,6 +343,10 @@ class Preparation:
                 self.prep.note = None
             self.prep.seconds = round(time.monotonic() - self._started, 2)
             self._opening.set()  # no opening is coming any more
+            if self.prep.input_tokens or self.prep.output_tokens:
+                self._spend.add("call_prep", model=self.prep.model, input_tokens=self.prep.input_tokens,
+                                output_tokens=self.prep.output_tokens, estimated=self.prep.usage_estimated,
+                                direction=self._meta.get("direction"))
             if not self.done.done():
                 self.done.set_result(self.prep.note)
 
@@ -345,11 +369,12 @@ class Preparation:
             raise ValueError("the answer had no <note>")
 
 
-async def prepare_call(inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *,
+async def prepare_call(inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *, spend: SpendLog,
                        deadline_s: float = NOTE_SECONDS, client=None, now: datetime | None = None,
                        language: CallLanguage | None = None) -> Prep:
     """Runs the prep to the end. Never raises: a Prep without a note says why in `error`."""
-    preparation = Preparation(inputs, meta, model, client=client, now=now, language=language).start(deadline_s)
+    preparation = Preparation(inputs, meta, model, spend=spend, client=client, now=now,
+                              language=language).start(deadline_s)
     await preparation.done
     return preparation.prep
 
@@ -358,14 +383,15 @@ def plan_meta(plan: Plan) -> dict[str, Any]:
     return {"direction": "outbound", "reason": plan.reason, "topic": plan.topic, "kind": plan.kind}
 
 
-async def prepare_outbound(plan: Plan, mode: str | None = None, extra: dict[str, Any] | None = None,
-                           deadline_s: float = NOTE_SECONDS, language: CallLanguage | None = None) -> Prep:
+async def prepare_outbound(plan: Plan, *, spend: SpendLog, mode: str | None = None,
+                           extra: dict[str, Any] | None = None, deadline_s: float = NOTE_SECONDS,
+                           language: CallLanguage | None = None) -> Prep:
     """For voice/outbound.py, before the phone rings: reads Bee for this plan, then prepares. `extra` adds to the
     call's metadata (agreed, earlier_call); a shorter `deadline_s` rings sooner, with the note given up earlier."""
     started = time.monotonic()
     inputs = await fetch_call_inputs(plan.inbox_dir, plan.conversation_ids)
     prep = await prepare_call(inputs, {**plan_meta(plan), **(extra or {})},
-                              prep_model(mode or os.environ.get("COORDINATOR_LLM", "bedrock")), deadline_s=deadline_s,
-                              language=language)
+                              prep_model(mode or os.environ.get("COORDINATOR_LLM", "bedrock")), spend=spend,
+                              deadline_s=deadline_s, language=language)
     prep.seconds = round(time.monotonic() - started, 2)
     return prep
