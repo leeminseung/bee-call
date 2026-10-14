@@ -33,12 +33,14 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
 
 import boto3
 from dotenv import load_dotenv
+from livekit import rtc
 from livekit.agents import AgentServer, AgentSession, JobContext, JobProcess, cli, inference, llm
 from livekit.plugins import aws, silero
 from livekit.plugins.aws.stt import Credentials
@@ -76,6 +78,7 @@ COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
 COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "zai.glm-5")
 WORKER = os.environ.get("WORKER", "fake")
 FIRST_WORDS_WAIT_S = 6.0  # ringing stops when the AI starts to speak, or after this long anyway (arbitrary)
+CALLER_WAIT_S = 5.0  # how long a call the user started waits to see the caller in the room (arbitrary)
 # After the user answers an AI call, its prepared opening does not wait longer than this for the Bee read
 # that only feeds the call record (arbitrary).
 OUTBOUND_INPUTS_WAIT_S = 0.5
@@ -196,15 +199,26 @@ def person_for_call(meta: dict, people: People) -> str | None:
     return person if isinstance(person, str) and people.known(person) else None
 
 
+def session_usage(session: AgentSession) -> list[dict] | None:
+    """The models LiveKit saw the call use (speech recognition, the model, the voice), for the daily budget."""
+    try:
+        return [entry.model_dump() for entry in session.usage.model_usage]
+    except Exception as exc:  # the budget then counts the call by its minutes
+        log.warning("no usage for this call: %s", exc)
+        return None
+
+
 def write_usage(rec: CallRecorder, session: AgentSession) -> None:
     """The call's minutes and model use, for the person's daily budget (voice/costs.py)."""
-    try:
-        models = [entry.model_dump() for entry in session.usage.model_usage]
-    except Exception as exc:  # the budget then counts the call by its minutes
-        log.warning("no usage for %s: %s", rec.dir, exc)
-        return
-    (rec.dir / "usage.json").write_text(json.dumps({"minutes": round(rec.elapsed() / 60, 2), "models": models},
-                                                   default=str))
+    models = session_usage(session)
+    if models is not None:
+        (rec.dir / "usage.json").write_text(json.dumps({"minutes": round(rec.elapsed() / 60, 2), "models": models},
+                                                       default=str))
+
+
+def the_caller(participant) -> bool:
+    """Anyone in a call's room but a voice server is the person on the phone."""
+    return getattr(participant, "kind", None) != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
 
 
 def call_meta(raw: str | None) -> dict:
@@ -324,7 +338,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
                 log.exception("could not close room %s", ctx.room.name)
             return
         prep = Prep.from_meta(meta.get("prep")) or Prep(error="the call was placed without a prep note")
-        preparation = ringing = None
+        preparation = ringing = left = None
         # This read is for the call record, and for the plain Bee context only when the call has no prep note.
         inputs = await read_by(inputs_task, OUTBOUND_INPUTS_WAIT_S if prep.note else INBOUND_READ_TIMEOUT_S)
     else:
@@ -337,10 +351,11 @@ async def run_call(ctx: JobContext, people: People) -> None:
 
         ctx.add_shutdown_callback(stop_ringing)
         preparation = inputs_task = None
-        left = asyncio.Event()  # the caller hung up while it rang
+        # The caller hung up while it still rang: watched until the AI's first words, whenever they joined (BC-027).
+        left = asyncio.Event()
+        ctx.room.on("participant_disconnected", lambda p: the_caller(p) and left.set())
         try:
-            caller = await asyncio.wait_for(ctx.wait_for_participant(), 5)
-            ctx.room.on("participant_disconnected", lambda p: p.identity == caller.identity and left.set())
+            await asyncio.wait_for(ctx.wait_for_participant(), CALLER_WAIT_S)
         except asyncio.TimeoutError:
             pass
 
@@ -431,13 +446,22 @@ async def run_call(ctx: JobContext, people: People) -> None:
         rec, jobs, workspace, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
                         language=language, earlier_call=meta.get("earlier_call"))
 
+    abandoned = False  # the caller hung up before the AI's first words: the call leaves no record
+
     async def shutdown() -> None:
         if keep_warm:
             keep_warm.cancel()
         if preparation is not None:
-            preparation.cancel()
+            preparation.cancel()  # the prep records its own model use (voice/costs.py SpendLog)
         await asyncio.gather(prep_recorder, *([inputs_saver] if inputs_saver else []), return_exceptions=True)
         await jobs.cancel_all()
+        if abandoned:  # nothing of it is kept but what it cost
+            models = session_usage(session)
+            if models:
+                SpendLog(workspace).add("call_hung_up_while_ringing", models=models, room=ctx.room.name)
+            rec.close()
+            shutil.rmtree(rec.dir, ignore_errors=True)
+            return
         if isinstance(session.llm, ClaudeBedrockLLM):
             session.llm.settle()  # a last reply may still be waiting to be committed
             # Exactly what Claude was sent, for checking a call afterwards.
@@ -465,15 +489,22 @@ async def run_call(ctx: JobContext, people: People) -> None:
         await session.start(room=ctx.room, agent=agent, record=False)
         session.say(prep.opening or greeting(meta, language))
         if ringing is not None:  # ring on through the session start and the voice's first syllable
-            await asyncio.wait_for(first_words.wait(), FIRST_WORDS_WAIT_S)
-    except asyncio.TimeoutError:
-        log.warning("no first words within %ss in room %s", FIRST_WORDS_WAIT_S, ctx.room.name)
+            spoke, gone = asyncio.create_task(first_words.wait()), asyncio.create_task(left.wait())
+            done, _ = await asyncio.wait({spoke, gone}, timeout=FIRST_WORDS_WAIT_S, return_when=asyncio.FIRST_COMPLETED)
+            spoke.cancel(), gone.cancel()
+            if not done:
+                log.warning("no first words within %ss in room %s", FIRST_WORDS_WAIT_S, ctx.room.name)
+            abandoned = left.is_set() and not first_words.is_set()
     finally:
         if ringing is not None:
             ringing.cancel()
             (rang,) = await asyncio.gather(ringing, return_exceptions=True)
             if isinstance(rang, Exception):
                 log.error("ringback failed in room %s: %r", ctx.room.name, rang)
+    if abandoned:
+        log.info("the caller hung up while it rang, in room %s", ctx.room.name)
+        ctx.shutdown(reason="the caller hung up while it rang")
+        return
     # The app shows a call the user started as connected from here.
     await ctx.room.local_participant.set_attributes({STATE_ATTRIBUTE: "answered"})
     rec.event("picked_up", after_s=round(time.monotonic() - started, 2))

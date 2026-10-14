@@ -219,3 +219,56 @@ def test_a_call_without_bee_reads_nothing_from_bee_and_never_mentions_it(tmp_pat
     for request in client.requests:  # the prep, for the call the user started
         assert "toolConfig" not in request
         assert re.findall(BEE_WORDING, request["system"][0]["text"] + json.dumps(request["messages"])) == []
+
+
+# ---------- hanging up while it rings (BC-027) ----------
+
+def spend_entries(workspace) -> list[dict]:
+    path = workspace / "state" / "spend.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+@pytest.mark.parametrize("hang_up_after", [0.1, 0.45])  # while the opening is written; after it, before the voice
+def test_a_call_hung_up_while_it_rings_leaves_nothing_but_its_cost(tmp_path, monkeypatch, quick, hang_up_after):
+    """BC-027: hung up while it still rings, the prep stops, and no call record or call_ended event is kept. The
+    prep's model use still counts (server review finding 4)."""
+    me = signed_in(tmp_path)
+    client = Converse(text(OPENING + NOTE * 30), gap=0.03, usage=(5000, 300))  # the opening at about 0.1 s
+    with_prep_model(monkeypatch, client)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"}, session=FakeSession(first_words_after=0.6))
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        running = asyncio.create_task(agent.run_call(call, me.people))
+        await asyncio.sleep(hang_up_after)
+        call.hang_up()
+        await running
+        await call.end()
+
+    asyncio.run(main())
+    assert call_folders(me.workspace) == [] and MetaSession(me.workspace).take_events() == []
+    assert call.ringing == ["start", "stop"] and STATE_ATTRIBUTE not in call.room.local_participant.attributes
+    assert call.shutdown_reason == "the caller hung up while it rang"
+    (prep,) = [e for e in spend_entries(me.workspace) if e["what"] == "call_prep"]
+    assert prep["input_tokens"] > 0 and prep["estimated"]  # stopped mid-answer: Bedrock's count never came
+
+
+def test_a_caller_seen_late_is_still_watched_while_it_rings(tmp_path, monkeypatch, quick):
+    me = signed_in(tmp_path)
+    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE * 30), gap=0.03))
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"}, session=FakeSession(first_words_after=None))
+    use_fakes(monkeypatch, call)
+    monkeypatch.setattr(agent, "CALLER_WAIT_S", 0.05)  # the app joins after the voice server looked for it
+
+    async def main():
+        running = asyncio.create_task(agent.run_call(call, me.people))
+        await asyncio.sleep(0.15)
+        call.join()
+        await asyncio.sleep(0.15)
+        call.hang_up()
+        await running
+        await call.end()
+
+    asyncio.run(main())
+    assert call_folders(me.workspace) == [] and call.shutdown_reason == "the caller hung up while it rang"
