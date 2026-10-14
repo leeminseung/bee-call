@@ -47,8 +47,8 @@ LANGUAGES = {
         opening="one or two short sentences of spoken Korean, in the polite style",
         # Sian - Tender, Calm & Clear, from the Voice Library (Matt's pick, 2026-10-14); add it to My Voices to use it.
         elevenlabs_voice="5n5gqmaQi9Ewevrz7bOS",
-        rule=("Speak Korean with the user, in natural, polite spoken Korean. The app's notes, Bee data and job "
-              "results may be in English; say what matters in Korean, and keep names and numbers exact."),
+        rule=("Speak Korean with the user, in natural, polite spoken Korean. The app's notes, the call prep note "
+              "and job results may be in English; say what matters in Korean, and keep names and numbers exact."),
         greetings={
             "echo": "안녕하세요, 에코 시험이에요. 말씀하시면 그대로 따라 할게요.",
             "voice note": "안녕하세요, Bee Call이에요. 새 음성 메모 때문에 전화드렸어요. 잠깐 통화 괜찮으세요?",

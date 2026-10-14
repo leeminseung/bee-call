@@ -185,13 +185,14 @@ def bee_log(tmp_path, monkeypatch):
     return log
 
 
-@pytest.mark.parametrize("direction", ["inbound", "outbound"])
+@pytest.mark.parametrize("direction,language", [("inbound", "en"), ("outbound", "en"), ("inbound", "ko")])
 def test_a_call_without_bee_reads_nothing_from_bee_and_never_mentions_it(tmp_path, monkeypatch, quick, bee_log,
-                                                                         direction):
+                                                                         direction, language):
     import re
     from livekit.agents.llm.tool_context import get_fnc_tool_names
 
     me = signed_in(tmp_path)  # Use Bee is off unless the person connected Bee
+    me.people.change_settings("matt", {"language": language})
     assert me.people.settings("matt").bee is False
     client = Converse(text(OPENING + NOTE))
     with_prep_model(monkeypatch, client)
