@@ -17,7 +17,7 @@ Status: work in progress for the Amazon "Build, Ship, Shape" hackathon (Bee trac
 | Session screen (`web/`, `voice/session_server.py`) | this Mac | Live view of a call: transcript, why the AI called, job cards |
 | Token server (`voice/token_server.py`) | this Mac | Hands LiveKit room tokens to the app, and tells an open app when the AI is calling |
 
-Every call is kept as plain files under `workspace/<date>/<time>/`: `transcript.md`, `events.jsonl`, `audio/` (raw audio, never uploaded), `inputs/` (raw Bee data), `prep.md` (the call prep note), `jobs/`, `bee-queue.jsonl`. `workspace/` is not in git.
+One server serves several people (`voice/people.py`). Each person has a folder, `data/people/<id>/`, and every call is kept there as plain files under `<date>/<time>/`: `transcript.md`, `events.jsonl`, `audio/` (raw audio, only while the person keeps audio on the server), `inputs/` (raw Bee data), `prep.md` (the call prep note), `jobs/`, `bee-queue.jsonl`, `usage.json`. The folder also holds `settings.json` (call language, evening call time, recording switches, daily budget), the meta agent's files, and the person's own Bee login (`bee/`) once they connect Bee. `data/` is not in git.
 
 ## Setup
 
@@ -33,6 +33,22 @@ python3 scripts/set_secret.py ELEVENLABS_API_KEY   # optional; input is hidden
 
 `.env.local` holds `AWS_PROFILE`, `AWS_REGION` (Transcribe and Polly), `BEDROCK_REGION` (Claude) and the LiveKit values; see `.env.example`. Turn off "use of your content for service improvement" for AWS AI services before real calls, so Transcribe does not keep your voice.
 
+## People
+
+The app signs in with Apple. A new person waits until you approve them; the app shows a six-letter code:
+
+```bash
+uv run python -m voice.people waiting                 # sign-ins waiting, with their codes
+uv run python -m voice.people approve 7F3K2A --as jiwoo
+uv run python -m voice.people list                    # approved people and their settings
+uv run python -m voice.people set jiwoo daily_budget_usd 2
+uv run python -m voice.people remove jiwoo            # takes access away; the folder stays
+```
+
+On a Mac, `uv run python -m voice.people add matt` approves a person for use from the Mac alone, and `BEE_CALL_DEV_PERSON=matt` in `.env.local` lets requests made on the Mac without a sign-in act as them (curl, `voice.fake_caller`, `voice.agent console`). Never set it on a server. A single-user `workspace/` from before moves in with `uv run python -m voice.people move workspace --to matt`.
+
+Each person's day has a budget (`daily_budget_usd`, 3 USD by default): an estimate from the calls' minutes and model use, background jobs and the meta agent (`voice/costs.py`). Past it, the app's new calls are refused and agreed AI calls wait for the next day.
+
 ## Run
 
 ```bash
@@ -40,7 +56,7 @@ uv run python -m voice.token_server                       # tokens for the app (
 COORDINATOR_LLM=claude uv run python -m voice.agent dev   # the voice server
 uv run python voice/session_server.py                     # the session screen (port 8788)
 uv run python -m voice.outbound                           # watch Bee and let the AI call when it is worth it
-uv run python -m beelink.writer workspace/<date>/<time>   # after a call: dry run of Bee writes; add --apply to write
+uv run python -m beelink.writer data/people/<id>/<date>/<time>   # after a call: dry run of Bee writes; --apply writes
 ```
 
 The voice server joins only rooms it is dispatched to, as the agent `bee-call`. A call the user starts gets it through the app's token. A call the AI starts gets it from `voice/dispatch.py`, with metadata that says why the AI is calling; the voice server then waits up to 60 seconds for the phone to answer. The phone rings in two ways: an open app hears the call on the token server's `/ring` stream, and a closed or locked one gets an Apple VoIP push (`voice/voip_push.py`). For the push, create an APNs key in the Apple Developer account (Certificates, Identifiers & Profiles, Keys, with Apple Push Notifications service), keep the `.p8` file outside the repository, and set `APNS_KEY_PATH`, `APNS_KEY_ID` and `APNS_TEAM_ID` in `.env.local`. The app registers its push token with the token server (`POST /voip`) whenever it reaches it, and shows "also while the app is closed" once that worked. On a push, the app reports the call to CallKit at once, as iOS requires for every VoIP push, and a ring that already rang or expired is reported and ended.
@@ -51,11 +67,11 @@ An ended call's record in the app has "Continue this call". The app asks the tok
 
 Whether a Bee change is worth a call is decided by a rule-based stand-in for now (`beelink/planner.py`): a conversation with at least four utterances that ended within the last hour, or a new voice note; never during another call; at least 30 minutes after the last call or the last question, whoever started it. Each decision, call or not, is written to `plan.md` in the Bee inbox folder. The watcher saves its Bee cursor only after a change was handled, so a call that could not be placed is retried on the next catch-up.
 
-Between calls, a meta agent decides what to propose (`meta/agent.py`). It wakes only for events, which any process appends to `workspace/meta/events.jsonl`: a Bee change (from `voice/outbound.py`'s watcher), a call that ended (the voice server), the user's answer to an offer (the token server), and a booked call ten minutes away. It looks at what changed with read-only tools, `list_files`, `read_file` and `grep` over the workspace (never outside it, never push tokens or audio) and the Bee read tools, and then it may offer a call, rewrite its notes (`workspace/meta/state.md`: open threads, the agenda for the next call, what the user turned down, what they prefer), or do nothing. It only proposes: calls wait for the user's yes, and Bee changes go on the agenda for a call. Notifications are capped at four a day and held between 23:00 and 08:00. Every time it thinks, the meta session (`workspace/meta/session.jsonl`) keeps the events, every tool it used and its own words, and the session screen shows them as they are under "Between calls". Each call's prep reads the notes. `uv run python -m probes.meta_probe` shows how the model judges three made-up moments in a scratch workspace. `voice/outbound.py --rules` uses the old rule-based planner instead.
+Between calls, a meta agent decides what to propose (`meta/agent.py`). It wakes only for events, which any process appends to `data/people/<id>/meta/events.jsonl`: a Bee change (from `voice/outbound.py`'s watcher), a call that ended (the voice server), the user's answer to an offer (the token server), and a booked call ten minutes away. Each person has their own meta agent, which sees only their folder and their Bee. It looks at what changed with read-only tools, `list_files`, `read_file` and `grep` over the person's folder (never outside it, never push tokens or audio) and the Bee read tools, and then it may offer a call, rewrite its notes (`meta/state.md` in the person's folder: open threads, the agenda for the next call, what the user turned down, what they prefer), or do nothing. It only proposes: calls wait for the user's yes, and Bee changes go on the agenda for a call. Notifications are capped at four a day and held between 23:00 and 08:00. Every time it thinks, the meta session (`meta/session.jsonl`) keeps the events, every tool it used and its own words, and the session screen shows them as they are under "Between calls". Each call's prep reads the notes. `uv run python -m probes.meta_probe` shows how the model judges three made-up moments in a scratch workspace. `voice/outbound.py --rules` uses the old rule-based planner instead.
 
-The AI never rings on its own: it asks first (`voice/offers.py`). A call decision becomes an offer, sent as a plain notification such as "About “Planned a Saturday hike”: free for a 5-minute call at 9:00 PM today?", with three buttons: at the suggested time, now, or not now. It shows on the lock screen and on Apple Watch, and the app's first screen lists open offers too. A button sends the answer to the token server (`POST /offers/<id>`) even while the app is closed, and `voice/outbound.py` places the call when the user tapped "now", when the accepted time comes (prepared 30 seconds early), or at a time the user booked out loud in a call (the coordinator's `book_call` tool; that call continues the call it was booked in). The suggested time is `CALL_TIME` (21:00 when unset; tomorrow when today's is less than ten minutes away). The app registers its notification token with `POST /push`. Try one offer without Bee events with `uv run python -m voice.outbound --once workspace/inbox/<folder> --any-age --no-cooldown`: it asks, then waits for the answer and places the call; `--direct` calls without asking (tests only).
+The AI never rings on its own: it asks first (`voice/offers.py`). A call decision becomes an offer, sent as a plain notification such as "About “Planned a Saturday hike”: free for a 5-minute call at 9:00 PM today?", with three buttons: at the suggested time, now, or not now. It shows on the lock screen and on Apple Watch, and the app's first screen lists open offers too. A button sends the answer to the token server (`POST /offers/<id>`) even while the app is closed, and `voice/outbound.py` places the call when the user tapped "now", when the accepted time comes (prepared 30 seconds early), or at a time the user booked out loud in a call (the coordinator's `book_call` tool; that call continues the call it was booked in). The suggested time is the person's `call_time` setting (21:00 by default; tomorrow when today's is less than ten minutes away). The app registers its notification token with `POST /push`. Try one offer without Bee events with `uv run python -m voice.outbound --once data/people/<id>/inbox/<folder> --person <id> --any-age --no-cooldown`: it asks, then waits for the answer and places the call; `--direct` calls without asking (tests only).
 
-`CALL_LANGUAGE` picks the call language: `en` (the default, and the demo) or `ko` (`voice/language.py`). It sets what Amazon Transcribe listens for, the Amazon Polly voice (Ruth or Seoyeon), the language the coordinator speaks and the prep's opening line; the rest of the instructions stay in English, and LiveKit's turn detector follows the transcript's language. One call is in one language, since Transcribe listens for one language per stream. Start `voice/outbound.py` with the same setting, and try Korean without a phone with `uv run python -m voice.fake_caller --language ko`.
+Each person's `language` setting picks their call language: `en` (the default, and the demo) or `ko` (`voice/language.py`); the app changes it with `PUT /settings`. It sets what Amazon Transcribe listens for, the Amazon Polly voice (Ruth or Seoyeon), the language the coordinator speaks and the prep's opening line; the rest of the instructions stay in English, and LiveKit's turn detector follows the transcript's language. One call is in one language, since Transcribe listens for one language per stream. Try Korean without a phone with `uv run python -m voice.fake_caller --language ko`.
 
 `TTS` picks the AI's voice: `polly` (the default: Ruth, or Seoyeon for Korean) or `elevenlabs` (`voice/voices.py`). ElevenLabs needs `ELEVENLABS_API_KEY` with the Text to Speech permission and a voice from the account's My Voices list (`ELEVENLABS_VOICE`, a voice id, overrides the language's default). Each call language has a default ElevenLabs voice (Sarah for English, Sian for Korean, `voice/language.py`), and `ELEVENLABS_MODEL` is `eleven_v4_turbo` when unset: the most expressive of ElevenLabs' fast models and, measured from Seoul, about as quick to its first sound as `eleven_flash_v2_5` (0.15-0.24 s against Polly's 0.8-1.1 s). `ELEVENLABS_STABILITY` (0 to 1) makes the voice livelier when lower. To compare voices, `uv run python -m probes.voice_samples` has real call lines read by the Polly voices and your ElevenLabs voices, on the path a call uses, and writes a page to listen to them side by side with each sample's time to first sound (`--list` shows your ElevenLabs voices, with the Voices read permission).
 
@@ -75,7 +91,7 @@ The harness runs the agent loop in AWS; when the agent calls one of its inline f
 
 ```bash
 uv run python -m voice.fake_caller                        # Polly plays a caller into a new room
-uv run python -m voice.fake_caller --outbound workspace/inbox/<folder>   # the AI calls about that Bee change; the fake caller answers
+uv run python -m voice.fake_caller --outbound data/people/<id>/inbox/<folder>   # the AI calls about that Bee change; the fake caller answers
 uv run python -m voice.fake_caller --line "Hello" --line "Please start a test job."
 # per-line pauses: cut the AI off after 3 s, pause 0.7 s mid-thought, then wait 10 s
 uv run python -m voice.fake_caller --line "Hi there" --line "Wait, one thing." --line "I got an offer," --line "and I'm not sure." --gap 3,10,0.7,10
@@ -88,7 +104,7 @@ Open `ios/BeeCall/BeeCall.xcodeproj`, pick your team under Signing, run on a dev
 
 ## Privacy
 
-Raw call audio stays on this Mac. Transcripts and job files are the only things meant for cloud storage. The session screen serves transcripts and job files to your local network so the phone can show them, but never raw audio (`audio/`) or raw Bee data (`inputs/`); it has no login, so run it only on a network you trust. Bee data is read through the official Bee CLI, and nothing is written to Bee unless you agreed to it out loud during the call and the writer runs with `--apply`.
+Each person sees only their own calls: the token server and the session screen work in the signed-in person's folder, the voice server records into it, and the meta agent and Bee reads stay inside it. Raw call audio is kept in the call's folder while the person's `record_on_server` setting is on (the default); with it off, only the transcript and the record are kept. The session screen never serves raw audio (`audio/`) or raw Bee data (`inputs/`). Bee data is read through the official Bee CLI, with each person's own login, and nothing is written to Bee unless you agreed to it out loud during the call and the writer runs with `--apply`.
 
 ## License
 

@@ -32,12 +32,12 @@ from dotenv import load_dotenv
 from beelink.planner import RulePlanner
 from voice.dispatch import open_inbound_room, place_call
 from voice.outbound import saved_trigger
+from voice.people import People, dev_person
 from voice.prep import PREP_SECONDS, prepare_outbound
 
 load_dotenv(".env.local")
 PROFILE = os.environ.get("AWS_PROFILE", "bee-call")
 REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
-WORKSPACE = Path("workspace")
 
 DEFAULT_LINES = {
     "en": ["Hi, can you hear me okay?",
@@ -80,8 +80,8 @@ def build_track(lines: list[str], voice: str, lead: float, gaps: list[float], ta
         )
 
 
-def newest_session(after: float) -> Path | None:
-    sessions = [p for p in WORKSPACE.glob("*/*") if p.is_dir() and p.stat().st_mtime >= after]
+def newest_session(workspace: Path, after: float) -> Path | None:
+    sessions = [p for p in workspace.glob("*/*") if p.is_dir() and p.stat().st_mtime >= after]
     return max(sessions, key=lambda p: p.stat().st_mtime) if sessions else None
 
 
@@ -114,6 +114,10 @@ def main() -> None:
                         help="let the AI call: plan and place a call for this saved Bee change, then answer it")
     parser.add_argument("--ring", type=float, default=3.0, help="seconds to let it ring before answering (--outbound)")
     args = parser.parse_args()
+    person = dev_person()  # the call is recorded in this person's folder, like a call from their phone
+    if not person:
+        raise SystemExit("set BEE_CALL_DEV_PERSON to the person whose folder the test call goes into")
+    workspace = People().workspace(person)
 
     lines = args.line or DEFAULT_LINES[args.language]
     voice, engine = (args.voice, "generative") if args.voice else CALLER_VOICES[args.language]
@@ -124,14 +128,14 @@ def main() -> None:
         build_track(lines, voice, lead, [float(g) for g in args.gap.split(",")], args.tail, track, engine)
         if args.outbound:
             # A test: ignore the gap between calls and the age of the saved conversation.
-            plan = RulePlanner(WORKSPACE, cooldown=timedelta(0), max_age=timedelta(days=3650)) \
+            plan = RulePlanner(workspace, cooldown=timedelta(0), max_age=timedelta(days=3650)) \
                 .decide(saved_trigger(args.outbound))
             print(f"plan: {'CALL' if plan.call else 'no call'} - {plan.reason}")
             if not plan.call:
                 return
             prep = asyncio.run(prepare_outbound(plan))
             print(f"prepared in {prep.seconds} s: " + (f"opening {prep.opening!r}" if prep.note else f"no note ({prep.error})"))
-            room = asyncio.run(place_call(plan, WORKSPACE, prep=prep.to_meta()))
+            room = asyncio.run(place_call(plan, workspace, prep=prep.to_meta(), person=person))
             print(f"the AI is calling in room {room}; answering in {args.ring:.0f}s")
             time.sleep(args.ring)
         else:
@@ -144,7 +148,7 @@ def main() -> None:
             check=True, stdout=subprocess.DEVNULL,
         )
     time.sleep(3)  # let the voice server flush the last turn
-    session = newest_session(started)
+    session = newest_session(workspace, started)
     if session is None:
         print("no session folder was written; is the voice server running in dev mode?")
         return

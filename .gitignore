@@ -3,7 +3,8 @@
 .env.local
 .env.*.local
 
-# Call data: raw audio and session files stay on this Mac
+# Call data: each person's folder (data/people/<id>/), and the single-user workspace from before
+data/
 workspace/
 
 # Python

@@ -43,7 +43,9 @@ log = logging.getLogger("bee-call.worker")
 
 REGION = "ap-southeast-2"
 HARNESS_NAME = "bee_call_worker"
-STATE_FILE = Path("workspace") / "state" / "harness.json"  # written by scripts/deploy_worker.py
+# Written by scripts/deploy_worker.py; machine-wide, not one person's (voice/people.py data root).
+STATE_FILE = Path(os.environ.get("BEE_CALL_DATA") or "data") / "harness.json"
+OLD_STATE_FILE = Path("workspace") / "state" / "harness.json"  # where it was before the per-person folders
 # The product model is Claude Opus 5.5. While Claude on Bedrock is blocked for this account, GLM 5
 # stands in (Matt, 2026-10-13): steps take 1-5 s and it runs the code interpreter. Kimi K3 checked
 # sources more carefully but thought for up to a minute or more per step and cannot use the code
@@ -280,8 +282,9 @@ def allowed_name(name: str) -> bool:
 def load_harness_arn() -> str | None:
     if os.environ.get("WORKER_HARNESS_ARN"):
         return os.environ["WORKER_HARNESS_ARN"]
-    if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text()).get("harnessArn")
+    for path in (STATE_FILE, OLD_STATE_FILE):
+        if path.exists():
+            return json.loads(path.read_text()).get("harnessArn")
     return None
 
 

@@ -176,7 +176,10 @@ async def _main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, task.cancel)
     try:
-        await BeeWatcher(Path("workspace"), _print_trigger).run()
+        from voice.people import People, dev_person
+        if not dev_person():
+            raise SystemExit("set BEE_CALL_DEV_PERSON: the watcher keeps its cursor and batches in that person's folder")
+        await BeeWatcher(People().workspace(dev_person()), _print_trigger).run()
     except asyncio.CancelledError:
         pass
 
