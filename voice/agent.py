@@ -81,7 +81,9 @@ WORKER = os.environ.get("WORKER", "fake")
 FIRST_WORDS_WAIT_S = 6.0  # ringing stops when the AI starts to speak, or after this long anyway (arbitrary)
 CALLER_WAIT_S = 5.0  # how long a call the user started waits to see the caller in the room (arbitrary)
 DECLINE_CHECK_S = 1.0  # how often a ringing AI call looks whether the user declined it (arbitrary)
-BEE_RETRY_S = 15.0  # after a call, its failed Bee writes are tried again for at most this long (arbitrary)
+# After a call, its failed Bee writes are tried again for at most this long: LiveKit gives a job's shutdown about
+# 10 s (shutdown_process_timeout), and the call's own record is closed first (arbitrary).
+BEE_RETRY_S = 5.0
 # After the user answers an AI call, its prepared opening does not wait longer than this for the Bee read
 # that only feeds the call record (arbitrary).
 OUTBOUND_INPUTS_WAIT_S = 0.5
@@ -238,14 +240,14 @@ async def wait_for_answer(ctx: JobContext, workspace: Path) -> str:
 
 
 async def after_bee_writes(rec: CallRecorder, person, language: CallLanguage) -> None:
-    """After a call: its failed Bee writes are tried once more, then one notification says what went into Bee
-    (contract sections 5 and 6)."""
+    """After a call, once its record is closed: its failed Bee writes are tried once more, then one notification
+    says what went into Bee (contract sections 5 and 6)."""
     writes = BeeWrites(rec.dir)
     try:
         for write in await asyncio.wait_for(writes.retry_failed(), BEE_RETRY_S):
-            rec.event("bee_write", key=write.key, kind=write.kind, text=write.text, item=write.item,
-                      question=write.question, answer=write.answer, result="ok" if write.status == "ok" else "failed",
-                      error=write.error, retried=True)
+            rec.after_call("bee_write", key=write.key, kind=write.kind, text=write.text, item=write.item,
+                           question=write.question, answer=write.answer,
+                           result="ok" if write.status == "ok" else "failed", error=write.error, retried=True)
     except asyncio.TimeoutError:
         log.warning("retrying the Bee writes of %s took too long", rec.dir)
     payload = summary_notification(writes.all(), language)
@@ -418,6 +420,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
                     task.cancel()
             if preparation is not None:
                 preparation.cancel()
+                await asyncio.gather(preparation.done, return_exceptions=True)  # its cost is recorded by then
             await asyncio.gather(ready, ringing, return_exceptions=True)
             ctx.shutdown(reason="the caller hung up while it rang")
             return
@@ -485,7 +488,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
     pending = preparation.done if preparation is not None and not preparation.done.done() else None
     agent = (BeeCoordinator if uses_bee else Coordinator)(
         rec, jobs, workspace, clock=someone.now, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
-                        language=language, earlier_call=meta.get("earlier_call"))
+        language=language, earlier_call=meta.get("earlier_call"))
 
     abandoned = False  # the caller hung up before the AI's first words: the call leaves no record
 
@@ -503,8 +506,6 @@ async def run_call(ctx: JobContext, people: People) -> None:
             rec.close()
             shutil.rmtree(rec.dir, ignore_errors=True)
             return
-        if uses_bee:
-            await after_bee_writes(rec, someone, language)
         if isinstance(session.llm, ClaudeBedrockLLM):
             session.llm.settle()  # a last reply may still be waiting to be committed
             # Exactly what Claude was sent, for checking a call afterwards.
@@ -515,6 +516,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
         # The meta agent looks at every call once it is over (meta/agent.py).
         add_event(workspace, "call_ended", now=someone.now(), call=f"{rec.dir.parent.name}/{rec.dir.name}",
                   direction=meta.get("direction", "inbound"))
+        if uses_bee:  # last, so a slow Bee never keeps the call's record open
+            await after_bee_writes(rec, someone, language)
 
     ctx.add_shutdown_callback(shutdown)
     wire_events(session, rec)

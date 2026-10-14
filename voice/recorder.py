@@ -94,3 +94,8 @@ class CallRecorder:
         self.ai_audio.close()
         self._events.close()
         self._transcript.close()
+
+    def after_call(self, event_type: str, /, **data: Any) -> None:
+        """An event that comes after call_ended (Bee writes tried again once the call is over)."""
+        with (self.dir / "events.jsonl").open("a") as f:
+            f.write(json.dumps({"t": self.elapsed(), **data, "type": event_type}, default=str) + "\n")
