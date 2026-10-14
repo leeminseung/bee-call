@@ -261,11 +261,13 @@ def test_a_call_hung_up_while_it_rings_leaves_nothing_but_its_cost(tmp_path, mon
     assert [m["characters_count"] for e in voice for m in e["models"]] == ([40] if hang_up_after > 0.4 else [])
 
 
-def test_a_caller_gone_before_the_voice_server_joined_leaves_nothing(tmp_path, monkeypatch, quick):
+@pytest.mark.parametrize("prep", ["by the model", "none"])  # with no prep model the opening is ready at once
+def test_a_caller_gone_before_the_voice_server_joined_leaves_nothing(tmp_path, monkeypatch, quick, prep):
     """Review of this round's fixes, finding 3: the app's join makes the room the voice server is sent to, so a
     caller not in it when the voice server looks has hung up already, and no disconnect will be seen."""
     me = signed_in(tmp_path)
-    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
+    if prep == "by the model":
+        with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
     call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
     use_fakes(monkeypatch, call)
     monkeypatch.setattr(agent, "CALLER_WAIT_S", 0.1)

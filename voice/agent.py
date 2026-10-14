@@ -419,10 +419,12 @@ async def run_call(ctx: JobContext, people: People) -> None:
             await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - started))
             return got
 
-        ready, hung_up = asyncio.create_task(get_ready()), asyncio.create_task(left.wait())
-        await asyncio.wait({ready, hung_up}, return_when=asyncio.FIRST_COMPLETED)
-        hung_up.cancel()
-        if not ready.done():
+        ready = None
+        if not left.is_set():  # a caller already gone gets no prep at all
+            ready, hung_up = asyncio.create_task(get_ready()), asyncio.create_task(left.wait())
+            await asyncio.wait({ready, hung_up}, return_when=asyncio.FIRST_COMPLETED)
+            hung_up.cancel()
+        if left.is_set():  # also when the prep was ready at the same moment
             log.info("the caller hung up while it rang, in room %s", ctx.room.name)
             for task in (ready, ringing, keep_warm):
                 if task:
@@ -430,7 +432,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
             if preparation is not None:
                 preparation.cancel()
                 await asyncio.gather(preparation.done, return_exceptions=True)  # its cost is recorded by then
-            await asyncio.gather(ready, ringing, return_exceptions=True)
+            await asyncio.gather(*[task for task in (ready, ringing) if task], return_exceptions=True)
             ctx.shutdown(reason="the caller hung up while it rang")
             return
         inputs = ready.result()
