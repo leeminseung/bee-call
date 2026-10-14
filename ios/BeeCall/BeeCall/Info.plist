@@ -6,6 +6,8 @@
 	<string>$(BEE_CALL_SERVER)</string>
 	<key>BeeCallRecords</key>
 	<string>$(BEE_CALL_RECORDS)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Bee Call never uses the camera. Its call library includes video features that stay off.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
