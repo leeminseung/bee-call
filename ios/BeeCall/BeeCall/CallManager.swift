@@ -49,8 +49,9 @@ final class CallManager: NSObject {
         AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
         try? AudioManager.shared.setEngineAvailability(.none)
 
-        liveKit.onUnexpectedDisconnect = { [weak self] in
-            self?.hangUp(.remoteEnded, "The call dropped")
+        liveKit.onUnexpectedDisconnect = { [weak self] error in
+            let ending = CallEnding.afterDisconnect(error)
+            self?.hangUp(ending.reason, ending.message)
         }
         pushRegistry.delegate = self
         pushRegistry.desiredPushTypes = [.voIP]

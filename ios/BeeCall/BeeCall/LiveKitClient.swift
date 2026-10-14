@@ -18,7 +18,8 @@ final class LiveKitClient: NSObject {
     nonisolated static let stateAttribute = "bee_call.state"
 
     private(set) var captions: [Caption] = []
-    @ObservationIgnored var onUnexpectedDisconnect: (() -> Void)?
+    /// LiveKit left the room without being asked to, with its reason (nil when it gave none).
+    @ObservationIgnored var onUnexpectedDisconnect: ((LiveKitError?) -> Void)?
     @ObservationIgnored var onAgentAnswered: (() -> Void)?
     @ObservationIgnored private var room: Room?
     @ObservationIgnored private var microphoneOn = true // a mute that arrives before the mic is published
@@ -154,7 +155,7 @@ extension LiveKitClient: RoomDelegate {
             guard room === self.room else { return } // we left on purpose
             self.room = nil
             self.phoneRecorder.stop()
-            self.onUnexpectedDisconnect?()
+            self.onUnexpectedDisconnect?(error)
         }
     }
 
