@@ -107,6 +107,17 @@ def test_the_push_carries_the_ring_to_the_registered_phone(person, config):
                                            "expires_epoch": 1791892860}
 
 
+def test_the_provider_token_is_kept_with_the_people_it_serves(person, config, tmp_path, monkeypatch):
+    """Under their data root, not under data/ wherever the process runs: the tests used to leave
+    data/apns_provider_token.json in the working copy."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    save_device_token(person, DEVICE, "development")
+    push(person, config)
+    assert (person.people.root / "apns_provider_token.json").exists() and not (elsewhere / "data").exists()
+
+
 def test_a_token_apple_no_longer_knows_is_dropped(person, config):
     save_device_token(person, DEVICE, "production")
     with pytest.raises(PushError, match="410 Unregistered"):
