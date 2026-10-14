@@ -499,6 +499,9 @@ async def run_call(ctx: JobContext, people: People) -> None:
     abandoned = False  # the caller hung up before the AI's first words: the call leaves no record
 
     async def shutdown() -> None:
+        # LiveKit runs this in a task of its own, which does not carry the Bee login chosen above: choose it again,
+        # so the writes retried after the call go to this person's Bee and no one else's.
+        bee.use_bee(people.bee_dir(person) if uses_bee else None)
         if keep_warm:
             keep_warm.cancel()
         if preparation is not None:

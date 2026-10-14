@@ -7,6 +7,7 @@ with no network: the room and the job, the caller who joins and hangs up, and th
 """
 
 import asyncio
+import contextvars
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -135,9 +136,10 @@ class FakeCall:
             self.ringing.append("stop")
 
     async def end(self) -> None:
-        """The job ends, as LiveKit ends it: every shutdown callback runs."""
+        """The job ends, as LiveKit ends it: every shutdown callback runs, each as a task the job itself starts, so
+        it does not see what the call set in its own context (whose Bee login, for one)."""
         for callback in self.shutdown_callbacks:
-            await callback()
+            await asyncio.get_running_loop().create_task(callback(), context=contextvars.Context())
 
 
 def use_fakes(monkeypatch, call: FakeCall) -> None:
