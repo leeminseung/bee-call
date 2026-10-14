@@ -308,8 +308,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				BEE_CALL_RECORDS = "";
-				BEE_CALL_SERVER = "";
+				BEE_CALL_RECORDS = "https://call.mslee.dev:8443/";
+				BEE_CALL_SERVER = "https://call.mslee.dev";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = BeeCall.entitlements;
 				CODE_SIGN_STYLE = Automatic;
