@@ -76,10 +76,19 @@ async def apply_one(item: dict[str, Any]) -> dict[str, Any]:
     raise ValueError(f"unknown kind: {kind!r}")
 
 
+def made_todo(response: Any) -> dict[str, Any]:
+    """The todo Bee made, from its answer: {"todo": {...}} or the todo itself, as the Bee CLI's own parser takes
+    either (parseTodoResponse in bee 0.7.3)."""
+    if not isinstance(response, dict):
+        return {}
+    todo = response.get("todo")
+    return todo if isinstance(todo, dict) else response
+
+
 async def take_back(write: BeeWrite) -> dict[str, Any]:
     """Undoes a write that went in."""
     if write.kind in ("todo_create", "todo_accept"):
-        todo = (write.response or {}).get("todo") or {}
+        todo = made_todo(write.response)
         if "id" not in todo:
             raise ValueError("Bee did not say which todo it made")
         return await cli.delete_todo(int(todo["id"]))

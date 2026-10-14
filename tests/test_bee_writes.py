@@ -270,6 +270,20 @@ def test_take_it_out_undoes_the_last_write_of_the_call(tmp_path, fake_bee):
     assert [w.status for w in BeeWrites(rec.dir).all()] == ["undone"]
 
 
+def test_take_it_out_works_when_bee_answers_with_the_bare_todo(tmp_path, fake_bee, monkeypatch):
+    """The Bee CLI prints the API's answer as it came, and it may be the new todo itself rather than {"todo": ...}
+    (the CLI's own parser takes both); the undo needs its id either way."""
+    monkeypatch.setenv("FAKE_BEE_BARE_TODO", "1")
+
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
+        return await agent.undo_bee_write(None)
+
+    assert asyncio.run(main()).startswith("Took it out of Bee: todo 'Note the bug'.")
+    assert ["todos", "delete", "99", "--json"] in calls(fake_bee)
+
+
 def test_undoing_a_fact_fix_puts_the_fact_back_as_it_was(tmp_path, fake_bee):
     async def main():
         agent, _ = await in_a_call(tmp_path)

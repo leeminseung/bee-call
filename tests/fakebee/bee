@@ -86,10 +86,15 @@ if cmd[:2] == ["facts", "confirm"]:
     out({"fact": {"id": int(cmd[2]), "confirmed": True}})
 if cmd[:2] == ["facts", "update"]:
     out({"fact": {"id": int(cmd[2]), "confirmed": True}})
+# Bee answers a new todo either wrapped ({"todo": {...}}) or as the todo itself, as the CLI's own parser allows
+# (parseTodoResponse in bee 0.7.3); FAKE_BEE_BARE_TODO=1 gives the bare form.
+def made(todo):
+    out(todo if os.environ.get("FAKE_BEE_BARE_TODO") else {"todo": todo})
+
 if cmd[:2] == ["todos", "create"]:
-    out({"todo": {"id": 99, "text": cmd[cmd.index("--text") + 1]}})
+    made({"id": 99, "text": cmd[cmd.index("--text") + 1], "created_at": now_ms, "completed": False})
 if cmd[:2] == ["todos", "accept-suggestion"]:
-    out({"todo": {"id": 100}})
+    made({"id": 100, "text": "Ask about bonus terms", "created_at": now_ms, "completed": False})
 if cmd[:2] == ["todos", "delete"]:
     out({"deleted": True, "id": int(cmd[2])})
 if cmd[:2] == ["facts", "get"]:
