@@ -2,7 +2,9 @@
 with no network: the room and the job, the caller who joins and hangs up, and the session that would speak.
 
     call = FakeCall(people, {"direction": "inbound", "person": "matt"})
-    await call.run(caller_joins_after=0.0)      # run_call, with the caller in the room
+    use_fakes(monkeypatch, call)                # run_call's session and ringback are the fakes
+    call.join()                                 # the caller is in the room
+    await agent.run_call(call, people)          # the call, up to the AI's first words
     await call.end()                            # the job ends: LiveKit's shutdown callbacks run
 """
 
