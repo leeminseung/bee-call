@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from beelink import context, writer
+from beelink import context
 from beelink.watcher import BeeWatcher, parse_stream_line
 
 FAKE_BEE = Path(__file__).parent / "fakebee" / "bee"
@@ -35,36 +35,6 @@ def write_queue(session: Path) -> None:
         {"kind": "todo_accept", "suggestion_id": 34},
     ]
     (session / "bee-queue.jsonl").write_text("".join(json.dumps(i) + "\n" for i in items))
-
-
-def test_writer_dry_run_writes_nothing(tmp_path, fake_bee):
-    session = tmp_path / "workspace" / "2026-10-12" / "1530"
-    write_queue(session)
-    results = asyncio.run(writer.run(session, apply=False))
-    assert [r["dry_run"] for r in results] == [True, True, True]
-    assert not any(tuple(c[:2]) in WRITE_COMMANDS for c in calls(fake_bee))
-    assert not (session / "bee-writes.jsonl").exists()
-
-
-def test_writer_apply_then_rerun_skips(tmp_path, fake_bee):
-    session = tmp_path / "workspace" / "2026-10-12" / "1530"
-    write_queue(session)
-    started = datetime.now().isoformat(timespec="seconds")
-    (session / "events.jsonl").write_text(json.dumps({"t": 0.0, "type": "call_started", "started_at": started}) + "\n")
-    first = asyncio.run(writer.run(session, apply=True))
-    assert all(r["ok"] for r in first)
-    written = [c for c in calls(fake_bee) if tuple(c[:2]) in WRITE_COMMANDS]
-    assert [c[:2] for c in written] == [["facts", "update"], ["todos", "create"], ["todos", "accept-suggestion"]]
-    assert ["--alarm-at", "2026-10-13T09:00:00+09:00"] == written[1][4:6]
-    # The session screen sees each result as a bee_write_done line, matched to its queued item.
-    done = [json.loads(l) for l in (session / "events.jsonl").read_text().splitlines()][1:]
-    assert [(d["type"], d["kind"], d["ok"]) for d in done] == [
-        ("bee_write_done", "fact_update", True), ("bee_write_done", "todo_create", True), ("bee_write_done", "todo_accept", True)]
-    assert done[2]["item"] == {"kind": "todo_accept", "suggestion_id": 34} and done[0]["t"] >= 0
-    again = asyncio.run(writer.run(session, apply=True))
-    assert again == []
-    assert len((session / "events.jsonl").read_text().splitlines()) == 4
-    assert len([c for c in calls(fake_bee) if tuple(c[:2]) in WRITE_COMMANDS]) == 3
 
 
 def make_session(workspace: Path, started: datetime, seconds: float) -> None:

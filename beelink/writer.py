@@ -1,47 +1,63 @@
-"""Writes a call's confirmed items from bee-queue.jsonl to Bee, after the call.
+"""Bee writes, made during the call right after the user's spoken yes (Matt, 2026-10-15; contract section 6).
 
-Every queue line was agreed to out loud by the user during the call:
+The call AI asks a question that names Bee and the item ("Bee에 할 일로 넣을까요?"); after a yes it writes at
+once, with the person's own Bee login, through BeeWrites.write(). Every write is kept in the call folder, in
+bee-writes.jsonl, one line per step and only appended to:
+  {"key": "w1", "status": "applying", "item": {...}, "question": ..., "answer": ..., "before": ..., "at": ...}
+  {"key": "w1", "status": "ok", "response": {...}, "at": ...}          or "failed" with "error"
+  {"key": "w1", "status": "undone", "at": ...}                          the user said "take it out" (or "undo_failed")
+A write's state is its latest line. "applying" is recorded before the Bee call, so a write cut off between the
+call and its result (the process stopped) is never repeated: Bee may already have it, and a todo must not be
+created twice. A write that failed is said out loud in the call and tried once more after it (retry_failed);
+then one notification says what went into Bee (summary_notification).
+
+Items:
   {"kind": "fact_confirm", "fact_id": 12}
   {"kind": "fact_update", "fact_id": 12, "text": "Bonus is 10%"}
   {"kind": "todo_create", "text": "Ask about bonus terms", "alarm_at": "2026-10-13T09:00:00+09:00"}
   {"kind": "todo_accept", "suggestion_id": 34}
+(an item may also carry "text" for how it reads, as a todo suggestion or a confirmed fact does).
 
-Dry run by default: prints the Bee commands and writes nothing to Bee.
-With --apply it runs them and appends each result to bee-writes.jsonl, which
-only this tool writes. Lines already applied are skipped on a rerun. Each result
-also goes into the call's events.jsonl as a bee_write_done line, which is where
-the session screen shows Bee writes; the call is over by then, so the voice
-server no longer writes that file.
-
-Run: uv run python -m beelink.writer workspace/2026-10-12/1530 [--apply]
+Run by hand: uv run python -m beelink.writer data/people/<id>/<date>/<time>            what was written, and how
+             uv run python -m beelink.writer data/people/<id>/<date>/<time> --apply    tries the failed ones again
+Items in a call's bee-queue.jsonl, from before writes were made in the call, carry no record of the user's yes;
+they are listed and never written.
 """
 
 import argparse
 import asyncio
-import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from beelink import cli
+from voice.language import CallLanguage
+
+WRITES = "bee-writes.jsonl"
+OLD_QUEUE = "bee-queue.jsonl"
+KINDS = ("fact_confirm", "fact_update", "todo_create", "todo_accept")
 
 
-def line_key(index: int, item: dict[str, Any]) -> str:
-    return f"{index}:{hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()[:12]}"
+@dataclass
+class BeeWrite:
+    key: str
+    item: dict[str, Any]
+    question: str | None
+    answer: str | None
+    status: str  # applying, ok, failed, undone, undo_failed
+    response: dict[str, Any] | None = None
+    before: dict[str, Any] | None = None  # the fact as it was, so an update can be taken back
+    error: str | None = None
 
+    @property
+    def kind(self) -> str:
+        return str(self.item.get("kind"))
 
-def describe(item: dict[str, Any]) -> list[str]:
-    kind = item.get("kind")
-    if kind == "fact_confirm":
-        return ["facts", "confirm", str(item["fact_id"])]
-    if kind == "fact_update":
-        return ["facts", "update", str(item["fact_id"]), "--text", item["text"], "--confirmed", "true"]
-    if kind == "todo_create":
-        return ["todos", "create", "--text", item["text"]] + (["--alarm-at", item["alarm_at"]] if item.get("alarm_at") else [])
-    if kind == "todo_accept":
-        return ["todos", "accept-suggestion", str(item["suggestion_id"])]
-    raise ValueError(f"unknown queue kind: {kind!r}")
+    @property
+    def text(self) -> str:
+        return str(self.item.get("text") or "")
 
 
 async def apply_one(item: dict[str, Any]) -> dict[str, Any]:
@@ -54,63 +70,170 @@ async def apply_one(item: dict[str, Any]) -> dict[str, Any]:
         return await cli.create_todo(item["text"], item.get("alarm_at"))
     if kind == "todo_accept":
         return await cli.accept_suggestion(item["suggestion_id"])
-    raise ValueError(f"unknown queue kind: {kind!r}")
+    raise ValueError(f"unknown kind: {kind!r}")
 
 
-def note_on_screen(session_dir: Path, item: dict[str, Any], ok: bool, error: str | None = None) -> None:
-    events = session_dir / "events.jsonl"
-    if not events.exists():
-        return
-    lines = [json.loads(l) for l in events.read_text().splitlines() if l.strip()]
-    started = next((e.get("started_at") for e in lines if e.get("type") == "call_started"), None)
-    try:  # seconds since the call started, like every other line in the file
-        t = round((datetime.now() - datetime.fromisoformat(started)).total_seconds(), 3)
-    except (TypeError, ValueError):
-        t = lines[-1].get("t") if lines else 0.0
-    line = {"t": t, "type": "bee_write_done", "kind": item.get("kind"), "text": item.get("text", ""), "ok": ok, "item": item}
-    if error:
-        line["error"] = error
-    with events.open("a") as f:
-        f.write(json.dumps(line, ensure_ascii=False) + "\n")
+async def take_back(write: BeeWrite) -> dict[str, Any]:
+    """Undoes a write that went in."""
+    if write.kind in ("todo_create", "todo_accept"):
+        todo = (write.response or {}).get("todo") or {}
+        if "id" not in todo:
+            raise ValueError("Bee did not say which todo it made")
+        return await cli.delete_todo(int(todo["id"]))
+    if write.kind == "fact_confirm":
+        return await cli.unconfirm_fact(write.item["fact_id"])
+    if write.kind == "fact_update":
+        before = write.before or {}
+        if not isinstance(before.get("text"), str):
+            raise ValueError("the fact's earlier text is not known")
+        return await cli.update_fact(write.item["fact_id"], before["text"], confirmed=bool(before.get("confirmed")))
+    raise ValueError(f"unknown kind: {write.kind!r}")
 
 
-async def run(session_dir: Path, apply: bool) -> list[dict[str, Any]]:
-    queue_file = session_dir / "bee-queue.jsonl"
-    if not queue_file.exists():
-        print("no bee-queue.jsonl in this session; nothing to write")
-        return []
-    results_file = session_dir / "bee-writes.jsonl"
-    done = set()
-    if results_file.exists():
-        done = {json.loads(l)["key"] for l in results_file.read_text().splitlines() if json.loads(l).get("ok")}
+class BeeWrites:
+    """One call's Bee writes (bee-writes.jsonl in its folder). The Bee login is the one chosen for the work that
+    calls these (beelink/cli.py use_bee): the person's own."""
 
-    results = []
-    for index, raw in enumerate(queue_file.read_text().splitlines()):
-        if not raw.strip():
-            continue
-        item = json.loads(raw)
-        key = line_key(index, item)
-        command = describe(item)
-        if key in done:
-            print(f"skip (already written): bee {' '.join(command)}")
-            continue
-        if not apply:
-            print(f"dry run: bee {' '.join(command)}")
-            results.append({"key": key, "item": item, "dry_run": True})
-            continue
-        record: dict[str, Any] = {"key": key, "item": item, "at": datetime.now().isoformat(timespec="seconds")}
+    def __init__(self, call_dir: Path) -> None:
+        self.dir = call_dir
+        self.path = call_dir / WRITES
+
+    def all(self) -> list[BeeWrite]:
+        """Each write as it stands now, in the order they were made."""
+        writes: dict[str, BeeWrite] = {}
         try:
-            record["response"] = await apply_one(item)
-            record["ok"] = True
+            lines = self.path.read_text().splitlines()
+        except OSError:
+            return []
+        for raw in lines:
+            try:
+                line = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(line, dict) or not isinstance(line.get("key"), str):
+                continue
+            key = line["key"]
+            if key not in writes:
+                if not isinstance(line.get("item"), dict):
+                    continue
+                writes[key] = BeeWrite(key, line["item"], line.get("question"), line.get("answer"), line["status"],
+                                       before=line.get("before"))
+            write = writes[key]
+            write.status = line.get("status", write.status)
+            if "response" in line:
+                write.response = line["response"]
+            if "error" in line:
+                write.error = line["error"]
+        return list(writes.values())
+
+    def _append(self, line: dict[str, Any]) -> None:
+        line = {**line, "at": datetime.now().isoformat(timespec="seconds")}
+        with self.path.open("a") as f:
+            f.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
+
+    async def _apply(self, write: BeeWrite) -> BeeWrite:
+        try:
+            write.response, write.status, write.error = await apply_one(write.item), "ok", None
+            self._append({"key": write.key, "status": "ok", "response": write.response})
         except Exception as exc:
-            record["ok"] = False
-            record["error"] = str(exc)
-        with results_file.open("a") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        note_on_screen(session_dir, item, record["ok"], record.get("error"))
-        print(f"{'ok' if record['ok'] else 'FAILED'}: bee {' '.join(command)}")
-        results.append(record)
-    return results
+            write.status, write.error = "failed", str(exc)[:300] or type(exc).__name__
+            self._append({"key": write.key, "status": "failed", "error": write.error})
+        return write
+
+    async def write(self, item: dict[str, Any], question: str, answer: str) -> BeeWrite:
+        """Writes one item the user said yes to; `question` is what the AI asked, `answer` the user's reply."""
+        write = BeeWrite(f"w{len(self.all()) + 1}", item, question, answer, "applying")
+        if item.get("kind") == "fact_update":  # kept so the user can take the fix back
+            try:
+                write.before = (await cli.fact(item["fact_id"])).get("fact")
+            except Exception:
+                write.before = None
+        self._append({"key": write.key, "status": "applying", "item": item, "question": question, "answer": answer,
+                      "before": write.before})
+        return await self._apply(write)
+
+    async def undo(self, key: str) -> BeeWrite:
+        """Takes a write that went in back out of Bee."""
+        (write,) = [w for w in self.all() if w.key == key]
+        if write.status != "ok":
+            raise ValueError(f"write {key} is {write.status}")
+        try:
+            await take_back(write)
+            write.status = "undone"
+            self._append({"key": key, "status": "undone"})
+        except Exception as exc:
+            write.status, write.error = "undo_failed", str(exc)[:300]
+            self._append({"key": key, "status": "undo_failed", "error": write.error})
+        return write
+
+    async def retry_failed(self) -> list[BeeWrite]:
+        """Tries each failed write once more (after the call). A write cut off mid-way ("applying") is left alone."""
+        retried = []
+        for write in self.all():
+            if write.status != "failed":
+                continue
+            self._append({"key": write.key, "status": "applying"})
+            retried.append(await self._apply(write))
+        return retried
+
+
+# ---------- what the user reads after the call ----------
+
+def label(write: BeeWrite, language: CallLanguage) -> str:
+    """One write as the user reads it: "todo 'Note the bug'", "할 일 '버그 기록'"."""
+    korean = language.code == "ko"
+    if write.kind.startswith("todo"):
+        name = "할 일" if korean else "todo"
+    else:
+        name = "사실" if korean else "fact"
+    if write.text:
+        return f"{name} '{write.text}'"
+    return ("제안된 할 일" if korean else "a suggested todo") if write.kind == "todo_accept" else \
+        ("사실 하나" if korean else "a fact")
+
+
+def summary_notification(writes: list[BeeWrite], language: CallLanguage) -> dict[str, Any] | None:
+    """The one plain notification after a call (contract section 5): what went into Bee, and what did not; None
+    when the call wrote nothing."""
+    went_in = [w for w in writes if w.status == "ok"]
+    left_out = [w for w in writes if w.status == "failed"]
+    if not went_in and not left_out:
+        return None
+    korean = language.code == "ko"
+
+    def some(found: list[BeeWrite]) -> str:
+        more = len(found) - 1
+        return label(found[0], language) + ((f" 외 {more}개" if korean else f" and {more} more") if more else "")
+
+    parts = []
+    if went_in:
+        parts.append(f"Bee에 넣었어요: {some(went_in)}" if korean else f"Added to Bee: {some(went_in)}")
+    if left_out:
+        parts.append(f"넣지 못했어요: {some(left_out)}" if korean else f"Couldn't add: {some(left_out)}")
+    return {"aps": {"alert": {"title": "Bee Call", "body": ". ".join(parts)}, "sound": "default", "thread-id": "bee"}}
+
+
+# ---------- by hand ----------
+
+async def run(session_dir: Path, apply: bool) -> list[BeeWrite]:
+    """Prints the call's Bee writes; with `apply`, tries the failed ones again. Returns the writes tried."""
+    writes = BeeWrites(session_dir)
+    for write in writes.all():
+        heard = f'asked "{write.question}", heard "{write.answer}"'
+        print(f"{write.status}: {write.kind} {json.dumps(write.item, ensure_ascii=False)} ({heard})"
+              + (" - Bee may have it: check before writing it again" if write.status == "applying" else ""))
+    old = session_dir / OLD_QUEUE
+    if old.exists():
+        for raw in old.read_text().splitlines():
+            if raw.strip():
+                print(f"not written: {raw.strip()} (queued before writes were made in the call; no spoken yes was "
+                      "recorded)")
+    if not apply:
+        return []
+    retried = await writes.retry_failed()
+    for write in retried:
+        print(f"{'ok' if write.status == 'ok' else 'FAILED'}: {write.kind} {write.text}")
+    return retried
 
 
 def person_of(session_dir: Path, people) -> str:
@@ -127,13 +250,13 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("session_dir", type=Path, help="a call folder, data/people/<id>/<date>/<time>")
-    parser.add_argument("--apply", action="store_true", help="really write to Bee (default is a dry run)")
+    parser.add_argument("--apply", action="store_true", help="try the failed writes again (default: only list)")
     args = parser.parse_args()
     people = People()
     person = person_of(args.session_dir, people)
     if not people.settings(person).bee:
         raise SystemExit(f"{person} has not connected Bee; nothing can be written")
-    print(f"writing to {person}'s Bee")
+    print(f"{person}'s Bee writes")
 
     async def as_person() -> None:
         cli.use_bee(people.bee_dir(person))  # only this person's Bee account

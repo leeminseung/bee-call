@@ -47,11 +47,13 @@ from livekit.plugins.aws.stt import Credentials
 
 from beelink import cli as bee
 from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
+from beelink.writer import BeeWrites, summary_notification
 from voice.aws_session import aws_profile, aws_session
 from voice.claude_llm import ClaudeBedrockLLM
 from voice.continuation import earlier_call
 from voice.costs import SpendLog, day_budget
 from meta.session import add_event, meta_notes
+from voice import voip_push
 from voice.coordinator import BeeCoordinator, Coordinator
 from voice.dispatch import AGENT_NAME, RING_SECONDS, declined
 from voice.echo_llm import EchoLLM
@@ -80,6 +82,7 @@ WORKER = os.environ.get("WORKER", "fake")
 FIRST_WORDS_WAIT_S = 6.0  # ringing stops when the AI starts to speak, or after this long anyway (arbitrary)
 CALLER_WAIT_S = 5.0  # how long a call the user started waits to see the caller in the room (arbitrary)
 DECLINE_CHECK_S = 1.0  # how often a ringing AI call looks whether the user declined it (arbitrary)
+BEE_RETRY_S = 15.0  # after a call, its failed Bee writes are tried again for at most this long (arbitrary)
 # After the user answers an AI call, its prepared opening does not wait longer than this for the Bee read
 # that only feeds the call record (arbitrary).
 OUTBOUND_INPUTS_WAIT_S = 0.5
@@ -233,6 +236,25 @@ async def wait_for_answer(ctx: JobContext, workspace: Path) -> str:
         return "answered"
     finally:
         joined.cancel()
+
+
+async def after_bee_writes(rec: CallRecorder, person, language: CallLanguage) -> None:
+    """After a call: its failed Bee writes are tried once more, then one notification says what went into Bee
+    (contract sections 5 and 6)."""
+    writes = BeeWrites(rec.dir)
+    try:
+        for write in await asyncio.wait_for(writes.retry_failed(), BEE_RETRY_S):
+            rec.event("bee_write", key=write.key, kind=write.kind, text=write.text, item=write.item,
+                      question=write.question, answer=write.answer, result="ok" if write.status == "ok" else "failed",
+                      error=write.error, retried=True)
+    except asyncio.TimeoutError:
+        log.warning("retrying the Bee writes of %s took too long", rec.dir)
+    payload = summary_notification(writes.all(), language)
+    if payload is not None:
+        try:
+            await voip_push.alert(payload, person, collapse_id=f"bee-{rec.dir.parent.name}-{rec.dir.name}")
+        except Exception as exc:
+            log.warning("the Bee summary after %s did not go out: %s", rec.dir, exc)
 
 
 def the_caller(participant) -> bool:
@@ -481,6 +503,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
             rec.close()
             shutil.rmtree(rec.dir, ignore_errors=True)
             return
+        if uses_bee:
+            await after_bee_writes(rec, people.person(person), language)
         if isinstance(session.llm, ClaudeBedrockLLM):
             session.llm.settle()  # a last reply may still be waiting to be committed
             # Exactly what Claude was sent, for checking a call afterwards.

@@ -296,3 +296,47 @@ def test_an_ai_call_declined_while_it_rings_is_declined_not_missed(tmp_path, mon
     assert call.deleted and call.session.started is None and call_folders(me.workspace) == []
     (event,) = MetaSession(me.workspace).take_events()
     assert (event["kind"], event["topic"]) == ("call_declined", "the interview")
+
+
+# ---------- Bee writes in the call: after it, a retry and one notification (contract sections 5 and 6) ----------
+
+def test_after_a_bee_call_failed_writes_are_tried_again_and_one_notification_says_what_went_in(
+        tmp_path, monkeypatch, quick, bee_log):
+    from beelink.writer import BeeWrites
+    from voice import voip_push
+
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"bee": True}, allowed=("bee",))
+    (tmp_path / "fail-once").write_text("todos create")
+    monkeypatch.setenv("FAKE_BEE_FAIL_ONCE", str(tmp_path / "fail-once"))
+    sent = []
+
+    async def alert(payload, person, **kw):
+        sent.append((payload, person.id))
+        return "apns"
+
+    monkeypatch.setattr(voip_push, "alert", alert)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        coordinator = call.session.started["agent"]
+        chat = coordinator.chat_ctx.copy()
+        chat.add_message(role="assistant", content="Shall I add 'note the bug' to your Bee todos?")
+        chat.add_message(role="user", content="Yes.")
+        await coordinator.update_chat_ctx(chat)
+        said = await coordinator.save_to_bee(None, kind="todo_create", text="Note the bug")  # Bee is down for a moment
+        await call.end()
+        return said
+
+    said = asyncio.run(main())
+    assert "tried again after the call" in said
+    (folder,) = call_folders(me.workspace)
+    assert [w.status for w in BeeWrites(folder).all()] == ["ok"]
+    results = [e["result"] for e in events_of(folder) if e["type"] == "bee_write"]
+    assert results == ["failed", "ok"]  # said in the call, then written after it
+    ((payload, whose),) = sent
+    assert whose == "matt" and payload["aps"]["alert"]["body"] == "Added to Bee: todo 'Note the bug'"
+    assert payload["aps"]["thread-id"] == "bee"

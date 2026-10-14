@@ -9,7 +9,7 @@ them. The voice server picks one by the person's setting when the call starts (v
 """
 
 import asyncio
-import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import AsyncIterable
@@ -21,7 +21,8 @@ from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_inst
 
 from beelink import reads
 from beelink.clock import now_text
-from voice.language import CallLanguage
+from beelink.writer import KINDS, BeeWrites, label
+from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
 from voice.recorder import CallRecorder
 from voice.speech_filter import SpeechFilter
@@ -69,14 +70,19 @@ The user wears Bee, a wearable that records and summarizes their conversations. 
 these instructions is what was looked up in Bee just before the call. Bring up things from it only when they \
 connect to what the user is talking about, or once the user's own topic is done. Never interrupt the user's topic \
 with them. For more from Bee during the call, use bee_today, bee_conversation and search_bee.
-When the prep note lists unconfirmed Bee facts, check them at a natural moment, for example \
-"I heard your bonus is 15 percent. Is that right?" If the user corrects it, queue a fact_update with the \
-corrected text. If they agree, queue a fact_confirm.
-Save things to Bee (facts, todos) only after the user has said yes out loud.
+Saving to Bee happens right away, in the call. First ask a question that names Bee and the item, such as \
+"Shall I add 'note the bug' to your Bee todos?". Only after a clear yes to that question, call save_to_bee, then \
+tell the user in a few words what you saved. A yes to any other question is no yes to saving. Write the item in \
+the user's language. If the user asks you to take it out, call undo_bee_write. If saving does not go through, \
+say so, and that it will be tried again after the call.
+When the prep note lists unconfirmed Bee facts, check them at a natural moment, naming Bee, for example \
+"Bee heard that your bonus is 15 percent. Is that right?" If the user agrees, save a fact_confirm. If they \
+correct it, ask whether to fix it in Bee, and after a yes save a fact_update with the corrected text.
 """
 
-BEE_WRITE_KINDS = ("fact_confirm", "fact_update", "todo_create", "todo_accept")
 NOTE_WAIT_S = 2.0  # the first reply waits at most this long for a prep note still being written (arbitrary)
+HANGUL = re.compile(r"[\uac00-\ud7a3]")
+ENGLISH = call_language("en")  # what the tools tell the model is in English, like the rest of its instructions
 
 
 def job_notification(news: JobNotification) -> str:
@@ -116,6 +122,7 @@ class Coordinator(Agent):
         self._recorder = recorder
         self._jobs = jobs
         self._workspace = workspace
+        self._language = language or call_language()
         self._pending_note = pending_note
         self._note_open = pending_note is not None  # until the first reply
         self._note_task: asyncio.Task | None = None
@@ -315,6 +322,10 @@ class BeeCoordinator(Coordinator):
     NOTE_RULES = BEE_NOTE_RULES
     NOTE_HEADER = "Call prep note (from Bee, just before the call):"
 
+    def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, **kwargs) -> None:
+        super().__init__(recorder, jobs, workspace, **kwargs)
+        self._bee_writes = BeeWrites(recorder.dir)  # this call's Bee writes, kept in its folder
+
     @function_tool
     async def search_bee(self, context: RunContext, query: str) -> str:
         """Search, by meaning, the user's conversations with other people that their Bee wearable recorded.
@@ -341,36 +352,72 @@ class BeeCoordinator(Coordinator):
         return await reads.conversation(conversation_id)
 
     @function_tool
-    async def queue_bee_write(self, context: RunContext, kind: str, text: str | None = None,
-                              fact_id: int | None = None, suggestion_id: int | None = None,
-                              alarm_at: str | None = None) -> str:
-        """Queue something the user agreed to out loud, to be saved to Bee after the call.
+    async def save_to_bee(self, context: RunContext, kind: str, text: str | None = None, fact_id: int | None = None,
+                          suggestion_id: int | None = None, alarm_at: str | None = None) -> str:
+        """Save one item to the user's Bee now. Only right after you asked a question that names Bee and the item,
+        such as "Shall I add 'note the bug' to your Bee todos?", and the user said yes to that question.
 
         Args:
             kind: One of fact_confirm, fact_update, todo_create, todo_accept.
-            text: The fact or todo text (fact_update, todo_create).
+            text: The todo or fact as it reads, in the user's language (needed for fact_update and todo_create).
             fact_id: The Bee fact id (fact_confirm, fact_update).
             suggestion_id: The Bee todo suggestion id (todo_accept).
             alarm_at: Optional ISO 8601 time for a todo alarm (todo_create).
         """
-        if kind not in BEE_WRITE_KINDS:
-            return f"Unknown kind {kind!r}; use one of {', '.join(BEE_WRITE_KINDS)}."
+        question, answer = self._last_exchange()
+        if not question or not answer or "bee" not in question.lower():
+            return ("Not saved: first ask the user a question that names Bee and the item, such as \"Shall I add "
+                    "'note the bug' to your Bee todos?\", and save it only after they say yes to that question.")
+        if kind not in KINDS:
+            return f"Unknown kind {kind!r}; use one of {', '.join(KINDS)}."
         item: dict = {"kind": kind}
         if kind in ("fact_confirm", "fact_update"):
             if fact_id is None:
                 return "fact_id is required."
             item["fact_id"] = fact_id
-        if kind in ("fact_update", "todo_create"):
-            if not text:
-                return "text is required."
-            item["text"] = text
+        if kind in ("fact_update", "todo_create") and not text:
+            return "text is required."
+        if text:
+            if self._language.code == "ko" and not HANGUL.search(text):
+                return "Write the text in Korean, the user's language, then save it."
+            item["text"] = text.strip()
         if kind == "todo_create" and alarm_at:
             item["alarm_at"] = alarm_at
         if kind == "todo_accept":
             if suggestion_id is None:
                 return "suggestion_id is required."
             item["suggestion_id"] = suggestion_id
-        with (self._recorder.dir / "bee-queue.jsonl").open("a") as f:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        self._recorder.event("bee_write_queued", kind=kind, text=text or "", item=item)
-        return "Queued. It will be saved to Bee after the call."
+        write = await self._bee_writes.write(item, question, answer)
+        what = label(write, ENGLISH)
+        self._recorder.event("bee_write", key=write.key, kind=kind, text=write.text, item=item, question=question,
+                             answer=answer, result="ok" if write.status == "ok" else "failed", error=write.error)
+        if write.status == "ok":
+            return f"Saved to Bee: {what}. Tell the user in a few words what you saved."
+        return (f"Saving {what} to Bee did not go through ({write.error}). Tell the user it did not go through and "
+                "that it will be tried again after the call.")
+
+    @function_tool
+    async def undo_bee_write(self, context: RunContext) -> str:
+        """Take the last item you saved to Bee in this call back out, when the user asks you to."""
+        saved = [w for w in self._bee_writes.all() if w.status == "ok"]
+        if not saved:
+            return "Nothing saved to Bee in this call is left to take out."
+        write = await self._bee_writes.undo(saved[-1].key)
+        what = label(write, ENGLISH)
+        if write.status != "undone":
+            return f"Could not take {what} out of Bee ({write.error}). Tell the user."
+        self._recorder.event("bee_write_undone", key=write.key, kind=write.kind, text=write.text)
+        return f"Took it out of Bee: {what}. Tell the user in a few words."
+
+    def _last_exchange(self) -> tuple[str | None, str | None]:
+        """The AI's question and the user's answer to it: the last user turn, and the AI's turn before it."""
+        question = answer = None
+        for item in reversed(self.chat_ctx.items):
+            if getattr(item, "type", None) != "message":
+                continue
+            if item.role == "user" and answer is None:
+                answer = item.text_content
+            elif item.role == "assistant" and answer is not None:
+                question = item.text_content
+                break
+        return question, answer

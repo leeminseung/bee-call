@@ -11,6 +11,13 @@ if folder:  # whose login the call used (beelink/cli.py use_bee)
         f.write(json.dumps({"folder": folder, "args": args}) + "\n")
 cmd = [a for a in args if a != "--json"]
 now_ms = int(time.time() * 1000)
+# A command that fails once: FAKE_BEE_FAIL_ONCE names a file holding the command's start ("todos create"); the
+# file goes away when it fails, so the next try works.
+fail_once = os.environ.get("FAKE_BEE_FAIL_ONCE")
+if fail_once and os.path.exists(fail_once) and " ".join(cmd).startswith(open(fail_once).read().strip()):
+    os.remove(fail_once)
+    print("Bee is unavailable right now", file=sys.stderr)
+    sys.exit(1)
 
 def out(obj):
     print(json.dumps(obj))
@@ -78,5 +85,9 @@ if cmd[:2] == ["todos", "create"]:
     out({"todo": {"id": 99, "text": cmd[cmd.index("--text") + 1]}})
 if cmd[:2] == ["todos", "accept-suggestion"]:
     out({"todo": {"id": 100}})
+if cmd[:2] == ["todos", "delete"]:
+    out({"deleted": True, "id": int(cmd[2])})
+if cmd[:2] == ["facts", "get"]:
+    out({"fact": {"id": int(cmd[2]), "text": "Bonus is 15%", "confirmed": False}})
 print("unknown fake bee command: " + " ".join(cmd), file=sys.stderr)
 sys.exit(2)

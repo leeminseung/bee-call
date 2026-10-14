@@ -1,8 +1,9 @@
 """Thin async wrapper around the Bee CLI (`bee`, @beeai/cli 0.7.3).
 
 Every call adds --json and returns the parsed object. Reads are safe to call
-at any time. Writes (facts and todos) are called only by beelink.writer, which
-runs them from a call's confirmed queue and only when told to apply.
+at any time. Writes (facts and todos) are called only by beelink.writer, during a
+call right after the user's spoken yes to a question that named Bee, and to retry
+or take back those writes.
 
 Whose Bee: one server serves several people (voice/people.py), each with their own
 Bee login in their own folder. use_bee() sets the folder for the work that follows in
@@ -146,15 +147,27 @@ async def me(timeout: float = TIMEOUT) -> dict[str, Any]:
     return await run_json("me", timeout=timeout)
 
 
+async def fact(fact_id: int) -> dict[str, Any]:
+    return await run_json("facts", "get", str(fact_id))
+
+
 # ---------- writes (only beelink.writer calls these) ----------
 
 async def confirm_fact(fact_id: int) -> dict[str, Any]:
     return await run_json("facts", "confirm", str(fact_id))
 
 
+async def unconfirm_fact(fact_id: int) -> dict[str, Any]:
+    return await run_json("facts", "update", str(fact_id), "--confirmed", "false")
+
+
 async def update_fact(fact_id: int, text: str, confirmed: bool = True) -> dict[str, Any]:
     return await run_json("facts", "update", str(fact_id), "--text", text,
                           "--confirmed", "true" if confirmed else "false")
+
+
+async def delete_todo(todo_id: int) -> dict[str, Any]:
+    return await run_json("todos", "delete", str(todo_id))
 
 
 async def create_todo(text: str, alarm_at: str | None = None) -> dict[str, Any]:
