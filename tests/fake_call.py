@@ -1,0 +1,144 @@
+"""A stand-in for LiveKit around the voice server's call (voice/agent.py run_call), so its decisions can be tested
+with no network: the room and the job, the caller who joins and hangs up, and the session that would speak.
+
+    call = FakeCall(people, {"direction": "inbound", "person": "matt"})
+    await call.run(caller_joins_after=0.0)      # run_call, with the caller in the room
+    await call.end()                            # the job ends: LiveKit's shutdown callbacks run
+"""
+
+import asyncio
+import json
+from types import SimpleNamespace
+from typing import Any
+
+
+class FakeEmitter:
+    def __init__(self) -> None:
+        self.handlers: dict[str, list] = {}
+
+    def on(self, event: str, callback=None):
+        if callback is None:  # used as a decorator
+            def register(handler):
+                self.handlers.setdefault(event, []).append(handler)
+                return handler
+            return register
+        self.handlers.setdefault(event, []).append(callback)
+        return callback
+
+    def emit(self, event: str, *args) -> None:
+        for handler in list(self.handlers.get(event, [])):
+            handler(*args)
+
+
+class FakeLocalParticipant:
+    def __init__(self) -> None:
+        self.attributes: dict[str, str] = {}
+
+    async def set_attributes(self, attributes: dict[str, str]) -> None:
+        self.attributes.update(attributes)
+
+
+class FakeRoom(FakeEmitter):
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+        self.local_participant = FakeLocalParticipant()
+
+
+class FakeSession(FakeEmitter):
+    """What run_call uses of LiveKit's AgentSession. Its voice starts `first_words_after` seconds after say()
+    (None: never)."""
+
+    def __init__(self, first_words_after: float | None = 0.05) -> None:
+        super().__init__()
+        self.first_words_after = first_words_after
+        self.started: dict[str, Any] | None = None
+        self.said: list[str] = []
+        self.llm = None
+        self.usage = SimpleNamespace(model_usage=[])
+        self.closed = False
+
+    async def start(self, **kwargs) -> None:
+        self.started = kwargs
+
+    def say(self, text: str) -> None:
+        self.said.append(text)
+        if self.first_words_after is not None:
+            asyncio.get_running_loop().call_later(
+                self.first_words_after, self.emit, "agent_state_changed",
+                SimpleNamespace(old_state="thinking", new_state="speaking"))
+
+    def generate_reply(self, **kwargs) -> None:
+        pass
+
+    def shutdown(self, drain: bool = False) -> None:
+        self.closed = True
+
+
+class FakeCall:
+    """One dispatched call: the job's context, the room, the caller and the session."""
+
+    def __init__(self, people, meta: dict[str, Any], room: str = "call-matt-20261015-090000",
+                 session: FakeSession | None = None) -> None:
+        self.people = people
+        self.room = FakeRoom(room)
+        self.session = session or FakeSession()
+        self.caller = SimpleNamespace(identity=meta.get("person") or "caller", kind=0)
+        self.joined = asyncio.Event()
+        self.shutdown_callbacks: list = []
+        self.shutdown_reason: str | None = None
+        self.deleted = False
+        self.ringing: list[str] = []  # "start", "stop" as the voice server's ringback plays and stops
+        self.job = SimpleNamespace(metadata=json.dumps(meta), room=SimpleNamespace(name=room))
+        self.proc = SimpleNamespace(userdata={"vad": None, "aws": None})
+
+    # ---------- JobContext ----------
+
+    async def connect(self) -> None:
+        pass
+
+    async def wait_for_participant(self):
+        await self.joined.wait()
+        return self.caller
+
+    def add_shutdown_callback(self, callback) -> None:
+        self.shutdown_callbacks.append(callback)
+
+    def shutdown(self, reason: str = "") -> None:
+        self.shutdown_reason = reason
+
+    def delete_room(self):
+        self.deleted = True
+        done = asyncio.get_running_loop().create_future()
+        done.set_result(None)
+        return done
+
+    # ---------- the test's side ----------
+
+    def join(self) -> None:
+        """The caller (the app) is in the room: it started the call, or answered the AI's."""
+        self.joined.set()
+
+    def hang_up(self) -> None:
+        self.room.emit("participant_disconnected", self.caller)
+
+    async def ring_back(self, room) -> None:
+        """voice/ringback.py ring_back, without audio."""
+        self.ringing.append("start")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.ringing.append("stop")
+
+    async def end(self) -> None:
+        """The job ends, as LiveKit ends it: every shutdown callback runs."""
+        for callback in self.shutdown_callbacks:
+            await callback()
+
+
+def use_fakes(monkeypatch, call: FakeCall) -> None:
+    """Points voice/agent.py at the fakes of this call."""
+    from voice import agent
+
+    monkeypatch.setattr(agent, "make_session", lambda ctx, language, voice, rec: call.session)
+    monkeypatch.setattr(agent, "ring_back", call.ring_back)

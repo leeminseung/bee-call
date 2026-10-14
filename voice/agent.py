@@ -248,11 +248,30 @@ def prewarm(proc: JobProcess) -> None:
 server = AgentServer(setup_fnc=prewarm, num_idle_processes=1)
 
 
+def make_session(ctx: JobContext, language: CallLanguage, tts_voice, rec: CallRecorder) -> AgentSession:
+    """The call's speech recognition, model, voice and turn-taking (tests put a stand-in here)."""
+    # Never keys frozen at prewarm: an instance role's keys expire after a few hours.
+    ctx.proc.userdata["transcribe_credentials"] = transcribe_credentials(ctx.proc.userdata["aws"])
+    return AgentSession(
+        stt=aws.STT(region=REGION, language=language.transcribe, credentials=ctx.proc.userdata["transcribe_credentials"]),
+        llm=make_llm(rec),
+        tts=make_tts(tts_voice, language, REGION),
+        vad=ctx.proc.userdata["vad"],
+        # Named rather than left to LiveKit's defaults, which follow the launch mode: `dev` (a Mac) picks LiveKit's
+        # cloud turn detector and adaptive interruptions, `start` (the server) a local model and voice activity only.
+        turn_handling={"turn_detection": inference.TurnDetector(version="v1"), "interruption": {"mode": "adaptive"}},
+    )
+
+
 @server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext) -> None:
+    await run_call(ctx, People())
+
+
+async def run_call(ctx: JobContext, people: People) -> None:
+    """One call, from the dispatch to the AI's first words; the rest runs in the session and its shutdown."""
     meta = call_meta(ctx.job.metadata)
     started = time.monotonic()
-    people = People()
     person = person_for_call(meta, people)
     if person is None:
         log.error("call in room %s is for no approved person (%r); not answering", ctx.room.name, meta.get("person"))
@@ -375,17 +394,7 @@ async def entrypoint(ctx: JobContext) -> None:
             (rec.dir / "prep.md").write_text(f"# Call prep note\n\n{prep.note}\n\nOpening: {prep.opening}\n")
 
     prep_recorder = asyncio.create_task(record_prep())
-    # Never keys frozen at prewarm: an instance role's keys expire after a few hours.
-    ctx.proc.userdata["transcribe_credentials"] = transcribe_credentials(ctx.proc.userdata["aws"])
-    session = AgentSession(
-        stt=aws.STT(region=REGION, language=language.transcribe, credentials=ctx.proc.userdata["transcribe_credentials"]),
-        llm=make_llm(rec),
-        tts=make_tts(tts_voice, language, REGION),
-        vad=ctx.proc.userdata["vad"],
-        # Named rather than left to LiveKit's defaults, which follow the launch mode: `dev` (a Mac) picks LiveKit's
-        # cloud turn detector and adaptive interruptions, `start` (the server) a local model and voice activity only.
-        turn_handling={"turn_detection": inference.TurnDetector(version="v1"), "interruption": {"mode": "adaptive"}},
-    )
+    session = make_session(ctx, language, tts_voice, rec)
 
     async def notify(news: JobNotification) -> None:
         if COORDINATOR_LLM == "echo":
