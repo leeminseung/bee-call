@@ -61,23 +61,25 @@ struct CallScreen: View {
             .buttonStyle(.bordered)
             .disabled(callRecordURL == nil)
 
-            Button {
-                Task {
-                    if calls.isInCall {
-                        await calls.endCall()
-                    } else {
-                        await calls.startCall(tokenServerURL: Server.tokenURL)
+            if let button = CallButton.shown(isRinging: calls.isRinging, isInCall: calls.isInCall) {
+                Button {
+                    Task {
+                        if calls.isInCall {
+                            await calls.endCall()
+                        } else {
+                            await calls.startCall(tokenServerURL: Server.tokenURL)
+                        }
                     }
+                } label: {
+                    Text(button.title)
+                        .font(.title3.bold())
+                        .frame(maxWidth: .infinity)
                 }
-            } label: {
-                Text(calls.isRinging ? "Decline" : calls.isInCall ? "End" : "Call")
-                    .font(.title3.bold())
-                    .frame(maxWidth: .infinity)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(button == .call ? .green : .red)
+                .disabled(calls.isEnding)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .tint(calls.isInCall ? .red : .green)
-            .disabled(calls.isEnding)
         }
         .padding()
         .sheet(isPresented: $showsCallRecord) {
@@ -142,6 +144,23 @@ struct CallScreen: View {
                     .foregroundStyle(.secondary)
                     .padding()
             }
+        }
+    }
+}
+
+/// The big button at the bottom of the call screen.
+enum CallButton: Equatable {
+    case call, end, decline
+
+    static func shown(isRinging: Bool, isInCall: Bool) -> CallButton? {
+        isRinging ? .decline : isInCall ? .end : .call
+    }
+
+    var title: String {
+        switch self {
+        case .call: "Call"
+        case .end: "End"
+        case .decline: "Decline"
         }
     }
 }
