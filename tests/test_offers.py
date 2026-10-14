@@ -223,3 +223,84 @@ def test_a_call_back_the_user_asks_for_is_booked_and_continues_this_call(tmp_pat
     assert "Ask the user for a later time" in asyncio.run(agent.book_call(None, "2020-01-01T08:00", "x"))
     assert "ISO 8601" in asyncio.run(agent.book_call(None, "tomorrow at 8", "x"))
     assert len(OfferStore(workspace).all()) == 1
+
+
+# Regressions from the review on 2026-10-14.
+
+def test_a_call_me_now_that_was_never_placed_closes(tmp_path):
+    store = OfferStore(tmp_path / "workspace")
+    offer, _ = asked(tmp_path)
+    store.answer(offer.id, "now", NOW)  # voice/outbound.py is not running
+    assert store.due(NOW + LATE_BY + timedelta(seconds=1)) == []
+    assert store.get(offer.id).state == "expired"
+
+
+def test_only_one_runner_places_a_call_and_a_call_off_wins(tmp_path):
+    workspace = tmp_path / "workspace"
+    store = OfferStore(workspace)
+    first = store.book("first", datetime.now() - timedelta(seconds=2), datetime.now())
+    second = store.book("second", datetime.now() - timedelta(seconds=1), datetime.now())
+    assert store.claim(first.id, datetime.now()).state == "calling"
+    assert store.claim(first.id, datetime.now()) is None  # a second runner gets nothing
+    placed = []
+
+    async def prepare(plan, extra=None, deadline_s=None):
+        other = second if plan.topic == "first" else first
+        store.answer(other.id, "decline", datetime.now())  # "Call off" while the other call is prepared
+        return Prep()
+
+    async def place(plan, ws, prep=None, continue_from=None, agreed=None):
+        placed.append(plan.topic)
+        return f"room-{len(placed)}"
+
+    store.mark(first.id, "booked", datetime.now())  # back to due for the run below
+    asyncio.run(call_due(workspace, prepare=prepare, place=place))
+    asyncio.run(call_due(workspace, prepare=prepare, place=place))
+    assert len(placed) == 1  # one call; the other was called off before its turn
+    other = second if placed == ["first"] else first
+    assert store.get(other.id).history[-1]["state"] == "declined"
+
+
+def test_no_call_while_another_rings_and_a_new_question_replaces_the_old(tmp_path):
+    from beelink.planner import OUTBOUND_LOG
+
+    workspace = tmp_path / "workspace"
+    store = OfferStore(workspace)
+    offer, plan = asked(tmp_path, now=datetime.now())
+    store.answer(offer.id, "now", datetime.now())
+    log = workspace / OUTBOUND_LOG
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(json.dumps({"at": datetime.now().isoformat(timespec="seconds")}) + "\n")  # an AI call just rang
+
+    async def place(*a, **kw):
+        raise AssertionError("must wait")
+
+    assert asyncio.run(call_due(workspace, place=place)) == [] and store.get(offer.id).state == "now"
+    older = store.ask(plan, NOW)
+    newer = store.ask(plan, NOW + timedelta(minutes=40))
+    assert store.get(older.id).state == "expired" and store.get(newer.id).state == "asked"
+
+
+def test_moving_or_calling_off_a_call_back_in_the_same_call(tmp_path):
+    from types import SimpleNamespace
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    workspace = tmp_path / "workspace"
+    agent = Coordinator(CallRecorder(workspace, room="r"), SimpleNamespace(), workspace)
+    day = (datetime.now() + timedelta(days=1)).replace(second=0, microsecond=0)
+    asyncio.run(agent.book_call(None, day.replace(hour=8, minute=0).isoformat(), "the interview"))
+    said = asyncio.run(agent.book_call(None, day.replace(hour=9, minute=0).isoformat(), "the interview"))
+    assert said.startswith("Moved the call back")
+    states = sorted(o.state for o in OfferStore(workspace).all())
+    assert states == ["booked", "declined"]
+    assert asyncio.run(agent.cancel_call(None)).startswith("Called off")
+    assert sorted(o.state for o in OfferStore(workspace).all()) == ["declined", "declined"]
+    assert asyncio.run(agent.cancel_call(None)).startswith("No call back")
+
+
+def test_looking_ahead_for_booked_calls_does_not_close_questions_early(tmp_path):
+    store = OfferStore(tmp_path / "workspace")
+    offer, _ = asked(tmp_path, now=datetime(2026, 10, 14, 20, 0))  # suggests 21:00
+    store.due(datetime(2026, 10, 14, 20, 59, 45), ahead=timedelta(seconds=30))
+    assert store.answer(offer.id, "later", datetime(2026, 10, 14, 20, 59, 50)).state == "booked"

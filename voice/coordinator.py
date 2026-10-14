@@ -99,6 +99,7 @@ class Coordinator(Agent):
         self._pending_note = pending_note
         self._note_open = pending_note is not None  # until the first reply
         self._note_task: asyncio.Task | None = None
+        self._booked: str | None = None  # the call back booked in this call (book_call), if any
 
     def _with_note(self, note: str | None) -> str:
         if not note:
@@ -307,10 +308,25 @@ class Coordinator(Agent):
             return "That time has passed. Ask the user for a later time."
         if when > now + timedelta(days=7):
             return "Calls can be booked at most a week ahead."
+        store = OfferStore(self._workspace)
+        moved = self._booked is not None and store.mark(self._booked, "declined", now, error="moved to a new time")
         session = f"{self._recorder.dir.parent.name}/{self._recorder.dir.name}"  # the booked call continues this one
-        offer = OfferStore(self._workspace).book(topic.strip() or "a call back", when, now, continue_from=session)
+        offer = store.book(topic.strip() or "a call back", when, now, continue_from=session)
+        self._booked = offer.id  # one call back per call: booking again moves it
         self._recorder.event("call_booked", offer=offer.id, at=offer.call_at, topic=offer.topic)
-        return f"Booked: you will call at {when:%a %b %-d, %-I:%M %p}. Confirm it to the user in a few words."
+        verb = "Moved the call back" if moved else "Booked"
+        return f"{verb}: you will call at {when:%a %b %-d, %-I:%M %p}. Confirm it to the user in a few words."
+
+    @function_tool
+    async def cancel_call(self, context: RunContext) -> str:
+        """Call off the call back booked in this call, when the user no longer wants it."""
+        offer = OfferStore(self._workspace).get(self._booked) if self._booked else None
+        if offer is None or offer.state != "booked":
+            return "No call back is booked in this call."
+        OfferStore(self._workspace).mark(offer.id, "declined", datetime.now(), error="called off in the call")
+        self._booked = None
+        self._recorder.event("call_cancelled", offer=offer.id)
+        return "Called off. Tell the user in a few words."
 
     @function_tool
     async def end_call(self, context: RunContext) -> str:

@@ -16,10 +16,13 @@ voice/token_server.py takes the app's answers (POST /offers/<id>) and lists open
 voice/outbound.py sends new offers and places the calls that are due.
 """
 
+import fcntl
 import json
 import os
 import re
 import secrets
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -82,20 +85,33 @@ def _iso(moment: datetime) -> str:
 
 
 class OfferStore:
+    """The offer files. The token server and voice/outbound.py are separate processes that both change them, so
+    every change re-reads the file under one lock (offers/.lock), and a call is placed only after claim() moved
+    its offer to "calling" (a second runner, or a "Call off" that came in meanwhile, makes the claim fail)."""
+
     def __init__(self, workspace: Path) -> None:
         self.dir = workspace / OFFERS_DIR
+
+    @contextmanager
+    def _lock(self) -> Iterator[None]:
+        self.dir.mkdir(parents=True, exist_ok=True)
+        with open(self.dir / ".lock", "w") as handle:  # flock is per open file: never nest these
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
     def _path(self, offer_id: str) -> Path:
         if not OFFER_ID.fullmatch(offer_id or ""):
             raise KeyError(offer_id)
         return self.dir / f"{offer_id}.json"
 
-    def save(self, offer: Offer) -> Offer:
-        self.dir.mkdir(parents=True, exist_ok=True)
+    def _save(self, offer: Offer) -> Offer:
         path = self._path(offer.id)
-        tmp = path.with_suffix(".tmp")
+        tmp = path.with_name(f".{offer.id}.{os.getpid()}.{secrets.token_hex(3)}.tmp")
         tmp.write_text(json.dumps(asdict(offer), ensure_ascii=False, indent=1))
-        tmp.replace(path)  # the token server and voice/outbound.py both write; never leave half a file
+        tmp.replace(path)  # readers never see half a file
         return offer
 
     def get(self, offer_id: str) -> Offer | None:
@@ -113,22 +129,43 @@ class OfferStore:
     def _new_id(self, now: datetime) -> str:
         return f"{now:%Y%m%d-%H%M%S}-{secrets.token_hex(2)}"
 
-    def mark(self, offer: Offer, state: str, now: datetime, **changes: Any) -> Offer:
+    @staticmethod
+    def _set(offer: Offer, state: str, now: datetime, **changes: Any) -> Offer:
         for key, value in changes.items():
             setattr(offer, key, value)
         offer.state = state
         offer.history.append({"at": _iso(now), "state": state})
-        return self.save(offer)
+        return offer
+
+    def mark(self, offer_id: str, state: str, now: datetime, **changes: Any) -> Offer | None:
+        """Sets an offer's state on the latest copy of its file."""
+        with self._lock():
+            offer = self.get(offer_id)
+            return self._save(self._set(offer, state, now, **changes)) if offer else None
+
+    def claim(self, offer_id: str, now: datetime) -> Offer | None:
+        """Moves a due offer to "calling" if it is still due; None if it changed meanwhile (called off, or claimed
+        by another runner). Only the claimant places the call."""
+        with self._lock():
+            offer = self.get(offer_id)
+            if offer is None or offer.state not in ("now", "booked"):
+                return None
+            return self._save(self._set(offer, "calling", now))
 
     def ask(self, plan: Plan, now: datetime, at: str | None = None) -> Offer:
-        """A plan the planner wants to call about becomes a question."""
+        """A plan the planner wants to call about becomes a question. An older question still unanswered is
+        closed: the newer one is about the user's latest day, and two would ring at the same suggested time."""
         suggested = call_time(now, at)
         offer = Offer(id=self._new_id(now), state="asked", reason=plan.reason, topic=plan.topic, kind=plan.kind,
                       suggested_at=_iso(suggested), expires_at=_iso(suggested),
                       inbox=str(plan.inbox_dir) if plan.inbox_dir else None,
                       plan=str(plan.path) if plan.path else None, conversation_ids=list(plan.conversation_ids),
                       history=[{"at": _iso(now), "state": "asked"}])
-        return self.save(offer)
+        with self._lock():
+            for older in self.all():
+                if older.state == "asked":
+                    self._save(self._set(older, "expired", now, error="replaced by a newer question"))
+            return self._save(offer)
 
     def book(self, topic: str, call_at: datetime, now: datetime, continue_from: str | None = None) -> Offer:
         """A call the user asked for out loud, such as "call me tomorrow at 8"."""
@@ -136,43 +173,52 @@ class OfferStore:
                       reason=f"In a call at {now:%H:%M}, the user asked to be called back: {topic}",
                       call_at=_iso(call_at), continue_from=continue_from,
                       history=[{"at": _iso(now), "state": "booked"}])
-        return self.save(offer)
+        with self._lock():
+            return self._save(offer)
 
     def answer(self, offer_id: str, choice: str, now: datetime) -> Offer:
         """The user's answer from a notification button or the app. KeyError: no such offer. ValueError: the
         offer is no longer waiting for an answer, or the choice is unknown."""
         if choice not in ANSWERS:
             raise ValueError(f"choice must be one of {', '.join(ANSWERS)}")
-        self.expire(now)
-        offer = self.get(offer_id)
-        if offer is None:
-            raise KeyError(offer_id)
-        if offer.state == "booked" and choice == "decline":  # a booked call can still be called off
-            return self.mark(offer, "declined", now)
-        if offer.state != "asked":
-            raise ValueError(f"the offer is {offer.state}")
-        state = ANSWERS[choice]
-        call_at = {"now": _iso(now), "booked": offer.suggested_at}.get(state)
-        return self.mark(offer, state, now, call_at=call_at)
+        with self._lock():
+            self._expire(now)
+            offer = self.get(offer_id)
+            if offer is None:
+                raise KeyError(offer_id)
+            if offer.state == "booked" and choice == "decline":  # a booked call can still be called off
+                return self._save(self._set(offer, "declined", now))
+            if offer.state != "asked":
+                raise ValueError(f"the offer is {offer.state}")
+            state = ANSWERS[choice]
+            call_at = {"now": _iso(now), "booked": offer.suggested_at}.get(state)
+            return self._save(self._set(offer, state, now, call_at=call_at))
 
-    def expire(self, now: datetime) -> None:
+    def _expire(self, now: datetime) -> None:
         for offer in self.all():
-            if offer.state == "asked" and offer.at("expires_at") and now >= offer.at("expires_at"):
-                self.mark(offer, "expired", now)
-            elif offer.state == "booked" and offer.at("call_at") and now > offer.at("call_at") + LATE_BY:
-                self.mark(offer, "expired", now, error="the booked time passed before it could be called")
+            call_at, expires_at = offer.at("call_at"), offer.at("expires_at")
+            if offer.state == "asked" and expires_at and now >= expires_at:
+                self._save(self._set(offer, "expired", now))
+            elif offer.state in ("now", "booked") and call_at and now > call_at + LATE_BY:
+                self._save(self._set(offer, "expired", now, error="the call could not be placed in time"))
             elif offer.state == "calling" and offer.history and \
                     now - datetime.fromisoformat(offer.history[-1]["at"]) > STUCK:
-                self.mark(offer, "failed", now, error="placing the call did not finish")
+                self._save(self._set(offer, "failed", now, error="placing the call did not finish"))
+
+    def expire(self, now: datetime) -> None:
+        with self._lock():
+            self._expire(now)
 
     def open(self, now: datetime) -> list[Offer]:
         self.expire(now)
         return [o for o in self.all() if o.state in OPEN]
 
-    def due(self, now: datetime) -> list[Offer]:
-        """Offers to call now: the user tapped "Call me now", or a booked time has come."""
+    def due(self, now: datetime, ahead: timedelta = timedelta(0)) -> list[Offer]:
+        """Offers to call: the user tapped "Call me now", or a booked time is at most `ahead` away. Closing
+        offers uses `now`, so an answer in the last seconds before the suggested time still counts."""
         self.expire(now)
-        return [o for o in self.all() if o.state in ("now", "booked") and o.at("call_at") and o.at("call_at") <= now]
+        until = now + ahead
+        return [o for o in self.all() if o.state in ("now", "booked") and o.at("call_at") and o.at("call_at") <= until]
 
 
 def plan_of(offer: Offer) -> Plan:

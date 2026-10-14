@@ -27,11 +27,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from beelink.planner import COOLDOWN, MAX_AGE, RulePlanner
+from beelink.planner import COOLDOWN, MAX_AGE, RulePlanner, call_in_progress, last_outbound
 from beelink.watcher import BeeWatcher, Trigger
 from voice import voip_push
 from voice.continuation import earlier_call
-from voice.dispatch import place_call
+from voice.dispatch import RING_SECONDS, place_call
 from voice.language import call_language
 from voice.offers import OPEN, Offer, OfferStore, agreed, notification, plan_of
 from voice.prep import NOTE_SECONDS, OPENING_BY_S, prepare_outbound
@@ -78,14 +78,26 @@ async def send_offer(offer: Offer, workspace: Path, now: datetime) -> None:
     print(f"asked: offer {offer.id}, {payload['aps']['alert']['body']!r} ({note})", flush=True)
 
 
+def busy(workspace: Path, now: datetime) -> bool:
+    """A call is going on, or an AI call was placed so recently that it may still be ringing."""
+    placed = last_outbound(workspace)
+    return call_in_progress(workspace, now) or (
+        placed is not None and timedelta(0) <= now - placed < timedelta(seconds=RING_SECONDS + 30))
+
+
 async def call_due(workspace: Path, now: datetime | None = None, prepare=prepare_outbound, place=place_call) -> list[str]:
-    """Places the calls the user said yes to: "Call me now", an accepted time that has come (prepared up to
-    BOOKED_AHEAD early), or a time booked in a call. Returns the rooms."""
-    store, rooms = OfferStore(workspace), []
+    """Places a call the user said yes to: "Call me now", an accepted time that has come (prepared up to
+    BOOKED_AHEAD early), or a time booked in a call. One call per round, and none while another call is going on
+    or ringing; the others wait for a later round and close if they are more than LATE_BY late. Returns the
+    room, or nothing."""
+    store = OfferStore(workspace)
     now = now or datetime.now()
-    for offer in store.due(now + BOOKED_AHEAD):
+    for offer in store.due(now, ahead=BOOKED_AHEAD):
+        if busy(workspace, now):
+            return []
         right_now = offer.state == "now"
-        store.mark(offer, "calling", now)
+        if store.claim(offer.id, now) is None:  # called off meanwhile, or another runner has it
+            continue
         try:
             extra = {"agreed": agreed(offer)}
             if offer.continue_from:
@@ -98,13 +110,13 @@ async def call_due(workspace: Path, now: datetime | None = None, prepare=prepare
             room = await place(plan, workspace, prep=prep.to_meta(), continue_from=offer.continue_from,
                                agreed=extra["agreed"])
         except Exception as exc:
-            store.mark(offer, "failed", datetime.now(), error=f"{type(exc).__name__}: {exc}"[:300])
+            store.mark(offer.id, "failed", datetime.now(), error=f"{type(exc).__name__}: {exc}"[:300])
             log.exception("could not place the call for offer %s", offer.id)
             continue
-        store.mark(offer, "called", datetime.now(), room=room)
+        store.mark(offer.id, "called", datetime.now(), room=room)
         print(f"calling for offer {offer.id}: room {room}", flush=True)
-        rooms.append(room)
-    return rooms
+        return [room]
+    return []
 
 
 async def serve_offers(workspace: Path, until: str | None = None) -> None:

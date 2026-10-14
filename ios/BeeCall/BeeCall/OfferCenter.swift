@@ -35,6 +35,9 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
 
     private(set) var open: [Offer] = []
     private(set) var notificationsOn = false
+    private(set) var notice: String? // one line under the list when an answer did not go through
+    @ObservationIgnored private var deviceToken: String?
+    @ObservationIgnored private var tokenSent = false
 
     // The buttons. Two sets of titles, picked by the Mac's call language (CALL_LANGUAGE).
     private static let categories: Set<UNNotificationCategory> = [
@@ -65,36 +68,68 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
 
     /// iOS's token for plain notifications (not the VoIP one), handed on by the app delegate.
     func register(deviceToken: Data) {
-        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
-        Task {
-            guard let url = endpoint("/push") else { return }
-            var request = URLRequest(url: url, timeoutInterval: 10)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            // Builds run from Xcode get pushes from Apple's development service, like the VoIP push.
-            request.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token, "environment": "development"])
-            _ = try? await URLSession.shared.data(for: request)
-        }
+        self.deviceToken = deviceToken.map { String(format: "%02x", $0) }.joined()
+        tokenSent = false
+        Task { await sendToken() }
+    }
+
+    /// Sent at launch, and again on each refresh until the token server has it (it may be off at launch).
+    private func sendToken() async {
+        guard let token = deviceToken, !tokenSent, let url = endpoint("/push") else { return }
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Builds run from Xcode get pushes from Apple's development service, like the VoIP push.
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token, "environment": "development"])
+        let response = try? await URLSession.shared.data(for: request)
+        tokenSent = (response?.1 as? HTTPURLResponse)?.statusCode == 204
     }
 
     func refresh() async {
+        await sendToken()
         guard let url = endpoint("/offers"),
               let (data, response) = try? await URLSession.shared.data(from: url),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return }
         struct Listing: Decodable { let offers: [Offer] }
-        if let listing = try? JSONDecoder().decode(Listing.self, from: data), listing.offers != open {
-            open = listing.offers
+        guard let listing = try? JSONDecoder().decode(Listing.self, from: data) else { return }
+        if listing.offers != open { open = listing.offers }
+        Self.clearClosed(keeping: Set(listing.offers.map(\.id)))
+    }
+
+    /// Takes away notifications whose offer has closed, so no button is left that can only fail.
+    private nonisolated static func clearClosed(keeping openIDs: Set<String>) {
+        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
+            let closed = delivered.filter { note in
+                (note.request.content.userInfo["offer"] as? String).map { !openIDs.contains($0) } ?? false
+            }.map(\.request.identifier)
+            if !closed.isEmpty { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: closed) }
         }
     }
 
-    func answer(_ offerID: String, _ choice: Choice) async {
-        guard let url = endpoint("/offers/\(offerID)") else { return }
+    /// Sends the answer; false when the token server refused it (the offer had closed) or could not be reached.
+    @discardableResult
+    func answer(_ offerID: String, _ choice: Choice) async -> Bool {
+        guard let url = endpoint("/offers/\(offerID)") else { return false }
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["choice": choice.rawValue])
-        _ = try? await URLSession.shared.data(for: request)
+        let response = try? await URLSession.shared.data(for: request)
+        let code = (response?.1 as? HTTPURLResponse)?.statusCode
+        let accepted = code == 200
+        notice = accepted ? nil : code == nil ? "Couldn't reach your Mac. Try again from here."
+            : "That offer has closed. You can call Bee Call any time."
         await refresh()
+        return accepted
+    }
+
+    /// After a button on a notification did not go through: say so, since the notification itself is gone.
+    private func tellAnswerFailed() async {
+        let content = UNMutableNotificationContent()
+        content.title = "Bee Call"
+        content.body = notice ?? "That answer did not go through."
+        try? await UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "answer-failed", content: content, trigger: nil))
     }
 
     private func endpoint(_ path: String) -> URL? {
@@ -115,7 +150,8 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         let offerID = response.notification.request.content.userInfo["offer"] as? String
         guard let offerID else { return }
         if let choice = Choice(rawValue: action) {
-            await answer(offerID, choice) // iOS keeps the app running until this returns
+            // iOS keeps the app running until this returns.
+            if await !answer(offerID, choice) { await tellAnswerFailed() }
         } else {
             await refresh() // the notification itself was tapped: the app opens on the offer list
         }
@@ -144,12 +180,17 @@ struct OfferList: View {
     let offers: OfferCenter
 
     var body: some View {
-        if !offers.open.isEmpty {
+        if !offers.open.isEmpty || offers.notice != nil {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(offers.open) { offer in
                     OfferRow(offer: offer) { choice in
                         Task { await offers.answer(offer.id, choice) }
                     }
+                }
+                if let notice = offers.notice {
+                    Text(notice)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
