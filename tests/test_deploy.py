@@ -108,12 +108,14 @@ def test_the_env_file_gives_the_services_exactly_the_values_in_ssm():
     assert quoted("$x") == '"\\$x"'
 
 
-def test_the_server_never_takes_a_profile_static_keys_or_the_dev_person_from_ssm():
+def test_the_server_never_takes_a_profile_static_keys_the_dev_person_or_what_its_units_set_from_ssm():
     params = {"AWS_PROFILE": "bee-call", "AWS_ACCESS_KEY_ID": "AKIA", "BEE_CALL_DEV_PERSON": "matt",
-              "APNS_KEY_PATH": "/Users/me/AuthKey.p8", "TWO_LINES": "a\nb", "TTS": "elevenlabs"}
+              "APNS_KEY_PATH": "/Users/me/AuthKey.p8", "LIVEKIT_AGENT_NAME": "bee-call-dev", "BEE_CALL_DATA": "data",
+              "TWO_LINES": "a\nb", "TTS": "elevenlabs"}
     text, skipped = env_file(params)
     assert systemd_env(text) == {"TTS": "elevenlabs"}
-    assert set(skipped) == {"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "BEE_CALL_DEV_PERSON", "APNS_KEY_PATH", "TWO_LINES"}
+    assert set(skipped) == {"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "BEE_CALL_DEV_PERSON", "APNS_KEY_PATH",
+                            "LIVEKIT_AGENT_NAME", "BEE_CALL_DATA", "TWO_LINES"}
 
 
 # ---------- Caddy ----------
@@ -139,8 +141,8 @@ def test_secrets_copy_this_macs_settings_except_its_own():
     local = {"LIVEKIT_URL": "wss://bee-call.livekit.cloud", "LIVEKIT_API_SECRET": "s3cret", "TTS": "elevenlabs",
              "AWS_PROFILE": "bee-call", "APNS_KEY_PATH": "/Users/me/AuthKey.p8", "LIVEKIT_AGENT_NAME": "bee-call-dev",
              "BEE_CALL_DEV_PERSON": "matt", "ELEVENLABS_VOICE": "", "COORDINATOR_LLM": "claude"}
-    chosen, skipped = server_settings(local, ("arn:aws:bedrock-agentcore:ap-southeast-2:1:harness/w", "data/harness.json"),
-                                      extra={"CALL_LANGUAGE": "ko"})
+    harness = ("arn:aws:bedrock-agentcore:ap-southeast-2:1:harness/w", "data/harness.json")
+    chosen, skipped = server_settings(local, harness, extra={"CALL_LANGUAGE": "ko"})
     assert {name: value for name, (value, _) in chosen.items()} == {
         "LIVEKIT_URL": "wss://bee-call.livekit.cloud", "LIVEKIT_API_SECRET": "s3cret", "TTS": "elevenlabs",
         "COORDINATOR_LLM": "claude", "WORKER_HARNESS_ARN": "arn:aws:bedrock-agentcore:ap-southeast-2:1:harness/w",
@@ -239,11 +241,15 @@ def unit(name: str) -> list[str]:
 def test_every_service_runs_unprivileged_in_seoul_time_with_the_settings_from_ssm(name):
     lines = unit(name)
     for expected in ["User=bee-call", "Restart=always", "EnvironmentFile=/run/bee-call/env",
-                     "Requires=bee-call-env.service", "Environment=TZ=Asia/Seoul",
+                     "After=bee-call-env.service network-online.target", "Environment=TZ=Asia/Seoul",
                      "Environment=BEE_CALL_DATA=/var/lib/bee-call", "WorkingDirectory=/opt/bee-call/app"]:
         assert expected in lines, f"{name}: {expected}"
     assert next(line for line in lines if line.startswith("ExecStart=")).startswith(
         "ExecStart=/opt/bee-call/app/.venv/bin/python -m ")
+    # Wants, not Requires: a failed settings read must not keep a service down, since Restart= never retries a
+    # failed dependency. The settings unit tries again by itself instead.
+    assert not any(line.startswith(("Requires=", "BindsTo=")) for line in lines)
+    assert "Restart=on-failure" in unit("bee-call-env")
 
 
 def test_the_voice_server_finishes_calls_before_it_stops_and_registers_as_bee_call():

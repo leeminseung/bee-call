@@ -2,9 +2,8 @@
 # Caddy serves it as https://<hostname>/.
 [Unit]
 Description=Bee Call token server (127.0.0.1:8787, https on 443)
-Requires=bee-call-env.service
+Wants=bee-call-env.service network-online.target
 After=bee-call-env.service network-online.target
-Wants=network-online.target
 
 [Service]
 User=bee-call

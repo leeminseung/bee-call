@@ -11,6 +11,12 @@
       ]
     },
     {
+      "Sid": "WebSearchThroughNovaWebGrounding",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeTool",
+      "Resource": "arn:aws:bedrock::515927224114:system-tool/amazon.nova_grounding"
+    },
+    {
       "Sid": "BackgroundWorker",
       "Effect": "Allow",
       "Action": "bedrock-agentcore:InvokeHarness",

@@ -11,10 +11,20 @@ REPO=git@github.com:leeminseung/bee-call.git
 APP=/opt/bee-call/app
 KNOWN_HOSTS=/etc/bee-call/github-known-hosts
 
+retry() {  # at first boot the Elastic IP replaces the instance's first public address, which can cut a download
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        "$@" && return 0
+        echo "failed: $*; trying again in $((attempt * 5)) s" >&2
+        sleep $((attempt * 5))
+    done
+    return 1
+}
+
 # The code uses this machine's local time for session folder names, quiet hours and call times; the users are
 # in Korea. The services also get TZ=Asia/Seoul from their units.
 timedatectl set-timezone Asia/Seoul
-command -v git >/dev/null || dnf install -y git
+command -v git >/dev/null || retry dnf install -y git
 
 install -d -m 0755 /etc/bee-call /opt/bee-call
 # GitHub's SSH host keys as https://api.github.com/meta lists them, so the first connection trusts no one blindly.
@@ -27,14 +37,18 @@ EOF
 # file keeps it and replacing it in SSM rotates it.
 KEY=$(mktemp -p /run bee-call-deploy-key.XXXXXX)
 trap 'rm -f "$KEY"' EXIT
-aws ssm get-parameter --region "$REGION" --name /bee-call/github-deploy-key --with-decryption \
-    --query Parameter.Value --output text > "$KEY"
-export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes"
+read_key() {
+    aws ssm get-parameter --region "$REGION" --name /bee-call/github-deploy-key --with-decryption \
+        --query Parameter.Value --output text > "$KEY"
+}
+retry read_key
+SSH_OPTIONS="-o IdentitiesOnly=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes"
+export GIT_SSH_COMMAND="ssh -i $KEY $SSH_OPTIONS"
 
 if [ -d "$APP/.git" ]; then
-    git -C "$APP" pull --ff-only
+    retry git -C "$APP" pull --ff-only
 else
-    git clone --branch main "$REPO" "$APP"
+    retry git clone --branch main "$REPO" "$APP"
 fi
 rm -f "$KEY"
 exec "$APP/deploy/install.sh"

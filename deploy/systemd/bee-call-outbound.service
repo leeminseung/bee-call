@@ -2,9 +2,8 @@
 # (voice/outbound.py). The watcher's `bee stream` runs as a child of this service.
 [Unit]
 Description=Bee Call between calls (Bee watcher, meta agent, offers)
-Requires=bee-call-env.service
+Wants=bee-call-env.service network-online.target
 After=bee-call-env.service network-online.target
-Wants=network-online.target
 
 [Service]
 User=bee-call

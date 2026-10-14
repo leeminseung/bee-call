@@ -33,9 +33,10 @@ SERVICE_GROUP = "bee-call"
 ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 HOSTNAME = re.compile(r"(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])")
 # Never taken from SSM: a profile or static keys would replace the instance role, the APNs key path is this
-# server's own file, and BEE_CALL_DEV_PERSON lets requests in without signing in, which only a Mac may allow.
+# server's own file, BEE_CALL_DEV_PERSON lets requests in without signing in, which only a Mac may allow, and the
+# units set the rest themselves; this file would override them (a Mac's agent name would share its calls).
 REFUSED = {"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "APNS_KEY_PATH",
-           "BEE_CALL_DEV_PERSON"}
+           "BEE_CALL_DEV_PERSON", "LIVEKIT_AGENT_NAME", "BEE_CALL_DATA", "BEE_BIN", "TZ", "TOKEN_SERVER_PORT"}
 
 
 def quoted(value: str) -> str:
@@ -51,7 +52,7 @@ def env_file(params: Mapping[str, str], apns_key: Path | None = None) -> tuple[s
         if not ENV_NAME.fullmatch(name):
             continue  # a file, such as apns-key
         if name in REFUSED:
-            skipped[name] = "never set on the server"
+            skipped[name] = "never taken from SSM"
         elif any(ch in value for ch in "\n\r\0"):
             skipped[name] = "not one line"
         else:

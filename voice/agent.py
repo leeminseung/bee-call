@@ -221,7 +221,7 @@ async def read_by(task: asyncio.Task, seconds: float) -> CallInputs | None:
 def prewarm(proc: JobProcess) -> None:
     # Done once per worker process, before any call, so calls start without a stall.
     proc.userdata["vad"] = silero.VAD.load()
-    proc.userdata["aws"] = aws_session() if PROFILE else None  # a Mac's profile; none on EC2, see transcribe_credentials
+    proc.userdata["aws"] = aws_session() if PROFILE else None  # none on EC2, see transcribe_credentials
     if proc.userdata["aws"] is not None:
         proc.userdata["aws"].get_credentials()  # read the profile now rather than at the first call
 

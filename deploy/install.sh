@@ -30,7 +30,7 @@ installed() {  # sha256 file: whether the file is already there with that conten
 }
 
 download() {  # url sha256 file
-    curl -fsSL --retry 3 -o "$3" "$1"
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o "$3" "$1"  # also through a dropped connection
     check "$2" "$3"
 }
 
@@ -75,12 +75,16 @@ trap 'rm -rf "$tmp"' EXIT
 if [ "$("$BIN/uv" --version 2>/dev/null | cut -d' ' -f2)" != "$UV_VERSION" ]; then
     download "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-installer.sh" \
         "$UV_INSTALLER_SHA256" "$tmp/uv-installer.sh"
-    UV_UNMANAGED_INSTALL="$BIN" sh "$tmp/uv-installer.sh"
+    for attempt in 1 2 3; do  # it downloads uv itself, without retries
+        UV_UNMANAGED_INSTALL="$BIN" sh "$tmp/uv-installer.sh" && break
+        [ "$attempt" = 3 ] && exit 1
+        sleep 10
+    done
 fi
 
 if ! installed "$CADDY_SHA256" "$BIN/caddy"; then
-    download "https://github.com/caddyserver/caddy/releases/download/v$CADDY_VERSION/caddy_${CADDY_VERSION}_linux_arm64.tar.gz" \
-        "$CADDY_TARBALL_SHA256" "$tmp/caddy.tar.gz"
+    release="https://github.com/caddyserver/caddy/releases/download/v$CADDY_VERSION"
+    download "$release/caddy_${CADDY_VERSION}_linux_arm64.tar.gz" "$CADDY_TARBALL_SHA256" "$tmp/caddy.tar.gz"
     tar -xzf "$tmp/caddy.tar.gz" -C "$tmp" caddy
     check "$CADDY_SHA256" "$tmp/caddy"
     install -m 0755 "$tmp/caddy" "$BIN/caddy"
@@ -101,7 +105,11 @@ export UV_PYTHON_INSTALL_DIR=/opt/bee-call/python UV_CACHE_DIR=/var/cache/bee-ca
 install -m 0644 deploy/systemd/*.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable "${SERVICES[@]}"
-echo "restarting the services; the voice server first lets calls in progress end (up to 10 minutes)"
-systemctl restart "${SERVICES[@]}"
+# The settings first (this stops the update if SSM cannot be read), then the quick services, and the voice server
+# last: it lets calls in progress end first (up to 10 minutes), while the app can already reach the others.
+systemctl restart bee-call-env
+systemctl restart bee-call-token bee-call-session bee-call-outbound
+echo "restarting the voice server; calls in progress end first (up to 10 minutes)"
+systemctl restart bee-call-agent
 caddy_config
 echo "running $(git -C "$APP" log -1 --format='%h %s')"

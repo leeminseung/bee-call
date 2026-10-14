@@ -17,6 +17,7 @@ name and length, never by value. Commands on the server go through SSM Run Comma
 
 import argparse
 import base64
+import functools
 import json
 import shlex
 import sys
@@ -25,14 +26,15 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 
+import boto3
 from botocore.exceptions import ClientError, WaiterError
 from dotenv import dotenv_values
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 from deploy.config import ENV_NAME, HOST_PARAMETER, HOSTNAME, PREFIX, REFUSED  # noqa: E402
-from voice.aws_session import aws_session  # noqa: E402
 
+PROFILE = "bee-call"  # always this one, even with another AWS_PROFILE exported in the shell
 REGION = "ap-southeast-2"
 NAME = "bee-call-server"  # the instance's Name tag, its security group, and its IAM role and instance profile
 TAGS = [{"Key": "Name", "Value": NAME}, {"Key": "Project", "Value": "bee-call"}]
@@ -80,7 +82,8 @@ for unit in bee-call-env bee-call-token bee-call-session bee-call-agent bee-call
     printf '  %-18s %-9s %-8s %s\n' "$unit" "$state" "$sub" "$mem"
 done
 echo "voice server: $(curl -s --max-time 3 http://127.0.0.1:8081/worker || echo 'no answer on :8081')"
-free -m | awk 'NR==2 {printf "memory: %s MiB used of %s, %s available\n", $3, $2, $7} NR==3 {printf "swap: %s MiB used of %s\n", $3, $2}'
+free -m | awk 'NR==2 {printf "memory: %s MiB used of %s, %s available\n", $3, $2, $7}
+              NR==3 {printf "swap: %s MiB used of %s\n", $3, $2}'
 df -h / | awk 'NR==2 {print "disk: " $3 " used of " $2}'
 """
 
@@ -166,12 +169,14 @@ def remote_commands(script: str, chunk: int = 2000) -> list[str]:
 
 # ---------- AWS ----------
 
-def session():
-    return aws_session(region_name=REGION)
+@functools.cache
+def session() -> boto3.Session:
+    return boto3.Session(profile_name=PROFILE, region_name=REGION)
 
 
 def confirm(plan: list[str], yes: bool) -> bool:
-    print("Plan:")
+    account = session().client("sts").get_caller_identity()["Account"]
+    print(f"Plan, in AWS account {account} (profile {PROFILE}, {REGION}):")
     for step in plan:
         print(f"  - {step}")
     if not yes:
@@ -334,8 +339,9 @@ def cmd_up(args) -> None:
     if not confirm(plan, args.yes):
         return
     if not group:
-        group = ec2.create_security_group(GroupName=NAME, VpcId=vpc, Description="Bee Call server: HTTPS and ACME",
-                                          TagSpecifications=[{"ResourceType": "security-group", "Tags": TAGS}])["GroupId"]
+        group = ec2.create_security_group(
+            GroupName=NAME, VpcId=vpc, Description="Bee Call server: HTTPS and ACME",
+            TagSpecifications=[{"ResourceType": "security-group", "Tags": TAGS}])["GroupId"]
         ec2.authorize_security_group_ingress(GroupId=group, IpPermissions=[
             {"IpProtocol": "tcp", "FromPort": port, "ToPort": port,
              "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "Bee Call"}]} for port in PORTS])

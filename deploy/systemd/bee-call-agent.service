@@ -3,9 +3,8 @@
 # (num_idle_processes=1 in voice/agent.py) and starts another for each call.
 [Unit]
 Description=Bee Call voice server (LiveKit worker bee-call)
-Requires=bee-call-env.service
+Wants=bee-call-env.service network-online.target
 After=bee-call-env.service network-online.target
-Wants=network-online.target
 
 [Service]
 User=bee-call

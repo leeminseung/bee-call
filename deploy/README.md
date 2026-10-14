@@ -6,7 +6,7 @@ One EC2 instance in Sydney (`ap-southeast-2`) runs the four Bee Call processes b
 
 | Part | Where | How it is reached |
 |---|---|---|
-| Token server (`voice/token_server.py`) | EC2, `bee-call-token.service`, 127.0.0.1:8787 | `https://<hostname>/` through Caddy |
+| Token server (`voice/token_server.py`) | EC2, `bee-call-token.service`, port 8787 | `https://<hostname>/` through Caddy |
 | Session screen (`voice/session_server.py`) | EC2, `bee-call-session.service`, 127.0.0.1:8788 | `https://<hostname>:8443/` through Caddy |
 | Voice server (`voice/agent.py start`) | EC2, `bee-call-agent.service` | LiveKit Cloud dispatches calls to the worker named `bee-call` |
 | Between calls (`voice/outbound.py`) | EC2, `bee-call-outbound.service` | outbound only: Bee CLI, Bedrock, APNs, LiveKit |
@@ -15,7 +15,7 @@ One EC2 instance in Sydney (`ap-southeast-2`) runs the four Bee Call processes b
 | Call media | LiveKit Cloud | the phone and the voice server connect to it directly |
 | Background jobs | AgentCore Harness in Sydney, as before | the voice server invokes it |
 
-Routing: port 443 goes to the token server and port 8443 to the session screen, both on one hostname with one Let's Encrypt certificate. Port 80 answers Let's Encrypt's HTTP challenge and redirects everything else to `https://<hostname>/`. Caddy forwards every write at once (`flush_interval -1`), so the ring stream and a call's live events are not held back. HTTP/3 is off because the security group opens TCP only.
+Routing: port 443 goes to the token server and port 8443 to the session screen, both on one hostname with one Let's Encrypt certificate. Port 80 answers Let's Encrypt's HTTP challenge and redirects everything else to `https://<hostname>/`. Caddy forwards every write at once (`flush_interval -1`), so the ring stream and a call's live events are not held back. HTTP/3 is off because the security group opens TCP only. The security group opens 80, 443 and 8443 and nothing else: the token server (8787) and the voice server's health check (8081) listen on every interface of the instance, since their code does not take an address, but nothing outside reaches them.
 
 The four services run as the system user `bee-call` with `Restart=always`, log to journald, and get `TZ=Asia/Seoul` (the system clock is set to Seoul too, because the code names session folders and times offers by local time). Their settings come from `/run/bee-call/env`, which `bee-call-env.service` writes at every boot from SSM (root only, mode 0600, in memory). The voice server keeps one idle job process (`num_idle_processes=1` in `voice/agent.py`); on stop it takes no new calls and lets calls in progress end, for up to 10 minutes.
 
@@ -47,10 +47,12 @@ These steps need you, once.
      --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
    aws iam create-instance-profile --instance-profile-name bee-call-server
    aws iam add-role-to-instance-profile --instance-profile-name bee-call-server --role-name bee-call-server
-   aws iam put-user-policy --user-name bee-call-dev --policy-name bee-call-deployer \
-     --policy-document file://deploy/iam/deployer-policy.json
+   aws iam create-policy --policy-name bee-call-deployer --policy-document file://deploy/iam/deployer-policy.json
+   aws iam attach-user-policy --user-name bee-call-dev \
+     --policy-arn arn:aws:iam::515927224114:policy/bee-call-deployer
    ```
-   `server-role-policy.json` allows Bedrock models, the AgentCore harness, Transcribe, Polly and reading `/bee-call/*`. If the web search answers AccessDenied, Nova Web Grounding wants one more action in the role; add the one the error names.
+   If the role and its instance profile exist already, skip `create-role`, `create-instance-profile` and `add-role-to-instance-profile`.
+   `server-role-policy.json` allows Bedrock models, Nova Web Grounding (the worker's web search, which needs `bedrock:InvokeTool` besides the model), the AgentCore harness, Transcribe, Polly and reading `/bee-call/*`. The deploying user's permissions go in a managed policy, because IAM allows a user only 2,048 characters of inline policies.
 4. **Buy the domain in Route 53.** Registering it there creates the hosted zone that `dns` writes to. The hostname can be the domain or a name under it.
 
 ## First deployment
@@ -82,7 +84,7 @@ Then point the app at the server: the server address is `https://<hostname>` and
 uv run python scripts/deploy_server.py ship --yes
 ```
 
-`ship` runs `deploy/bootstrap.sh` on the instance: it pulls `main` from GitHub, and `deploy/install.sh` updates the pinned tools if their versions changed, runs `uv sync --locked`, installs the units and restarts the services. Push first: the instance deploys what is on GitHub. After `secrets --yes`, `ship --yes` makes the services read the new settings.
+`ship` runs `deploy/bootstrap.sh` on the instance: it pulls `main` from GitHub, and `deploy/install.sh` updates the pinned tools if their versions changed, runs `uv sync --locked`, installs the units and restarts the services: the settings first (an unreadable SSM stops the update there, with the services still running), then the token server, the session screen and the between-calls process, and the voice server last, after calls in progress have ended (up to 10 minutes). Until it is back, no new call can start. Push first: the instance deploys what is on GitHub. After `secrets --yes`, `ship --yes` makes the services read the new settings.
 
 ```bash
 uv run python scripts/deploy_server.py status             # services, their memory, the voice server's jobs
