@@ -99,6 +99,14 @@ final class Server {
         }
     }
 
+    /// Every kind of launch, also one for a VoIP push or a notification button, which never reach the foreground:
+    /// the switches go to the server, and "Use Bee" turned off is carried out (contract section 1).
+    func appLaunched() {
+        settings.send()
+        guard Self.savedToken() != nil else { return }
+        Task { await bee.sync(openingApprovalPage: false) }
+    }
+
     var isSignedIn: Bool {
         if case .signedIn = state { true } else { false }
     }

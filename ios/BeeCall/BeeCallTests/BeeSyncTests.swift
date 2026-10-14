@@ -11,8 +11,10 @@ final class BeeSyncTests: XCTestCase {
     }
 
     @MainActor private func bee(_ store: UserDefaults, _ server: FakeServer, opened: @escaping (URL) -> Void = { _ in },
-                                statuses: @escaping (Int) -> Void = { _ in }) -> BeeSync {
-        BeeSync(store: store, transport: server, open: { opened($0) }, noteStatus: statuses)
+                                statuses: @escaping (Int) -> Void = { _ in },
+                                signedIn: @escaping () -> Bool = { true }) -> BeeSync {
+        BeeSync(store: store, transport: server, open: { opened($0); return true }, noteStatus: statuses,
+                signedIn: signedIn)
     }
 
     @MainActor private func store(useBee: Bool) -> UserDefaults {
@@ -204,6 +206,56 @@ final class BeeSyncTests: XCTestCase {
         var noted: [Int] = []
         await bee(store(useBee: true), server, statuses: { noted.append($0) }).sync()
         XCTAssertEqual(noted, [401])
+    }
+
+    // MARK: - Without the app on screen: a launch for a VoIP push, a change made in the Settings app
+
+    /// Off is honoured at once: the AI's next call may be answered from the lock screen without opening the app.
+    @MainActor func testTurningItOffInTheSettingsAppDisconnectsAtOnce() async {
+        let server = FakeServer()
+        server.replies["GET /me"] = me(connected: true, connecting: false)
+        let store = store(useBee: true)
+        let bee = bee(store, server)
+        store.set(false, forKey: "use_bee")
+        await waitUntil("Bee is disconnected") { server.sent == ["GET /me", "POST /bee/disconnect"] }
+        _ = bee
+    }
+
+    @MainActor func testTurningItOnInTheSettingsAppLeavesBeesPageForTheForeground() async throws {
+        let server = FakeServer()
+        server.replies["GET /me"] = me(connected: false, connecting: false)
+        server.replies["POST /bee/connect"] = .json(200, ["link": link])
+        var opened = 0
+        let store = store(useBee: false)
+        let bee = bee(store, server, opened: { _ in opened += 1 })
+        store.set(true, forKey: "use_bee")
+        await waitUntil("the server is asked") { server.sent == ["GET /me"] }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(server.sent, ["GET /me"], "no approval link without the app on screen")
+        await bee.sync() // the app comes to the foreground
+        XCTAssertEqual(opened, 1)
+    }
+
+    @MainActor func testASyncWithoutTheScreenNeverOpensBeesPageNorUsesItUp() async {
+        let server = FakeServer()
+        server.replies["GET /me"] = me(connected: false, connecting: false)
+        server.replies["POST /bee/connect"] = .json(200, ["link": link])
+        var opened = 0
+        let bee = bee(store(useBee: true), server, opened: { _ in opened += 1 })
+        await bee.sync(openingApprovalPage: false) // a launch for a VoIP push
+        XCTAssertEqual(server.sent, ["GET /me"])
+        await bee.sync()
+        XCTAssertEqual(opened, 1)
+    }
+
+    @MainActor func testAChangeWhileSignedOutSendsNothing() async throws {
+        let server = FakeServer()
+        let store = store(useBee: true)
+        let bee = bee(store, server, signedIn: { false })
+        store.set(false, forKey: "use_bee")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(server.sent, [])
+        _ = bee
     }
 
     @MainActor func testAnUnreachableServerChangesNothing() async {

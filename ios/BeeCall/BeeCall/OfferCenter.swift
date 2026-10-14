@@ -181,7 +181,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         OfferCenter.shared.setUp() // before launch ends, so a button tapped while the app was closed is delivered
         // Every kind of launch, also one for a VoIP push or a notification button, which never reach the
         // foreground: the server must not act on stale switches (contract section 1).
-        Server.shared.settings.send()
+        Server.shared.appLaunched()
         return true
     }
 

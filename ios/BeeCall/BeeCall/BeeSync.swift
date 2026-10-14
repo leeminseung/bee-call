@@ -29,27 +29,41 @@ enum BeeStep: Equatable {
     }
 }
 
-/// Brings Bee in line with "Use Bee", on coming to the foreground and after signing in. The server says in
-/// GET /me whether Bee is connected, or an approval is pending.
+/// Brings Bee in line with "Use Bee": on coming to the foreground and after signing in, and, without asking for
+/// Bee's approval page, at every launch and when the Settings app changes the switch, so that off is carried out
+/// even when the app is never opened. The server says in GET /me whether Bee is connected, or an approval is pending.
 @Observable
 final class BeeSync {
     private(set) var status = "" // shown under the call status when the person uses Bee
     @ObservationIgnored private let store: UserDefaults
     @ObservationIgnored private let transport: any HTTPTransport
-    @ObservationIgnored private let open: (URL) async -> Void
+    @ObservationIgnored private let open: (URL) async -> Bool
     @ObservationIgnored private let noteStatus: (Int) -> Void
+    @ObservationIgnored private let signedIn: () -> Bool
+    @ObservationIgnored private var observer: (any NSObjectProtocol)?
+    @ObservationIgnored private var lastSeenSwitch: Bool // "Use Bee" as the last change notice found it
     /// The sync still running, if any: syncs run one at a time, and each sees what the one before did.
     @ObservationIgnored private var running: Task<Void, Never>?
     /// The value of "Use Bee" the app last acted on, kept across launches: the switch changed when it differs.
     private static let handledKey = "use_bee_handled"
 
     init(store: UserDefaults = .standard, transport: any HTTPTransport = URLSession.shared,
-         open: @escaping (URL) async -> Void = { _ = await UIApplication.shared.open($0) },
-         noteStatus: @escaping (Int) -> Void) {
+         open: @escaping (URL) async -> Bool = { await UIApplication.shared.open($0) },
+         noteStatus: @escaping (Int) -> Void, signedIn: @escaping () -> Bool = { Server.savedToken() != nil }) {
         self.store = store
         self.transport = transport
         self.open = open
         self.noteStatus = noteStatus
+        self.signedIn = signedIn
+        lastSeenSwitch = AppSettings(store).useBee
+        observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil,
+                                                          queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.switchMayHaveChanged() }
+        }
+    }
+
+    isolated deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
     }
 
     func clearStatus() {
@@ -61,17 +75,27 @@ final class BeeSync {
         store.removeObject(forKey: Self.handledKey)
     }
 
-    func sync() async {
+    /// `openingApprovalPage` false: the app is not on screen, so a connect waits for the next foreground.
+    func sync(openingApprovalPage: Bool = true) async {
         let previous = running
         let next = Task {
             await previous?.value
-            await syncOnce()
+            await syncOnce(openingApprovalPage: openingApprovalPage)
         }
         running = next
         await next.value
     }
 
-    private func syncOnce() async {
+    /// Any defaults change posts the notice (the app's own writes too); only a changed "Use Bee" counts.
+    private func switchMayHaveChanged() {
+        let wanted = AppSettings(store).useBee
+        guard wanted != lastSeenSwitch else { return }
+        lastSeenSwitch = wanted
+        guard signedIn() else { return }
+        Task { await sync(openingApprovalPage: false) }
+    }
+
+    private func syncOnce(openingApprovalPage: Bool) async {
         let wanted = AppSettings(store).useBee
         guard let request = Server.request("/me"), let (data, response) = try? await transport.send(request) else {
             return // unreachable: the next foreground tries again
@@ -88,13 +112,14 @@ final class BeeSync {
             status = text
             store.set(wanted, forKey: Self.handledKey)
         case .connect:
+            guard openingApprovalPage else { return } // and it is not used up: the next foreground connects
             status = "Connecting Bee: approve Bee Call in the Bee app"
             guard let link = await approvalLink() else {
                 status = "Bee could not be connected right now" // the next foreground tries again
                 return
             }
             store.set(true, forKey: Self.handledKey)
-            await open(link) // Bee's own approval page
+            _ = await open(link) // Bee's own approval page
         case .disconnect:
             status = "Turning Bee off…"
             if await disconnect() {
