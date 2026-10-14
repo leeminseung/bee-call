@@ -762,3 +762,14 @@ def test_a_sign_out_also_takes_the_push_tokens_kept_before_the_registry(tmp_path
     assert voip_push.load_device_token(people.person("matt"), "voip")["token"] == "ac" * 32
     people.end_session(sign_in)
     assert voip_push.load_device_token(people.person("matt"), "voip") is None
+
+
+def test_a_setting_of_the_wrong_kind_is_refused_not_a_server_error(tmp_path):
+    """A list or an object where a name is expected is a bad value (400), never an unhandled error (acceptance
+    BC-089 found a 500)."""
+    people = People(tmp_path)
+    people.add("matt")
+    for bad in (["en"], {"code": "en"}, 1, None):
+        with pytest.raises(ValueError):
+            people.change_settings("matt", {"language": bad})
+    assert people.settings("matt").language == "en"

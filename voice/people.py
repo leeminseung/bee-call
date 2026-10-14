@@ -102,7 +102,7 @@ class Settings:
         """Sets one setting after checking it; ValueError for an unknown name or a bad value."""
         if name == "language":
             from voice.language import LANGUAGES
-            if value not in LANGUAGES:
+            if not isinstance(value, str) or value not in LANGUAGES:
                 raise ValueError(f"language must be one of {', '.join(LANGUAGES)}")
         elif name == "call_time":
             if not isinstance(value, str) or not CALL_TIME.fullmatch(value):
