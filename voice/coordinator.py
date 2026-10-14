@@ -72,17 +72,17 @@ these instructions is what was looked up in Bee just before the call. Bring up t
 connect to what the user is talking about, or once the user's own topic is done. Never interrupt the user's topic \
 with them. For more from Bee during the call, use bee_today, bee_conversation and search_bee.
 Saving to Bee happens right away, in the call, in three steps. First call propose_bee_save with the item, \
-written in the user's language. Then ask one question that names Bee and quotes the item exactly as you proposed \
-it, such as "Shall I add 'Note the bug' to your Bee todos?" (write Bee as "Bee" in every language, as in "Bee에 \
-할 일로 '버그 기록'을 넣을까요?"). Only after a clear yes to that question, call save_to_bee with the number \
-propose_bee_save gave, then tell the user in a few words what you saved. A yes to any other question, or one given \
-before you proposed the item, is no yes to saving; only the answer to your first question about an item counts, \
-so to ask again, propose it again first. If the user asks you to take it out, call undo_bee_write. If saving does \
-not go through, say what save_to_bee tells you to say.
+written in the user's language. Then ask one question that names Bee and, in the question itself, quotes the \
+item exactly as you proposed it, such as "Shall I add 'Note the bug' to your Bee todos?" (write Bee as "Bee" in \
+every language, as in "Bee에 할 일로 '버그 기록'을 넣을까요?"). Only after a clear yes to that question, call \
+save_to_bee with the number propose_bee_save gave, then tell the user in a few words what you saved. A yes to any \
+other question, or one given before you proposed the item, is no yes to saving; only the answer to your first \
+question about an item counts, so to ask again, propose it again first. If the user asks you to take it out, call \
+undo_bee_write. If saving does not go through, say what save_to_bee tells you to say.
 When the prep note lists unconfirmed Bee facts, check them at a natural moment: propose a fact_confirm with the \
-fact as Bee has it, then ask, quoting it, for example "Bee heard 'Bonus is 15%'. Is that right?" If the user \
-agrees, save it. If they correct it, propose a fact_update with the corrected text, ask whether to fix it in Bee, \
-quoting the new text, and after a yes save it.
+fact as Bee has it, then ask, quoting it in the question itself, for example "Did Bee hear 'Bonus is 15%' \
+right?" If the user agrees, save it. If they correct it, propose a fact_update with the corrected text, ask \
+whether to fix it in Bee, quoting the new text, and after a yes save it.
 """
 
 NOTE_WAIT_S = 2.0  # the first reply waits at most this long for a prep note still being written (arbitrary)
@@ -99,8 +99,8 @@ EXPIRED = "expired"  # a proposal whose question was answered and passed (BeeCoo
 # How to ask about each kind of item; the item is quoted as proposed, and the AI says the question in the user's
 # language.
 ASK_LIKE = {"todo_create": "Shall I add '{text}' to your Bee todos?",
-            "todo_accept": "Bee suggested the todo '{text}'. Shall I add it?",
-            "fact_confirm": "Bee heard '{text}'. Is that right?",
+            "todo_accept": "Shall I add Bee's suggested todo '{text}'?",
+            "fact_confirm": "Did Bee hear '{text}' right?",
             "fact_update": "Shall I fix it in Bee to '{text}'?"}
 ENGLISH = call_language("en")  # what the tools tell the model is in English, like the rest of its instructions
 
@@ -526,14 +526,16 @@ class BeeCoordinator(Coordinator):
 
 
 def asks_about(text: str | None, item: str) -> bool:
-    """Whether an AI turn asks about the item: it names Bee (the word), asks ("?") and quotes the item's text whole,
-    in quotation marks (so 'Buy milk' is not quoted by 'Buy milk and eggs')."""
-    text = text or ""
-    if not (NAMES_BEE.search(text) and QUESTION.search(text)):
+    """Whether an AI turn asks about the item: it names Bee (the word), and one of its sentences is a question
+    ("?") that quotes the item's text whole, in quotation marks. So "I'll add 'Buy milk' to Bee. Anything else?"
+    asks about something else, and 'Buy milk and eggs' does not quote 'Buy milk'."""
+    text = re.sub(r"\s+", " ", text or "")
+    if not NAMES_BEE.search(text):
         return False
     quote = f"[{re.escape(QUOTES)}]"
     quoted = re.compile(f"{quote}{re.escape(_plain(item))}[.!?。]?{quote}")
-    return quoted.search(re.sub(r"\s+", " ", text).casefold()) is not None
+    return any(quoted.search(sentence.casefold()) for sentence in SENTENCES.split(text)
+               if QUESTION.search(sentence.rstrip(QUOTES + " ")[-1:]))
 
 
 def _plain(text: str) -> str:

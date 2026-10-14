@@ -256,6 +256,19 @@ def test_an_item_turned_down_is_not_saved_on_a_yes_to_anything_else(tmp_path, fa
     assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []
 
 
+def test_an_item_announced_rather_than_asked_about_is_not_saved(tmp_path, fake_bee):
+    """The quote has to sit in the question itself: "I'll add 'Buy milk' to your Bee todos. Anything else?" asks
+    about something else."""
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        number = await proposed(agent, kind="todo_create", text="Buy milk")
+        await say(agent, ("assistant", "I'll add 'Buy milk' to your Bee todos. Anything else?"),
+                  ("user", "Yes, also call mom."))
+        return await agent.save_to_bee(None, proposal=number)
+
+    assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []
+
+
 def test_an_item_the_user_changed_is_not_saved_on_the_yes_to_the_new_one(tmp_path, fake_bee):
     async def main():
         agent, _ = await in_a_call(tmp_path)
@@ -359,7 +372,7 @@ def test_take_it_out_never_deletes_by_an_id_that_is_not_a_todo_s(tmp_path, fake_
 
     async def main():
         agent, _ = await in_a_call(tmp_path)
-        await saved(agent, "Bee suggested the todo 'Ask about bonus terms'. Shall I add it?", "Yes.",
+        await saved(agent, "Shall I add Bee's suggested todo 'Ask about bonus terms'?", "Yes.",
                     kind="todo_accept", suggestion_id=34, text="Ask about bonus terms")
         return await agent.undo_bee_write(None)
 
@@ -477,7 +490,7 @@ def test_a_refused_accept_is_tried_again_only_while_bee_still_suggests_it(tmp_pa
 
     async def main():
         agent, rec = await in_a_call(tmp_path)
-        await saved(agent, "Bee suggested the todo 'Ask about bonus terms'. Shall I add it?", "Yes.",
+        await saved(agent, "Shall I add Bee's suggested todo 'Ask about bonus terms'?", "Yes.",
                     kind="todo_accept", suggestion_id=suggestion, text="Ask about bonus terms")
         await BeeWrites(rec.dir).retry_failed()
         return rec
