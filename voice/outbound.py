@@ -79,18 +79,20 @@ async def send_offer(offer: Offer, person: Person, now: datetime, language: Call
     store = OfferStore(person.workspace)
     if quiet(now):
         return f"held: quiet hours, the notification goes out at {quiet_ends(now):%H:%M}; it shows in the app now"
-    if store.notified_on(now) >= DAILY_NOTIFICATIONS:
-        return f"held: {DAILY_NOTIFICATIONS} notifications went out today already; it shows in the app now"
-    payload = notification(offer, now, language or call_language())
+    going = store.start_notifying(offer.id, now, DAILY_NOTIFICATIONS)
+    if isinstance(going, str):
+        return f"held: {going}; it shows in the app now"
+    payload = notification(going, now, language or call_language())
     try:
         sent = await voip_push.alert(payload, person, collapse_id=offer.id,
                                      expires_epoch=int(offer.at("expires_at").timestamp()))
     except Exception as exc:  # the offer still waits in the app's list
+        store.notified(offer.id, sent=False)
         print(f"asked: offer {offer.id}, but the notification failed: {exc}", flush=True)
         return f"the notification failed ({exc}); it shows in the app"
+    store.notified(offer.id, sent=bool(sent))
     if not sent:
         return "no notification (no APNs key, or the app has not sent its token yet); it shows in the app"
-    store.mark_notified(offer.id, now)
     print(f"asked: offer {offer.id}, {payload['aps']['alert']['body']!r} (apns-id {sent})", flush=True)
     return f"notification sent: {payload['aps']['alert']['body']}"
 

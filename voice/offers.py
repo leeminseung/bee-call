@@ -64,6 +64,7 @@ class Offer:
     claim: str | None = None  # the runner's claim while it is calling or placing (Claim.token)
     error: str | None = None
     notified_at: str | None = None  # when its notification went out; None while held (quiet hours, daily limit)
+    notice: str | None = None  # its notification: "sending" (recorded before the push), then "sent"
     history: list[dict[str, str]] = field(default_factory=list)  # [{"at": ISO, "state": ...}]
 
     def at(self, name: str) -> datetime | None:
@@ -205,15 +206,31 @@ class OfferStore:
         """A call booked in a call is moved or called off in that call (voice/coordinator.py)."""
         return self._move(offer_id, now, ("booked",), "declined", error=why)
 
-    def mark_notified(self, offer_id: str, now: datetime) -> None:
+    def start_notifying(self, offer_id: str, now: datetime, daily_limit: int) -> Offer | str:
+        """Records, under the lock and before the push, that this question's notification is going out now; the
+        day's count includes it from here. So a process stopped during the push never sends it twice, and two
+        senders at once never pass the daily limit together. Returns the offer, or why it is not sent."""
         with self._lock():
             offer = self.get(offer_id)
-            if offer is not None:
-                offer.notified_at = _iso(now)
+            if offer is None or offer.state != "asked" or offer.notified_at:
+                return "it no longer waits for its notification"
+            if self.notified_on(now) >= daily_limit:
+                return f"{daily_limit} notifications went out today already"
+            offer.notified_at, offer.notice = _iso(now), "sending"
+            return self._save(offer)
+
+    def notified(self, offer_id: str, sent: bool) -> None:
+        """After the push: kept as sent, or forgotten when it did not go out (no phone or key, APNs refused), so it
+        is tried again later."""
+        with self._lock():
+            offer = self.get(offer_id)
+            if offer is not None and offer.notice == "sending":
+                offer.notice = "sent" if sent else None
+                offer.notified_at = offer.notified_at if sent else None
                 self._save(offer)
 
     def notified_on(self, day: datetime) -> int:
-        """How many offer notifications went out on that day."""
+        """How many offer notifications went out on that day (counted from the moment they started to go out)."""
         prefix = day.date().isoformat()
         return sum(1 for o in self.all() if o.notified_at and o.notified_at.startswith(prefix))
 

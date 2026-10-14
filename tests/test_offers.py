@@ -454,3 +454,58 @@ def test_a_runner_stopped_before_placing_gives_the_offer_back(tmp_path):
     assert store.get(offer.id).state == "now" and [o.id for o in store.due(datetime.now())] == [offer.id]
     (room,) = asyncio.run(call_due(me.person, prepare=prepared_quickly, place=placing(rooms)))
     assert [r.name for r in rooms] == [room] and store.get(offer.id).state == "called"
+
+
+def test_an_offer_notification_is_recorded_before_it_is_pushed(tmp_path, monkeypatch):
+    from voice.outbound import send_held, send_offer
+
+    me = signed_in(tmp_path)
+    now = datetime(2026, 10, 15, 12, 0)
+    offer, _ = asked(tmp_path, now=now, workspace=me.workspace)
+    pushed = []
+
+    class Stopped(BaseException):  # the process stops while the push is under way
+        pass
+
+    async def dies(payload, person, **kw):
+        pushed.append(payload["offer"])
+        raise Stopped()
+
+    async def works(payload, person, **kw):
+        pushed.append(payload["offer"])
+        return "apns"
+
+    monkeypatch.setattr(voip_push, "alert", dies)
+    with pytest.raises(Stopped):
+        asyncio.run(send_offer(offer, me.person, now))
+    monkeypatch.setattr(voip_push, "alert", works)
+    asyncio.run(send_held(me.person, now + timedelta(minutes=1)))  # the loop, started again
+    assert pushed == [offer.id] and OfferStore(me.workspace).notified_on(now) == 1
+
+
+def test_two_senders_at_once_keep_to_the_daily_limit(tmp_path, monkeypatch):
+    from voice.outbound import send_offer
+
+    me = signed_in(tmp_path)
+    store = OfferStore(me.workspace)
+    now = datetime(2026, 10, 15, 12, 0)
+    pushed = []
+
+    async def slow(payload, person, **kw):
+        await asyncio.sleep(0.1)
+        pushed.append(payload["offer"])
+        return "apns"
+
+    monkeypatch.setattr(voip_push, "alert", slow)
+    _, plan = asked(tmp_path, now=now, workspace=me.workspace)
+    for i in range(3):
+        sent = store.ask(plan, now - timedelta(hours=3 - i))
+        asyncio.run(send_offer(sent, me.person, now - timedelta(hours=3 - i)))
+    pushed.clear()
+    last = store.ask(plan, now)
+
+    async def both():
+        return await asyncio.gather(send_offer(last, me.person, now), send_offer(last, me.person, now))
+
+    asyncio.run(both())
+    assert pushed == [last.id] and store.notified_on(now) == 4
