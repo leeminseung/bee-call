@@ -318,3 +318,15 @@ def test_one_notification_after_the_call_lists_what_went_into_bee(tmp_path, fake
     assert payload["aps"]["alert"]["body"] == body
     assert payload["aps"]["thread-id"] == "bee" and "category" not in payload["aps"]
     assert summary_notification([], call_language(language)) is None  # nothing went in: no notification
+
+
+@pytest.mark.parametrize("language,body", [
+    ("en", "Added to Bee: todo 'Note the bug'. Not sure it went in, check Bee: todo 'Call Dana'"),
+    ("ko", "Bee에 넣었어요: 할 일 '버그 기록'. 들어갔는지 모르니 Bee에서 확인해 주세요: 할 일 '다나에게 전화'")])
+def test_the_notification_names_what_bee_may_have_in_the_person_s_language(language, body):
+    from beelink.writer import BeeWrite, summary_notification
+
+    first, second = ("Note the bug", "Call Dana") if language == "en" else ("버그 기록", "다나에게 전화")
+    writes = [BeeWrite("w1", {"kind": "todo_create", "text": first}, "q", "a", "ok"),
+              BeeWrite("w2", {"kind": "todo_create", "text": second}, "q", "a", "unknown")]
+    assert summary_notification(writes, call_language(language))["aps"]["alert"]["body"] == body
