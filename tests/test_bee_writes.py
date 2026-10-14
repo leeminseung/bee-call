@@ -155,6 +155,22 @@ def test_a_proposal_is_saved_once(tmp_path, fake_bee):
     assert writes_to_bee(fake_bee) == [["todos", "create"]]
 
 
+def test_two_saves_at_once_are_kept_apart(tmp_path, fake_bee):
+    """LiveKit runs the tool calls of one reply at the same time (livekit/agents/voice/generation.py); each write
+    keeps its own record, so one cannot take the other's result or be undone in its place."""
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        one = await proposed(agent, kind="fact_update", fact_id=7, text="Bonus is 10%")
+        two = await proposed(agent, kind="fact_update", fact_id=8, text="Starts in May")
+        await say(agent, ("assistant", "Shall I fix both in Bee?"), ("user", "Yes."))
+        await asyncio.gather(agent.save_to_bee(None, proposal=one), agent.save_to_bee(None, proposal=two))
+        return rec
+
+    rec = asyncio.run(main())
+    assert sorted(w.item["fact_id"] for w in BeeWrites(rec.dir).all()) == [7, 8]
+    assert len({e["key"] for e in events(rec) if e["type"] == "bee_write"}) == 2
+
+
 def test_the_text_written_to_bee_is_in_the_person_s_language(tmp_path, fake_bee):
     async def main():
         agent, _ = await in_a_call(tmp_path, [("user", "버그를 찾았어요.")], "ko")

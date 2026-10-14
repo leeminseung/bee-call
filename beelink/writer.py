@@ -137,14 +137,17 @@ class BeeWrites:
     async def begin(self, item: dict[str, Any], question: str, answer: str) -> BeeWrite:
         """Records a write the user said yes to, as "applying", before anything reaches Bee; `question` is what the
         AI asked, `answer` the user's reply. apply() then writes it."""
-        write = BeeWrite(f"w{len(self.all()) + 1}", item, question, answer, "applying")
+        before = None
         if item.get("kind") == "fact_update":  # kept so the user can take the fix back
             try:
-                write.before = (await cli.fact(item["fact_id"])).get("fact")
+                before = (await cli.fact(item["fact_id"])).get("fact")
             except Exception:
-                write.before = None
+                before = None
+        # The key is taken and recorded with nothing awaited in between, so writes made at the same time (one
+        # reply's tool calls run together) each get their own.
+        write = BeeWrite(f"w{len(self.all()) + 1}", item, question, answer, "applying", before=before)
         self._append({"key": write.key, "status": "applying", "item": item, "question": question, "answer": answer,
-                      "before": write.before})
+                      "before": before})
         return write
 
     async def apply(self, write: BeeWrite) -> BeeWrite:
