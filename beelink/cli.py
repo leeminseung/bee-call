@@ -159,9 +159,11 @@ async def fact(fact_id: int) -> dict[str, Any]:
     return await run_json("facts", "get", str(fact_id))
 
 
-async def todos(limit: int = 50, timeout: float = TIMEOUT) -> dict[str, Any]:
-    """The newest todos, open and completed: {"todos": [{"id", "text", "created_at" (ms), "completed"}, ...]}."""
-    return await run_json("todos", "list", "--limit", str(limit), timeout=timeout)
+async def todos(limit: int = 50, cursor: Any = None, timeout: float = TIMEOUT) -> dict[str, Any]:
+    """One page of todos, open and completed, in no promised order: {"todos": [{"id", "text", "created_at" (ms),
+    "completed"}, ...], "next_cursor": ...}."""
+    args = ["todos", "list", "--limit", str(limit)] + (["--cursor", str(cursor)] if cursor else [])
+    return await run_json(*args, timeout=timeout)
 
 
 # ---------- writes (only beelink.writer calls these) ----------

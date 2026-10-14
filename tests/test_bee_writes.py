@@ -414,6 +414,46 @@ def test_a_todo_bee_stored_before_its_error_is_not_written_again(tmp_path, fake_
     assert [t["text"] for t in json.loads((tmp_path / "todos.json").read_text())] == ["Note the bug"]
 
 
+def test_the_todo_bee_stored_is_found_past_the_first_page(tmp_path, fake_bee, monkeypatch):
+    """Third review of this round's fixes, finding 2: Bee lists todos a page at a time and promises no order."""
+    import time
+
+    todos = tmp_path / "todos.json"
+    old = int(time.time() * 1000) - 10 * 86_400_000
+    todos.write_text(json.dumps([{"id": i, "text": f"Old {i}", "created_at": old, "completed": False}
+                                 for i in range(50)]))
+    monkeypatch.setenv("FAKE_BEE_TODOS", str(todos))
+    (tmp_path / "fail-after").write_text("todos create")
+    monkeypatch.setenv("FAKE_BEE_FAIL_AFTER_ONCE", str(tmp_path / "fail-after"))
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
+        await BeeWrites(rec.dir).retry_failed()
+        return rec
+
+    rec = asyncio.run(main())
+    assert [w.status for w in BeeWrites(rec.dir).all()] == ["ok"] and writes_to_bee(fake_bee) == [["todos", "create"]]
+    assert [c for c in calls(fake_bee) if c[:2] == ["todos", "list"]][-1][-3:] == ["--cursor", "50", "--json"]
+
+
+def test_a_retry_cut_off_while_asking_bee_is_left_to_the_user(tmp_path, fake_bee, monkeypatch):
+    """The retry after the call has a few seconds; cut off while it asks Bee, the write may be there."""
+    fail_once(tmp_path, monkeypatch, "todos create")
+    monkeypatch.setenv("FAKE_BEE_SLOW", "todos list 3")
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(BeeWrites(rec.dir).retry_failed(), 0.5)
+        return rec
+
+    rec = asyncio.run(main())
+    assert [w.status for w in BeeWrites(rec.dir).all()] == ["unknown"]
+    assert writes_to_bee(fake_bee) == [["todos", "create"]]
+
+
 def test_a_refused_todo_bee_cannot_be_asked_about_is_left_to_the_user(tmp_path, fake_bee, monkeypatch):
     fail_once(tmp_path, monkeypatch, "todos create")
     monkeypatch.setenv("FAKE_BEE_DOWN", "todos list")

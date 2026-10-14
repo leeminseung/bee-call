@@ -48,6 +48,7 @@ OLD_QUEUE = "bee-queue.jsonl"
 KINDS = ("fact_confirm", "fact_update", "todo_create", "todo_accept")
 MAYBE_WRITTEN = ("unknown", "applying")  # Bee may or may not have the item; never written again by itself
 CLOCK_SLACK_S = 120  # Bee's clock and this machine's may differ; a todo made this much before a write is older
+TODO_PAGES = 10  # pages of 50 todos looked through for a write that may have gone in; more cannot be told
 
 
 @dataclass
@@ -215,6 +216,11 @@ class BeeWrites:
                 continue
             try:
                 found = await in_bee_after_all(write)
+            except asyncio.CancelledError:  # cut off while asking: it may be there
+                self._ended(write, "unknown", f"{write.error}; cut off while asking Bee whether it has it")
+                if done is not None:
+                    done(write)
+                raise
             except Exception as exc:
                 log.warning("could not ask Bee whether %s is there: %s", write.key, exc)
                 found = None
@@ -243,17 +249,24 @@ async def in_bee_after_all(write: BeeWrite) -> dict[str, Any] | bool | None:
     """Whether Bee has a write the CLI reported as failed: what Bee shows of it (it went in after all), False (it
     did not), or None (it cannot be told, so it must not be written again)."""
     if write.kind == "todo_create":
-        todos = (await cli.todos()).get("todos")
-        if not isinstance(todos, list):
-            return None
-        for todo in todos:
-            if not isinstance(todo, dict) or _plain(todo.get("text")) != _plain(write.text):
-                continue
-            made = todo.get("created_at")
-            if isinstance(made, (int, float)) and write.began is not None and made / 1000 < write.began - CLOCK_SLACK_S:
-                continue  # an older todo of the same name
-            return {"todo": todo}
-        return False
+        cursor = None
+        for _ in range(TODO_PAGES):  # every page: Bee promises no order
+            page = await cli.todos(cursor=cursor)
+            todos = page.get("todos")
+            if not isinstance(todos, list):
+                return None
+            for todo in todos:
+                if not isinstance(todo, dict) or _plain(todo.get("text")) != _plain(write.text):
+                    continue
+                made = todo.get("created_at")
+                if isinstance(made, (int, float)) and write.began is not None \
+                        and made / 1000 < write.began - CLOCK_SLACK_S:
+                    continue  # an older todo of the same name
+                return {"todo": todo}
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return False
+        return None  # more todos than are looked through
     if write.kind == "todo_accept":
         pending = await cli.todo_suggestions(limit=50)
         if any(isinstance(s, dict) and s.get("id") == write.item.get("suggestion_id") for s in pending):
