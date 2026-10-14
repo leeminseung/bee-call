@@ -2,7 +2,7 @@
 2026-10-14).
 
 When a Bee change is worth a call, the planner's plan becomes an offer instead of a call: an app notification
-such as "About “Planned a Saturday hike”: free for a 5-minute call at 9:00 PM today?" with three buttons. The AI
+such as "About “Planned a Saturday hike”: free for a quick call at 9:00 PM today?" with three buttons. The AI
 calls only when the user taps "Call me now", at the suggested time once the user accepted it, or at a time agreed
 out loud in a call (the coordinator's book_call tool). The notification also shows on the lock screen and on
 Apple Watch, and the app lists open offers on its first screen, so a missed notification can still be answered.
@@ -405,11 +405,11 @@ def notification(offer: Offer, now: datetime, language: CallLanguage) -> dict[st
     topic = (offer.topic or "").strip()
     if language.code == "ko":
         about = f"“{topic}” 이야기" if topic else ("새 음성 메모 이야기" if offer.kind == "voice note" else "오늘 하루 이야기")
-        body, category = f"{about}, {when}에 5분 통화 괜찮으세요?", "CALL_OFFER_KO"
+        body, category = f"{about}, {when}에 잠깐 통화 괜찮으세요?", "CALL_OFFER_KO"
     else:
         about = f"About “{topic}”" if topic else ("About your new voice note" if offer.kind == "voice note"
                                                  else "About your day")
-        body, category = f"{about}: free for a 5-minute call at {when}?", "CALL_OFFER"
+        body, category = f"{about}: free for a quick call at {when}?", "CALL_OFFER"
     return {"aps": {"alert": {"title": "Bee Call", "body": body}, "sound": "default", "category": category,
                     "thread-id": "offers"},
             "offer": offer.id}

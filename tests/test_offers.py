@@ -43,10 +43,10 @@ def test_a_call_decision_becomes_a_question_with_the_plan_behind_it(tmp_path):
                                                                        plan.reason)
     english = notification(offer, NOW, call_language("en"))
     assert english["aps"]["alert"]["body"] == \
-        "About “Planned a Saturday hike with Dana”: free for a 5-minute call at 9:00 PM today?"
+        "About “Planned a Saturday hike with Dana”: free for a quick call at 9:00 PM today?"
     assert (english["aps"]["category"], english["offer"]) == ("CALL_OFFER", offer.id)
     korean = notification(offer, NOW, call_language("ko"))
-    assert korean["aps"]["alert"]["body"] == "“Planned a Saturday hike with Dana” 이야기, 오늘 밤 9시에 5분 통화 괜찮으세요?"
+    assert korean["aps"]["alert"]["body"] == "“Planned a Saturday hike with Dana” 이야기, 오늘 밤 9시에 잠깐 통화 괜찮으세요?"
     assert korean["aps"]["category"] == "CALL_OFFER_KO"
 
 
