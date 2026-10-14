@@ -2,14 +2,6 @@ import Foundation
 import LiveKit
 import Observation
 
-/// One caption line, as transcribed by the voice server.
-struct Caption: Identifiable {
-    let id: String
-    let isMine: Bool
-    var text: String
-    var sentAt: Date
-}
-
 /// The LiveKit side of a call: room token, room, microphone, captions.
 @Observable
 final class LiveKitClient: NSObject {
@@ -17,7 +9,8 @@ final class LiveKitClient: NSObject {
     /// started hears ringing from the voice server while the AI reads the user's Bee data.
     nonisolated static let stateAttribute = "bee_call.state"
 
-    private(set) var captions: [Caption] = []
+    private(set) var captionList = CaptionList()
+    var captions: [Caption] { captionList.captions }
     /// The room's connection dropped, came back, or ended without the app asking.
     @ObservationIgnored var onLinkChange: ((CallLink) -> Void)?
     @ObservationIgnored var onAgentAnswered: (() -> Void)?
@@ -38,7 +31,7 @@ final class LiveKitClient: NSObject {
     /// starts; with `answering`, the room of the AI's call. Only the pass from the token server differs.
     func connect(tokenServerURL: String, answering roomName: String? = nil,
                  continuing earlierCall: String? = nil) async throws -> String {
-        captions = []
+        captionList = CaptionList()
         let access = try await fetchAccess(from: tokenServerURL, answering: roomName, continuing: earlierCall)
         try Task.checkCancellation() // the call ended while we fetched the token
         return try await connect(access: access)
@@ -84,16 +77,8 @@ final class LiveKitClient: NSObject {
 
     private func show(_ text: String, segment: String, from sender: Participant.Identity, sentAt: Date, in room: Room) {
         guard room === self.room else { return } // a late line from an earlier call
-        let id = "\(sender.stringValue)/\(segment)"
-        if let index = captions.firstIndex(where: { $0.id == id }) {
-            guard sentAt >= captions[index].sentAt else { return } // an older version of this line
-            captions[index].text = text
-            captions[index].sentAt = sentAt
-        } else {
-            let isMine = sender == room.localParticipant.identity
-            captions.append(Caption(id: id, isMine: isMine, text: text, sentAt: sentAt))
-            if captions.count > 30 { captions.removeFirst() }
-        }
+        let isMine = sender == room.localParticipant.identity
+        captionList.show(text, line: "\(sender.stringValue)/\(segment)", isMine: isMine, sentAt: sentAt)
     }
 
     // MARK: - Token server
