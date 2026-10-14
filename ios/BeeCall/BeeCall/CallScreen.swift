@@ -5,6 +5,7 @@ struct CallScreen: View {
     @AppStorage("tokenServerURL") private var tokenServerURL = "http://localhost:8787/token"
     @Environment(\.scenePhase) private var scenePhase
     @State private var showsCallRecord = false
+    private let offers = OfferCenter.shared
 
     var body: some View {
         VStack(spacing: 16) {
@@ -21,6 +22,10 @@ struct CallScreen: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
+            }
+
+            if !calls.isInCall {
+                OfferList(offers: offers) // the calls Bee Call asks about, still waiting for an answer
             }
 
             captions
@@ -80,6 +85,14 @@ struct CallScreen: View {
         }
         .task {
             await calls.askForMicrophone()
+        }
+        // Open offers while the app is on screen; a notification or a button refreshes them at once too.
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                await offers.refresh()
+                try? await Task.sleep(for: .seconds(20))
+            }
         }
     }
 

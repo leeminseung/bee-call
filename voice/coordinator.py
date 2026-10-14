@@ -6,7 +6,7 @@ Slow work goes to the worker through `delegate`; its news comes back as job noti
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import AsyncIterable
 
@@ -18,6 +18,7 @@ from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_inst
 from beelink import reads
 from beelink.clock import now_text
 from voice.language import CallLanguage
+from voice.offers import OfferStore
 from voice.recorder import CallRecorder
 from voice.speech_filter import SpeechFilter
 from worker.runner import JobNotification, JobRunner, short
@@ -285,6 +286,31 @@ class Coordinator(Agent):
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
         self._recorder.event("bee_write_queued", kind=kind, text=text or "", item=item)
         return "Queued. It will be saved to Bee after the call."
+
+    @function_tool
+    async def book_call(self, context: RunContext, at: str, topic: str) -> str:
+        """Book a call back at a time the user asked for or agreed to out loud, such as "call me tomorrow at 8".
+        At that time you call them, picking up from this call. Never book a call the user did not ask for.
+
+        Args:
+            at: The local date and time to call, in ISO 8601, like 2026-10-15T08:00.
+            topic: What the call is for, in a few words.
+        """
+        try:
+            when = datetime.fromisoformat(at.strip())
+        except ValueError:
+            return "Give the time in ISO 8601, like 2026-10-15T08:00."
+        if when.tzinfo is not None:
+            when = when.astimezone().replace(tzinfo=None)  # this Mac's local time, like the rest of the workspace
+        now = datetime.now()
+        if when < now + timedelta(minutes=1):
+            return "That time has passed. Ask the user for a later time."
+        if when > now + timedelta(days=7):
+            return "Calls can be booked at most a week ahead."
+        session = f"{self._recorder.dir.parent.name}/{self._recorder.dir.name}"  # the booked call continues this one
+        offer = OfferStore(self._workspace).book(topic.strip() or "a call back", when, now, continue_from=session)
+        self._recorder.event("call_booked", offer=offer.id, at=offer.call_at, topic=offer.topic)
+        return f"Booked: you will call at {when:%a %b %-d, %-I:%M %p}. Confirm it to the user in a few words."
 
     @function_tool
     async def end_call(self, context: RunContext) -> str:

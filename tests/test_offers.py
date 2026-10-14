@@ -203,3 +203,23 @@ def test_the_alert_push_goes_to_the_app_with_its_own_token(tmp_path):
     assert got == "A-1" and str(request.url).endswith("/3/device/" + "cd" * 32)
     assert request.headers["apns-topic"] == "com.leeminseung.beecall" and request.headers["apns-push-type"] == "alert"
     assert request.headers["apns-collapse-id"] == "x" and json.loads(request.content) == payload
+
+
+def test_a_call_back_the_user_asks_for_is_booked_and_continues_this_call(tmp_path):
+    from types import SimpleNamespace
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    workspace = tmp_path / "workspace"
+    rec = CallRecorder(workspace, room="r")
+    agent = Coordinator(rec, SimpleNamespace(), workspace)
+    tomorrow = (datetime.now() + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+    said = asyncio.run(agent.book_call(None, tomorrow.isoformat(timespec="minutes"), "how the interview went"))
+    assert said.startswith("Booked: you will call at")
+    (offer,) = OfferStore(workspace).all()
+    assert (offer.state, offer.source, offer.topic) == ("booked", "call", "how the interview went")
+    assert offer.call_at == tomorrow.isoformat(timespec="seconds")
+    assert offer.continue_from == f"{rec.dir.parent.name}/{rec.dir.name}"
+    assert "Ask the user for a later time" in asyncio.run(agent.book_call(None, "2020-01-01T08:00", "x"))
+    assert "ISO 8601" in asyncio.run(agent.book_call(None, "tomorrow at 8", "x"))
+    assert len(OfferStore(workspace).all()) == 1

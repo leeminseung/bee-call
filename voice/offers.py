@@ -28,7 +28,7 @@ from typing import Any
 from beelink.planner import OFFERS_DIR, Plan
 from voice.language import CallLanguage
 
-CALL_TIME = os.environ.get("CALL_TIME", "21:00")  # the time an offer suggests (arbitrary default; a setting later)
+CALL_TIME = "21:00"  # the time an offer suggests when CALL_TIME is unset (arbitrary default; a setting later)
 MIN_LEAD = timedelta(minutes=10)  # closer than this to today's call time, an offer suggests tomorrow (arbitrary)
 LATE_BY = timedelta(minutes=10)  # a booked call this late is not placed any more (arbitrary)
 STUCK = timedelta(minutes=5)  # "calling" for longer than this means the placing process died (arbitrary)
@@ -69,9 +69,10 @@ class Offer:
         return data
 
 
-def call_time(now: datetime, at: str = CALL_TIME) -> datetime:
-    """Today's call time, or tomorrow's when today's is past or too close."""
-    hour, minute = (int(x) for x in at.split(":"))
+def call_time(now: datetime, at: str | None = None) -> datetime:
+    """Today's call time, or tomorrow's when today's is past or too close. CALL_TIME is read here, after the
+    processes have loaded .env.local."""
+    hour, minute = (int(x) for x in (at or os.environ.get("CALL_TIME") or CALL_TIME).split(":"))
     today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     return today if today - now >= MIN_LEAD else today + timedelta(days=1)
 
@@ -119,7 +120,7 @@ class OfferStore:
         offer.history.append({"at": _iso(now), "state": state})
         return self.save(offer)
 
-    def ask(self, plan: Plan, now: datetime, at: str = CALL_TIME) -> Offer:
+    def ask(self, plan: Plan, now: datetime, at: str | None = None) -> Offer:
         """A plan the planner wants to call about becomes a question."""
         suggested = call_time(now, at)
         offer = Offer(id=self._new_id(now), state="asked", reason=plan.reason, topic=plan.topic, kind=plan.kind,
