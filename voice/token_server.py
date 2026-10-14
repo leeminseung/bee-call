@@ -2,7 +2,9 @@
 
 Every request except signing in carries the app's sign-in token (Authorization: Bearer <token>) and works only
 on that person's own folder (voice/people.py). On a Mac, BEE_CALL_DEV_PERSON lets requests made on the machine
-itself in without a token (curl, test callers); never set it on a server.
+itself in without a token when they carry the header X-Bee-Call-Dev: 1 (curl, test callers); a web page in a
+browser cannot send that header to another site without asking first, and this server never says yes. The dev
+fallback is off on a server (BEE_CALL_PUBLIC_HOST set), and requests must name a known host.
 
 Run: uv run python -m voice.token_server
 
@@ -62,6 +64,7 @@ from voice.costs import spent_today
 from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata, room_name
 from voice.offers import OfferStore
 from voice.people import People, dev_person, waiting_code
+from voice.session_server import local_host
 
 load_dotenv(".env.local")
 log = logging.getLogger("bee-call.token")
@@ -98,12 +101,28 @@ def from_this_machine(request: web.Request) -> bool:
     return request.remote in ("127.0.0.1", "::1") and "X-Forwarded-For" not in request.headers
 
 
+def dev_request(request: web.Request) -> bool:
+    return (not os.environ.get("BEE_CALL_PUBLIC_HOST") and from_this_machine(request)
+            and request.headers.get("X-Bee-Call-Dev") == "1")
+
+
+@web.middleware
+async def known_hosts_only(request: web.Request, handler):
+    """Refuses host names other than this machine's and the server's own, so a web page cannot point its own
+    domain at this server (DNS rebinding)."""
+    public = os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip().lower()
+    host = (request.url.host or "").lower().rstrip(".")
+    if not local_host(request.url.host) and not (public and host == public):
+        raise web.HTTPMisdirectedRequest(text="unknown host name\n")
+    return await handler(request)
+
+
 @web.middleware
 async def signed_in(request: web.Request, handler):
     if request.path in OPEN_PATHS:
         return await handler(request)
     person = request.app[PEOPLE].who(bearer(request))
-    if person is None and not bearer(request) and from_this_machine(request):
+    if person is None and not bearer(request) and dev_request(request):
         person = dev_person()
     if person is None:
         raise web.HTTPUnauthorized(text="sign in first\n")
@@ -367,7 +386,7 @@ async def stop_bee_logins(app: web.Application) -> None:
 
 def make_app(url: str, key: str, secret: str, people: People, room_exists=livekit_room_exists,
              verify=apple_signin.verify) -> web.Application:
-    app = web.Application(middlewares=[signed_in])
+    app = web.Application(middlewares=[known_hosts_only, signed_in])
     app[URL], app[KEY], app[SECRET], app[ROOM_EXISTS] = url, key, secret, room_exists
     app[PEOPLE], app[NONCES], app[VERIFY], app[BEE_LOGINS] = people, apple_signin.Nonces(), verify, {}
     app.on_shutdown.append(stop_bee_logins)
@@ -402,5 +421,6 @@ if __name__ == "__main__":
     for iface, ip in lan_addresses() or [("this Mac only", "127.0.0.1")]:
         print(f"  http://{ip}:{port}/token  ({iface})", flush=True)
     if dev_person():
-        print(f"requests made on this Mac without a sign-in act as {dev_person()} (BEE_CALL_DEV_PERSON)", flush=True)
+        print(f"requests made on this Mac without a sign-in, with the header X-Bee-Call-Dev: 1, act as {dev_person()} "
+              "(BEE_CALL_DEV_PERSON)", flush=True)
     web.run_app(app, host="0.0.0.0", port=port, print=None)

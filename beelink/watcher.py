@@ -136,11 +136,17 @@ class BeeWatcher:
         while True:
             # Own process group: the bee CLI is a node wrapper around a native binary,
             # and both must go when the watcher stops.
-            proc = await asyncio.create_subprocess_exec(
-                cli.bee_bin(), "stream", "--json", "--types", STREAM_TYPES,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=cli.run_env(),
-                start_new_session=True,
-            )
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    cli.bee_bin(), "stream", "--json", "--types", STREAM_TYPES,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=cli.run_env(),
+                    start_new_session=True,
+                )
+            except (OSError, cli.BeeError) as exc:  # a stream that cannot start is retried like a dropped one
+                log.warning("bee stream could not start: %s; retrying in %.0fs", exc, backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60.0)
+                continue
             try:
                 async with self._lock:
                     await self.catch_up("connected")
@@ -177,9 +183,12 @@ async def _main() -> None:
         loop.add_signal_handler(sig, task.cancel)
     try:
         from voice.people import People, dev_person
-        if not dev_person():
-            raise SystemExit("set BEE_CALL_DEV_PERSON: the watcher keeps its cursor and batches in that person's folder")
-        await BeeWatcher(People().workspace(dev_person()), _print_trigger).run()
+        people, person = People(), dev_person()
+        if not person or not people.settings(person).bee:
+            raise SystemExit("set BEE_CALL_DEV_PERSON to a person who connected Bee: the watcher reads their Bee "
+                             "and keeps its cursor and batches in their folder")
+        cli.use_bee(people.bee_dir(person))
+        await BeeWatcher(people.workspace(person), _print_trigger).run()
     except asyncio.CancelledError:
         pass
 

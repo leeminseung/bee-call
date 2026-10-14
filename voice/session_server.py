@@ -345,8 +345,8 @@ async def signed_in(request: web.Request, handler):
     header = request.headers.get("Authorization", "")
     token = header[7:].strip() if header.startswith("Bearer ") else request.cookies.get(SESSION_COOKIE)
     person = request.app[PEOPLE].who(token)
-    if person is None and not token and from_this_machine(request):
-        person = dev_person()
+    if person is None and not token and from_this_machine(request) and not os.environ.get("BEE_CALL_PUBLIC_HOST"):
+        person = dev_person()  # reading only: a page elsewhere can make the browser ask, but not read the answer
     if person is None:
         raise web.HTTPUnauthorized(text="sign in first\n")
     request[PERSON] = person

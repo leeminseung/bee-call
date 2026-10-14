@@ -83,6 +83,8 @@ class Prep:
     opening_s: float | None = None  # when the opening was ready, from the start of the prep
     model: str | None = None
     error: str | None = None  # why there is no note
+    input_tokens: int = 0  # the prep's model use, for the person's daily budget (voice/costs.py)
+    output_tokens: int = 0
 
     def to_meta(self) -> dict[str, Any]:
         return asdict(self)
@@ -91,7 +93,7 @@ class Prep:
     def from_meta(cls, data: Any) -> "Prep | None":
         if not isinstance(data, dict):
             return None
-        names = ("note", "opening", "reads", "seconds", "opening_s", "model", "error")
+        names = ("note", "opening", "reads", "seconds", "opening_s", "model", "error", "input_tokens", "output_tokens")
         return cls(**{k: data[k] for k in names if k in data})
 
 
@@ -214,8 +216,9 @@ async def _not_read(use: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _stream(client, model_id: str, system: str, messages: list[dict[str, Any]],
-                  on_text: Callable[[str], None]) -> dict[str, Any]:
-    """One streamed Converse request: on_text gets the text so far as it grows. Returns the assistant message."""
+                  on_text: Callable[[str], None], prep: "Prep | None" = None) -> dict[str, Any]:
+    """One streamed Converse request: on_text gets the text so far as it grows. Returns the assistant message.
+    The request's token use is added to `prep`."""
     loop = asyncio.get_running_loop()
     events: asyncio.Queue = asyncio.Queue()
     stop = threading.Event()
@@ -249,6 +252,10 @@ async def _stream(client, model_id: str, system: str, messages: list[dict[str, A
                     on_text(text)
                 elif "toolUse" in delta and tool is not None:
                     tool["input"] += delta["toolUse"].get("input", "")
+            elif "metadata" in event and prep is not None:
+                used = event["metadata"].get("usage") or {}
+                prep.input_tokens += int(used.get("inputTokens") or 0)
+                prep.output_tokens += int(used.get("outputTokens") or 0)
             elif "contentBlockStop" in event and tool is not None:
                 try:
                     tool["input"] = json.loads(tool["input"] or "{}")
@@ -323,7 +330,7 @@ class Preparation:
     async def _run(self, model_id: str, region: str) -> None:
         client = self._client or bedrock_client(region)
         messages = [{"role": "user", "content": [{"text": seed_text(self._inputs, self._meta, self._now)}]}]
-        reply = await _stream(client, model_id, self._system, messages, self._on_text)
+        reply = await _stream(client, model_id, self._system, messages, self._on_text, self.prep)
         written = "".join(block.get("text", "") for block in reply["content"])
         uses = [block["toolUse"] for block in reply["content"] if "toolUse" in block]
         if uses:
@@ -331,7 +338,8 @@ class Preparation:
                                              for n, u in enumerate(uses)))
             ask = "Now write the note." if self.prep.opening else "Now write the opening and the note."
             messages += [reply, {"role": "user", "content": [*results, {"text": ask}]}]
-            reply = await _stream(client, model_id, self._system, messages, lambda text: self._on_text(written + text))
+            reply = await _stream(client, model_id, self._system, messages, lambda text: self._on_text(written + text),
+                                  self.prep)
             written += "".join(block.get("text", "") for block in reply["content"])
         self.prep.note = parse_note(written)
         if not self.prep.note:

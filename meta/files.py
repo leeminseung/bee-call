@@ -21,7 +21,8 @@ MAX_MATCHES = 50
 MAX_FILE_BYTES = 5_000_000
 GREP_SECONDS = 3.0  # a whole grep (arbitrary)
 LINE_SECONDS = 0.05  # one line against the pattern (arbitrary)
-HIDDEN = ("*token*.json", "*.p8", "*.wav", "*.mp3", "*.m4a", "*.tmp", ".*")  # secrets, audio, half-written files
+# Secrets (push tokens, keys, a Bee CLI login: token-prod, pairing-prod.json), audio, half-written files.
+HIDDEN = ("*token*", "pairing-*", "proxy-*", "*.p8", "*.wav", "*.mp3", "*.m4a", "*.tmp", ".*")
 LOCATION = re.compile(r'"(primary_location|location|address|latitude|longitude|lat|lng|lon)"\s*:\s*'
                       r'(\{[^{}]*\}|"[^"]*"|-?\d+(?:\.\d+)?)', re.IGNORECASE)
 

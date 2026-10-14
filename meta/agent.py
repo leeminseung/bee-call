@@ -144,7 +144,7 @@ def _event_line(workspace: Path, event: dict[str, Any]) -> str:
     return f"[{at}] {kind}: {json.dumps({k: v for k, v in event.items() if k not in ('at', 'kind')}, ensure_ascii=False)}"
 
 
-def context(workspace: Path, events: list[dict[str, Any]], now: datetime) -> str:
+def context(workspace: Path, events: list[dict[str, Any]], now: datetime, call_time: str | None = None) -> str:
     """The first message: the time and limits, open offers, the agent's notes and past entries, and the events."""
     session, store = MetaSession(workspace), OfferStore(workspace)
     left = max(0, DAILY_NOTIFICATIONS - store.notified_on(now))
@@ -154,7 +154,7 @@ def context(workspace: Path, events: list[dict[str, Any]], now: datetime) -> str
     offers = [f"- {o.id} {o.state}: \"{o.topic}\"" + (f", call at {o.call_at}" if o.call_at else "")
               + (f", suggested {o.suggested_at}" if o.state == "asked" else "") for o in store.open(now)]
     return "\n\n".join([
-        f"It is now {now_text(now)}. The evening call time is {os.environ.get('CALL_TIME') or CALL_TIME}. {limits}",
+        f"It is now {now_text(now)}. The evening call time is {call_time or os.environ.get('CALL_TIME') or CALL_TIME}. {limits}",
         "Open offers:\n" + ("\n".join(offers) if offers else "none"),
         "Your notes (state.md):\n" + session.state(),
         "Your recent entries (meta session):\n" + session.recent_text(),
@@ -250,7 +250,7 @@ class Thinker:
         entry: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "events": events, "model": self.model[0],
                                  "tools": [], "actions": [], "decision": "",
                                  "usage": {"input_tokens": 0, "output_tokens": 0}}  # for voice/costs.py
-        messages = [{"role": "user", "content": [{"text": context(self.workspace, events, now)}]}]
+        messages = [{"role": "user", "content": [{"text": context(self.workspace, events, now, self.call_time)}]}]
         try:
             for _ in range(MAX_ROUNDS):
                 response = await self._converse(INSTRUCTIONS, messages)

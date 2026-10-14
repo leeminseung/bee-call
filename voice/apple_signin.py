@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import secrets
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -18,6 +19,7 @@ import jwt
 APPLE_ISSUER = "https://appleid.apple.com"
 APPLE_KEYS_URL = "https://appleid.apple.com/auth/keys"
 NONCE_SECONDS = 600  # a nonce must come back within this long (arbitrary; Apple's tokens last 10 minutes too)
+MAX_NONCES = 1000  # outstanding at once; past this the oldest are dropped (arbitrary, far above a few people's use)
 
 _client: jwt.PyJWKClient | None = None
 
@@ -59,11 +61,13 @@ class Nonces:
     """One-time values for sign-in, kept in memory (one token server process)."""
 
     def __init__(self) -> None:
-        self._issued: dict[str, float] = {}
+        self._issued: OrderedDict[str, float] = OrderedDict()  # oldest first
 
     def new(self) -> str:
         now = time.monotonic()
-        self._issued = {n: t for n, t in self._issued.items() if now - t < NONCE_SECONDS}
+        while self._issued and (len(self._issued) >= MAX_NONCES
+                                or now - next(iter(self._issued.values())) >= NONCE_SECONDS):
+            self._issued.popitem(last=False)
         nonce = secrets.token_urlsafe(24)
         self._issued[nonce] = now
         return nonce

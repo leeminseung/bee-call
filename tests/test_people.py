@@ -158,18 +158,23 @@ def test_the_app_changes_its_settings(tmp_path):
 
 def test_without_a_sign_in_only_this_machine_gets_the_dev_person(tmp_path, monkeypatch):
     me = signed_in(tmp_path)
+    dev = {"X-Bee-Call-Dev": "1"}
 
     async def main():
         async with TestClient(TestServer(app_for(me.people))) as client:
             plain = await client.get("/me")
-            proxied = await client.get("/me", headers={"X-Forwarded-For": "203.0.113.9"})
-            wrong = await client.get("/me", headers={"Authorization": "Bearer made-up"})
-            return plain.status, proxied.status, wrong.status
+            marked = await client.get("/me", headers=dev)
+            proxied = await client.get("/me", headers={**dev, "X-Forwarded-For": "203.0.113.9"})
+            wrong = await client.get("/me", headers={**dev, "Authorization": "Bearer made-up"})
+            elsewhere = await client.get("/me", headers={**dev, "Host": "evil.example"})
+            return plain.status, marked.status, proxied.status, wrong.status, elsewhere.status
 
-    assert asyncio.run(main()) == (401, 401, 401)
+    assert asyncio.run(main()) == (401, 401, 401, 401, 421)
     monkeypatch.setenv("BEE_CALL_DEV_PERSON", "matt")
-    # From this machine without a token: the dev person. Through a proxy, or with a wrong token: no one.
-    assert asyncio.run(main()) == (200, 401, 401)
+    # Only from this machine, with the header no web page can send cross-site, and only off a server.
+    assert asyncio.run(main()) == (401, 200, 401, 401, 421)
+    monkeypatch.setenv("BEE_CALL_PUBLIC_HOST", "call.example.com")
+    assert asyncio.run(main()) == (401, 401, 401, 401, 421)
 
 
 # ---------- one person's things stay theirs ----------
@@ -271,9 +276,40 @@ def test_each_person_s_bee_calls_use_their_own_login(tmp_path, fake_bee):
     matt, jiwoo, nobody = asyncio.run(main())
     assert matt["first_name"] == "Matt" and jiwoo["first_name"] == "Matt"  # the fake answers the same
     assert nobody == "Bee is not connected for this person"
-    folders = sorted(Path(entry["folder"]).name for entry in who_log(fake_bee))
-    parents = {Path(entry["folder"]).parent.name for entry in who_log(fake_bee)}
-    assert folders == ["bee", "bee"] and parents == {"matt", "jiwoo"}
+    folders = {Path(entry["folder"]) for entry in who_log(fake_bee)}
+    assert folders == {people.bee_dir("matt"), people.bee_dir("jiwoo")}
+
+
+def test_bee_calls_fail_until_someone_s_login_is_chosen(tmp_path, fake_bee):
+    async def nobody_chosen():
+        try:
+            await cli.me()
+        except cli.BeeError as exc:
+            return str(exc)
+
+    import contextvars
+    # A fresh context, as if a new loop forgot use_bee(): no fallback to this machine's own Bee login.
+    assert "no person's Bee login was chosen" in contextvars.Context().run(asyncio.run, nobody_chosen())
+
+
+def test_the_meta_agent_s_file_tools_cannot_reach_a_bee_login(tmp_path):
+    from meta import files
+
+    people = People(tmp_path / "data")
+    people.add("matt")
+    ws = people.workspace("matt")
+    login = people.bee_dir("matt")
+    login.mkdir(parents=True)
+    (login / "token-prod").write_text("secret-bee-token")
+    assert not login.resolve().is_relative_to(ws.resolve())  # outside the folder the tools browse
+    # Even a login left inside a workspace (the layout before) stays hidden.
+    (ws / "bee").mkdir()
+    (ws / "bee" / "token-prod").write_text("secret-bee-token")
+    (ws / "bee" / "pairing-prod.json").write_text('{"secret": "x"}')
+    assert "token-prod" not in files.list_files(ws, "bee") and "pairing" not in files.list_files(ws, "bee")
+    with pytest.raises(files.FileError):
+        files.read_file(ws, "bee/token-prod")
+    assert "secret" not in files.grep(ws, "secret")
 
 
 def test_connecting_and_disconnecting_bee_from_the_app(tmp_path, fake_bee, monkeypatch):
@@ -301,29 +337,40 @@ def test_connecting_and_disconnecting_bee_from_the_app(tmp_path, fake_bee, monke
 
 # ---------- the daily budget ----------
 
-def test_spend_counts_calls_jobs_and_meta_thinks_of_today(tmp_path):
+def test_spend_counts_calls_prep_jobs_searches_and_meta_thinks_of_today(tmp_path):
+    from livekit.agents.metrics.usage import LLMModelUsage, STTModelUsage, TTSModelUsage
+
     ws = tmp_path
     now = datetime(2026, 10, 14, 21, 0)
     done = ws / "2026-10-14" / "2000"
     (done / "jobs" / "01").mkdir(parents=True)
-    (done / "usage.json").write_text(json.dumps({"minutes": 10, "models": [
-        {"type": "llm_usage", "provider": "aws", "model": "zai.glm-5", "input_tokens": 1_000_000, "output_tokens": 0},
-        {"type": "stt_usage", "provider": "aws", "model": "transcribe", "audio_duration": 600.0},
-        {"type": "tts_usage", "provider": "elevenlabs", "model": "eleven_v4_turbo", "characters_count": 5000}]}))
-    (done / "jobs" / "01" / "usage.json").write_text(json.dumps({"input_tokens": 0, "output_tokens": 1_000_000}))
+    # What voice/agent.py writes: LiveKit's own usage entries, with the providers as its plugins name them.
+    models = [LLMModelUsage(provider="AWS Bedrock", model="zai.glm-5", input_tokens=1_000_000),
+              STTModelUsage(provider="Amazon Transcribe", model="en-US", audio_duration=600.0),
+              TTSModelUsage(provider="Amazon Polly", model="neural", characters_count=10_000),
+              TTSModelUsage(provider="ElevenLabs", model="eleven_v4_turbo", characters_count=5000)]
+    (done / "usage.json").write_text(json.dumps({"minutes": 10, "models": [m.model_dump() for m in models]}, default=str))
+    (done / "events.jsonl").write_text(json.dumps({"t": 1.0, "type": "call_prep", "model": "zai.glm-5",
+                                                   "input_tokens": 100_000, "output_tokens": 0}) + "\n")
+    (done / "jobs" / "01" / "usage.json").write_text(json.dumps({
+        "input_tokens": 0, "output_tokens": 1_000_000,
+        "steps": [{"round_s": 3.0, "calls": [{"name": "web_search", "s": 9.0}, {"name": "save_file", "s": 0.1}]},
+                  {"round_s": 2.0, "calls": [{"name": "web_search", "s": 8.0}]}]}))
     going = ws / "2026-10-14" / "2050"
     going.mkdir(parents=True)
     (going / "events.jsonl").write_text('{"t": 0.0, "type": "call_started"}\n{"t": 120.0, "type": "message"}\n')
     yesterday = ws / "2026-10-13" / "2000"
     yesterday.mkdir(parents=True)
     (yesterday / "usage.json").write_text(json.dumps({"models": [
-        {"type": "stt_usage", "provider": "aws", "audio_duration": 6000.0}]}))
+        STTModelUsage(provider="Amazon Transcribe", model="en-US", audio_duration=6000.0).model_dump()]}))
     (ws / "meta").mkdir()
     (ws / "meta" / "session.jsonl").write_text("\n".join(json.dumps(e) for e in [
         {"at": "2026-10-14T19:00:00", "model": "zai.glm-5", "usage": {"input_tokens": 500_000, "output_tokens": 0}},
         {"at": "2026-10-13T19:00:00", "model": "zai.glm-5", "usage": {"input_tokens": 9_000_000, "output_tokens": 0}},
     ]) + "\n")
-    expected = 1.00 + 600 * costs.STT_USD_PER_SECOND + 3.20 + 2 * costs.CALL_USD_PER_MINUTE + 0.50
+    call = 1.00 + 600 * costs.STT_USD_PER_SECOND + 10_000 * costs.POLLY_USD_PER_CHAR["neural"]  # ElevenLabs: 0
+    prep, job = 0.10, 3.20 + 2 * costs.WEB_SEARCH_USD
+    expected = call + prep + job + 2 * costs.CALL_USD_PER_MINUTE + 0.50
     assert costs.spent_today(ws, now) == pytest.approx(expected)
 
 
@@ -394,3 +441,80 @@ def test_a_call_can_skip_keeping_its_audio(tmp_path):
     kept = CallRecorder(tmp_path, "call-y")
     kept.close()
     assert (kept.dir / "audio").is_dir()
+
+
+# ---------- the voice server and the loops between calls ----------
+
+def test_a_call_is_answered_only_for_an_approved_person(tmp_path, monkeypatch):
+    from voice.agent import person_for_call
+
+    people = People(tmp_path / "data")
+    people.add("matt")
+    assert person_for_call({"person": "matt"}, people) == "matt"
+    assert person_for_call({"person": "jiwoo"}, people) is None  # not approved
+    assert person_for_call({"person": "../matt"}, people) is None
+    assert person_for_call({}, people) is None  # no person and no dev person
+    monkeypatch.setenv("BEE_CALL_DEV_PERSON", "matt")
+    assert person_for_call({}, people) == "matt"  # a console call or a test caller on the Mac
+    assert person_for_call({"person": "jiwoo"}, people) is None  # the dev person never stands in for someone else
+
+
+def test_one_person_s_loops_stop_together_and_none_outlive_the_supervisor(tmp_path, monkeypatch):
+    from voice import outbound
+
+    people = People(tmp_path / "data")
+    people.add("matt")
+    people.change_settings("matt", {"bee": True}, allowed=("bee",))
+    alive = {"offers": 0, "meta": 0}
+
+    async def forever(kind):
+        alive[kind] += 1
+        try:
+            await asyncio.Event().wait()
+        finally:
+            alive[kind] -= 1
+
+    async def offers(*args, **kwargs):
+        await forever("offers")
+
+    async def meta(*args, **kwargs):
+        await forever("meta")
+
+    class BrokenWatcher:  # the Bee stream cannot start, every time
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self):
+            raise OSError("bee: command not found")
+
+    monkeypatch.setattr(outbound, "serve_offers", offers)
+    monkeypatch.setattr(outbound, "serve_meta", meta)
+    monkeypatch.setattr(outbound, "BeeWatcher", BrokenWatcher)
+    monkeypatch.setattr(outbound, "PEOPLE_CHECK_S", 0.01)
+
+    async def main():
+        supervisor = asyncio.create_task(outbound.serve_people(people))
+        most = 0
+        for _ in range(50):  # about 50 restarts of matt's loops
+            await asyncio.sleep(0.01)
+            most = max(most, alive["offers"], alive["meta"])
+        supervisor.cancel()
+        await asyncio.gather(supervisor, return_exceptions=True)
+        return most
+
+    assert asyncio.run(main()) <= 1  # never a second set beside the first
+    assert alive == {"offers": 0, "meta": 0}  # nothing left once the supervisor stopped
+
+
+def test_moving_an_old_workspace_keeps_the_worker_harness_for_everyone(tmp_path, monkeypatch, capsys):
+    from voice import people as people_module
+
+    old = tmp_path / "workspace"
+    (old / "state").mkdir(parents=True)
+    (old / "state" / "harness.json").write_text('{"harnessArn": "arn:aws:bedrock-agentcore:x"}')
+    (old / "2026-10-14" / "2100").mkdir(parents=True)
+    people_module.main(["--data", str(tmp_path / "data"), "add", "matt"])
+    people_module.main(["--data", str(tmp_path / "data"), "move", str(old), "--to", "matt"])
+    assert json.loads((tmp_path / "data" / "harness.json").read_text())["harnessArn"].endswith(":x")
+    assert (tmp_path / "data" / "people" / "matt" / "2026-10-14" / "2100").is_dir()
+    assert "Bee is not connected for matt yet" in capsys.readouterr().out

@@ -17,7 +17,7 @@ Status: work in progress for the Amazon "Build, Ship, Shape" hackathon (Bee trac
 | Session screen (`web/`, `voice/session_server.py`) | this Mac | Live view of a call: transcript, why the AI called, job cards |
 | Token server (`voice/token_server.py`) | this Mac | Hands LiveKit room tokens to the app, and tells an open app when the AI is calling |
 
-One server serves several people (`voice/people.py`). Each person has a folder, `data/people/<id>/`, and every call is kept there as plain files under `<date>/<time>/`: `transcript.md`, `events.jsonl`, `audio/` (raw audio, only while the person keeps audio on the server), `inputs/` (raw Bee data), `prep.md` (the call prep note), `jobs/`, `bee-queue.jsonl`, `usage.json`. The folder also holds `settings.json` (call language, evening call time, recording switches, daily budget), the meta agent's files, and the person's own Bee login (`bee/`) once they connect Bee. `data/` is not in git.
+One server serves several people (`voice/people.py`). Each person has a folder, `data/people/<id>/`, and every call is kept there as plain files under `<date>/<time>/`: `transcript.md`, `events.jsonl`, `audio/` (raw audio, only while the person keeps audio on the server), `inputs/` (raw Bee data), `prep.md` (the call prep note), `jobs/`, `bee-queue.jsonl`, `usage.json`. The folder also holds `settings.json` (call language, evening call time, recording switches, daily budget) and the meta agent's files. The person's own Bee login, once they connect Bee, sits outside it in `data/bee/<id>/`, where the meta agent's file tools cannot reach it. `data/` is not in git.
 
 ## Setup
 
@@ -45,9 +45,9 @@ uv run python -m voice.people set jiwoo daily_budget_usd 2
 uv run python -m voice.people remove jiwoo            # takes access away; the folder stays
 ```
 
-On a Mac, `uv run python -m voice.people add matt` approves a person for use from the Mac alone, and `BEE_CALL_DEV_PERSON=matt` in `.env.local` lets requests made on the Mac without a sign-in act as them (curl, `voice.fake_caller`, `voice.agent console`). Never set it on a server. A single-user `workspace/` from before moves in with `uv run python -m voice.people move workspace --to matt`.
+On a Mac, `uv run python -m voice.people add matt` approves a person for use from the Mac alone, and `BEE_CALL_DEV_PERSON=matt` in `.env.local` lets requests made on the Mac without a sign-in act as them when they carry the header `X-Bee-Call-Dev: 1` (curl, `voice.fake_caller`, `voice.agent console`). It is ignored on a server (where `BEE_CALL_PUBLIC_HOST` is set); never set it there anyway. A single-user `workspace/` from before moves in with `uv run python -m voice.people move workspace --to matt`; the worker's `state/harness.json` goes to `data/harness.json`, for everyone. Bee then has to be connected again for that person, since their login now lives in their own folder: turn on Use Bee in the app, or run `curl -X POST http://localhost:8787/bee/connect -H 'X-Bee-Call-Dev: 1'` and open the link it returns on the phone.
 
-Each person's day has a budget (`daily_budget_usd`, 3 USD by default): an estimate from the calls' minutes and model use, background jobs and the meta agent (`voice/costs.py`). Past it, the app's new calls are refused and agreed AI calls wait for the next day.
+Each person's day has a budget (`daily_budget_usd`, 3 USD by default): an estimate from the calls' minutes and model use, background jobs and the meta agent (`voice/costs.py`). Past it, the app's new calls are refused, agreed AI calls are not placed (the offer says why), and the meta agent waits for the next day.
 
 ## Run
 
@@ -56,7 +56,7 @@ uv run python -m voice.token_server                       # tokens for the app (
 COORDINATOR_LLM=claude uv run python -m voice.agent dev   # the voice server
 uv run python voice/session_server.py                     # the session screen (port 8788)
 uv run python -m voice.outbound                           # watch Bee and let the AI call when it is worth it
-uv run python -m beelink.writer data/people/<id>/<date>/<time>   # after a call: dry run of Bee writes; --apply writes
+uv run python -m beelink.writer data/people/<id>/<date>/<time>   # after a call: dry run of that person's Bee writes; --apply writes
 ```
 
 The voice server joins only rooms it is dispatched to, as the agent `bee-call`. A call the user starts gets it through the app's token. A call the AI starts gets it from `voice/dispatch.py`, with metadata that says why the AI is calling; the voice server then waits up to 60 seconds for the phone to answer. The phone rings in two ways: an open app hears the call on the token server's `/ring` stream, and a closed or locked one gets an Apple VoIP push (`voice/voip_push.py`). For the push, create an APNs key in the Apple Developer account (Certificates, Identifiers & Profiles, Keys, with Apple Push Notifications service), keep the `.p8` file outside the repository, and set `APNS_KEY_PATH`, `APNS_KEY_ID` and `APNS_TEAM_ID` in `.env.local`. The app registers its push token with the token server (`POST /voip`) whenever it reaches it, and shows "also while the app is closed" once that worked. On a push, the app reports the call to CallKit at once, as iOS requires for every VoIP push, and a ring that already rang or expired is reported and ended.

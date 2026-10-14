@@ -8,8 +8,9 @@ Whose Bee: one server serves several people (voice/people.py), each with their o
 Bee login in their own folder. use_bee() sets the folder for the work that follows in
 the current task (a context variable, copied into tasks started from it); the CLI then
 keeps its login in files there (BEE_CONFIG_DIR, BEE_FORCE_FILE_STORE). use_bee(None)
-means this person has not connected Bee, and every call fails with BeeError. Where
-use_bee() was never called, the CLI uses this machine's own login (a single-user Mac).
+means this person has not connected Bee. Every call fails with BeeError then, and also
+where use_bee() was never called, so a Bee call cannot land in the wrong person's account
+by accident. use_machine_bee() opts into this machine's own Bee login (tests, probes).
 
 Set BEE_BIN to point at another executable (the tests use a fake one).
 """
@@ -34,6 +35,7 @@ class BeeError(RuntimeError):
 @dataclass(frozen=True)
 class BeeLogin:
     folder: Path | None  # None: this person has not connected Bee
+    machine: bool = False  # this machine's own Bee login instead of a person's folder
 
 
 _login: ContextVar[BeeLogin | None] = ContextVar("bee_login", default=None)
@@ -44,6 +46,11 @@ def use_bee(folder: Path | None) -> None:
     _login.set(BeeLogin(folder))
 
 
+def use_machine_bee() -> None:
+    """This machine's own Bee login (the keychain on a Mac), for tests and probes run by hand."""
+    _login.set(BeeLogin(None, machine=True))
+
+
 def login_env(folder: Path) -> dict[str, str]:
     return {**os.environ, "BEE_CONFIG_DIR": str(folder), "BEE_FORCE_FILE_STORE": "1"}
 
@@ -52,7 +59,9 @@ def run_env() -> dict[str, str] | None:
     """The environment for running the CLI as the current person (None: this machine's own login)."""
     login = _login.get()
     if login is None:
-        return None  # this machine's own login
+        raise BeeError("no person's Bee login was chosen for this work (beelink/cli.py use_bee)")
+    if login.machine:
+        return None
     if login.folder is None:
         raise BeeError("Bee is not connected for this person")
     return login_env(login.folder)

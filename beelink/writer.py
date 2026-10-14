@@ -113,12 +113,33 @@ async def run(session_dir: Path, apply: bool) -> list[dict[str, Any]]:
     return results
 
 
+def person_of(session_dir: Path, people) -> str:
+    """The person whose call folder this is: data/people/<id>/<date>/<time>, inside the data root."""
+    session_dir = session_dir.resolve()
+    person = session_dir.parent.parent.name
+    if session_dir.parent.parent != people.folder(person).resolve():
+        raise SystemExit(f"{session_dir} is not a call folder under {people.root.resolve()}/people/<id>/")
+    return person
+
+
 def main() -> None:
+    from voice.people import People
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("session_dir", type=Path)
+    parser.add_argument("session_dir", type=Path, help="a call folder, data/people/<id>/<date>/<time>")
     parser.add_argument("--apply", action="store_true", help="really write to Bee (default is a dry run)")
     args = parser.parse_args()
-    asyncio.run(run(args.session_dir, args.apply))
+    people = People()
+    person = person_of(args.session_dir, people)
+    if not people.settings(person).bee:
+        raise SystemExit(f"{person} has not connected Bee; nothing can be written")
+    print(f"writing to {person}'s Bee")
+
+    async def as_person() -> None:
+        cli.use_bee(people.bee_dir(person))  # only this person's Bee account
+        await run(args.session_dir, args.apply)
+
+    asyncio.run(as_person())
 
 
 if __name__ == "__main__":

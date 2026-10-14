@@ -179,6 +179,13 @@ def wire_events(session: AgentSession, rec: CallRecorder) -> None:
         rec.event("session_closed", reason=str(getattr(ev, "reason", "")))
 
 
+def person_for_call(meta: dict, people: People) -> str | None:
+    """Whose call this is: the person in the dispatch metadata, or on a Mac the dev person for a call without one
+    (console, test callers). None when that is no approved person: the call is not answered."""
+    person = meta.get("person") or dev_person()
+    return person if isinstance(person, str) and people.known(person) else None
+
+
 def write_usage(rec: CallRecorder, session: AgentSession) -> None:
     """The call's minutes and model use, for the person's daily budget (voice/costs.py)."""
     try:
@@ -236,9 +243,9 @@ async def entrypoint(ctx: JobContext) -> None:
     meta = call_meta(ctx.job.metadata)
     started = time.monotonic()
     people = People()
-    person = meta.get("person") or dev_person()  # no person: a console call or a test caller on a Mac
-    if not person or not people.known(person):
-        log.error("call in room %s is for no approved person (%r); not answering", ctx.room.name, person)
+    person = person_for_call(meta, people)
+    if person is None:
+        log.error("call in room %s is for no approved person (%r); not answering", ctx.room.name, meta.get("person"))
         ctx.shutdown(reason="no approved person for this call")
         return
     workspace = people.workspace(person)
@@ -352,7 +359,8 @@ async def entrypoint(ctx: JobContext) -> None:
         if preparation is not None:
             await preparation.done
         rec.event("call_prep", seconds=prep.seconds, model=prep.model, reads=prep.reads, note=prep.note,
-                  opening=prep.opening, error=prep.error)
+                  opening=prep.opening, error=prep.error, input_tokens=prep.input_tokens,
+                  output_tokens=prep.output_tokens)
         if prep.note:
             (rec.dir / "prep.md").write_text(f"# Call prep note\n\n{prep.note}\n\nOpening: {prep.opening}\n")
 

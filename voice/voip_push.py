@@ -136,7 +136,8 @@ async def _send(kind: str, payload: dict[str, Any], workspace: Path, config: Apn
     device = load_device_token(workspace, kind)
     if config is None or device is None:
         return None
-    token = provider_token(config, cache=workspace / PROVIDER_TOKEN_FILE)
+    # One cache for every person: APNs counts token renewals per signing key, not per person.
+    token = provider_token(config, cache=Path(os.environ.get("BEE_CALL_DATA") or "data") / PROVIDER_TOKEN_FILE.name)
     topic = f"{config.bundle_id}.voip" if kind == "voip" else config.bundle_id
     headers = {"authorization": f"bearer {token}", "apns-topic": topic, "apns-push-type": kind,
                "apns-priority": "10"}

@@ -6,9 +6,12 @@ Under the data root (BEE_CALL_DATA, default data/):
   people/<id>/        one person's workspace, with the folders a single workspace always had (calls by date,
                       inbox/, meta/, state/), plus
     settings.json     their call language, evening call time, recording switches and daily budget
-    bee/              their Bee CLI login (BEE_CONFIG_DIR, beelink/cli.py), once they connected Bee
+  bee/<id>/           their Bee CLI login (BEE_CONFIG_DIR, beelink/cli.py), once they connected Bee. Outside
+                      the workspace on purpose: the meta agent's file tools browse the workspace, and this
+                      folder holds a credential
   accounts.json       Apple sign-in ids of approved people, and of those waiting for Matt's approval
   sessions.json       the sign-in tokens the app holds, kept only as hashes
+  harness.json        the background worker's AgentCore harness (scripts/deploy_worker.py), for everyone
 
 Every request, call and tool works inside one person's folder, so one person's calls, Bee data and notes never
 reach another person's AI or screen.
@@ -160,7 +163,8 @@ class People:
         return folder
 
     def bee_dir(self, person: str) -> Path:
-        return self.folder(person) / "bee"
+        self.folder(person)  # checks the id
+        return self.root / "bee" / person
 
     def ids(self) -> list[str]:
         """Everyone approved."""
@@ -341,9 +345,16 @@ def main(argv: list[str] | None = None) -> None:
         clashes = [p.name for p in source.iterdir() if (target / p.name).exists()]
         if clashes:
             sys.exit(f"{target} already has {', '.join(sorted(clashes))}; nothing moved")
+        # The background worker's harness is the machine's, not the person's (worker/harness.py reads it here).
+        harness = source / "state" / "harness.json"
+        if harness.exists() and not (people.root / "harness.json").exists():
+            shutil.move(str(harness), people.root / "harness.json")
         for item in sorted(source.iterdir()):
             shutil.move(str(item), target / item.name)
         print(f"moved the contents of {source} into {target}")
+        if not people.settings(args.person).bee:
+            print(f"Bee is not connected for {args.person} yet: turn on Use Bee in the app, or run "
+                  "curl -X POST http://localhost:8787/bee/connect -H 'X-Bee-Call-Dev: 1' on this Mac")
 
 
 if __name__ == "__main__":

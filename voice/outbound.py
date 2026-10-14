@@ -62,7 +62,8 @@ NOW_PREP_S = OPENING_BY_S + 2.0  # "Call me now": ring soon; the note gets this 
 PEOPLE_CHECK_S = 10.0  # how often the list of people and their settings is read again (arbitrary)
 
 
-async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, direct: bool = False) -> str | None:
+async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, direct: bool = False,
+                 person: str | None = None) -> str | None:
     """Decides; a call decision asks the user (returns the offer id), or with `direct` calls at once (returns
     the room)."""
     plan = planner.decide(trigger)
@@ -73,7 +74,7 @@ async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, direct: 
         prep = await prepare_outbound(plan)
         print(f"prepared in {prep.seconds} s: " + (f"opening {prep.opening!r}" if prep.note else
                                                     f"no note ({prep.error})"), flush=True)
-        room = await place_call(plan, planner.workspace, prep=prep.to_meta())
+        room = await place_call(plan, planner.workspace, prep=prep.to_meta(), person=person)
         print(f"calling: room {room}", flush=True)
         return room
     now = planner.now()
@@ -254,11 +255,13 @@ async def serve_person(people: People, person: str, settings: Settings) -> None:
         add_event(workspace, "bee_change", **bee_event(trigger, workspace))
 
     thinker = Thinker(workspace, send=send, call_time=settings.call_time)
-    loops = [serve_offers(workspace, person=person, language=language, over_budget=over_budget),
-             serve_meta(workspace, thinker, language=language, over_budget=over_budget)]
-    if settings.bee:
-        loops.append(BeeWatcher(workspace, on_trigger).run())
-    await asyncio.gather(*loops)
+    # A TaskGroup: if one loop fails, the others stop too, so serve_people() never starts a second set beside
+    # survivors of the first.
+    async with asyncio.TaskGroup() as group:
+        group.create_task(serve_offers(workspace, person=person, language=language, over_budget=over_budget))
+        group.create_task(serve_meta(workspace, thinker, language=language, over_budget=over_budget))
+        if settings.bee:
+            group.create_task(BeeWatcher(workspace, on_trigger).run())
 
 
 async def serve_people(people: People) -> None:
@@ -276,6 +279,7 @@ async def serve_people(people: People) -> None:
                     if task.done() and not task.cancelled() and task.exception():
                         log.error("loops for %s stopped: %r", person, task.exception())
                     task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)  # gone before a new set starts
                     del running[person]
             for person, (settings, key) in wanted.items():
                 if person not in running:
@@ -285,6 +289,7 @@ async def serve_people(people: People) -> None:
     finally:
         for task, _ in running.values():
             task.cancel()
+        await asyncio.gather(*(task for task, _ in running.values()), return_exceptions=True)
 
 
 async def main() -> None:
@@ -326,7 +331,7 @@ async def main() -> None:
     thinker = Thinker(workspace, send=send, call_time=settings.call_time)
     if args.once:
         if args.rules:
-            made = await handle(saved_trigger(args.once), planner, args.dry_run, args.direct)
+            made = await handle(saved_trigger(args.once), planner, args.dry_run, args.direct, person)
             if made and not args.direct:
                 await serve_offers(workspace, until=made, person=person, language=language)  # wait for the answer
             return
@@ -341,7 +346,7 @@ async def main() -> None:
 
     async def on_trigger(trigger: Trigger) -> None:
         # Errors go back to the watcher, which keeps its cursor so the same change is looked at again.
-        await handle(trigger, planner, args.dry_run, args.direct)
+        await handle(trigger, planner, args.dry_run, args.direct, person)
 
     try:
         loops = [] if args.dry_run else [serve_offers(workspace, person=person, language=language)]

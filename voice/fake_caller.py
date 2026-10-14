@@ -33,6 +33,7 @@ from beelink.planner import RulePlanner
 from voice.dispatch import open_inbound_room, place_call
 from voice.outbound import saved_trigger
 from voice.people import People, dev_person
+from beelink import cli as bee
 from voice.prep import PREP_SECONDS, prepare_outbound
 
 load_dotenv(".env.local")
@@ -117,7 +118,9 @@ def main() -> None:
     person = dev_person()  # the call is recorded in this person's folder, like a call from their phone
     if not person:
         raise SystemExit("set BEE_CALL_DEV_PERSON to the person whose folder the test call goes into")
-    workspace = People().workspace(person)
+    people = People()
+    workspace = people.workspace(person)
+    bee.use_bee(people.bee_dir(person) if people.settings(person).bee else None)  # the call prep reads their Bee
 
     lines = args.line or DEFAULT_LINES[args.language]
     voice, engine = (args.voice, "generative") if args.voice else CALLER_VOICES[args.language]
