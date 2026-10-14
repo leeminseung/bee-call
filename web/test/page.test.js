@@ -108,3 +108,15 @@ test("a record from before the call event keeps its Bee conversation card", () =
   assert.match(page.text(card), /Planned a Saturday hike with Dana and promised to pick a trail by tonight\./);
   assert.match(page.text(card), /From your Bee conversation/);
 });
+
+// ---------- wording (contract section 8) ----------
+
+test("when the records cannot be reached, no page says it is the Mac", async () => {
+  for (const hash of ["#/", "#/calls", "#/meta"]) {
+    const page = loadPage({ hash }); // every request fails, as with no network
+    await page.settle();
+    const note = page.visibleText(page.byId("view"));
+    assert.match(note, /Can't reach the call records right now\. Retrying…/, hash);
+    assert.doesNotMatch(note, /\bMac\b/, hash);
+  }
+});

@@ -209,7 +209,7 @@
     view.replaceChildren(el("p", "empty", text));
   }
 
-  const UNREACHABLE = "Can't reach the session server on the Mac. Retrying…";
+  const UNREACHABLE = "Can't reach the call records right now. Retrying…"; // the server is on the Mac or in the cloud
   const NO_CALLS = "No calls yet. When the AI calls you, the call shows up here.";
 
   // ---------- file viewer (keeps the iPhone web view on this page) ----------
