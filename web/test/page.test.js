@@ -323,3 +323,14 @@ test("a write Bee may have taken without saying so asks the person to check Bee 
   assert.match(todo.rest, /may have gone in/);
   assert.doesNotMatch(todo.rest, /tries again/);
 });
+
+test("between calls, a missed and a declined AI call read as words, not as event names", async () => {
+  const meta = { state: "", entries: [{ at: "2026-10-15T21:05:00+09:00", events: [
+    { kind: "call_missed", topic: "Saturday hike" }, { kind: "call_declined", topic: "Saturday hike" }] }] };
+  const page = loadPage({ hash: "#/meta", fetch: async () => ({ ok: true, json: async () => meta }) });
+  await page.settle();
+  const text = page.visibleText(page.byId("view"));
+  assert.match(text, /You did not answer an AI call about “Saturday hike”/);
+  assert.match(text, /You declined an AI call about “Saturday hike”/);
+  assert.doesNotMatch(text, /call_missed|call_declined/);
+});

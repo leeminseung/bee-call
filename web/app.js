@@ -313,6 +313,8 @@
     call_ended: (e) => `A call ended (${e.call || ""})`,
     offer_answered: (e) => `You answered an offer about “${e.topic || ""}”: ${e.choice || ""}`,
     booked_soon: (e) => `A booked call is coming up at ${atLabel(e.call_at)}: “${e.topic || ""}”`,
+    call_missed: (e) => `You did not answer an AI call about “${e.topic || ""}”`,
+    call_declined: (e) => `You declined an AI call about “${e.topic || ""}”`,
   };
 
   class MetaPage {
