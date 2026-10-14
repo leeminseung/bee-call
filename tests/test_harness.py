@@ -3,6 +3,8 @@
 import asyncio
 import json
 
+import pytest
+
 from worker.harness import INLINE_FUNCTIONS, HarnessWorker, harness_definition, read_round
 from worker.runner import Job
 from worker.web_search import SearchResult
@@ -246,3 +248,65 @@ def test_a_warm_up_that_calls_a_tool_is_told_not_to(tmp_path):
     asyncio.run(main())
     answer = harness.requests[1]["messages"][0]["content"][0]["toolResult"]
     assert answer["toolUseId"] == "w1" and answer["status"] == "error"
+
+
+# ---------- what a job costs reaches the daily budget (server review finding 4, repro s10) ----------
+
+def searching_rounds(n: int, tokens: int = 1_000_000):
+    """n rounds that each search the web once and report `tokens` input tokens."""
+    rounds = [assistant(("tool", f"s{i}", "web_search", [json.dumps({"question": f"q{i}"})])) for i in range(n)]
+    for r in rounds:
+        r[-1] = {"metadata": {"usage": {"inputTokens": tokens, "outputTokens": 0}}}
+    return rounds
+
+
+def run_in_a_call(tmp_path, harness, cancel_after: float | None = None) -> str:
+    """Runs one job in a call folder of today; returns how it ended."""
+    from datetime import datetime
+    from worker.runner import JobRunner
+
+    call = tmp_path / datetime.now().strftime("%Y-%m-%d") / "0100"
+    call.mkdir(parents=True)
+
+    async def main():
+        async def notify(news):
+            pass
+
+        runner = JobRunner(call, lambda *a, **k: None, HarnessWorker("arn:harness", client=harness, search=fake_search),
+                           notify)
+        runner.start("research something")
+        if cancel_after is not None:
+            await asyncio.sleep(cancel_after)
+            await runner.cancel_all()  # the call ended
+        await asyncio.gather(*runner.tasks.values(), return_exceptions=True)
+        return runner.jobs["01"].status
+
+    return asyncio.run(main())
+
+
+def test_a_failed_job_still_counts_what_it_used(tmp_path):
+    from datetime import datetime
+    from voice.costs import WEB_SEARCH_USD, spent_today
+
+    rounds = searching_rounds(5) + [assistant(("text", "Still going"), stop="max_iterations_exceeded")]
+    assert run_in_a_call(tmp_path, FakeHarness(rounds)) == "failed"
+    rounds_cost = 5 * 1.00 + 5 * WEB_SEARCH_USD + (100 / 1_000_000) * 1.00 + (10 / 1_000_000) * 3.20  # the last round
+    assert spent_today(tmp_path, datetime.now()) == pytest.approx(rounds_cost)
+
+
+class SlowHarness(FakeHarness):
+    """Each round takes a while, as the real one does."""
+
+    def invoke_harness(self, **params):
+        import time
+        time.sleep(0.2)
+        return super().invoke_harness(**params)
+
+
+def test_a_job_cancelled_when_the_call_ends_still_counts_its_rounds_so_far(tmp_path):
+    from datetime import datetime
+    from voice.costs import WEB_SEARCH_USD, spent_today
+
+    assert run_in_a_call(tmp_path, SlowHarness(searching_rounds(10)), cancel_after=0.5) == "cancelled"
+    spent = spent_today(tmp_path, datetime.now())
+    assert spent >= 1.00 + WEB_SEARCH_USD  # at least the rounds that finished before the call ended

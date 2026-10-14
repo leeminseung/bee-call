@@ -9,6 +9,7 @@ of at most two sentences. It is a test stand-in, not the product.
 from typing import Awaitable, Callable
 
 from beelink.clock import now_text
+from worker.harness import write_usage
 from worker.runner import Job
 from worker.web_search import SearchResult, web_search
 
@@ -22,6 +23,8 @@ class SearchWorker:
     async def run(self, job: Job, progress: Callable[[str], None],
                   relay: Callable[[str], Awaitable[None]]) -> str:
         progress("Searching the web")
+        # One search, counted in the daily budget from the moment it is sent (voice/costs.py job_cost).
+        write_usage(job, {"input_tokens": 0, "output_tokens": 0, "steps": [{"calls": [{"name": "web_search"}]}]})
         # The search model has no clock either; give it today's date for relative dates.
         result = await self.search(f"{job.task} (It is now {now_text()}.)")
         (job.dir / "report.md").write_text(f"# Report for job {job.job_id}\n\nTask: {job.task}\n\n{result.markdown()}")
