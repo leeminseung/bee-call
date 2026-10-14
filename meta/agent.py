@@ -165,12 +165,14 @@ def context(workspace: Path, events: list[dict[str, Any]], now: datetime) -> str
 class Thinker:
     """One think(): a Converse tool loop. `client` and `send` can be fakes in tests."""
 
-    def __init__(self, workspace: Path, model: tuple[str, str] | None = None, client=None, send: Send | None = None):
+    def __init__(self, workspace: Path, model: tuple[str, str] | None = None, client=None, send: Send | None = None,
+                 call_time: str | None = None):
         self.workspace = workspace
         self.model = model or prep_model(os.environ.get("COORDINATOR_LLM", "bedrock")) or \
             ("zai.glm-5", os.environ.get("BEDROCK_REGION", "ap-southeast-2"))
         self.client = client
         self.send = send
+        self.call_time = call_time  # the evening time an offer suggests (the person's setting; CALL_TIME when None)
 
     async def _tool(self, name: str, args: dict[str, Any], now: datetime, actions: list[dict[str, Any]]) -> str:
         ws = self.workspace
@@ -229,7 +231,7 @@ class Thinker:
         ids = [int(i) for i in args.get("conversation_ids") or []]
         plan = Plan(call=True, reason=why, inbox_dir=inbox_dir, conversation_ids=ids, topic=topic,
                     kind="conversation" if ids else None)
-        offer = store.ask(plan, now)
+        offer = store.ask(plan, now, at=self.call_time)
         sent = await self.send(offer, self.workspace, now) if self.send else "not sent (no sender)"
         actions.append({"tool": "offer_call", "offer": offer.id, "topic": topic, "result": sent})
         return f"Asked: offer {offer.id}, suggesting {offer.suggested_at}. {sent}"
@@ -246,11 +248,16 @@ class Thinker:
         now = now or datetime.now()
         started = time.monotonic()
         entry: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "events": events, "model": self.model[0],
-                                 "tools": [], "actions": [], "decision": ""}
+                                 "tools": [], "actions": [], "decision": "",
+                                 "usage": {"input_tokens": 0, "output_tokens": 0}}  # for voice/costs.py
         messages = [{"role": "user", "content": [{"text": context(self.workspace, events, now)}]}]
         try:
             for _ in range(MAX_ROUNDS):
-                reply = (await self._converse(INSTRUCTIONS, messages))["output"]["message"]
+                response = await self._converse(INSTRUCTIONS, messages)
+                used = response.get("usage") or {}
+                entry["usage"]["input_tokens"] += int(used.get("inputTokens") or 0)
+                entry["usage"]["output_tokens"] += int(used.get("outputTokens") or 0)
+                reply = response["output"]["message"]
                 messages.append(reply)
                 text = "".join(block.get("text", "") for block in reply["content"]).strip()
                 uses = [block["toolUse"] for block in reply["content"] if "toolUse" in block]

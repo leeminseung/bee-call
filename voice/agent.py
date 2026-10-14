@@ -22,6 +22,8 @@ The server joins only rooms it is dispatched to, as the agent named AGENT_NAME:
 the app's token dispatches it for a call the user starts, and voice/dispatch.py
 for a call the AI starts. The dispatch metadata says which, and for an AI call
 why it is calling; the AI then waits for the phone to answer before speaking.
+It also names the person (voice/people.py): the call is recorded in their folder,
+in their language and voice, and reads only their Bee.
 
 Run: uv run python -m voice.agent dev       (joins rooms on LiveKit Cloud)
      uv run python -m voice.agent console   (this Mac's mic and speakers)
@@ -40,6 +42,7 @@ from livekit.agents import AgentServer, AgentSession, JobContext, JobProcess, cl
 from livekit.plugins import aws, silero
 from livekit.plugins.aws.stt import Credentials
 
+from beelink import cli as bee
 from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
 from voice.claude_llm import ClaudeBedrockLLM
 from voice.continuation import earlier_call
@@ -48,7 +51,8 @@ from voice.coordinator import Coordinator
 from voice.dispatch import AGENT_NAME, RING_SECONDS
 from voice.echo_llm import EchoLLM
 from voice.fake_claude import FakeAnthropic
-from voice.language import call_language
+from voice.language import CallLanguage, call_language
+from voice.people import People, dev_person
 from voice.prep import INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_model
 from voice.recorder import CallRecorder
 from voice.ringback import STATE_ATTRIBUTE, ring_back
@@ -62,8 +66,6 @@ load_dotenv(".env.local")
 PROFILE = os.environ.get("AWS_PROFILE", "bee-call")
 REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", REGION)
-LANGUAGE = call_language()  # CALL_LANGUAGE: en (default) or ko, see voice/language.py
-VOICE = voice_choice(LANGUAGE)  # TTS: polly (default) or elevenlabs, see voice/voices.py
 COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
 # For COORDINATOR_LLM=bedrock. GLM 5 speaks while it calls a tool. MiniMax M2.5 scored best in
 # probes/coordinator_bench.py (2026-10-12) but calls tools without a word, and in the first real
@@ -74,7 +76,6 @@ FIRST_WORDS_WAIT_S = 6.0  # ringing stops when the AI starts to speak, or after 
 # After the user answers an AI call, its prepared opening does not wait longer than this for the Bee read
 # that only feeds the call record (arbitrary).
 OUTBOUND_INPUTS_WAIT_S = 0.5
-WORKSPACE = Path("workspace")
 
 log = logging.getLogger("bee-call")
 
@@ -178,6 +179,17 @@ def wire_events(session: AgentSession, rec: CallRecorder) -> None:
         rec.event("session_closed", reason=str(getattr(ev, "reason", "")))
 
 
+def write_usage(rec: CallRecorder, session: AgentSession) -> None:
+    """The call's minutes and model use, for the person's daily budget (voice/costs.py)."""
+    try:
+        models = [entry.model_dump() for entry in session.usage.model_usage]
+    except Exception as exc:  # the budget then counts the call by its minutes
+        log.warning("no usage for %s: %s", rec.dir, exc)
+        return
+    (rec.dir / "usage.json").write_text(json.dumps({"minutes": round(rec.elapsed() / 60, 2), "models": models},
+                                                   default=str))
+
+
 def call_meta(raw: str | None) -> dict:
     try:
         meta = json.loads(raw) if raw else {}
@@ -186,9 +198,9 @@ def call_meta(raw: str | None) -> dict:
     return meta if isinstance(meta, dict) else {}
 
 
-def greeting(meta: dict) -> str:
+def greeting(meta: dict, language: CallLanguage) -> str:
     """The first line when there is no prepared opening."""
-    lines = LANGUAGE.greetings
+    lines = language.greetings
     if COORDINATOR_LLM == "echo":
         return lines["echo"]
     if meta.get("earlier_call"):
@@ -223,10 +235,23 @@ server = AgentServer(setup_fnc=prewarm, num_idle_processes=1)
 async def entrypoint(ctx: JobContext) -> None:
     meta = call_meta(ctx.job.metadata)
     started = time.monotonic()
+    people = People()
+    person = meta.get("person") or dev_person()  # no person: a console call or a test caller on a Mac
+    if not person or not people.known(person):
+        log.error("call in room %s is for no approved person (%r); not answering", ctx.room.name, person)
+        ctx.shutdown(reason="no approved person for this call")
+        return
+    workspace = people.workspace(person)
+    settings = people.settings(person)
+    language = call_language(settings.language)
+    tts_voice = voice_choice(language, {**os.environ, **settings.voice_env()})
+    bee.use_bee(people.bee_dir(person) if settings.bee else None)  # only this person's Bee, in this call
     if meta.get("continue_from"):  # the user tapped "Continue this call" in an earlier call's record
-        meta["earlier_call"] = earlier_call(WORKSPACE, meta["continue_from"])
-    meta["meta_notes"] = meta_notes(WORKSPACE)  # the meta agent's agenda and open threads, for the opening
+        meta["earlier_call"] = earlier_call(workspace, meta["continue_from"])
+    meta["meta_notes"] = meta_notes(workspace)  # the meta agent's agenda and open threads, for the opening
     inbox = Path(meta["inbox"]) if meta.get("inbox") else None
+    if inbox is not None and not inbox.resolve().is_relative_to(workspace.resolve()):
+        inbox = None  # only the person's own Bee batches
     conversation_ids = meta.get("conversation_ids") or []
     backend = {"search": SearchWorker, "harness": HarnessWorker}.get(WORKER, FakeWorker)()
     # Wake a cloud worker session now, so the first job does not wait for one to start.
@@ -240,7 +265,7 @@ async def entrypoint(ctx: JobContext) -> None:
             await asyncio.wait_for(ctx.wait_for_participant(), RING_SECONDS)
         except asyncio.TimeoutError:
             log.info("no answer within %ss in room %s", RING_SECONDS, ctx.room.name)
-            add_event(WORKSPACE, "call_missed", room=ctx.room.name, topic=meta.get("topic"), reason=meta.get("reason"))
+            add_event(workspace, "call_missed", room=ctx.room.name, topic=meta.get("topic"), reason=meta.get("reason"))
             inputs_task.cancel()
             if keep_warm:
                 keep_warm.cancel()
@@ -273,7 +298,7 @@ async def entrypoint(ctx: JobContext) -> None:
         async def get_ready() -> CallInputs:
             nonlocal preparation
             got = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S)
-            preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM), language=LANGUAGE).start()
+            preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM), language=language).start()
             await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - started))
             return got
 
@@ -292,8 +317,9 @@ async def entrypoint(ctx: JobContext) -> None:
             return
         inputs = ready.result()
         prep = preparation.prep
-    rec = CallRecorder(WORKSPACE, ctx.job.room.name)
-    rec.event("coordinator", llm=COORDINATOR_LLM, language=LANGUAGE.code, voice=VOICE.describe())
+    rec = CallRecorder(workspace, ctx.job.room.name, keep_audio=settings.record_on_server)
+    rec.event("coordinator", llm=COORDINATOR_LLM, language=language.code, voice=tts_voice.describe(), person=person,
+              audio_on_server=settings.record_on_server, audio_on_phone=settings.record_on_phone)
     rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"),
               continue_from=meta.get("continue_from") if meta.get("earlier_call") else None)
 
@@ -332,9 +358,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     prep_recorder = asyncio.create_task(record_prep())
     session = AgentSession(
-        stt=aws.STT(region=REGION, language=LANGUAGE.transcribe, credentials=ctx.proc.userdata["transcribe_credentials"]),
+        stt=aws.STT(region=REGION, language=language.transcribe, credentials=ctx.proc.userdata["transcribe_credentials"]),
         llm=make_llm(rec),
-        tts=make_tts(VOICE, LANGUAGE, REGION),
+        tts=make_tts(tts_voice, language, REGION),
         vad=ctx.proc.userdata["vad"],
         turn_handling={"turn_detection": inference.TurnDetector()},
     )
@@ -352,8 +378,8 @@ async def entrypoint(ctx: JobContext) -> None:
     # Until (or without) a prep note, the plain Bee context. A note still being written replaces it when it
     # arrives, up to the first reply.
     pending = preparation.done if preparation is not None and not preparation.done.done() else None
-    agent = Coordinator(rec, jobs, WORKSPACE, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
-                        language=LANGUAGE, earlier_call=meta.get("earlier_call"))
+    agent = Coordinator(rec, jobs, workspace, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
+                        language=language, earlier_call=meta.get("earlier_call"))
 
     async def shutdown() -> None:
         if keep_warm:
@@ -367,9 +393,10 @@ async def entrypoint(ctx: JobContext) -> None:
             # Exactly what Claude was sent, for checking a call afterwards.
             (rec.dir / "claude-history.json").write_text(json.dumps(
                 {"system": session.llm.system_prompt, "messages": session.llm.history}, ensure_ascii=False, indent=1))
+        write_usage(rec, session)
         rec.close()
         # The meta agent looks at every call once it is over (meta/agent.py).
-        add_event(WORKSPACE, "call_ended", call=f"{rec.dir.parent.name}/{rec.dir.name}",
+        add_event(workspace, "call_ended", call=f"{rec.dir.parent.name}/{rec.dir.name}",
                   direction=meta.get("direction", "inbound"))
 
     ctx.add_shutdown_callback(shutdown)
@@ -384,7 +411,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session.on("agent_state_changed", lambda ev: ev.new_state == "speaking" and first_words.set())
     try:
         await session.start(room=ctx.room, agent=agent)
-        session.say(prep.opening or greeting(meta))
+        session.say(prep.opening or greeting(meta, language))
         if ringing is not None:  # ring on through the session start and the voice's first syllable
             await asyncio.wait_for(first_words.wait(), FIRST_WORDS_WAIT_S)
     except asyncio.TimeoutError:

@@ -21,9 +21,10 @@ from tests.test_outbound import inbox
 NOW = datetime(2026, 10, 14, 18, 30)
 
 
-def asked(tmp_path, now=NOW):
-    plan = RulePlanner(tmp_path / "workspace").decide(saved_trigger(inbox(tmp_path)))
-    return OfferStore(tmp_path / "workspace").ask(plan, now), plan
+def asked(tmp_path, now=NOW, workspace=None):
+    workspace = workspace or tmp_path / "workspace"
+    plan = RulePlanner(workspace).decide(saved_trigger(inbox(tmp_path)))
+    return OfferStore(workspace).ask(plan, now), plan
 
 
 def test_an_offer_suggests_the_evening_call_time_today_or_tomorrow():
@@ -159,13 +160,15 @@ def test_a_call_that_cannot_be_placed_is_marked_failed(tmp_path):
 
 def test_the_app_answers_through_the_token_server(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
+    from tests.helpers import signed_in
     from voice.token_server import make_app
 
-    offer, _ = asked(tmp_path, now=datetime.now())
+    me = signed_in(tmp_path)
+    offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
 
     async def main():
-        app = make_app("wss://example", "APIkey", "s" * 32, tmp_path / "workspace", room_exists=None)
-        async with TestClient(TestServer(app)) as client:
+        app = make_app("wss://example", "APIkey", "s" * 32, me.people, room_exists=None)
+        async with TestClient(TestServer(app), headers=me.headers) as client:
             token = await client.post("/push", json={"token": "ab" * 32, "environment": "development"})
             listed = await (await client.get("/offers")).json()
             yes = await client.post(f"/offers/{offer.id}", json={"choice": "later"})
@@ -175,8 +178,8 @@ def test_the_app_answers_through_the_token_server(tmp_path):
             return token.status, listed, yes.status, await yes.json(), twice.status, unknown.status, bad.status
 
     token, listed, yes, body, twice, unknown, bad = asyncio.run(main())
-    assert token == 204 and voip_push.load_device_token(tmp_path / "workspace", "alert")["token"] == "ab" * 32
-    assert voip_push.load_device_token(tmp_path / "workspace") is None  # the VoIP token is a different one
+    assert token == 204 and voip_push.load_device_token(me.workspace, "alert")["token"] == "ab" * 32
+    assert voip_push.load_device_token(me.workspace) is None  # the VoIP token is a different one
     assert [o["id"] for o in listed["offers"]] == [offer.id] and listed["offers"][0]["suggested_epoch"]
     assert (yes, body["offer"]["state"], twice, unknown, bad) == (200, "booked", 409, 404, 400)
 

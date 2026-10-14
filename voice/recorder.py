@@ -6,8 +6,9 @@ workspace/<date>/<time>/
   audio/user.wav  the caller's microphone audio as received
   audio/ai.wav    the AI's synthesized speech, utterances back to back
 
-Files are append-only and only the voice server writes them.
-Raw audio never leaves this Mac (workspace/ is git-ignored and not synced).
+Files are append-only and only the voice server writes them. The audio files are
+written only when the person keeps call audio on the server (voice/people.py
+record_on_server, on by default); the record and transcript are always written.
 """
 
 import json
@@ -21,13 +22,15 @@ from livekit import rtc
 
 
 class WavSink:
-    def __init__(self, path: Path) -> None:
-        self._path = path
+    def __init__(self, path: Path | None) -> None:
+        self._path = path  # None: audio is not kept for this call
         self._wav: wave.Wave_write | None = None
         self._format: tuple[int, int] | None = None
         self.skipped_frames = 0
 
     def write(self, frame: rtc.AudioFrame) -> None:
+        if self._path is None:
+            return
         fmt = (frame.sample_rate, frame.num_channels)
         if self._wav is None:
             self._wav = wave.open(str(self._path), "wb")
@@ -47,7 +50,7 @@ class WavSink:
 
 
 class CallRecorder:
-    def __init__(self, workspace: Path, room: str) -> None:
+    def __init__(self, workspace: Path, room: str, keep_audio: bool = True) -> None:
         now = datetime.now()
         base = workspace / now.strftime("%Y-%m-%d") / now.strftime("%H%M")
         self.dir = base
@@ -55,13 +58,15 @@ class CallRecorder:
         while self.dir.exists():
             self.dir = base.with_name(f"{base.name}-{n}")
             n += 1
-        (self.dir / "audio").mkdir(parents=True)
+        self.dir.mkdir(parents=True)
+        if keep_audio:
+            (self.dir / "audio").mkdir()
         self._t0 = time.monotonic()
         self._events = (self.dir / "events.jsonl").open("a")
         self._transcript = (self.dir / "transcript.md").open("a")
         self._transcript.write(f"# Call {now:%Y-%m-%d %H:%M} (room {room})\n\n")
-        self.user_audio = WavSink(self.dir / "audio" / "user.wav")
-        self.ai_audio = WavSink(self.dir / "audio" / "ai.wav")
+        self.user_audio = WavSink(self.dir / "audio" / "user.wav" if keep_audio else None)
+        self.ai_audio = WavSink(self.dir / "audio" / "ai.wav" if keep_audio else None)
         self.event("call_started", room=room, started_at=now.isoformat(timespec="seconds"))
 
     def elapsed(self) -> float:

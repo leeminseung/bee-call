@@ -352,12 +352,13 @@ def plan_meta(plan: Plan) -> dict[str, Any]:
 
 
 async def prepare_outbound(plan: Plan, mode: str | None = None, extra: dict[str, Any] | None = None,
-                           deadline_s: float = NOTE_SECONDS) -> Prep:
+                           deadline_s: float = NOTE_SECONDS, language: CallLanguage | None = None) -> Prep:
     """For voice/outbound.py, before the phone rings: reads Bee for this plan, then prepares. `extra` adds to the
     call's metadata (agreed, earlier_call); a shorter `deadline_s` rings sooner, with the note given up earlier."""
     started = time.monotonic()
     inputs = await fetch_call_inputs(plan.inbox_dir, plan.conversation_ids)
     prep = await prepare_call(inputs, {**plan_meta(plan), **(extra or {})},
-                              prep_model(mode or os.environ.get("COORDINATOR_LLM", "bedrock")), deadline_s=deadline_s)
+                              prep_model(mode or os.environ.get("COORDINATOR_LLM", "bedrock")), deadline_s=deadline_s,
+                              language=language)
     prep.seconds = round(time.monotonic() - started, 2)
     return prep

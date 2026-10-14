@@ -51,6 +51,6 @@ def test_fallback_greetings_follow_the_language(monkeypatch):
     from voice import agent
 
     monkeypatch.setattr(agent, "COORDINATOR_LLM", "bedrock")
-    monkeypatch.setattr(agent, "LANGUAGE", call_language("ko"))
-    assert agent.greeting({"direction": "inbound"}).startswith("네, Bee Call이에요")
-    assert "음성 메모" in agent.greeting({"direction": "outbound", "kind": "voice note"})
+    korean = call_language("ko")
+    assert agent.greeting({"direction": "inbound"}, korean).startswith("네, Bee Call이에요")
+    assert "음성 메모" in agent.greeting({"direction": "outbound", "kind": "voice note"}, korean)

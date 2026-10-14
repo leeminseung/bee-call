@@ -68,13 +68,15 @@ def test_only_ids_of_earlier_calls_name_a_folder(tmp_path):
 
 def test_the_app_asks_for_a_continued_call_with_the_record_id(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
+    from tests.helpers import signed_in
     from voice.token_server import make_app
 
-    earlier_session(tmp_path)
+    me = signed_in(tmp_path)
+    earlier_session(me.workspace)
 
     async def main():
-        app = make_app("wss://example", "APIkey", "s" * 32, tmp_path, room_exists=None)
-        async with TestClient(TestServer(app)) as client:
+        app = make_app("wss://example", "APIkey", "s" * 32, me.people, room_exists=None)
+        async with TestClient(TestServer(app), headers=me.headers) as client:
             good = await client.get("/token", params={"identity": "user", "continue": EARLIER})
             plain = await client.get("/token", params={"identity": "user"})
             missing = await client.get("/token", params={"identity": "user", "continue": "2026-10-13/0001"})
@@ -84,8 +86,8 @@ def test_the_app_asks_for_a_continued_call_with_the_record_id(tmp_path):
     good, plain, missing, sneaky = asyncio.run(main())
     meta = lambda body: json.loads(  # noqa: E731
         jwt.decode(body["token"], options={"verify_signature": False})["roomConfig"]["agents"][0]["metadata"])
-    assert meta(good) == {"direction": "inbound", "continue_from": EARLIER}
-    assert meta(plain) == {"direction": "inbound"}
+    assert meta(good) == {"direction": "inbound", "continue_from": EARLIER, "person": "matt"}
+    assert meta(plain) == {"direction": "inbound", "person": "matt"}
     assert (missing, sneaky) == (400, 400)
 
 
@@ -114,5 +116,4 @@ def test_a_continued_call_without_an_opening_still_says_so(monkeypatch):
 
     monkeypatch.setattr(agent, "COORDINATOR_LLM", "bedrock")
     for code, words in (("en", "pick up where we left off"), ("ko", "이어서")):
-        monkeypatch.setattr(agent, "LANGUAGE", call_language(code))
-        assert words in agent.greeting({"direction": "inbound", "earlier_call": "..."})
+        assert words in agent.greeting({"direction": "inbound", "earlier_call": "..."}, call_language(code))

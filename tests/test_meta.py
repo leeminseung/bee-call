@@ -175,18 +175,20 @@ def test_the_calls_get_the_meta_agents_notes_and_answers_wake_it(tmp_path):
     assert "Ask about Offer B's bonus" in call_brief(CallInputs(), {"direction": "inbound", "meta_notes": notes})
 
     from aiohttp.test_utils import TestClient, TestServer
+    from tests.helpers import signed_in
     from tests.test_offers import asked
     from voice.token_server import make_app
 
-    offer, _ = asked(tmp_path, now=datetime.now())
+    me = signed_in(tmp_path)
+    offer, _ = asked(tmp_path, now=datetime.now(), workspace=me.workspace)
 
     async def main():
-        app = make_app("wss://example", "APIkey", "s" * 32, tmp_path / "workspace", room_exists=None)
-        async with TestClient(TestServer(app)) as client:
+        app = make_app("wss://example", "APIkey", "s" * 32, me.people, room_exists=None)
+        async with TestClient(TestServer(app), headers=me.headers) as client:
             return (await client.post(f"/offers/{offer.id}", json={"choice": "decline"})).status
 
     assert asyncio.run(main()) == 200
-    (event,) = MetaSession(ws).take_events()
+    (event,) = MetaSession(me.workspace).take_events()
     assert (event["kind"], event["offer"], event["choice"]) == ("offer_answered", offer.id, "decline")
 
 

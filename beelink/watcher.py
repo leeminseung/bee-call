@@ -138,7 +138,7 @@ class BeeWatcher:
             # and both must go when the watcher stops.
             proc = await asyncio.create_subprocess_exec(
                 cli.bee_bin(), "stream", "--json", "--types", STREAM_TYPES,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=cli.run_env(),
                 start_new_session=True,
             )
             try:

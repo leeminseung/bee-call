@@ -112,17 +112,20 @@ def test_other_refusals_keep_the_token(tmp_path, config):
 
 def test_the_token_server_keeps_the_app_s_voip_token(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
+    from tests.helpers import signed_in
     from voice.token_server import make_app
 
+    me = signed_in(tmp_path)
+
     async def main():
-        app = make_app("wss://example", "APIkey", "s" * 32, tmp_path, room_exists=None)
-        async with TestClient(TestServer(app)) as client:
+        app = make_app("wss://example", "APIkey", "s" * 32, me.people, room_exists=None)
+        async with TestClient(TestServer(app), headers=me.headers) as client:
             bad = await client.post("/voip", json={"token": "xyz", "environment": "development"})
             good = await client.post("/voip", json={"token": DEVICE, "environment": "development"})
             return bad.status, good.status
 
     assert asyncio.run(main()) == (400, 204)
-    assert load_device_token(tmp_path)["environment"] == "development"
+    assert load_device_token(me.workspace)["environment"] == "development"
 
 
 def test_placing_a_call_pushes_its_ring_line_and_a_failed_push_does_not_stop_it(tmp_path, monkeypatch):

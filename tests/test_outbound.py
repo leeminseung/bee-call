@@ -17,6 +17,7 @@ from beelink.context import CallInputs
 from beelink.planner import OUTBOUND_LOG, RulePlanner
 from voice import agent
 from voice.dispatch import AGENT_NAME, place_call
+from voice.language import call_language
 from voice.prep import Prep, call_brief
 from voice.outbound import saved_trigger
 from voice.token_server import make_token, recent_calls
@@ -139,13 +140,14 @@ def test_ring_stream_starts_with_calls_placed_in_the_last_minute(tmp_path):
 
 def test_voice_server_greets_and_briefs_by_who_called(monkeypatch):
     monkeypatch.setattr(agent, "COORDINATOR_LLM", "fake")
+    english = call_language("en")
     out = agent.call_meta(json.dumps({"direction": "outbound", "topic": "Planned a Saturday hike with Dana",
                                       "reason": "A Bee conversation just ended."}))
-    assert agent.greeting(out) == ("Hi, it's Bee Call. I'm calling about your conversation: "
-                                   "Planned a Saturday hike with Dana. Do you have a minute?")
-    assert agent.greeting(agent.call_meta('{"direction": "inbound"}')) == "Hi, it's Bee Call. What's on your mind?"
+    assert agent.greeting(out, english) == ("Hi, it's Bee Call. I'm calling about your conversation: "
+                                            "Planned a Saturday hike with Dana. Do you have a minute?")
+    assert agent.greeting(agent.call_meta('{"direction": "inbound"}'), english) == "Hi, it's Bee Call. What's on your mind?"
     note = agent.call_meta('{"direction": "outbound", "kind": "voice note"}')
-    assert agent.greeting(note) == "Hi, it's Bee Call. I'm calling about your new voice note. Do you have a minute?"
+    assert agent.greeting(note, english) == "Hi, it's Bee Call. I'm calling about your new voice note. Do you have a minute?"
     assert agent.call_meta("not json") == {}
     brief = call_brief(CallInputs(facts=[{"id": 7, "text": "Bonus is 15%"}]), out)
     assert brief == "You placed this call. Why: A Bee conversation just ended.\nUnconfirmed Bee fact (id 7): Bonus is 15%"
@@ -154,7 +156,10 @@ def test_voice_server_greets_and_briefs_by_who_called(monkeypatch):
 def test_answering_a_call_that_already_ended_is_refused(tmp_path):
     from aiohttp.test_utils import make_mocked_request
     from aiohttp import web
-    from voice.token_server import make_app, token
+    from tests.helpers import signed_in
+    from voice.token_server import PERSON, make_app, token
+
+    me = signed_in(tmp_path)
 
     async def main():
         async def gone(app, room):
@@ -164,8 +169,9 @@ def test_answering_a_call_that_already_ended_is_refused(tmp_path):
             return True
 
         for exists, expected in ((gone, 410), (live, 200)):
-            app = make_app("wss://example", "APIkey", "s" * 32, tmp_path, room_exists=exists)
-            request = make_mocked_request("GET", "/token?identity=matt&room=call-1&answer=1", app=app)
+            app = make_app("wss://example", "APIkey", "s" * 32, me.people, room_exists=exists)
+            request = make_mocked_request("GET", "/token?room=call-matt-20261014-210000&answer=1", app=app)
+            request[PERSON] = "matt"
             try:
                 status = (await token(request)).status
             except web.HTTPException as exc:

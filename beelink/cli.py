@@ -4,19 +4,58 @@ Every call adds --json and returns the parsed object. Reads are safe to call
 at any time. Writes (facts and todos) are called only by beelink.writer, which
 runs them from a call's confirmed queue and only when told to apply.
 
+Whose Bee: one server serves several people (voice/people.py), each with their own
+Bee login in their own folder. use_bee() sets the folder for the work that follows in
+the current task (a context variable, copied into tasks started from it); the CLI then
+keeps its login in files there (BEE_CONFIG_DIR, BEE_FORCE_FILE_STORE). use_bee(None)
+means this person has not connected Bee, and every call fails with BeeError. Where
+use_bee() was never called, the CLI uses this machine's own login (a single-user Mac).
+
 Set BEE_BIN to point at another executable (the tests use a fake one).
 """
 
 import asyncio
 import json
 import os
+import re
+from contextvars import ContextVar
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 TIMEOUT = 60.0
+LOGIN_LINK = re.compile(r"Authentication link:\s*(https://\S+)")
 
 
 class BeeError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class BeeLogin:
+    folder: Path | None  # None: this person has not connected Bee
+
+
+_login: ContextVar[BeeLogin | None] = ContextVar("bee_login", default=None)
+
+
+def use_bee(folder: Path | None) -> None:
+    """Whose Bee the CLI calls in this task and the tasks it starts use from now on."""
+    _login.set(BeeLogin(folder))
+
+
+def login_env(folder: Path) -> dict[str, str]:
+    return {**os.environ, "BEE_CONFIG_DIR": str(folder), "BEE_FORCE_FILE_STORE": "1"}
+
+
+def run_env() -> dict[str, str] | None:
+    """The environment for running the CLI as the current person (None: this machine's own login)."""
+    login = _login.get()
+    if login is None:
+        return None  # this machine's own login
+    if login.folder is None:
+        raise BeeError("Bee is not connected for this person")
+    return login_env(login.folder)
 
 
 def bee_bin() -> str:
@@ -26,7 +65,7 @@ def bee_bin() -> str:
 async def run_json(*args: str, timeout: float = TIMEOUT) -> dict[str, Any]:
     proc = await asyncio.create_subprocess_exec(
         bee_bin(), *args, "--json",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=run_env(),
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
@@ -109,3 +148,47 @@ async def create_todo(text: str, alarm_at: str | None = None) -> dict[str, Any]:
 
 async def accept_suggestion(suggestion_id: int) -> dict[str, Any]:
     return await run_json("todos", "accept-suggestion", str(suggestion_id))
+
+
+# ---------- one person's Bee login (voice/token_server.py /bee/...) ----------
+
+async def _run_text(folder: Path, *args: str, timeout: float) -> tuple[int, str]:
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    proc = await asyncio.create_subprocess_exec(
+        bee_bin(), *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=login_env(folder))
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        proc.kill()
+        await proc.wait()
+        raise
+    return proc.returncode or 0, out.decode(errors="replace")
+
+
+async def start_login(folder: Path, timeout: float = 30.0) -> str:
+    """Starts a Bee login kept in `folder` and returns the approval link the person opens on their phone. The
+    request lasts about 5 minutes; finish_login() completes it after they approve."""
+    code, out = await _run_text(folder, "login", "--no-wait", timeout=timeout)
+    found = LOGIN_LINK.search(out)
+    if code != 0 or not found:
+        raise BeeError(f"bee login did not give an approval link (exit {code})")
+    return found.group(1)
+
+
+async def finish_login(folder: Path, timeout: float) -> bool:
+    """Waits up to `timeout` for the approval and completes the login. `bee status` alone does not pick up an
+    approved request; running `bee login` again does (friction log 3)."""
+    try:
+        await _run_text(folder, "login", timeout=timeout)
+    except asyncio.TimeoutError:
+        return False
+    return await logged_in(folder)
+
+
+async def logged_in(folder: Path, timeout: float = 15.0) -> bool:
+    code, out = await _run_text(folder, "status", timeout=timeout)
+    return code == 0 and "not logged in" not in out.lower()
+
+
+async def logout(folder: Path, timeout: float = 15.0) -> None:
+    await _run_text(folder, "logout", timeout=timeout)

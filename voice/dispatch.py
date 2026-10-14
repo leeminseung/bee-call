@@ -28,9 +28,16 @@ AGENT_NAME = "bee-call"
 RING_SECONDS = 60  # how long the voice server waits for the phone to answer (arbitrary)
 
 
+def room_name(person: str, now: datetime | None = None) -> str:
+    """A call's room carries its person, so the token server can tell whose call a room is (answer=1)."""
+    return f"call-{person}-{(now or datetime.now()):%Y%m%d-%H%M%S}"
+
+
 def call_metadata(direction: str, plan: Plan | None = None, prep: dict[str, Any] | None = None,
-                  continue_from: str | None = None, agreed: str | None = None) -> str:
+                  continue_from: str | None = None, agreed: str | None = None, person: str | None = None) -> str:
     data: dict[str, Any] = {"direction": direction}
+    if person:  # whose call: the voice server works in this person's folder (voice/people.py)
+        data["person"] = person
     if continue_from:  # the earlier call this one continues (voice/continuation.py)
         data["continue_from"] = continue_from
     if agreed:  # how the user agreed to an AI call (voice/offers.py)
@@ -53,16 +60,16 @@ def room_with_agent(room: str, metadata: str, ring_seconds: int = RING_SECONDS) 
 
 async def place_call(plan: Plan, workspace: Path, lk: api.LiveKitAPI | None = None,
                      prep: dict[str, Any] | None = None, *, continue_from: str | None = None,
-                     agreed: str | None = None) -> str:
-    """Opens the room for an AI-initiated call and records it for the ring. Returns the room name.
+                     agreed: str | None = None, person: str | None = None) -> str:
+    """Opens the room for an AI-initiated call to `person` and records it for the ring. Returns the room name.
     `prep` is the call prep note (voice/prep.py Prep.to_meta()), made before this call; `agreed` says how the
     user agreed to it (voice/offers.py), and `continue_from` the earlier call it continues."""
-    room = f"call-{datetime.now():%Y%m%d-%H%M%S}"
+    room = room_name(person) if person else f"call-{datetime.now():%Y%m%d-%H%M%S}"
     own = lk is None
     lk = lk or api.LiveKitAPI()  # LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET from the environment
     try:
         await lk.room.create_room(room_with_agent(room, call_metadata("outbound", plan, prep, continue_from,
-                                                                      agreed)))
+                                                                      agreed, person)))
     finally:
         if own:
             await lk.aclose()

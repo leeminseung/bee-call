@@ -5,11 +5,38 @@ import json, os, sys, time
 args = sys.argv[1:]
 with open(os.environ["FAKE_BEE_LOG"], "a") as f:
     f.write(json.dumps(args) + "\n")
+folder = os.environ.get("BEE_CONFIG_DIR")
+if folder:  # whose login the call used (beelink/cli.py use_bee)
+    with open(os.environ["FAKE_BEE_LOG"] + ".who", "a") as f:
+        f.write(json.dumps({"folder": folder, "args": args}) + "\n")
 cmd = [a for a in args if a != "--json"]
 now_ms = int(time.time() * 1000)
 
 def out(obj):
     print(json.dumps(obj))
+    sys.exit(0)
+
+# One person's login, kept in BEE_CONFIG_DIR: a file named "approve" there stands for the person tapping the
+# approval link.
+if cmd == ["login", "--no-wait"]:
+    os.makedirs(folder, exist_ok=True)
+    open(os.path.join(folder, "pairing-prod.json"), "w").write("{}")
+    print("Authentication link: https://bee.computer/connect#fake-pairing\n")
+    sys.exit(0)
+if cmd == ["login"]:
+    while not os.path.exists(os.path.join(folder, "approve")):
+        time.sleep(0.05)
+    open(os.path.join(folder, "token-prod"), "w").write("fake")
+    print("Connected to the Bee account of Test Person.")
+    sys.exit(0)
+if cmd == ["status"]:
+    print("API: production" + ("\nLogged in as Test Person." if folder and os.path.exists(os.path.join(folder, "token-prod"))
+                               else "\nNot logged in."))
+    sys.exit(0)
+if cmd == ["logout"]:
+    if folder and os.path.exists(os.path.join(folder, "token-prod")):
+        os.remove(os.path.join(folder, "token-prod"))
+    print("Logged out.")
     sys.exit(0)
 
 if cmd[:1] == ["changed"]:

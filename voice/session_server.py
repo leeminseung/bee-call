@@ -5,8 +5,12 @@ voice/recorder.py). This server only reads those folders. It serves a static
 page (web/) that shows one call: why the AI called, the turns, background jobs
 and what will be saved to Bee.
 
-Run: uv run python voice/session_server.py [--workspace DIR] [--port 8788]
+Run: uv run python voice/session_server.py [--data DIR] [--port 8788]
 Open the printed LAN URL on the iPhone (same Wi-Fi) or http://localhost:8788/.
+
+Each person sees only their own calls (voice/people.py). The API asks for the app's sign-in token, as a
+Bearer header or the cookie bee_call_session that the app sets in its web view; on a Mac, BEE_CALL_DEV_PERSON
+lets requests made on the machine itself in without one.
 
 GET /                                          the page (web/index.html)
 GET /static/<file>                             files under web/
@@ -17,8 +21,7 @@ GET /api/sessions/<date>/<time>/events         Server-Sent Events: every line of
 GET /api/sessions/<date>/<time>/files/<path>   one file inside that session folder, never audio/ or inputs/
 GET /api/meta                                  the meta agent's session (newest first) and its notes
 
-Development only: anyone on the same network can read transcripts and job files. Raw call audio
-(audio/) and raw Bee data (inputs/, which carries places and coordinates) are never served.
+Raw call audio (audio/) and raw Bee data (inputs/, which carries places and coordinates) are never served.
 """
 
 import argparse
@@ -35,10 +38,12 @@ from typing import Any
 
 from aiohttp import web
 
+from voice.people import People, dev_person
+
 REPO = Path(__file__).resolve().parent.parent
 WEB_DIR = REPO / "web"
-DEFAULT_WORKSPACE = REPO / "workspace"
 DEFAULT_PORT = 8788
+SESSION_COOKIE = "bee_call_session"
 
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 TIME_RE = re.compile(r"(\d{4})(?:-(\d+))?")
@@ -243,7 +248,7 @@ def session_folder(request: web.Request) -> Path:
     date, clock = request.match_info["date"], request.match_info["time"]
     if not DATE_RE.fullmatch(date) or not TIME_RE.fullmatch(clock):
         raise web.HTTPNotFound()
-    root = request.app[WORKSPACE]
+    root = workspace(request)
     folder = root / date / clock
     if not folder.is_dir() or not folder.resolve().is_relative_to(root.resolve()):
         raise web.HTTPNotFound()
@@ -291,7 +296,10 @@ async def index(request: web.Request) -> web.FileResponse:
 
 
 async def list_sessions(request: web.Request) -> web.Response:
-    return web.json_response(request.app[INDEX].sessions(), headers={"Cache-Control": "no-store"})
+    indexes = request.app[INDEXES]
+    if request[PERSON] not in indexes:
+        indexes[request[PERSON]] = SessionIndex(workspace(request))
+    return web.json_response(indexes[request[PERSON]].sessions(), headers={"Cache-Control": "no-store"})
 
 
 async def no_cache_static(request: web.Request, response: web.StreamResponse) -> None:
@@ -317,13 +325,41 @@ def local_host(name: str | None) -> bool:
 
 @web.middleware
 async def local_hosts_only(request: web.Request, handler):
-    if not local_host(request.url.host):
+    public = os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip().lower()  # the server's own name, behind https
+    host = (request.url.host or "").lower().rstrip(".")
+    if not local_host(request.url.host) and not (public and host == public):
         raise web.HTTPMisdirectedRequest(text="unknown host name; use this Mac's IP address or .local name\n")
     return await handler(request)
 
 
-WORKSPACE = web.AppKey("workspace", Path)
-INDEX = web.AppKey("index", SessionIndex)
+def from_this_machine(request: web.Request) -> bool:
+    """Made on this machine itself, not passed on by a proxy in front (which adds X-Forwarded-For)."""
+    return request.remote in ("127.0.0.1", "::1") and "X-Forwarded-For" not in request.headers
+
+
+@web.middleware
+async def signed_in(request: web.Request, handler):
+    """The API is per person; the page and its static files carry no call data."""
+    if not request.path.startswith("/api/"):
+        return await handler(request)
+    header = request.headers.get("Authorization", "")
+    token = header[7:].strip() if header.startswith("Bearer ") else request.cookies.get(SESSION_COOKIE)
+    person = request.app[PEOPLE].who(token)
+    if person is None and not token and from_this_machine(request):
+        person = dev_person()
+    if person is None:
+        raise web.HTTPUnauthorized(text="sign in first\n")
+    request[PERSON] = person
+    return await handler(request)
+
+
+def workspace(request: web.Request) -> Path:
+    return request.app[PEOPLE].workspace(request[PERSON])
+
+
+PERSON = web.RequestKey("person", str)  # who is asking, set by signed_in()
+PEOPLE = web.AppKey("people", People)
+INDEXES = web.AppKey("indexes", dict)  # person -> SessionIndex
 STOPPING = web.AppKey("stopping", asyncio.Event)
 
 
@@ -331,9 +367,8 @@ META_ENTRIES = 100  # the newest entries the timeline shows (arbitrary)
 
 
 async def meta_session(request: web.Request) -> web.Response:
-    """What the meta agent saw and decided between calls, as it wrote it (meta/session.py). Read here directly,
-    so this server stays a standalone script."""
-    folder = request.app[WORKSPACE] / "meta"
+    """What the meta agent saw and decided between calls, as it wrote it (meta/session.py)."""
+    folder = workspace(request) / "meta"
     entries = []
     try:
         lines = (folder / "session.jsonl").read_text(errors="replace").splitlines()[-META_ENTRIES:]
@@ -354,10 +389,10 @@ async def meta_session(request: web.Request) -> web.Response:
                              dumps=lambda data: json.dumps(data, ensure_ascii=False, default=str))
 
 
-def make_app(workspace: Path) -> web.Application:
-    app = web.Application(middlewares=[local_hosts_only])
-    app[WORKSPACE] = workspace
-    app[INDEX] = SessionIndex(workspace)
+def make_app(people: People) -> web.Application:
+    app = web.Application(middlewares=[local_hosts_only, signed_in])
+    app[PEOPLE] = people
+    app[INDEXES] = {}
     app[STOPPING] = asyncio.Event()
     app.on_shutdown.append(stop_streams)
     app.on_response_prepare.append(no_cache_static)
@@ -396,19 +431,19 @@ def lan_addresses() -> list[tuple[str, str]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Serve the live session screen.")
-    parser.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
-                        help="folder that holds <date>/<time>/ session folders (default: workspace/)")
+    parser.add_argument("--data", type=Path, default=None,
+                        help="the data root with people/<id>/ (default: BEE_CALL_DATA or data/)")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args()
-    workspace = args.workspace.expanduser().resolve()
+    people = People(args.data.expanduser().resolve() if args.data else None)
     print(f"session screen on http://localhost:{args.port}/ (this Mac); from the iPhone on the same Wi-Fi:", flush=True)
     for iface, ip in lan_addresses():
         print(f"  http://{ip}:{args.port}/  ({iface})", flush=True)
     if socket.gethostname().endswith(".local"):
         print(f"  http://{socket.gethostname()}:{args.port}/", flush=True)
-    print(f"reading sessions from {workspace}" + ("" if workspace.is_dir() else " (missing for now)"), flush=True)
-    web.run_app(make_app(workspace), host=args.host, port=args.port, print=None, shutdown_timeout=5)
+    print(f"reading each person's calls under {people.root.resolve()}/people", flush=True)
+    web.run_app(make_app(people), host=args.host, port=args.port, print=None, shutdown_timeout=5)
 
 
 if __name__ == "__main__":
