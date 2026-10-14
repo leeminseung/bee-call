@@ -177,13 +177,28 @@ def test_a_yes_to_a_bee_question_about_something_else_saves_nothing_earlier(tmp_
     assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []
 
 
-@pytest.mark.parametrize("answer", ["No, don't.", "아니요, 넣지 마세요."])
+@pytest.mark.parametrize("answer", ["No, don't.", "아니요, 넣지 마세요.", "Yes.\nWait, no, don't."])
 def test_a_no_saves_nothing(tmp_path, fake_bee, answer):
     async def main():
         agent, _ = await in_a_call(tmp_path)
-        return await saved(agent, *ASKED[:1], answer, kind="todo_create", text="Note the bug")
+        number = await proposed(agent, kind="todo_create", text="Note the bug")
+        await say(agent, ("assistant", ASKED[0]), *[("user", breath) for breath in answer.split("\n")])
+        return await agent.save_to_bee(None, proposal=number)
 
-    assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []
+    said = asyncio.run(main())
+    assert said.startswith("Not saved") and writes_to_bee(fake_bee) == []
+    assert "propose it again" in said  # it may be a partial yes: the AI asks about the item alone
+
+
+@pytest.mark.parametrize("answer", ["네, 넣어주세요. 알람은 필요 없어요.", "Yes, but don't set an alarm."])
+def test_a_yes_that_says_no_to_something_else_is_a_yes(tmp_path, fake_bee, answer):
+    async def main():
+        agent, _ = await in_a_call(tmp_path, language="ko" if "네" in answer else "en")
+        text = "버그 기록" if "네" in answer else "Note the bug"
+        question = "Bee에 할 일로 '버그 기록'을 넣을까요?" if "네" in answer else ASKED[0]
+        return await saved(agent, question, answer, kind="todo_create", text=text)
+
+    assert asyncio.run(main()).startswith("Saved to Bee")
 
 
 def test_a_statement_naming_bee_and_the_item_is_no_question(tmp_path, fake_bee):
@@ -208,20 +223,62 @@ def test_a_yes_said_in_two_breaths_is_kept_whole(tmp_path, fake_bee):
     assert [w.answer for w in BeeWrites(rec.dir).all()] == ["Yes. Please add it."]
 
 
-def test_an_answer_the_conversation_moved_past_needs_the_question_again(tmp_path, fake_bee):
+def test_an_answer_the_conversation_moved_past_needs_the_item_proposed_again(tmp_path, fake_bee):
+    """Only the answer to the first question about a proposal counts; once the conversation went past it, the AI
+    proposes the item again and asks again (third review of this round's fixes, finding 1)."""
     async def main():
         agent, _ = await in_a_call(tmp_path)
         number = await proposed(agent, kind="todo_create", text="Note the bug")
         await say(agent, ("assistant", ASKED[0]), ("user", "Let me think."), ("assistant", "Sure, take your time."),
                   ("user", "Okay."))
         moved_on = await agent.save_to_bee(None, proposal=number)
+        again = await agent.save_to_bee(None, proposal=number)
+        renewed = await proposed(agent, kind="todo_create", text="Note the bug")
         await say(agent, ("assistant", "So, shall I add 'Note the bug' to your Bee todos?"), ("user", "Yes."),
                   ("assistant", "Adding it now."))  # the AI's own words while it saves do not count against it
-        return moved_on, await agent.save_to_bee(None, proposal=number)
+        return moved_on, again, await agent.save_to_bee(None, proposal=renewed)
 
-    moved_on, asked_again = asyncio.run(main())
-    assert moved_on.startswith("Not saved") and asked_again.startswith("Saved to Bee")
-    assert writes_to_bee(fake_bee) == [["todos", "create"]]
+    moved_on, again, renewed = asyncio.run(main())
+    assert moved_on.startswith("Not saved") and "propose it again" in moved_on and "propose it again" in again
+    assert renewed.startswith("Saved to Bee") and writes_to_bee(fake_bee) == [["todos", "create"]]
+
+
+def test_an_item_turned_down_is_not_saved_on_a_yes_to_anything_else(tmp_path, fake_bee):
+    """Third review of this round's fixes, finding 1: the AI's next turn quoted the item and asked something else."""
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        number = await proposed(agent, kind="todo_create", text="Buy milk")
+        await say(agent, ("assistant", "Shall I add 'Buy milk' to your Bee todos?"), ("user", "No."),
+                  ("assistant", "Okay, I won't add 'Buy milk' to Bee. Anything else?"),
+                  ("user", "Yes, remind me to call mom."))
+        return await agent.save_to_bee(None, proposal=number)
+
+    assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []
+
+
+def test_an_item_the_user_changed_is_not_saved_on_the_yes_to_the_new_one(tmp_path, fake_bee):
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        old = await proposed(agent, kind="todo_create", text="Buy milk")
+        await say(agent, ("assistant", "Shall I add 'Buy milk' to your Bee todos?"),
+                  ("user", "Make it milk and eggs."))
+        new = await proposed(agent, kind="todo_create", text="Buy milk and eggs")
+        await say(agent, ("assistant", "Shall I add 'Buy milk and eggs' to your Bee todos?"), ("user", "Yes."))
+        return await agent.save_to_bee(None, proposal=old), await agent.save_to_bee(None, proposal=new)
+
+    old, new = asyncio.run(main())
+    assert old.startswith("Not saved") and new.startswith("Saved to Bee")
+    assert [c[3] for c in calls(fake_bee) if c[:2] == ["todos", "create"]] == ["Buy milk and eggs"]
+
+
+def test_a_short_item_inside_a_longer_quote_is_not_quoted(tmp_path, fake_bee):
+    async def main():
+        agent, _ = await in_a_call(tmp_path, language="ko")
+        number = await proposed(agent, kind="todo_create", text="운동")
+        await say(agent, ("assistant", "Bee가 '주말마다 운동을 함'이라고 들었어요. 맞나요?"), ("user", "네."))
+        return await agent.save_to_bee(None, proposal=number)
+
+    assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []
 
 
 def test_a_proposal_is_saved_once(tmp_path, fake_bee):

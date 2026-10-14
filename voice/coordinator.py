@@ -76,8 +76,9 @@ written in the user's language. Then ask one question that names Bee and quotes 
 it, such as "Shall I add 'Note the bug' to your Bee todos?" (write Bee as "Bee" in every language, as in "Bee에 \
 할 일로 '버그 기록'을 넣을까요?"). Only after a clear yes to that question, call save_to_bee with the number \
 propose_bee_save gave, then tell the user in a few words what you saved. A yes to any other question, or one given \
-before you proposed the item, is no yes to saving. If the user asks you to take it out, call undo_bee_write. If \
-saving does not go through, say what save_to_bee tells you to say.
+before you proposed the item, is no yes to saving; only the answer to your first question about an item counts, \
+so to ask again, propose it again first. If the user asks you to take it out, call undo_bee_write. If saving does \
+not go through, say what save_to_bee tells you to say.
 When the prep note lists unconfirmed Bee facts, check them at a natural moment: propose a fact_confirm with the \
 fact as Bee has it, then ask, quoting it, for example "Bee heard 'Bonus is 15%'. Is that right?" If the user \
 agrees, save it. If they correct it, propose a fact_update with the corrected text, ask whether to fix it in Bee, \
@@ -88,9 +89,13 @@ NOTE_WAIT_S = 2.0  # the first reply waits at most this long for a prep note sti
 HANGUL = re.compile(r"[\uac00-\ud7a3]")
 QUESTION = re.compile(r"[?？]")
 NAMES_BEE = re.compile(r"(?<![A-Za-z])Bee(?![a-z]| Call)")  # "Bee", "Bee에"; not "been", "beer" or "Bee Call"
-# Answers that say no, which never count as a yes to saving, whatever the AI makes of them.
-REFUSAL = re.compile(r"^\W*(?:no\b|nope\b|nah\b|don'?t\b|do not\b|not now\b|never ?mind\b|아니|아뇨|됐어|됐습니다|싫어)"
-                     r"|하지 ?마|넣지 ?마|필요 ?없", re.IGNORECASE)
+# A sentence of the answer that starts by saying no. Such an answer never counts as a yes to saving, whatever the
+# AI makes of it; it may be a partial yes ("No, just the milk."), so the AI asks about the item alone.
+REFUSAL = re.compile(r"^\W*(?:no\b|nope\b|nah\b|don'?t\b|do not\b|not now\b|never ?mind\b|wait,? no\b|"
+                     r"아니|아뇨|됐어|됐습니다|싫어|하지 ?마|넣지 ?마|필요 ?없)", re.IGNORECASE)
+SENTENCES = re.compile(r"(?<=[.!?。])\s+|\n")
+QUOTES = "'\"‘’“”「」『』«»"
+EXPIRED = "expired"  # a proposal whose question was answered and passed (BeeCoordinator._answer_to)
 # How to ask about each kind of item; the item is quoted as proposed, and the AI says the question in the user's
 # language.
 ASK_LIKE = {"todo_create": "Shall I add '{text}' to your Bee todos?",
@@ -336,10 +341,12 @@ class Coordinator(Agent):
 @dataclass
 class Proposal:
     """An item the AI means to ask about saving to Bee. The user's yes counts only if it comes after this point in
-    the conversation (the id of the user's last turn when it was proposed; None: before they spoke)."""
+    the conversation (the id of the user's last turn when it was proposed; None: before they spoke), and only as
+    the answer to the first question about it; after that answer has passed, the proposal has expired."""
     item: dict
     after: str | None
     saved: bool = False
+    expired: bool = False
 
 
 class BeeCoordinator(Coordinator):
@@ -430,15 +437,22 @@ class BeeCoordinator(Coordinator):
             return f"There is no proposal {proposal}; call propose_bee_save first."
         if found.saved:
             return f"Proposal {proposal} was already saved; it is not saved twice."
-        heard = self._answer_to(found)
+        heard = EXPIRED if found.expired else self._answer_to(found)
         if heard is None:
-            return (f"Not saved: the user has not just said yes to a question about proposal {proposal}. Ask now, in "
+            return (f"Not saved: the user has not yet said yes to a question about proposal {proposal}. Ask now, in "
                     "one question that names Bee and quotes the item exactly, such as: "
                     f"{ASK_LIKE[found.item['kind']].format(text=found.item['text'])} Call save_to_bee again only "
                     "after they say yes to it.")
-        question, answer = heard
-        if REFUSAL.search(answer):
-            return f"Not saved: the user said no (\"{answer}\"). Do not save it."
+        if heard == EXPIRED:
+            found.expired = True
+            return (f"Not saved: proposal {proposal} was asked about, and the conversation went on past the answer. If "
+                    "the user still wants it, propose it again with propose_bee_save and ask about it alone.")
+        question, breaths = heard
+        answer = " ".join(breaths)
+        if any(REFUSAL.search(sentence) for breath in breaths for sentence in SENTENCES.split(breath)):
+            found.expired = True
+            return (f"Not saved: the answer sounds like a no (\"{answer}\"). If the user did want it, propose it "
+                    "again with propose_bee_save and ask about it alone.")
         found.saved = True
         write = await self._bee_writes.begin(found.item, question, answer)
         try:
@@ -476,15 +490,16 @@ class BeeCoordinator(Coordinator):
         return [item for item in self.chat_ctx.items
                 if getattr(item, "type", None) == "message" and item.role in ("user", "assistant")]
 
-    def _answer_to(self, proposal: Proposal) -> tuple[str, str] | None:
-        """The question the AI asked about a proposed item, and the user's answer, as the conversation shows them;
-        None when there is no such answer to save on.
-        - The question is the AI's last turn since the proposal that names Bee (the word), quotes the item's text
-          and asks ("?"). A save in the reply that asks has no answer yet; a yes from before the proposal, or to a
-          question about something else, is not an answer to it.
-        - The answer is the user's turns right after it (one breath or several), with nothing between but the
-          AI's words that ask nothing. Once the conversation went on past the answer (the user spoke again after
-          the AI did, or the AI asked something else), the question has to be asked again."""
+    def _answer_to(self, proposal: Proposal) -> tuple[str, list[str]] | str | None:
+        """The question the AI asked about a proposed item and the user's answer to it, as the conversation shows
+        them: (question, the answer's breaths). None while there is none yet: no question since the proposal (a save
+        in the reply that asks cannot see that reply yet), or no answer to it yet. EXPIRED once the answer is past.
+        - The question is the first AI turn since the proposal that names Bee (the word), quotes the item whole and
+          asks ("?"); if the AI said it again before the user answered, its last saying.
+        - The answer is the user's turns right after it (one breath or several), with nothing between but the AI's
+          words that ask nothing.
+        - The answer is past once the conversation went on: the user spoke again after the AI did, or the AI asked
+          something else. A yes after that, to whatever, is no answer to this proposal."""
         turns = self._turns()
         ids = [turn.id for turn in turns]
         if proposal.after is None:
@@ -492,24 +507,33 @@ class BeeCoordinator(Coordinator):
         elif proposal.after in ids:
             later = turns[ids.index(proposal.after) + 1:]
         else:
-            return None  # the turn it followed is no longer in the conversation: ask again
-        quoted = _plain(proposal.item["text"])
-        asked = [i for i, turn in enumerate(later) if turn.role == "assistant"
-                 and NAMES_BEE.search(turn.text_content or "") and QUESTION.search(turn.text_content or "")
-                 and quoted in _plain(turn.text_content or "")]
+            return EXPIRED  # the turn it followed is no longer in the conversation
+        item = proposal.item["text"]
+        asked = [i for i, turn in enumerate(later) if turn.role == "assistant" and asks_about(turn.text_content, item)]
         if not asked:
             return None
-        rest = later[asked[-1] + 1:]
-        first = next((i for i, turn in enumerate(rest) if turn.role == "user"), None)
-        if first is None:
-            return None  # not answered yet
-        if any(QUESTION.search(turn.text_content or "") for turn in rest[:first]):
-            return None  # the AI asked something else before the answer
-        end = next((i for i in range(first, len(rest)) if rest[i].role != "user"), len(rest))
-        if any(turn.role == "user" or QUESTION.search(turn.text_content or "") for turn in rest[end:]):
-            return None  # the conversation went on past the answer
-        answer = " ".join((turn.text_content or "").strip() for turn in rest[first:end]).strip()
-        return (later[asked[-1]].text_content or "", answer) if answer else None
+        answered = next((i for i in range(asked[0] + 1, len(later)) if later[i].role == "user"), None)
+        if answered is None:
+            return None
+        question = max(i for i in asked if i < answered)
+        if any(QUESTION.search(turn.text_content or "") for turn in later[question + 1:answered]):
+            return EXPIRED  # the AI asked something else before the answer
+        end = next((i for i in range(answered, len(later)) if later[i].role != "user"), len(later))
+        if any(turn.role == "user" or QUESTION.search(turn.text_content or "") for turn in later[end:]):
+            return EXPIRED
+        breaths = [(turn.text_content or "").strip() for turn in later[answered:end]]
+        return (later[question].text_content or "", [b for b in breaths if b]) if any(breaths) else None
+
+
+def asks_about(text: str | None, item: str) -> bool:
+    """Whether an AI turn asks about the item: it names Bee (the word), asks ("?") and quotes the item's text whole,
+    in quotation marks (so 'Buy milk' is not quoted by 'Buy milk and eggs')."""
+    text = text or ""
+    if not (NAMES_BEE.search(text) and QUESTION.search(text)):
+        return False
+    quote = f"[{re.escape(QUOTES)}]"
+    quoted = re.compile(f"{quote}{re.escape(_plain(item))}[.!?。]?{quote}")
+    return quoted.search(re.sub(r"\s+", " ", text).casefold()) is not None
 
 
 def _plain(text: str) -> str:
