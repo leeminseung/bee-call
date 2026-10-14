@@ -118,8 +118,14 @@ final class BeeSync {
                 status = "Bee could not be connected right now" // the next foreground tries again
                 return
             }
-            store.set(true, forKey: Self.handledKey)
-            _ = await open(link) // Bee's own approval page
+            if await open(link) { // Bee's own approval page
+                store.set(true, forKey: Self.handledKey)
+            } else {
+                // Bee Call left the screen before the page could open: the approval nobody can see is cancelled,
+                // and the next foreground starts over with a new link.
+                _ = await disconnect()
+                status = ""
+            }
         case .disconnect:
             status = "Turning Bee off…"
             if await disconnect() {

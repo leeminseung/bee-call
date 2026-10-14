@@ -248,6 +248,23 @@ final class BeeSyncTests: XCTestCase {
         XCTAssertEqual(opened, 1)
     }
 
+    /// Leaving Bee Call while /bee/connect runs: iOS cannot open Bee's page from the background.
+    @MainActor func testAPageThatCouldNotOpenIsNotUsedUp() async {
+        let server = FakeServer()
+        server.replies["GET /me"] = me(connected: false, connecting: false)
+        server.replies["POST /bee/connect"] = .json(200, ["link": link])
+        var onScreen = false
+        var opened = 0
+        let bee = BeeSync(store: store(useBee: true), transport: server,
+                          open: { _ in if onScreen { opened += 1 }; return onScreen }, noteStatus: { _ in })
+        await bee.sync()
+        XCTAssertEqual(server.sent, ["GET /me", "POST /bee/connect", "POST /bee/disconnect"],
+                       "the approval nobody can see is cancelled")
+        onScreen = true
+        await bee.sync() // the next foreground
+        XCTAssertEqual(opened, 1)
+    }
+
     @MainActor func testAChangeWhileSignedOutSendsNothing() async throws {
         let server = FakeServer()
         let store = store(useBee: true)
