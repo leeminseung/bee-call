@@ -364,6 +364,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
             return
         inputs = ready.result()
         prep = preparation.prep
+    # The phone sends the person's settings as it answers (contract section 1): whether audio is kept is read now.
+    settings = people.settings(person)
     rec = CallRecorder(workspace, ctx.job.room.name, keep_audio=settings.record_on_server)
     rec.event("coordinator", llm=COORDINATOR_LLM, language=language.code, voice=tts_voice.describe(), person=person,
               audio_on_server=settings.record_on_server, audio_on_phone=settings.record_on_phone)
@@ -452,7 +454,9 @@ async def run_call(ctx: JobContext, people: People) -> None:
     first_words = asyncio.Event()
     session.on("agent_state_changed", lambda ev: ev.new_state == "speaking" and first_words.set())
     try:
-        await session.start(room=ctx.room, agent=agent)
+        # LiveKit's own recording (audio, transcript, traces) stays off whatever the LiveKit project says: call
+        # audio is kept only by our recorder, and only while the person keeps record_on_server on.
+        await session.start(room=ctx.room, agent=agent, record=False)
         session.say(prep.opening or greeting(meta, language))
         if ringing is not None:  # ring on through the session start and the voice's first syllable
             await asyncio.wait_for(first_words.wait(), FIRST_WORDS_WAIT_S)

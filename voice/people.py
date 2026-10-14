@@ -70,14 +70,26 @@ class Settings:
     voice: str | None = None
 
     @classmethod
-    def from_dict(cls, data: Any) -> "Settings":
-        settings = cls()
-        if isinstance(data, dict):
-            for name, value in data.items():
-                try:
-                    settings.change(name, value)
-                except ValueError:
-                    pass  # an unknown or broken value keeps the default
+    def from_file(cls, path: Path) -> "Settings":
+        """A person's settings.json. Never written yet: the defaults. Broken (unreadable, not an object, or without
+        a valid record_on_server): the defaults too, so calls still work, but with call audio off, since the
+        person may have turned it off. A broken value of another setting keeps that setting's default."""
+        try:
+            text = path.read_text()
+        except FileNotFoundError:
+            return cls()
+        except OSError:
+            return cls(record_on_server=False)
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return cls(record_on_server=False)
+        settings = cls(record_on_server=False)  # until the file itself says to keep audio
+        for name, value in data.items() if isinstance(data, dict) else ():
+            try:
+                settings.change(name, value)
+            except ValueError:
+                pass  # an unknown or broken value keeps the default
         return settings
 
     def change(self, name: str, value: Any) -> None:
@@ -203,11 +215,7 @@ class People:
         return person in self.ids()
 
     def settings(self, person: str) -> Settings:
-        try:
-            data = json.loads((self.folder(person) / "settings.json").read_text())
-        except (OSError, ValueError):
-            data = {}
-        return Settings.from_dict(data)
+        return Settings.from_file(self.folder(person) / "settings.json")
 
     def save_settings(self, person: str, settings: Settings) -> None:
         folder = self.workspace(person)

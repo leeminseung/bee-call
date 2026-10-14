@@ -145,3 +145,25 @@ def test_the_budget_is_checked_only_before_a_call_starts_and_never_cuts_one(tmp_
 
         assert asyncio.run(main()) == (True, False, False)
         asyncio.run(call.end())
+
+
+def test_livekit_never_records_a_call_and_audio_follows_the_setting_at_answer_time(tmp_path, monkeypatch, quick):
+    """Server review finding 6 and contract section 1: LiveKit's own recording is off in code, whatever the LiveKit
+    project says; our own recorder keeps audio by record_on_server, read again when the phone answers."""
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "outbound", "person": "matt", "topic": "the interview"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        task = asyncio.create_task(agent.run_call(call, me.people))
+        await asyncio.sleep(0.05)  # dispatched, ringing; the app sends the person's settings as they answer
+        me.people.change_settings("matt", {"record_on_server": False})
+        call.join()
+        await task
+        await call.end()
+
+    asyncio.run(main())
+    assert call.session.started["record"] is False
+    (folder,) = call_folders(me.workspace)
+    assert not (folder / "audio").exists()
+    assert next(e for e in events_of(folder) if e["type"] == "coordinator")["audio_on_server"] is False

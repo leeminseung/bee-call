@@ -62,9 +62,13 @@ def test_settings_are_checked_and_the_app_changes_only_its_own(tmp_path):
         with pytest.raises(ValueError):
             people.change_settings("matt", bad)
     assert people.settings("matt") == changed  # a refused change changes nothing
-    # A broken file keeps the defaults instead of failing a call.
-    (people.folder("matt") / "settings.json").write_text('{"language": "fr", "call_time": 9}')
-    assert people.settings("matt") == Settings()
+    # A broken file keeps the defaults instead of failing a call, except that it keeps no call audio: the person
+    # may have turned that off (server review finding 6).
+    for broken in ('{"language": "fr", "call_time": 9}', "not json", "[1, 2]", '{"record_on_server": "yes"}'):
+        (people.folder("matt") / "settings.json").write_text(broken)
+        assert people.settings("matt") == Settings(record_on_server=False), broken
+    (people.folder("matt") / "settings.json").unlink()
+    assert people.settings("matt").record_on_server is True  # never set: the default, on (Matt, 2026-10-14)
 
 
 def test_sign_ins_wait_for_approval_and_end_when_the_person_is_removed(tmp_path):
