@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 
 import boto3
@@ -47,6 +48,7 @@ from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
 from voice.aws_session import aws_profile, aws_session
 from voice.claude_llm import ClaudeBedrockLLM
 from voice.continuation import earlier_call
+from voice.costs import day_budget
 from meta.session import add_event, meta_notes
 from voice.coordinator import Coordinator
 from voice.dispatch import AGENT_NAME, RING_SECONDS
@@ -277,6 +279,13 @@ async def run_call(ctx: JobContext, people: People) -> None:
         log.error("call in room %s is for no approved person (%r); not answering", ctx.room.name, meta.get("person"))
         ctx.shutdown(reason="no approved person for this call")
         return
+    if meta.get("direction") != "outbound":  # the AI's own calls were checked before they were placed
+        budget = day_budget(people.person(person), datetime.now())
+        if budget.used_up:  # the app's pass to the room lasts two hours; the budget is checked as the call starts
+            log.info("not answering the call in room %s: %s", ctx.room.name, budget.why())
+            await ctx.delete_room()  # ends the call on the phone
+            ctx.shutdown(reason=budget.why())
+            return
     workspace = people.workspace(person)
     settings = people.settings(person)
     language = call_language(settings.language)
