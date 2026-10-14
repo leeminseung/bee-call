@@ -250,6 +250,8 @@ async def after_bee_writes(rec: CallRecorder, person, language: CallLanguage) ->
                            result="ok" if write.status == "ok" else "failed", error=write.error, retried=True)
     except asyncio.TimeoutError:
         log.warning("retrying the Bee writes of %s took too long", rec.dir)
+    except Exception:  # what was written stays in bee-writes.jsonl for the writer command
+        log.exception("retrying the Bee writes of %s failed", rec.dir)
     payload = summary_notification(writes.all(), language)
     if payload is not None:
         try:

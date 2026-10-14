@@ -18,6 +18,7 @@ SpendLog), also when it is stopped: a call nobody answers and a call hung up whi
 import asyncio
 import functools
 import json
+import logging
 import os
 import re
 import threading
@@ -35,6 +36,8 @@ from beelink.planner import Plan
 from voice.aws_session import aws_session
 from voice.costs import SpendLog
 from voice.language import CallLanguage, call_language
+
+log = logging.getLogger("bee-call.prep")
 
 PREP_SECONDS = 8.0  # the most a caller hears ringing before the AI picks up (agreed with Matt, 2026-10-13)
 # Starting the voice and its first syllable took about 2 s after the opening was ready (2026-10-13), and the
@@ -367,12 +370,15 @@ class Preparation:
                 self.prep.note = None
             self.prep.seconds = round(time.monotonic() - self._started, 2)
             self._opening.set()  # no opening is coming any more
-            if self.prep.input_tokens or self.prep.output_tokens:
-                self._spend.add("call_prep", model=self.prep.model, input_tokens=self.prep.input_tokens,
-                                output_tokens=self.prep.output_tokens, estimated=self.prep.usage_estimated,
-                                direction=self._meta.get("direction"))
             if not self.done.done():
                 self.done.set_result(self.prep.note)
+            if self.prep.input_tokens or self.prep.output_tokens:
+                try:
+                    self._spend.add("call_prep", model=self.prep.model, input_tokens=self.prep.input_tokens,
+                                    output_tokens=self.prep.output_tokens, estimated=self.prep.usage_estimated,
+                                    direction=self._meta.get("direction"))
+                except OSError:  # a call never waits on its own bookkeeping
+                    log.exception("could not record the prep's model use")
 
     async def _run(self, model_id: str, region: str) -> None:
         client = self._client or bedrock_client(region)
