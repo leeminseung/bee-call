@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 TIMEOUT = 60.0
+WRITE_TIMEOUT = TIMEOUT  # how long a write waits for Bee's answer
 LOGIN_LINK = re.compile(r"Authentication link:\s*(https://\S+)")
 
 
@@ -154,29 +155,29 @@ async def fact(fact_id: int) -> dict[str, Any]:
 # ---------- writes (only beelink.writer calls these) ----------
 
 async def confirm_fact(fact_id: int) -> dict[str, Any]:
-    return await run_json("facts", "confirm", str(fact_id))
+    return await run_json("facts", "confirm", str(fact_id), timeout=WRITE_TIMEOUT)
 
 
 async def unconfirm_fact(fact_id: int) -> dict[str, Any]:
-    return await run_json("facts", "update", str(fact_id), "--confirmed", "false")
+    return await run_json("facts", "update", str(fact_id), "--confirmed", "false", timeout=WRITE_TIMEOUT)
 
 
 async def update_fact(fact_id: int, text: str, confirmed: bool = True) -> dict[str, Any]:
     return await run_json("facts", "update", str(fact_id), "--text", text,
-                          "--confirmed", "true" if confirmed else "false")
+                          "--confirmed", "true" if confirmed else "false", timeout=WRITE_TIMEOUT)
 
 
 async def delete_todo(todo_id: int) -> dict[str, Any]:
-    return await run_json("todos", "delete", str(todo_id))
+    return await run_json("todos", "delete", str(todo_id), timeout=WRITE_TIMEOUT)
 
 
 async def create_todo(text: str, alarm_at: str | None = None) -> dict[str, Any]:
     args = ["todos", "create", "--text", text] + (["--alarm-at", alarm_at] if alarm_at else [])
-    return await run_json(*args)
+    return await run_json(*args, timeout=WRITE_TIMEOUT)
 
 
 async def accept_suggestion(suggestion_id: int) -> dict[str, Any]:
-    return await run_json("todos", "accept-suggestion", str(suggestion_id))
+    return await run_json("todos", "accept-suggestion", str(suggestion_id), timeout=WRITE_TIMEOUT)
 
 
 # ---------- one person's Bee login (voice/token_server.py /bee/...) ----------
