@@ -28,6 +28,12 @@ struct BeeCallApp: App {
             .task(id: scenePhase) {
                 if scenePhase == .active { await server.syncSettings() }
             }
+            // A Bee Call entry tapped in the Phone app's Recents: a new call, as the Call button makes.
+            .onContinueUserActivity(RecentsCall.activityType) { activity in
+                guard RecentsCall.startsCall(activity, signedIn: server.isSignedIn, inCall: calls.isInCall)
+                else { return }
+                Task { await calls.startCall(tokenServerURL: Server.tokenURL) }
+            }
         }
     }
 }
