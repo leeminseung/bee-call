@@ -136,7 +136,7 @@ final class CallManager: NSObject {
     /// Rings the phone through CallKit for the AI's call, unless the ring has expired,
     /// this room rang already, or another call is on.
     private func ringPhone(for ring: Ring, tokenServerURL: String) {
-        guard answerBy(ring) > .now, rungRooms[ring.room] == nil, !isInCall else { return }
+        guard Self.answerBy(ring) > .now, rungRooms[ring.room] == nil, !isInCall else { return }
         let id = UUID()
         rungRooms[ring.room] = id
         callID = id
@@ -155,7 +155,7 @@ final class CallManager: NSObject {
             finish("Microphone access is off. Turn it on in Settings.")
             return
         }
-        guard answerBy(ring) > .now else {
+        guard Self.answerBy(ring) > .now else {
             finish("Missed a call from Bee Call")
             return
         }
@@ -192,7 +192,7 @@ final class CallManager: NSObject {
 
     private func stopRingingAtExpiry(_ id: UUID, _ ring: Ring) {
         ringTimeout = Task {
-            try? await Task.sleep(for: .seconds(answerBy(ring).timeIntervalSinceNow))
+            try? await Task.sleep(for: .seconds(Self.answerBy(ring).timeIntervalSinceNow))
             guard !Task.isCancelled, callID == id, isRinging else { return }
             hangUp(.unanswered, "Missed a call from Bee Call")
         }
@@ -215,7 +215,7 @@ final class CallManager: NSObject {
             return
         }
         let address = Server.tokenURL
-        guard let ring, rungRooms[ring.room] == nil, answerBy(ring) > .now, !isInCall, !address.isEmpty else {
+        guard let ring, rungRooms[ring.room] == nil, Self.answerBy(ring) > .now, !isInCall, !address.isEmpty else {
             // Unreadable, already rung and over, expired, during another call, or no token server set.
             let id = UUID()
             provider.reportNewIncomingCall(with: id, update: update) { [weak self] _ in
@@ -246,10 +246,10 @@ final class CallManager: NSObject {
     }
 
     /// Stops ringing a little before expires_at, when the voice server gives up and closes the room.
-    /// Answering still needs a pass and a LiveKit join, and a join that lands after the room closed
-    /// would open a new, empty room with no AI in it.
-    private func answerBy(_ ring: Ring) -> Date {
-        ring.expiresAt.addingTimeInterval(-5)
+    /// Answering still needs the settings (SettingsSync.answerWait at most), a pass and a LiveKit join (about
+    /// 5 s), and a join that lands after the room closed would open a new, empty room with no AI in it.
+    static func answerBy(_ ring: Ring) -> Date {
+        ring.expiresAt.addingTimeInterval(-5 - TimeInterval(SettingsSync.answerWait.components.seconds))
     }
 
     /// CallKit shows the caller on one line, so a long topic is cut at a word.

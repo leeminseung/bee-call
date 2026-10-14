@@ -25,3 +25,14 @@ final class RingStreamTests: XCTestCase {
         XCTAssertNil(RingStream.ring(fromPush: ["topic": "x", "expires_at": "2026-10-15T21:01:00"]))
     }
 }
+
+/// How long the phone rings for the AI's call.
+final class RingDeadlineTests: XCTestCase {
+    /// The voice server gives up at expires_at. Answering first sends the settings (at most
+    /// SettingsSync.answerWait), then gets a pass and joins (about 5 s at worst), so the ringing stops early
+    /// enough for all three.
+    @MainActor func testARingStopsInTimeForTheSettingsThePassAndTheJoin() {
+        let ring = Ring(room: "call-matt-20261015-210000", topic: nil, expiresAt: Date(timeIntervalSince1970: 1_791_816_060))
+        XCTAssertEqual(CallManager.answerBy(ring), ring.expiresAt.addingTimeInterval(-7))
+    }
+}
