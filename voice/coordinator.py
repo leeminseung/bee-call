@@ -94,6 +94,13 @@ NAMES_BEE = re.compile(r"(?<![A-Za-z])Bee(?![a-z]| Call)")  # "Bee", "Bee에"; n
 # AI makes of it; it may be a partial yes ("No, just the milk."), so the AI asks about the item alone.
 REFUSAL = re.compile(r"^\W*(?:no\b|nope\b|nah\b|don'?t\b|do not\b|not now\b|never ?mind\b|wait,? no\b|"
                      r"아니|아뇨|됐어|됐습니다|싫어|하지 ?마|넣지 ?마|필요 ?없)", re.IGNORECASE)
+# The answer's first sentence has to start by saying yes (after a filler such as "음" or "well"); a hedge, a
+# "later", or the AI's own question heard back is no yes (pre-deploy review, 2026-10-15).
+AFFIRMATIVE = re.compile(r"^\W*(?:(?:음|어|아|그|저|um|uh|hmm|well|oh)\W+)?"
+                         r"(?:yes\b|yeah\b|yep\b|yup\b|sure\b|ok\b|okay\b|please\b|go ahead\b|go for it\b|do it\b|"
+                         r"absolutely\b|of course\b|sounds good\b|that'?s right\b|right\b|correct\b|"
+                         r"네|넵|넹|예|응|그래|그럼|좋아|좋습니다|좋네요|넣어|해 ?줘|해 ?주세요|맞아|맞습니다|그렇게|부탁|"
+                         r"물론|당연|오케이)", re.IGNORECASE)
 SENTENCES = re.compile(r"(?<=[.!?。])\s+|\n")
 QUOTES = "'\"‘’“”「」『』«»"
 EXPIRED = "expired"  # a proposal whose question was answered and passed (BeeCoordinator._answer_to)
@@ -461,6 +468,10 @@ class BeeCoordinator(Coordinator):
             found.expired = True
             return (f"Not saved: the answer sounds like a no (\"{answer}\"). If the user did want it, propose it "
                     "again with propose_bee_save and ask about it alone.")
+        if not AFFIRMATIVE.search(SENTENCES.split(answer.strip())[0]):
+            found.expired = True
+            return (f"Not saved: the answer is not a yes (\"{answer}\"). If the user wants it, propose it again with "
+                    "propose_bee_save and ask about it alone.")
         found.saved = True
         write = await self._bee_writes.begin(found.item, question, answer)
         try:

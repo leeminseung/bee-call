@@ -604,3 +604,31 @@ def test_the_notification_names_what_bee_may_have_in_the_person_s_language(langu
     writes = [BeeWrite("w1", {"kind": "todo_create", "text": first}, "q", "a", "ok"),
               BeeWrite("w2", {"kind": "todo_create", "text": second}, "q", "a", "unknown")]
     assert summary_notification(writes, call_language(language))["aps"]["alert"]["body"] == body
+
+
+@pytest.mark.parametrize("answer", ["나중에요.", "글쎄요...", "잠깐만요, 다시 생각해 볼게요.",
+                                    "Bee에 할 일로 '버그 기록'을 넣을까요?", "Hmm, let me think.", "Later, maybe."])
+def test_an_answer_that_is_not_a_yes_saves_nothing(tmp_path, fake_bee, answer):
+    """The pre-deploy review (2026-10-15): a hedge, a "later", or the AI's own question heard back was let through
+    because only a no was refused. Saving needs a yes."""
+    async def main():
+        korean = any("가" <= c <= "힣" for c in answer)
+        agent, _ = await in_a_call(tmp_path, language="ko" if korean else "en")
+        question = "Bee에 할 일로 '버그 기록'을 넣을까요?" if korean else ASKED[0]
+        return await saved(agent, question, answer, kind="todo_create", text="버그 기록" if korean else "Note the bug")
+
+    said = asyncio.run(main())
+    assert said.startswith("Not saved") and writes_to_bee(fake_bee) == []
+
+
+@pytest.mark.parametrize("answer", ["네.", "응, 넣어줘.", "음, 네 넣어 주세요.", "넣어 줘.", "좋아요!", "맞아요.",
+                                    "그래, 부탁해.", "Yes, please.", "Sure.", "Okay, go ahead.", "Please do.",
+                                    "Yeah."])
+def test_the_usual_ways_of_saying_yes_save(tmp_path, fake_bee, answer):
+    async def main():
+        korean = any("가" <= c <= "힣" for c in answer)
+        agent, _ = await in_a_call(tmp_path, language="ko" if korean else "en")
+        question = "Bee에 할 일로 '버그 기록'을 넣을까요?" if korean else ASKED[0]
+        return await saved(agent, question, answer, kind="todo_create", text="버그 기록" if korean else "Note the bug")
+
+    assert asyncio.run(main()).startswith("Saved to Bee")
