@@ -28,6 +28,9 @@ LANGUAGES = {
     "en": CallLanguage(
         code="en", name="English", transcribe="en-US", voice="Ruth", engine="generative",
         opening="under 20 words of spoken English",
+        # Sarah, an ElevenLabs default voice; Jessica (cgSgspJ2msm6clMCkdW9) and Chris (iP95p4xoKVk53GoZ742B)
+        # are the other English picks (Matt, 2026-10-14), not yet decided between.
+        elevenlabs_voice="EXAVITQu4vr4xnSDxMaL",
         greetings={
             "echo": "Hi! This is the echo test. Say something and I'll repeat it.",
             "voice note": "Hi, it's Bee Call. I'm calling about your new voice note. Do you have a minute?",
@@ -41,6 +44,8 @@ LANGUAGES = {
         # into 15.6 s of unintelligible speech, and its length varied run to run (4.3 s, 5.9 s); neural stayed 3.8 s.
         code="ko", name="Korean", transcribe="ko-KR", voice="Seoyeon", engine="neural",
         opening="one or two short sentences of spoken Korean, in the polite style",
+        # Sian - Tender, Calm & Clear, from the Voice Library (Matt's pick, 2026-10-14); add it to My Voices to use it.
+        elevenlabs_voice="5n5gqmaQi9Ewevrz7bOS",
         rule=("Speak Korean with the user, in natural, polite spoken Korean. The app's notes, Bee data and job "
               "results may be in English; say what matters in Korean, and keep names and numbers exact."),
         greetings={

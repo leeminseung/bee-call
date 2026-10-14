@@ -1,5 +1,5 @@
-"""Rings the iPhone through Apple's VoIP push (PushKit), so an AI call rings even when the app is closed or
-the phone is locked.
+"""Apple push for the iPhone app: the VoIP push (PushKit) that rings an AI call even when the app is closed or
+the phone is locked, and the plain alert push that asks before a call (voice/offers.py).
 
 The app registers for VoIP pushes at launch and sends its device token to the token server, which keeps
 it in workspace/state/voip_token.json. When the AI places a call, voice/dispatch.py hands the ring line
@@ -14,6 +14,9 @@ in .env.local:
   APNS_TEAM_ID    the team id of the Apple Developer account
   APNS_BUNDLE_ID  the app's bundle id (com.leeminseung.beecall when unset)
 Without them, or before the app has registered, ring() does nothing and only an open app rings.
+
+The alert push needs its own device token (the app sends it to POST /push, kept in state/alert_token.json) and
+goes to the app's bundle id with push type "alert"; the same .p8 key signs both.
 """
 
 import json
@@ -32,6 +35,8 @@ import jwt
 log = logging.getLogger("bee-call.voip")
 
 TOKEN_FILE = Path("state") / "voip_token.json"  # under the workspace; written by the token server
+ALERT_TOKEN_FILE = Path("state") / "alert_token.json"  # the app's token for plain notifications
+TOKEN_FILES = {"voip": TOKEN_FILE, "alert": ALERT_TOKEN_FILE}
 # The signed provider token, shared by the processes that place calls (voice.outbound, the fake caller): APNs
 # answers TooManyProviderTokenUpdates to a team that renews it too often.
 PROVIDER_TOKEN_FILE = Path("state") / "apns_provider_token.json"
@@ -81,22 +86,22 @@ def provider_token(config: ApnsConfig, now: float | None = None, cache: Path | N
     return token
 
 
-def save_device_token(workspace: Path, token: str, environment: str) -> None:
-    """Called by the token server when the app sends the token PushKit gave it."""
+def save_device_token(workspace: Path, token: str, environment: str, kind: str = "voip") -> None:
+    """Called by the token server when the app sends the token PushKit (voip) or iOS (alert) gave it."""
     token = token.strip().lower()
     if not DEVICE_TOKEN.fullmatch(token):
         raise ValueError("not a device token")
     if environment not in APNS_HOSTS:
         raise ValueError(f"environment must be one of {', '.join(APNS_HOSTS)}")
-    path = workspace / TOKEN_FILE
+    path = workspace / TOKEN_FILES[kind]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"token": token, "environment": environment,
                                 "at": datetime.now().isoformat(timespec="seconds")}) + "\n")
 
 
-def load_device_token(workspace: Path) -> dict[str, str] | None:
+def load_device_token(workspace: Path, kind: str = "voip") -> dict[str, str] | None:
     try:
-        data = json.loads((workspace / TOKEN_FILE).read_text())
+        data = json.loads((workspace / TOKEN_FILES[kind]).read_text())
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict) or not DEVICE_TOKEN.fullmatch(str(data.get("token", ""))) \
@@ -109,16 +114,36 @@ async def ring(line: dict[str, Any], workspace: Path, config: ApnsConfig | None 
                transport: httpx.AsyncBaseTransport | None = None) -> str | None:
     """Sends the VoIP push for an AI call's ring line. Returns APNs' id for the push, or None when VoIP push
     is not set up (no key or no registered phone). Raises PushError when APNs refuses it."""
+    payload = {key: line.get(key) for key in ("room", "topic", "expires_at", "expires_epoch")}
+    # APNs drops a push that cannot arrive before the voice server gives up.
+    expires = line.get("expires_epoch") if isinstance(line.get("expires_epoch"), int) else None
+    return await _send("voip", payload, workspace, config, transport, expires_epoch=expires)
+
+
+async def alert(payload: dict[str, Any], workspace: Path, *, expires_epoch: int | None = None,
+                collapse_id: str | None = None, config: ApnsConfig | None = None,
+                transport: httpx.AsyncBaseTransport | None = None) -> str | None:
+    """Sends a plain notification (payload with "aps"). Returns APNs' id, or None when alert push is not set up
+    (no key, or the app has not sent its alert token). Raises PushError when APNs refuses it."""
+    return await _send("alert", payload, workspace, config, transport, expires_epoch=expires_epoch,
+                       collapse_id=collapse_id)
+
+
+async def _send(kind: str, payload: dict[str, Any], workspace: Path, config: ApnsConfig | None,
+                transport: httpx.AsyncBaseTransport | None, *, expires_epoch: int | None = None,
+                collapse_id: str | None = None) -> str | None:
     config = config or ApnsConfig.from_env()
-    device = load_device_token(workspace)
+    device = load_device_token(workspace, kind)
     if config is None or device is None:
         return None
     token = provider_token(config, cache=workspace / PROVIDER_TOKEN_FILE)
-    headers = {"authorization": f"bearer {token}", "apns-topic": f"{config.bundle_id}.voip",
-               "apns-push-type": "voip", "apns-priority": "10"}
-    if isinstance(line.get("expires_epoch"), int):  # APNs drops a push that cannot arrive before the voice server gives up
-        headers["apns-expiration"] = str(line["expires_epoch"])
-    payload = {key: line.get(key) for key in ("room", "topic", "expires_at", "expires_epoch")}
+    topic = f"{config.bundle_id}.voip" if kind == "voip" else config.bundle_id
+    headers = {"authorization": f"bearer {token}", "apns-topic": topic, "apns-push-type": kind,
+               "apns-priority": "10"}
+    if expires_epoch is not None:
+        headers["apns-expiration"] = str(expires_epoch)
+    if collapse_id:
+        headers["apns-collapse-id"] = collapse_id[:64]  # a newer push with the same id replaces the older one
     url = f"{APNS_HOSTS[device['environment']]}/3/device/{device['token']}"
     async with httpx.AsyncClient(http2=transport is None, transport=transport, timeout=10) as client:
         response = await client.post(url, headers=headers, json=payload)
@@ -129,5 +154,5 @@ async def ring(line: dict[str, Any], workspace: Path, config: ApnsConfig | None 
     except ValueError:
         reason = response.text[:200]
     if reason in GONE:  # the app was deleted, or this token belongs to another build; wait for a new one
-        (workspace / TOKEN_FILE).unlink(missing_ok=True)
+        (workspace / TOKEN_FILES[kind]).unlink(missing_ok=True)
     raise PushError(f"APNs answered {response.status_code} {reason}".strip())

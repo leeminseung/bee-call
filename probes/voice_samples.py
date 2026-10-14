@@ -1,4 +1,4 @@
-"""Voice samples for picking the AI's voice: real lines from our calls, read by Amazon Polly and ElevenLabs voices
+"""Voice samples for picking the AI's voice: call lines with warmth and feeling in them, read by Amazon Polly and ElevenLabs voices
 through the same LiveKit TTS the voice server uses (voice/voices.py), on one page to listen to side by side.
 
   uv run python -m probes.voice_samples --list      # the ElevenLabs voices in My Voices (needs Voices read)
@@ -11,8 +11,8 @@ in the Voice Library), or both languages when it has none, with each model it li
 Each sample records how long its first sound took, measured here over this Mac's connection, through the same
 streaming path as a call (Polly one sentence at a time, ElevenLabs over its WebSocket).
 
-Cost: ElevenLabs bills characters; the script prints the total before it starts (about 330 per English voice
-and model, 150 per Korean one). Polly generative costs about 3 US cents per 1,000 characters.
+Cost: ElevenLabs bills characters; the script prints the total before it starts (about 640 per English voice
+and model, 330 per Korean one). Polly generative costs about 3 US cents per 1,000 characters.
 Writes WAV files and index.html under workspace/probes/voices/<time>/ unless --out says otherwise;
 --combine DIR... makes one page from earlier runs.
 """
@@ -40,19 +40,25 @@ from livekit.agents import tts as lk_tts
 from voice.language import CallLanguage, call_language
 from voice.voices import ELEVENLABS_MODEL, VoiceChoice, elevenlabs_key, make_tts
 
-LINES = {  # said by the AI in real calls on 2026-10-13 and 10-14
+LINES = {  # warmth and feeling are what make a voice sound like a person, so the lines lean on them
     "en": [
-        "Hi Minseung! Calling about your Saturday hike plans with Dana. Got a minute?",
-        "Good news — no rain expected in Seoul today or tomorrow. It's partly cloudy today around 26 degrees, "
-        "and mostly sunny tomorrow. Details are in the app.",
-        "Got it. So yesterday you and Dana planned a Saturday hike. Do you remember where you were thinking "
-        "of going?",
+        "Hey Minseung, it's Bee Call. Is now still a good time? I've got the laptop comparison you asked for.",
+        "Oh no, that sounds really frustrating. You put so much into that presentation, and it's completely fair "
+        "to feel let down. Do you want to talk it through, or should I just take a few things off your plate?",
+        "Wait, you got the offer? That's amazing, congratulations! Honestly, you earned this. All that late-night "
+        "prep finally paid off. Let's celebrate a little before we get into the details.",
+        "Okay, I have to ask... is this the third time we're comparing MacBooks? I'm kidding. This time I've got "
+        "the real numbers, so let's settle it for good.",
     ],
     "ko": [
-        "안녕하세요, 민승님. 무엇을 도와드릴까요?",
-        "와, 이직 제안이라니 큰 결정이네요. 어떤 부분이 고민이세요?",
-        "네, 소개해 드릴게요. 저는 Bee Call이라고 합니다. 전화로 하루를 정리하고, 한 가지 구체적인 일을 "
-        "완료하도록 도와드리는 역할을 합니다.",
+        "아, 그러셨구나. 오늘 면접 생각보다 많이 긴장되셨죠? 그래도 끝까지 차분하게 대답하신 거, 저는 정말 잘하셨다고 "
+        "생각해요. 결과가 어떻게 나오든, 준비하신 시간은 절대 헛되지 않아요.",
+        "와, 정말요? 합격하셨어요? 진짜 축하드려요! 그동안 늦게까지 준비하시던 거 제가 다 알잖아요. 오늘은 맛있는 거 "
+        "드시면서 푹 쉬세요.",
+        "음, 목소리가 좀 지쳐 보이시는데 괜찮으세요? 오늘 일정이 꽤 빡빡했잖아요. 급한 건 제가 정리해 둘 테니까, 지금은 "
+        "잠깐이라도 숨 좀 돌리셔도 돼요.",
+        "하하, 또 노트북 고민이세요? 이번엔 진짜 결정하실 거죠? 농담이에요. 이번에는 제가 확실하게 비교해서, 고민 끝내 "
+        "드릴게요.",
     ],
 }
 POLLY = {  # (voice, engine), the first of each language is what the calls use now
@@ -216,6 +222,8 @@ async def main() -> None:
     parser.add_argument("--voices", default="", help="comma-separated ElevenLabs voice ids, or names before ' - '")
     parser.add_argument("--models", default=",".join(DEFAULT_MODELS), help="comma-separated ElevenLabs models")
     parser.add_argument("--no-polly", action="store_true", help="skip the Polly voices")
+    parser.add_argument("--all-polly", action="store_true",
+                        help="every English generative Polly voice, not only the ones calls use now")
     parser.add_argument("--no-elevenlabs", action="store_true", help="only the Polly voices")
     parser.add_argument("--any-model", action="store_true",
                         help="read every model, also ones a voice does not list as high quality")
@@ -269,7 +277,7 @@ async def main() -> None:
         if not args.no_polly:
             for language, choices in POLLY.items():
                 lang = call_language(language)
-                for i, (name, engine) in enumerate(choices):
+                for i, (name, engine) in enumerate(choices if args.all_polly else choices[:1]):
                     row = Row(f"Polly {name}", f"{engine}" + (", 지금 통화 목소리" if i == 0 else ""), language)
                     await read_row(row, make_tts(VoiceChoice("polly", name, engine), lang, region), out,
                                    f"polly-{name.lower()}")

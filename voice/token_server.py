@@ -12,6 +12,14 @@ GET /ring                                Server-Sent Events: one "ring" event pe
 POST /voip  {"token": hex, "environment": "development"|"production"}
                                          the app's VoIP push token, so an AI call rings a closed app too
                                          (voice/voip_push.py); 204, or 400 for something else
+GET /token?identity=matt&continue=D/T    a new call that continues the earlier call D/T (voice/continuation.py)
+POST /push  {"token": hex, "environment": ...}
+                                         the app's token for plain notifications: the offers that ask
+                                         before an AI call (voice/offers.py)
+GET /offers                              offers still waiting for an answer or a call
+POST /offers/<id>  {"choice": "now"|"later"|"decline"}
+                                         the user's answer; voice/outbound.py places the call. 404 unknown,
+                                         409 already answered or closed
 
 Listens on all interfaces so an iPhone on the same Wi-Fi can reach it.
 Development only: anyone on the network can get a token.
@@ -31,6 +39,7 @@ from livekit import api
 from beelink.planner import OUTBOUND_LOG
 from voice import voip_push
 from voice.continuation import session_dir
+from voice.offers import OfferStore
 from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata
 
 load_dotenv(".env.local")
@@ -143,6 +152,41 @@ async def voip_token(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
+async def alert_token(request: web.Request) -> web.Response:
+    """The app's token for plain notifications (the offers that ask before a call)."""
+    try:
+        body = await request.json()
+        voip_push.save_device_token(request.app["workspace"], str(body["token"]), str(body["environment"]), "alert")
+    except (ValueError, KeyError, TypeError) as exc:
+        raise web.HTTPBadRequest(text=f"expected a notification token: {exc}")
+    print(f"notification token saved ({body['environment']})", flush=True)
+    return web.Response(status=204)
+
+
+async def list_offers(request: web.Request) -> web.Response:
+    """The offers still waiting for an answer or a call, for the app's first screen."""
+    store = OfferStore(request.app["workspace"])
+    return web.json_response({"offers": [o.view() for o in store.open(datetime.now())]})
+
+
+async def answer_offer(request: web.Request) -> web.Response:
+    """A notification button or the app: {"choice": "now" | "later" | "decline"}. voice/outbound.py places the call."""
+    try:
+        body = await request.json()
+        choice = str(body["choice"])
+    except (ValueError, KeyError, TypeError):
+        raise web.HTTPBadRequest(text='expected {"choice": "now" | "later" | "decline"}\n')
+    store = OfferStore(request.app["workspace"])
+    try:
+        offer = store.answer(request.match_info["offer_id"], choice, datetime.now())
+    except KeyError:
+        raise web.HTTPNotFound(text="no such offer\n")
+    except ValueError as exc:
+        raise web.HTTPConflict(text=f"{exc}\n")
+    print(f"offer {offer.id}: {choice} -> {offer.state}", flush=True)
+    return web.json_response({"offer": offer.view()})
+
+
 def make_app(url: str, key: str, secret: str, workspace: Path = WORKSPACE, room_exists=livekit_room_exists) -> web.Application:
     app = web.Application()
     app["url"], app["key"], app["secret"], app["workspace"] = url, key, secret, workspace
@@ -150,6 +194,9 @@ def make_app(url: str, key: str, secret: str, workspace: Path = WORKSPACE, room_
     app.router.add_get("/token", token)
     app.router.add_get("/ring", ring)
     app.router.add_post("/voip", voip_token)
+    app.router.add_post("/push", alert_token)
+    app.router.add_get("/offers", list_offers)
+    app.router.add_post("/offers/{offer_id}", answer_offer)
     return app
 
 

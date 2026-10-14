@@ -29,12 +29,15 @@ RING_SECONDS = 60  # how long the voice server waits for the phone to answer (ar
 
 
 def call_metadata(direction: str, plan: Plan | None = None, prep: dict[str, Any] | None = None,
-                  continue_from: str | None = None) -> str:
+                  continue_from: str | None = None, agreed: str | None = None) -> str:
     data: dict[str, Any] = {"direction": direction}
     if continue_from:  # the earlier call this one continues (voice/continuation.py)
         data["continue_from"] = continue_from
+    if agreed:  # how the user agreed to an AI call (voice/offers.py)
+        data["agreed"] = agreed
     if plan is not None:
-        data.update({"inbox": str(plan.inbox_dir), "plan": str(plan.path) if plan.path else None,
+        data.update({"inbox": str(plan.inbox_dir) if plan.inbox_dir else None,
+                     "plan": str(plan.path) if plan.path else None,
                      "conversation_ids": plan.conversation_ids, "reason": plan.reason, "topic": plan.topic,
                      "kind": plan.kind})
     if prep is not None:
@@ -49,14 +52,17 @@ def room_with_agent(room: str, metadata: str, ring_seconds: int = RING_SECONDS) 
 
 
 async def place_call(plan: Plan, workspace: Path, lk: api.LiveKitAPI | None = None,
-                     prep: dict[str, Any] | None = None) -> str:
+                     prep: dict[str, Any] | None = None, *, continue_from: str | None = None,
+                     agreed: str | None = None) -> str:
     """Opens the room for an AI-initiated call and records it for the ring. Returns the room name.
-    `prep` is the call prep note (voice/prep.py Prep.to_meta()), made before this call."""
+    `prep` is the call prep note (voice/prep.py Prep.to_meta()), made before this call; `agreed` says how the
+    user agreed to it (voice/offers.py), and `continue_from` the earlier call it continues."""
     room = f"call-{datetime.now():%Y%m%d-%H%M%S}"
     own = lk is None
     lk = lk or api.LiveKitAPI()  # LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET from the environment
     try:
-        await lk.room.create_room(room_with_agent(room, call_metadata("outbound", plan, prep)))
+        await lk.room.create_room(room_with_agent(room, call_metadata("outbound", plan, prep, continue_from,
+                                                                      agreed)))
     finally:
         if own:
             await lk.aclose()

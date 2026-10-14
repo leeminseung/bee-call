@@ -122,7 +122,12 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime | None = N
         why = f"You are about to call the user. Why: {meta.get('reason') or 'to talk through their day'}"
         if meta.get("topic"):
             why += f" (topic: {meta['topic']})"
-        ask = "In the opening, greet the user, say in a few words why you are calling, and ask if they have a minute."
+        if meta.get("agreed"):  # voice/offers.py: the AI calls only when the user said yes
+            why += f". They agreed to this call: {meta['agreed']}"
+            ask = "In the opening, greet the user and say in a few words that you are calling as agreed, and about what."
+        else:
+            ask = ("In the opening, greet the user, say in a few words why you are calling, and ask if they have a "
+                   "minute.")
     elif meta.get("earlier_call"):
         why = "The user is calling you from the app to continue an earlier call with you"
         ask = ("In the opening, greet the user and pick up where the earlier call left off: in a few words, what you "
@@ -339,10 +344,13 @@ def plan_meta(plan: Plan) -> dict[str, Any]:
     return {"direction": "outbound", "reason": plan.reason, "topic": plan.topic, "kind": plan.kind}
 
 
-async def prepare_outbound(plan: Plan, mode: str | None = None) -> Prep:
-    """For voice/outbound.py, before the phone rings: reads Bee for this plan, then prepares."""
+async def prepare_outbound(plan: Plan, mode: str | None = None, extra: dict[str, Any] | None = None,
+                           deadline_s: float = NOTE_SECONDS) -> Prep:
+    """For voice/outbound.py, before the phone rings: reads Bee for this plan, then prepares. `extra` adds to the
+    call's metadata (agreed, earlier_call); a shorter `deadline_s` rings sooner, with the note given up earlier."""
     started = time.monotonic()
     inputs = await fetch_call_inputs(plan.inbox_dir, plan.conversation_ids)
-    prep = await prepare_call(inputs, plan_meta(plan), prep_model(mode or os.environ.get("COORDINATOR_LLM", "bedrock")))
+    prep = await prepare_call(inputs, {**plan_meta(plan), **(extra or {})},
+                              prep_model(mode or os.environ.get("COORDINATOR_LLM", "bedrock")), deadline_s=deadline_s)
     prep.seconds = round(time.monotonic() - started, 2)
     return prep

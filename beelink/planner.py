@@ -11,8 +11,11 @@ Rules of the stand-in:
   MAX_AGE with at least MIN_UTTERANCES utterances, or a new voice note (our own
   calls were already filtered out by the watcher);
 - no call while another call is going on;
-- at least COOLDOWN since the last call ended or the last AI call was placed,
-  whoever started it.
+- at least COOLDOWN since the last call ended, the last AI call was placed or the
+  user was last asked about one, whoever started it.
+
+A "call" decision is a question first: voice/outbound.py asks the user with a
+notification (voice/offers.py) and calls only when they say yes.
 """
 
 import json
@@ -31,13 +34,14 @@ COOLDOWN = timedelta(minutes=30)  # arbitrary
 # a quiet caller writes no events for minutes, and a crashed call only blocks new calls for a while.
 LIVE_WINDOW_S = 900
 OUTBOUND_LOG = Path("state") / "outbound.jsonl"  # under the workspace; written by voice/dispatch.py
+OFFERS_DIR = Path("state") / "offers"  # under the workspace; one file per call offer (voice/offers.py)
 
 
 @dataclass
 class Plan:
     call: bool
     reason: str
-    inbox_dir: Path
+    inbox_dir: Path | None  # None for a call the user booked in a call (no Bee change behind it)
     conversation_ids: list[int] = field(default_factory=list)
     topic: str | None = None  # what the call is about, in Bee's words (its short summary)
     kind: str | None = None  # "conversation" or "voice note"
@@ -61,12 +65,25 @@ def last_outbound(workspace: Path) -> datetime | None:
     return datetime.fromisoformat(json.loads(lines[-1])["at"]) if lines else None
 
 
+def last_offer(workspace: Path) -> datetime | None:
+    """When the user was last asked about a call (voice/offers.py)."""
+    asked = []
+    for path in (workspace / OFFERS_DIR).glob("*.json"):
+        try:
+            history = json.loads(path.read_text()).get("history") or []
+            asked += [datetime.fromisoformat(h["at"]) for h in history if h.get("state") == "asked"]
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return max(asked) if asked else None
+
+
 def last_call(workspace: Path) -> datetime | None:
-    """The later of: the last AI call placed, and the end of the last call recorded (either direction)."""
+    """The latest of: the last AI call placed, the end of the last call recorded (either direction), and the last
+    time the user was asked about a call."""
     times = [w_end for _, w_end in our_call_windows(workspace)]
-    placed = last_outbound(workspace)
-    if placed is not None:
-        times.append(placed.timestamp())
+    for moment in (last_outbound(workspace), last_offer(workspace)):
+        if moment is not None:
+            times.append(moment.timestamp())
     return datetime.fromtimestamp(max(times)) if times else None
 
 

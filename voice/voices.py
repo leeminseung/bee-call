@@ -8,8 +8,8 @@ the Voices read permission.
   TTS                   polly (default) or elevenlabs
   POLLY_VOICE           a Polly voice in place of the call language's (Ruth for English, Seoyeon for Korean)
   ELEVENLABS_VOICE      a voice id in place of the call language's
-  ELEVENLABS_MODEL      eleven_flash_v2_5 when unset; eleven_v3_conversational and eleven_v4_turbo are more
-                        expressive and go through ElevenLabs' text-to-dialogue stream
+  ELEVENLABS_MODEL      eleven_v4_turbo when unset (the most expressive fast model; it goes through ElevenLabs'
+                        text-to-dialogue stream); eleven_flash_v2_5 is the older fast one
   ELEVENLABS_STABILITY  0 to 1, lower is livelier and less steady; unset keeps the voice's own setting
 """
 
@@ -24,7 +24,8 @@ from livekit.plugins import aws, elevenlabs
 from voice.language import CallLanguage
 
 PROVIDERS = ("polly", "elevenlabs")
-ELEVENLABS_MODEL = "eleven_flash_v2_5"  # ElevenLabs' fastest model, made for conversations
+# Measured from Seoul on 2026-10-14: first sound 0.15-0.24 s, as quick as Flash v2.5, and the voice Matt preferred.
+ELEVENLABS_MODEL = "eleven_v4_turbo"
 SIMILARITY_BOOST = 0.75  # ElevenLabs' default; VoiceSettings needs it whenever stability is set
 
 
