@@ -137,11 +137,13 @@ def zone_for(host: str, zones: list[str]) -> str | None:
 
 def remote_commands(script: str, chunk: int = 2000) -> list[str]:
     """Run Command lines that rebuild `script` on the instance and run it with bash. It travels as base64, so no
-    shell reads or expands it on the way."""
+    shell reads or expands it on the way. Run Command keeps only the first 24,000 characters of output, so the
+    script's output is cut to its last 23,000 first: the end of a long run says how it ended."""
     encoded = base64.b64encode(script.encode()).decode()
     lines = ['f=$(mktemp)']
     lines += [f"printf '%s' '{encoded[i:i + chunk]}' >> \"$f\"" for i in range(0, len(encoded), chunk)]
-    lines.append('base64 -d < "$f" > "$f.sh" && bash "$f.sh"; rc=$?; rm -f "$f" "$f.sh"; exit $rc')
+    lines.append('base64 -d < "$f" > "$f.sh" && bash "$f.sh" > "$f.out" 2>&1; rc=$?; tail -c 23000 "$f.out"; '
+                 'rm -f "$f" "$f.sh" "$f.out"; exit $rc')
     return lines
 
 
@@ -214,8 +216,8 @@ def public_host(ssm) -> str | None:
 
 
 def run_on_server(ssm, instance_id: str, script: str, timeout: int = 300, comment: str = "Bee Call") -> str:
-    """Runs a bash script as root on the instance through SSM Run Command and returns what it printed (the last
-    24,000 characters at most, as Run Command keeps them). Exits if the script fails."""
+    """Runs a bash script as root on the instance through SSM Run Command and returns what it printed (its last
+    23,000 characters). Exits if the script fails."""
     command = ssm.send_command(InstanceIds=[instance_id], DocumentName="AWS-RunShellScript", Comment=comment,
                                Parameters={"commands": remote_commands(script), "executionTimeout": [str(timeout)]})
     command_id = command["Command"]["CommandId"]
@@ -424,9 +426,9 @@ def cmd_logs(args) -> None:
     s = session()
     instance_id = running_instance(s.client("ec2"))
     if args.service == "boot":
-        script = f"tail -n {args.lines} /var/log/cloud-init-output.log | tail -c 23000"
+        script = f"tail -n {args.lines} /var/log/cloud-init-output.log"
     else:
-        script = f"journalctl -u {UNITS[args.service]} -n {args.lines} --no-pager -o short-iso | tail -c 23000"
+        script = f"journalctl -u {UNITS[args.service]} -n {args.lines} --no-pager -o short-iso"
     print(run_on_server(s.client("ssm"), instance_id, script, timeout=60, comment="Bee Call logs"))
 
 

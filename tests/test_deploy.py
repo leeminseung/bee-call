@@ -173,6 +173,12 @@ def test_run_command_rebuilds_the_script_on_the_server_unchanged():
     assert (run.returncode, run.stdout) == (3, "it's 42 $HOME\n")
 
 
+def test_run_command_keeps_the_end_of_a_long_output():
+    lines = remote_commands("printf 'x%.0s' $(seq 30000); echo; echo finished >&2\n")
+    run = subprocess.run(["sh", "-c", "\n".join(lines)], capture_output=True, text=True)
+    assert run.returncode == 0 and len(run.stdout) == 23000 and run.stdout.endswith("x\nfinished\n")
+
+
 def test_the_user_data_fits_ec2s_limit_and_hands_over_to_the_checkout():
     text = BOOTSTRAP.read_text()
     assert text.startswith("#!/bin/bash\n") and len(text.encode()) < 16 * 1024
