@@ -44,6 +44,7 @@ from livekit.plugins.aws.stt import Credentials
 
 from beelink import cli as bee
 from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
+from voice.aws_session import aws_profile, aws_session
 from voice.claude_llm import ClaudeBedrockLLM
 from voice.continuation import earlier_call
 from meta.session import add_event, meta_notes
@@ -63,7 +64,7 @@ from worker.runner import JobNotification, JobRunner
 from worker.search import SearchWorker
 
 load_dotenv(".env.local")
-PROFILE = os.environ.get("AWS_PROFILE", "bee-call")
+PROFILE = aws_profile()  # None on EC2: the instance role
 REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", REGION)
 COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
@@ -80,10 +81,17 @@ OUTBOUND_INPUTS_WAIT_S = 0.5
 log = logging.getLogger("bee-call")
 
 
-def transcribe_credentials() -> Credentials:
-    # The Transcribe plugin does not read ~/.aws profiles, so hand it the
-    # profile's keys in memory. Nothing is printed or written to disk.
-    creds = boto3.Session(profile_name=PROFILE).get_credentials().get_frozen_credentials()
+def transcribe_credentials(session: boto3.Session | None) -> Credentials | None:
+    # The Transcribe plugin finds environment keys and an EC2 instance role by itself, afresh for every stream it
+    # opens, but it does not read ~/.aws profiles. On EC2 (no session) it is left to do that, so even a stream
+    # reopened late in a long call has current keys. With a profile (a Mac) it gets the profile's keys in memory,
+    # as they are at the start of each call. Nothing is printed or written to disk.
+    if session is None:
+        return None
+    found = session.get_credentials()
+    if found is None:
+        raise RuntimeError("no AWS credentials: set AWS_PROFILE, or run with an instance role")
+    creds = found.get_frozen_credentials()
     return Credentials(access_key_id=creds.access_key, secret_access_key=creds.secret_key,
                        session_token=creds.token)
 
@@ -232,7 +240,9 @@ async def read_by(task: asyncio.Task, seconds: float) -> CallInputs | None:
 def prewarm(proc: JobProcess) -> None:
     # Done once per worker process, before any call, so calls start without a stall.
     proc.userdata["vad"] = silero.VAD.load()
-    proc.userdata["transcribe_credentials"] = transcribe_credentials()
+    proc.userdata["aws"] = aws_session() if PROFILE else None  # none on EC2, see transcribe_credentials
+    if proc.userdata["aws"] is not None:
+        proc.userdata["aws"].get_credentials()  # read the profile now rather than at the first call
 
 
 server = AgentServer(setup_fnc=prewarm, num_idle_processes=1)
@@ -365,12 +375,16 @@ async def entrypoint(ctx: JobContext) -> None:
             (rec.dir / "prep.md").write_text(f"# Call prep note\n\n{prep.note}\n\nOpening: {prep.opening}\n")
 
     prep_recorder = asyncio.create_task(record_prep())
+    # Never keys frozen at prewarm: an instance role's keys expire after a few hours.
+    ctx.proc.userdata["transcribe_credentials"] = transcribe_credentials(ctx.proc.userdata["aws"])
     session = AgentSession(
         stt=aws.STT(region=REGION, language=language.transcribe, credentials=ctx.proc.userdata["transcribe_credentials"]),
         llm=make_llm(rec),
         tts=make_tts(tts_voice, language, REGION),
         vad=ctx.proc.userdata["vad"],
-        turn_handling={"turn_detection": inference.TurnDetector()},
+        # Named rather than left to LiveKit's defaults, which follow the launch mode: `dev` (a Mac) picks LiveKit's
+        # cloud turn detector and adaptive interruptions, `start` (the server) a local model and voice activity only.
+        turn_handling={"turn_detection": inference.TurnDetector(version="v1"), "interruption": {"mode": "adaptive"}},
     )
 
     async def notify(news: JobNotification) -> None:

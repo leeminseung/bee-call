@@ -29,12 +29,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 
-import boto3
 import botocore.session
 from botocore.config import Config
 from botocore.exceptions import EventStreamError
 
 from beelink.clock import now_text
+from voice.aws_session import aws_session
 from worker.chart import render_svg
 from worker.runner import Job
 from worker.web_search import SearchResult, web_search
@@ -294,7 +294,7 @@ class HarnessWorker:
         self.harness_arn = harness_arn or load_harness_arn()
         if not self.harness_arn:
             raise RuntimeError("no harness ARN: run scripts/deploy_worker.py first")
-        self.client = client or boto3.Session(profile_name=os.environ.get("AWS_PROFILE", "bee-call")).client(
+        self.client = client or aws_session().client(
             "bedrock-agentcore", region_name=REGION, config=Config(read_timeout=900))
         self.search = search
         self._ready: str | None = None  # a warm session no job is using

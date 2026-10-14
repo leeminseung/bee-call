@@ -21,7 +21,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import boto3
 from botocore.config import Config
 
 from beelink import cli, reads
@@ -29,6 +28,7 @@ from beelink.clock import now_text
 from beelink.planner import Plan
 from meta import files
 from meta.session import DAILY_NOTIFICATIONS, MetaSession, quiet, quiet_ends
+from voice.aws_session import aws_session
 from voice.offers import CALL_TIME, Offer, OfferStore
 from voice.prep import prep_model
 
@@ -110,9 +110,8 @@ def clean(value: Any, limit: int) -> str:
 @functools.lru_cache(maxsize=4)
 def meta_client(region: str):
     """Its own Bedrock client: a think can wait longer than a call's prep, and one retry is worth it here."""
-    session = boto3.Session(profile_name=os.environ.get("AWS_PROFILE", "bee-call"))
-    return session.client("bedrock-runtime", region_name=region,
-                          config=Config(connect_timeout=5, read_timeout=90, retries={"max_attempts": 3}))
+    return aws_session().client("bedrock-runtime", region_name=region,
+                                config=Config(connect_timeout=5, read_timeout=90, retries={"max_attempts": 3}))
 
 
 def _event_line(workspace: Path, event: dict[str, Any]) -> str:

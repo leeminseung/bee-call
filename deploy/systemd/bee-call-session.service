@@ -1,0 +1,25 @@
+# The session screen: call records and their live event streams, shown in the app (voice/session_server.py).
+# Caddy serves it as https://<hostname>:8443/.
+[Unit]
+Description=Bee Call session screen (127.0.0.1:8788, https on 8443)
+Wants=bee-call-env.service network-online.target
+After=bee-call-env.service network-online.target
+
+[Service]
+User=bee-call
+Group=bee-call
+WorkingDirectory=/opt/bee-call/app
+EnvironmentFile=/run/bee-call/env
+Environment=TZ=Asia/Seoul
+Environment=BEE_CALL_DATA=/var/lib/bee-call
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/bee-call/app/.venv/bin/python -m voice.session_server --host 127.0.0.1
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

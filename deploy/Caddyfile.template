@@ -1,0 +1,22 @@
+# Bee Call: HTTPS in front of the two web servers, for one hostname, with a Let's Encrypt certificate.
+# deploy/config.py writes it to /etc/caddy/Caddyfile with the hostname that scripts/deploy_server.py dns set.
+#   https://__HOSTNAME__/       the token server (127.0.0.1:8787): call tokens, the ring stream, push tokens, offers
+#   https://__HOSTNAME__:8443/  the session screen (127.0.0.1:8788): call records and their live event streams
+# Port 80 answers Let's Encrypt's HTTP challenge and sends everything else to https://__HOSTNAME__/.
+{
+	servers {
+		protocols h1 h2 # no HTTP/3: the security group opens TCP only
+	}
+}
+
+__HOSTNAME__ {
+	reverse_proxy 127.0.0.1:8787 {
+		flush_interval -1 # every write at once, so the ring stream's events are not held back
+	}
+}
+
+__HOSTNAME__:8443 {
+	reverse_proxy 127.0.0.1:8788 {
+		flush_interval -1 # a call's live events, as they happen
+	}
+}

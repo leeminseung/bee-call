@@ -26,10 +26,10 @@ import time
 from datetime import timedelta
 from pathlib import Path
 
-import boto3
 from dotenv import load_dotenv
 
 from beelink.planner import RulePlanner
+from voice.aws_session import aws_session
 from voice.dispatch import open_inbound_room, place_call
 from voice.outbound import saved_trigger
 from voice.people import People, dev_person
@@ -37,7 +37,6 @@ from beelink import cli as bee
 from voice.prep import PREP_SECONDS, prepare_outbound
 
 load_dotenv(".env.local")
-PROFILE = os.environ.get("AWS_PROFILE", "bee-call")
 REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 
 DEFAULT_LINES = {
@@ -59,7 +58,7 @@ def synthesize(polly, text: str, path: Path, voice: str, engine: str = "generati
 
 def build_track(lines: list[str], voice: str, lead: float, gaps: list[float], tail: float, out: Path,
                 engine: str = "generative") -> None:
-    polly = boto3.Session(profile_name=PROFILE).client("polly", region_name=REGION)
+    polly = aws_session().client("polly", region_name=REGION)
     with tempfile.TemporaryDirectory() as tmp:
         parts = []
         for i, text in enumerate(lines):

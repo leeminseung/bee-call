@@ -1,0 +1,28 @@
+# The token server: call tokens, the ring stream, push tokens and offers for the app (voice/token_server.py).
+# Caddy serves it as https://<hostname>/.
+[Unit]
+Description=Bee Call token server (127.0.0.1:8787, https on 443)
+Wants=bee-call-env.service network-online.target
+After=bee-call-env.service network-online.target
+
+[Service]
+User=bee-call
+Group=bee-call
+WorkingDirectory=/opt/bee-call/app
+EnvironmentFile=/run/bee-call/env
+Environment=TZ=Asia/Seoul
+Environment=BEE_CALL_DATA=/var/lib/bee-call
+Environment=BEE_BIN=/opt/bee-call/bin/bee
+Environment=BEE_FORCE_FILE_STORE=1
+Environment=LIVEKIT_AGENT_NAME=bee-call
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/bee-call/app/.venv/bin/python -m voice.token_server
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
