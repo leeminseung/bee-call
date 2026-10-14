@@ -48,9 +48,20 @@ def events(rec: CallRecorder) -> list[dict]:
     return [json.loads(line) for line in (rec.dir / "events.jsonl").read_text().splitlines()]
 
 
+RECORDERS: list[CallRecorder] = []  # the calls a test opened, closed when it ends
+
+
+@pytest.fixture(autouse=True)
+def close_the_calls():
+    yield
+    while RECORDERS:
+        RECORDERS.pop().close()
+
+
 async def in_a_call(tmp_path, said: list[tuple[str, str]] = (), language: str = "en"):
     """A Bee person's call after these turns (role, text)."""
     rec = CallRecorder(tmp_path / "workspace", room="call-matt-20261015-210000", now=seoul_now())
+    RECORDERS.append(rec)
     agent = BeeCoordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now,
                            language=call_language(language))
     await say(agent, *said)
