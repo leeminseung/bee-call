@@ -40,6 +40,13 @@ struct CallRecordSheet: View {
                 }
         }
     }
+
+    /// The sign-in cookie the page's requests carry (voice/session_server.py reads bee_call_session).
+    static func signInCookie(token: String, for url: URL) -> HTTPCookie? {
+        guard let host = url.host else { return nil }
+        return HTTPCookie(properties: [.name: "bee_call_session", .value: token, .domain: host, .path: "/",
+                                       .secure: url.scheme == "https"])
+    }
 }
 
 /// WKWebView with the session screen. Loads again when `attempt` changes.
@@ -73,9 +80,7 @@ private struct SessionPage: UIViewRepresentable {
         guard context.coordinator.loadedAttempt != attempt else { return }
         context.coordinator.loadedAttempt = attempt
         let request = URLRequest(url: url, timeoutInterval: 10)
-        guard let token = Server.savedToken(), let host = url.host,
-              let cookie = HTTPCookie(properties: [.name: "bee_call_session", .value: token, .domain: host, .path: "/",
-                                                   .secure: url.scheme == "https"]) else {
+        guard let token = Server.savedToken(), let cookie = CallRecordSheet.signInCookie(token: token, for: url) else {
             view.load(request)
             return
         }
