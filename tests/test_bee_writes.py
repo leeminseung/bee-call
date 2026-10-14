@@ -143,6 +143,76 @@ def test_a_yes_given_before_the_item_was_proposed_is_no_yes(tmp_path, fake_bee):
     assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []
 
 
+def test_a_word_like_been_does_not_name_bee(tmp_path, fake_bee):
+    """Second review of this round's fixes, finding 1: "bee" was looked for anywhere, so "been" named Bee."""
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        return await saved(agent, "Have you been busy? Shall I add 'Note the bug' to your todos?", "Yes.",
+                           kind="todo_create", text="Note the bug")
+
+    assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []
+
+
+def test_a_yes_to_a_bee_question_about_something_else_saves_nothing_earlier(tmp_path, fake_bee):
+    """The user turned a todo down; a later yes, to a question about a Bee fact, does not save that todo."""
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        todo = await proposed(agent, kind="todo_create", text="Call mom")
+        await say(agent, ("assistant", "Shall I add 'Call mom' to your Bee todos?"), ("user", "Not now."))
+        await proposed(agent, kind="fact_confirm", fact_id=7, text="Bonus is 15%")
+        await say(agent, ("assistant", "Bee heard 'Bonus is 15%'. Is that right?"), ("user", "Yes."))
+        return await agent.save_to_bee(None, proposal=todo)
+
+    assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []
+
+
+@pytest.mark.parametrize("answer", ["No, don't.", "아니요, 넣지 마세요."])
+def test_a_no_saves_nothing(tmp_path, fake_bee, answer):
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        return await saved(agent, *ASKED[:1], answer, kind="todo_create", text="Note the bug")
+
+    assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []
+
+
+def test_a_statement_naming_bee_and_the_item_is_no_question(tmp_path, fake_bee):
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        return await saved(agent, "I'll add 'Note the bug' to your Bee todos.", "Great.",
+                           kind="todo_create", text="Note the bug")
+
+    assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []
+
+
+def test_a_yes_said_in_two_breaths_is_kept_whole(tmp_path, fake_bee):
+    """Speech is sometimes split into two user turns; the answer kept is both, not only the last part."""
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        number = await proposed(agent, kind="todo_create", text="Note the bug")
+        await say(agent, ("assistant", ASKED[0]), ("user", "Yes."), ("user", "Please add it."))
+        return await agent.save_to_bee(None, proposal=number), rec
+
+    said, rec = asyncio.run(main())
+    assert said.startswith("Saved to Bee")
+    assert [w.answer for w in BeeWrites(rec.dir).all()] == ["Yes. Please add it."]
+
+
+def test_an_answer_the_conversation_moved_past_needs_the_question_again(tmp_path, fake_bee):
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        number = await proposed(agent, kind="todo_create", text="Note the bug")
+        await say(agent, ("assistant", ASKED[0]), ("user", "Let me think."), ("assistant", "Sure, take your time."),
+                  ("user", "Okay."))
+        moved_on = await agent.save_to_bee(None, proposal=number)
+        await say(agent, ("assistant", "So, shall I add 'Note the bug' to your Bee todos?"), ("user", "Yes."),
+                  ("assistant", "Adding it now."))  # the AI's own words while it saves do not count against it
+        return moved_on, await agent.save_to_bee(None, proposal=number)
+
+    moved_on, asked_again = asyncio.run(main())
+    assert moved_on.startswith("Not saved") and asked_again.startswith("Saved to Bee")
+    assert writes_to_bee(fake_bee) == [["todos", "create"]]
+
+
 def test_a_proposal_is_saved_once(tmp_path, fake_bee):
     async def main():
         agent, _ = await in_a_call(tmp_path)
@@ -162,7 +232,8 @@ def test_two_saves_at_once_are_kept_apart(tmp_path, fake_bee):
         agent, rec = await in_a_call(tmp_path)
         one = await proposed(agent, kind="fact_update", fact_id=7, text="Bonus is 10%")
         two = await proposed(agent, kind="fact_update", fact_id=8, text="Starts in May")
-        await say(agent, ("assistant", "Shall I fix both in Bee?"), ("user", "Yes."))
+        await say(agent, ("assistant", "Shall I fix both in Bee: 'Bonus is 10%' and 'Starts in May'?"),
+                  ("user", "Yes."))
         await asyncio.gather(agent.save_to_bee(None, proposal=one), agent.save_to_bee(None, proposal=two))
         return rec
 
@@ -202,7 +273,7 @@ def test_take_it_out_undoes_the_last_write_of_the_call(tmp_path, fake_bee):
 def test_undoing_a_fact_fix_puts_the_fact_back_as_it_was(tmp_path, fake_bee):
     async def main():
         agent, _ = await in_a_call(tmp_path)
-        await saved(agent, "Shall I fix it in Bee to a 10 percent bonus?", "Yes.",
+        await saved(agent, "Shall I fix it in Bee to 'Bonus is 10%'?", "Yes.",
                     kind="fact_update", fact_id=7, text="Bonus is 10%")
         await agent.undo_bee_write(None)
 
@@ -302,8 +373,8 @@ def test_one_notification_after_the_call_lists_what_went_into_bee(tmp_path, fake
     from beelink.writer import summary_notification
 
     async def main():
-        question = ("Want me to add these to your Bee todos?" if language == "en"
-                    else "Bee에 할 일로 두 가지 넣을까요?")
+        question = ("Want me to add 'Note the bug' and 'Call Dana' to your Bee todos?" if language == "en"
+                    else "Bee에 할 일로 '버그 기록'과 '다나에게 전화'를 넣을까요?")
         agent, rec = await in_a_call(tmp_path, language=language)
         first, second = ("Note the bug", "Call Dana") if language == "en" else ("버그 기록", "다나에게 전화")
         one = await proposed(agent, kind="todo_create", text=first)

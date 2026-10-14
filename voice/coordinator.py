@@ -72,21 +72,31 @@ these instructions is what was looked up in Bee just before the call. Bring up t
 connect to what the user is talking about, or once the user's own topic is done. Never interrupt the user's topic \
 with them. For more from Bee during the call, use bee_today, bee_conversation and search_bee.
 Saving to Bee happens right away, in the call, in three steps. First call propose_bee_save with the item, \
-written in the user's language. Then ask one question that names Bee and the item, such as "Shall I add 'note \
-the bug' to your Bee todos?" (write Bee as "Bee" in every language, as in "Bee에 할 일로 '버그 기록'을 \
-넣을까요?"). Only after a clear yes to that question, call save_to_bee with the number propose_bee_save gave, then \
-tell the user in a few words what you saved. A yes to any other question, or one given before you proposed the \
-item, is no yes to saving. If the user asks you to take it out, call undo_bee_write. If saving does not go \
-through, say what save_to_bee tells you to say.
-When the prep note lists unconfirmed Bee facts, check them at a natural moment: propose a fact_confirm, then ask, \
-naming Bee, for example "Bee heard that your bonus is 15 percent. Is that right?" If the user agrees, save it. If \
-they correct it, propose a fact_update with the corrected text, ask whether to fix it in Bee, and after a yes save \
-it.
+written in the user's language. Then ask one question that names Bee and quotes the item exactly as you proposed \
+it, such as "Shall I add 'Note the bug' to your Bee todos?" (write Bee as "Bee" in every language, as in "Bee에 \
+할 일로 '버그 기록'을 넣을까요?"). Only after a clear yes to that question, call save_to_bee with the number \
+propose_bee_save gave, then tell the user in a few words what you saved. A yes to any other question, or one given \
+before you proposed the item, is no yes to saving. If the user asks you to take it out, call undo_bee_write. If \
+saving does not go through, say what save_to_bee tells you to say.
+When the prep note lists unconfirmed Bee facts, check them at a natural moment: propose a fact_confirm with the \
+fact as Bee has it, then ask, quoting it, for example "Bee heard 'Bonus is 15%'. Is that right?" If the user \
+agrees, save it. If they correct it, propose a fact_update with the corrected text, ask whether to fix it in Bee, \
+quoting the new text, and after a yes save it.
 """
 
 NOTE_WAIT_S = 2.0  # the first reply waits at most this long for a prep note still being written (arbitrary)
 HANGUL = re.compile(r"[\uac00-\ud7a3]")
 QUESTION = re.compile(r"[?？]")
+NAMES_BEE = re.compile(r"(?<![A-Za-z])Bee(?![a-z]| Call)")  # "Bee", "Bee에"; not "been", "beer" or "Bee Call"
+# Answers that say no, which never count as a yes to saving, whatever the AI makes of them.
+REFUSAL = re.compile(r"^\W*(?:no\b|nope\b|nah\b|don'?t\b|do not\b|not now\b|never ?mind\b|아니|아뇨|됐어|됐습니다|싫어)"
+                     r"|하지 ?마|넣지 ?마|필요 ?없", re.IGNORECASE)
+# How to ask about each kind of item; the item is quoted as proposed, and the AI says the question in the user's
+# language.
+ASK_LIKE = {"todo_create": "Shall I add '{text}' to your Bee todos?",
+            "todo_accept": "Bee suggested the todo '{text}'. Shall I add it?",
+            "fact_confirm": "Bee heard '{text}'. Is that right?",
+            "fact_update": "Shall I fix it in Bee to '{text}'?"}
 ENGLISH = call_language("en")  # what the tools tell the model is in English, like the rest of its instructions
 
 
@@ -370,33 +380,31 @@ class BeeCoordinator(Coordinator):
         return await reads.conversation(conversation_id, self._clock().tzinfo)
 
     @function_tool
-    async def propose_bee_save(self, context: RunContext, kind: str, text: str | None = None,
-                               fact_id: int | None = None, suggestion_id: int | None = None,
-                               alarm_at: str | None = None) -> str:
+    async def propose_bee_save(self, context: RunContext, kind: str, text: str, fact_id: int | None = None,
+                               suggestion_id: int | None = None, alarm_at: str | None = None) -> str:
         """Before you ask the user whether to save something to their Bee: fixes the item and gives it a number.
-        Then ask one question that names Bee and the item, and call save_to_bee with the number only after the
-        user says yes to it.
+        Then ask one question that names Bee and quotes the item, and call save_to_bee with the number only after
+        the user says yes to it.
 
         Args:
             kind: One of fact_confirm, fact_update, todo_create, todo_accept.
-            text: The todo or fact as it reads, in the user's language (needed for fact_update and todo_create).
+            text: The item as your question will quote it: the todo, or the fact as it should read, in the user's
+                language; for fact_confirm and todo_accept, the fact or the suggested todo as Bee has it.
             fact_id: The Bee fact id (fact_confirm, fact_update).
             suggestion_id: The Bee todo suggestion id (todo_accept).
             alarm_at: Optional ISO 8601 time for a todo alarm (todo_create).
         """
         if kind not in KINDS:
             return f"Unknown kind {kind!r}; use one of {', '.join(KINDS)}."
-        item: dict = {"kind": kind}
+        if not text or not text.strip():
+            return "text is required: the item as your question will quote it."
+        if kind in ("fact_update", "todo_create") and self._language.code == "ko" and not HANGUL.search(text):
+            return "Write the text in Korean, the user's language, then propose it again."
+        item: dict = {"kind": kind, "text": text.strip()}
         if kind in ("fact_confirm", "fact_update"):
             if fact_id is None:
                 return "fact_id is required."
             item["fact_id"] = fact_id
-        if kind in ("fact_update", "todo_create") and not text:
-            return "text is required."
-        if text:
-            if self._language.code == "ko" and not HANGUL.search(text):
-                return "Write the text in Korean, the user's language, then propose it again."
-            item["text"] = text.strip()
         if kind == "todo_create" and alarm_at:
             item["alarm_at"] = alarm_at
         if kind == "todo_accept":
@@ -405,9 +413,10 @@ class BeeCoordinator(Coordinator):
             item["suggestion_id"] = suggestion_id
         number = len(self._proposals) + 1
         self._proposals[number] = Proposal(item, after=self._last_user_turn())
-        return (f"Proposal {number}: {item_label(item, ENGLISH)}. Ask the user now, in one question that names Bee "
-                "and the item, whether to save it (unless you already asked it in this reply). Call save_to_bee with "
-                f"proposal {number} only after they say yes to that question.")
+        return (f"Proposal {number}: {item_label(item, ENGLISH)}. Ask the user now (unless you already asked it in "
+                f"this reply), in one question that names Bee and quotes the item exactly, such as: "
+                f"{ASK_LIKE[kind].format(text=item['text'])} Call save_to_bee with proposal {number} only after they "
+                "say yes to that question.")
 
     @function_tool
     async def save_to_bee(self, context: RunContext, proposal: int) -> str:
@@ -421,11 +430,15 @@ class BeeCoordinator(Coordinator):
             return f"There is no proposal {proposal}; call propose_bee_save first."
         if found.saved:
             return f"Proposal {proposal} was already saved; it is not saved twice."
-        question, answer = self._answer_to(found)
-        if question is None or answer is None:
-            return ("Not saved: no yes to it yet. Ask the user now, in one question that names Bee and the item, "
-                    "such as \"Shall I add 'note the bug' to your Bee todos?\", and call save_to_bee again only after "
-                    "they say yes to that question.")
+        heard = self._answer_to(found)
+        if heard is None:
+            return (f"Not saved: the user has not just said yes to a question about proposal {proposal}. Ask now, in "
+                    "one question that names Bee and quotes the item exactly, such as: "
+                    f"{ASK_LIKE[found.item['kind']].format(text=found.item['text'])} Call save_to_bee again only "
+                    "after they say yes to it.")
+        question, answer = heard
+        if REFUSAL.search(answer):
+            return f"Not saved: the user said no (\"{answer}\"). Do not save it."
         found.saved = True
         write = await self._bee_writes.begin(found.item, question, answer)
         try:
@@ -463,11 +476,15 @@ class BeeCoordinator(Coordinator):
         return [item for item in self.chat_ctx.items
                 if getattr(item, "type", None) == "message" and item.role in ("user", "assistant")]
 
-    def _answer_to(self, proposal: Proposal) -> tuple[str | None, str | None]:
-        """The question the AI asked about a proposed item and the user's answer, as the conversation shows them:
-        the user's last turn, if it came after the item was proposed, and the AI's turn right before that turn, if it
-        too came after the proposal, names Bee and asks ("?"). (None, None) when there is no such answer yet: the
-        AI saved in the reply that asked, or the yes was to another question or came before the item was fixed."""
+    def _answer_to(self, proposal: Proposal) -> tuple[str, str] | None:
+        """The question the AI asked about a proposed item, and the user's answer, as the conversation shows them;
+        None when there is no such answer to save on.
+        - The question is the AI's last turn since the proposal that names Bee (the word), quotes the item's text
+          and asks ("?"). A save in the reply that asks has no answer yet; a yes from before the proposal, or to a
+          question about something else, is not an answer to it.
+        - The answer is the user's turns right after it (one breath or several), with nothing between but the
+          AI's words that ask nothing. Once the conversation went on past the answer (the user spoke again after
+          the AI did, or the AI asked something else), the question has to be asked again."""
         turns = self._turns()
         ids = [turn.id for turn in turns]
         if proposal.after is None:
@@ -475,14 +492,26 @@ class BeeCoordinator(Coordinator):
         elif proposal.after in ids:
             later = turns[ids.index(proposal.after) + 1:]
         else:
-            return None, None  # the turn it followed is no longer in the conversation: ask again
-        users = [i for i, turn in enumerate(later) if turn.role == "user"]
-        if not users:
-            return None, None
-        asked = [turn for turn in later[:users[-1]] if turn.role == "assistant"]
+            return None  # the turn it followed is no longer in the conversation: ask again
+        quoted = _plain(proposal.item["text"])
+        asked = [i for i, turn in enumerate(later) if turn.role == "assistant"
+                 and NAMES_BEE.search(turn.text_content or "") and QUESTION.search(turn.text_content or "")
+                 and quoted in _plain(turn.text_content or "")]
         if not asked:
-            return None, None
-        question = asked[-1].text_content or ""
-        if "bee" not in question.lower() or not QUESTION.search(question):
-            return None, None
-        return question, later[users[-1]].text_content
+            return None
+        rest = later[asked[-1] + 1:]
+        first = next((i for i, turn in enumerate(rest) if turn.role == "user"), None)
+        if first is None:
+            return None  # not answered yet
+        if any(QUESTION.search(turn.text_content or "") for turn in rest[:first]):
+            return None  # the AI asked something else before the answer
+        end = next((i for i in range(first, len(rest)) if rest[i].role != "user"), len(rest))
+        if any(turn.role == "user" or QUESTION.search(turn.text_content or "") for turn in rest[end:]):
+            return None  # the conversation went on past the answer
+        answer = " ".join((turn.text_content or "").strip() for turn in rest[first:end]).strip()
+        return (later[asked[-1]].text_content or "", answer) if answer else None
+
+
+def _plain(text: str) -> str:
+    """Text compared loosely: spaces collapsed, case and end punctuation ignored."""
+    return re.sub(r"\s+", " ", text).strip().strip(".!?。").casefold()
