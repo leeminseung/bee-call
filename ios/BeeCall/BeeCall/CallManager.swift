@@ -3,6 +3,7 @@ import CallKit
 import LiveKit
 import Observation
 import PushKit
+import UIKit
 
 /// Runs each call through CallKit, so iOS treats it as a phone call:
 /// call-priority audio, AirPods and lock-screen controls, the green call indicator.
@@ -414,7 +415,13 @@ extension CallManager: CXProviderDelegate {
         // Also reached when iOS ends the call (lock screen, AirPods, Dynamic Island).
         let declined = isRinging // the AI's call, ended before it was answered
         if declined, let room = rungRooms.first(where: { $0.value == action.callUUID })?.key {
-            Task { await decline.send(room: room) } // not awaited: CallKit's end goes on at once
+            // Not awaited: CallKit's end goes on at once. Declined from the lock screen, the app runs only for the
+            // call, so it asks iOS for the time to finish the request after the call is gone.
+            let awake = UIApplication.shared.beginBackgroundTask(withName: "decline")
+            Task {
+                await decline.send(room: room)
+                UIApplication.shared.endBackgroundTask(awake)
+            }
         }
         isEnding = true
         connecting?.cancel()
