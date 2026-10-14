@@ -199,3 +199,63 @@ test("an older record's writes after the call keep their To save in Bee card", (
   assert.match(page.text(card), /^To save in Bee 2 of 2 saved/);
   assert.deepEqual(beeItems(page).map((item) => item.status), ["Saved", "Saved"]);
 });
+
+// ---------- the person's speech, live (contract section 8) ----------
+
+// The person's bubbles as shown, in order: confirmed turns, then the unconfirmed one when it shows on its own.
+const userBubbles = (page) => page.all("turn")
+  .filter((turn) => turn.classList.contains("user") && !turn.hidden)
+  .map((turn) => page.text(turn.children[0]).replace(/^You (said|are saying): /, ""));
+
+test("speech not yet confirmed shows as its own bubble while the AI spoke last", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(fixture(AI_CALL).slice(0, 10)); // up to the AI's opening line
+  page.live([{ t: 6.0, type: "user_transcript", text: "Yes, now is fine." }]);
+  assert.deepEqual(userBubbles(page), ["Yes, now is fine."]);
+  assert.equal(page.one("pending").hidden, false);
+});
+
+test("the person's consecutive turns before the AI's next turn read as one bubble", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(fixture(AI_CALL));
+  assert.deepEqual(userBubbles(page), [
+    "Yes, now is fine. Dana says her knee is better, but she still wants an easy route.",
+    "Yes please.",
+    "Actually, take that out.",
+    "Sure.",
+  ]);
+});
+
+test("live, the person's next words show in the same bubble until the AI speaks", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(fixture(AI_CALL).slice(0, 12)); // the AI's opening, then "Yes, now is fine." confirmed
+  page.live([{ t: 7.1, type: "user_transcript", text: "Dana says her knee is better," }]);
+  assert.deepEqual(userBubbles(page), ["Yes, now is fine. Dana says her knee is better,"]);
+  assert.equal(page.one("pending").hidden, true, "no second bubble for the unconfirmed words");
+  page.live([{ t: 7.4, type: "message", role: "user", text: "Dana says her knee is better," }]);
+  assert.deepEqual(userBubbles(page), ["Yes, now is fine. Dana says her knee is better,"]);
+  assert.equal(page.all("pending-text").length, 0);
+});
+
+test("words the AI's turn cuts into start the next bubble after it", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(fixture(AI_CALL).slice(0, 12));
+  page.live([
+    { t: 7.1, type: "user_transcript", text: "Wait," },
+    { t: 7.2, type: "message", role: "assistant", text: "Shall I", interrupted: true },
+  ]);
+  assert.deepEqual(userBubbles(page), ["Yes, now is fine.", "Wait,"]);
+  page.live([{ t: 7.4, type: "message", role: "user", text: "Wait, one more thing." }]);
+  assert.deepEqual(userBubbles(page), ["Yes, now is fine.", "Wait, one more thing."]);
+  assert.equal(page.one("pending").hidden, true);
+});
+
+test("words left unconfirmed when the call ends join the person's last bubble", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed([
+    ...fixture(AI_CALL).slice(0, 12),
+    { t: 7.1, type: "user_transcript", text: "bye then." },
+    { t: 8, type: "call_ended" },
+  ]);
+  assert.deepEqual(userBubbles(page), ["Yes, now is fine. bye then."]);
+});

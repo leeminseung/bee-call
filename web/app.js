@@ -490,6 +490,7 @@
       this.pendingEl.replaceChildren();
       this.pendingEl.hidden = true;
       this.timeline.replaceChildren(this.pendingEl); // the unconfirmed user line always sits last
+      this.userTurn = null; // the person's bubble since the AI's last turn
       this.dock.replaceChildren();
       this.beeSlot.replaceChildren();
       this.continueSlot.replaceChildren();
@@ -709,39 +710,84 @@
       this.add(row);
     }
 
+    // The person's turns before the AI's next turn read as one bubble: speech recognition cuts continuous speech
+    // into several turns. `userTurn` is that open bubble, closed by the AI's next turn.
     addMessage(ev, t) {
       const user = ev.role === "user";
-      if (user) this.clearPending();
-      const turn = el("li", `turn ${user ? "user" : "ai"}${ev.interrupted ? " interrupted" : ""}`);
-      const body = el("div", user ? "bubble" : "speech");
-      body.append(el("span", "sr-only", user ? "You said: " : "AI said: "));
       const text = typeof ev.text === "string" ? ev.text.trim() : "";
-      body.append(text || "…");
-      if (ev.interrupted) body.append(" ", el("span", "cut", "interrupted"));
-      turn.append(body, el("div", "meta", clock(t)));
+      let turn;
+      if (user) {
+        this.pending = []; // this turn confirms the words shown so far
+        if (this.userTurn) {
+          this.userTurn.texts.push(text);
+          this.userTurn.interrupted = Boolean(ev.interrupted);
+        } else {
+          this.userTurn = { ...this.newTurn("user", ev, t), texts: [text], interrupted: Boolean(ev.interrupted) };
+        }
+        turn = this.userTurn.turn;
+      } else {
+        if (this.userTurn) {
+          const closed = this.userTurn;
+          this.userTurn = null;
+          this.renderUserTurn(closed); // words still unconfirmed move to a bubble of their own after this turn
+        }
+        const ai = this.newTurn("ai", ev, t);
+        ai.body.append(el("span", "sr-only", "AI said: "), text || "…");
+        if (ev.interrupted) ai.body.append(" ", el("span", "cut", "interrupted"));
+        turn = ai.turn;
+      }
       if (this.debug && ev.metrics) {
         const details = el("details", "msg-metrics");
         const raw = typeof ev.metrics === "string" ? ev.metrics : JSON.stringify(ev.metrics, null, 2);
         details.append(el("summary", null, "metrics"), el("pre", "json", raw));
         turn.append(details);
       }
-      this.add(turn);
+      this.showPending();
     }
 
-    // user_transcript is final speech that the matching user `message` confirms a moment later.
+    newTurn(who, ev, t) {
+      const turn = el("li", `turn ${who}${ev.interrupted ? " interrupted" : ""}`);
+      const body = el("div", who === "user" ? "bubble" : "speech");
+      turn.append(body, el("div", "meta", clock(t)));
+      this.add(turn);
+      return { turn, body };
+    }
+
+    renderUserTurn(turn) {
+      turn.turn.classList.toggle("interrupted", turn.interrupted);
+      const said = turn.texts.filter(Boolean).join(" ") || "…";
+      const parts = [el("span", "sr-only", "You said: "), said];
+      if (turn.interrupted) parts.push(" ", el("span", "cut", "interrupted"));
+      if (turn === this.userTurn && this.pending.length) {
+        parts.push(" ", el("span", "pending-text", this.pending.join(" ")));
+      }
+      turn.body.replaceChildren(...parts);
+    }
+
+    // user_transcript is final speech that the matching user `message` confirms a moment later. It shows in the
+    // person's open bubble, or in a bubble of its own (the last in the timeline) when the AI spoke last.
     addPending(text) {
       if (typeof text !== "string" || !text.trim()) return;
       this.pending.push(text.trim());
-      const bubble = el("div", "bubble");
-      bubble.append(el("span", "sr-only", "You are saying: "), this.pending.join(" "));
-      this.pendingEl.replaceChildren(bubble);
-      this.pendingEl.hidden = false;
+      this.showPending();
     }
 
     clearPending() {
       this.pending = [];
-      this.pendingEl.replaceChildren();
-      this.pendingEl.hidden = true;
+      this.showPending();
+    }
+
+    showPending() {
+      if (this.userTurn) this.renderUserTurn(this.userTurn);
+      if (this.userTurn || !this.pending.length) {
+        this.pendingEl.replaceChildren();
+        this.pendingEl.hidden = true;
+        return;
+      }
+      const bubble = el("div", "bubble");
+      bubble.append(el("span", "sr-only", "You are saying: "), this.pending.join(" "));
+      this.pendingEl.replaceChildren(bubble);
+      this.pendingEl.hidden = false;
     }
 
     end(ev, t) {

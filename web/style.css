@@ -198,6 +198,7 @@ h1 {
   font-size: 11.5px; line-height: 1.6; color: var(--faint); white-space: nowrap;
 }
 .turn.pending .bubble { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
+.pending-text { color: var(--muted); } /* words not yet confirmed, at the end of the person's open bubble */
 /* Replies can carry paragraph breaks ("First, ...\n\nSecond, ..."); keep them. */
 .bubble, .speech, .relay, .job-summary, .why-summary, .quote p, .bee-text, .row-text { white-space: pre-line; }
 
