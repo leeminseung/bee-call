@@ -42,7 +42,9 @@ DISK_GB = 30
 GITHUB_REPO = "leeminseung/bee-call"
 DEPLOY_KEY = "github-deploy-key"
 ENV_LOCAL = REPO / ".env.local"
-HARNESS_STATE = REPO / "workspace" / "state" / "harness.json"  # written by scripts/deploy_worker.py
+# Where scripts/deploy_worker.py keeps the worker's ARN: the data root's harness.json since the per-person folders,
+# workspace/state/harness.json before them.
+HARNESS_STATES = ("data/harness.json", "workspace/state/harness.json")
 BOOTSTRAP = REPO / "deploy" / "bootstrap.sh"
 UNITS = {"token": "bee-call-token", "session": "bee-call-session", "agent": "bee-call-agent",
          "outbound": "bee-call-outbound", "caddy": "caddy", "env": "bee-call-env"}
@@ -91,10 +93,11 @@ deploy/install.sh caddy
 
 # ---------- pure parts (tested) ----------
 
-def server_settings(local: Mapping[str, str | None], harness_arn: str | None = None,
+def server_settings(local: Mapping[str, str | None], harness: tuple[str, str] | None = None,
                     extra: Mapping[str, str] | None = None) -> tuple[dict[str, tuple[str, str]], dict[str, str]]:
     """What `secrets` writes, as name -> (value, where it came from), and the names it leaves out, with why:
-    .env.local except this Mac's own settings, the worker's ARN, the server defaults, and --set."""
+    .env.local except this Mac's own settings, the worker's ARN (`harness`: the ARN and the file it is in), the
+    server defaults, and --set."""
     chosen: dict[str, tuple[str, str]] = {}
     skipped: dict[str, str] = {}
     for name, value in local.items():
@@ -106,8 +109,8 @@ def server_settings(local: Mapping[str, str | None], harness_arn: str | None = N
             skipped[name] = "empty"
         else:
             chosen[name] = (value, ".env.local")
-    if harness_arn and "WORKER_HARNESS_ARN" not in chosen:
-        chosen["WORKER_HARNESS_ARN"] = (harness_arn, "workspace/state/harness.json")
+    if harness and "WORKER_HARNESS_ARN" not in chosen:
+        chosen["WORKER_HARNESS_ARN"] = harness
     for name, value in SERVER_DEFAULTS.items():
         if name == "WORKER" and "WORKER_HARNESS_ARN" not in chosen:
             continue  # the harness worker cannot start without its ARN; the server then runs the fake worker
@@ -115,6 +118,18 @@ def server_settings(local: Mapping[str, str | None], harness_arn: str | None = N
     for name, value in (extra or {}).items():
         chosen[name] = (value, "--set")
     return chosen, skipped
+
+
+def harness_on_this_mac(local: Mapping[str, str | None]) -> tuple[str, str] | None:
+    """The worker's ARN and the file it came from, if scripts/deploy_worker.py has made the worker."""
+    data = local.get("BEE_CALL_DATA")
+    for name in ([f"{data}/harness.json"] if data else []) + list(HARNESS_STATES):
+        path = REPO / name  # an absolute BEE_CALL_DATA stays absolute
+        if path.exists():
+            arn = json.loads(path.read_text()).get("harnessArn")
+            if arn:
+                return arn, name
+    return None
 
 
 def parse_sets(pairs: list[str]) -> dict[str, str]:
@@ -265,8 +280,7 @@ def cmd_deploy_key(args) -> None:
 
 def cmd_secrets(args) -> None:
     local = dotenv_values(ENV_LOCAL) if ENV_LOCAL.exists() else {}
-    harness = json.loads(HARNESS_STATE.read_text()).get("harnessArn") if HARNESS_STATE.exists() else None
-    chosen, skipped = server_settings(local, harness, parse_sets(args.set))
+    chosen, skipped = server_settings(local, harness_on_this_mac(local), parse_sets(args.set))
     ssm = session().client("ssm")
     existing = parameter_names(ssm)
     plan = [f"{PREFIX}{name}: SecureString, {len(value)} characters, from {source}"
@@ -278,7 +292,7 @@ def cmd_secrets(args) -> None:
     if others:
         print(f"already on the server and left as they are: {', '.join(others)}")
     if "WORKER_HARNESS_ARN" not in chosen and "WORKER_HARNESS_ARN" not in existing:
-        print("no worker ARN (workspace/state/harness.json): the server runs the fake worker until WORKER and "
+        print(f"no worker ARN in {' or '.join(HARNESS_STATES)}: the server runs the fake worker until WORKER and "
               "WORKER_HARNESS_ARN are set")
     if "apns-key" not in existing:
         print("no APNs key on the server yet, so no pushes from it. Upload the .p8 file yourself:")

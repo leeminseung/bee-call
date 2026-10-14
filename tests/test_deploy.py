@@ -14,7 +14,8 @@ from types import SimpleNamespace
 import pytest
 
 from deploy.config import TEMPLATE, caddyfile, env_file, quoted
-from scripts.deploy_server import BOOTSTRAP, parse_sets, remote_commands, server_settings, zone_for
+from scripts.deploy_server import (BOOTSTRAP, harness_on_this_mac, parse_sets, remote_commands, server_settings,
+                                   zone_for)
 from voice import agent
 from voice.aws_session import aws_profile, aws_session
 from voice.dispatch import AGENT_NAME, agent_name
@@ -135,7 +136,7 @@ def test_secrets_copy_this_macs_settings_except_its_own():
     local = {"LIVEKIT_URL": "wss://bee-call.livekit.cloud", "LIVEKIT_API_SECRET": "s3cret", "TTS": "elevenlabs",
              "AWS_PROFILE": "bee-call", "APNS_KEY_PATH": "/Users/me/AuthKey.p8", "LIVEKIT_AGENT_NAME": "bee-call-dev",
              "BEE_CALL_DEV_PERSON": "matt", "ELEVENLABS_VOICE": "", "COORDINATOR_LLM": "claude"}
-    chosen, skipped = server_settings(local, harness_arn="arn:aws:bedrock-agentcore:ap-southeast-2:1:harness/w",
+    chosen, skipped = server_settings(local, ("arn:aws:bedrock-agentcore:ap-southeast-2:1:harness/w", "data/harness.json"),
                                       extra={"CALL_LANGUAGE": "ko"})
     assert {name: value for name, (value, _) in chosen.items()} == {
         "LIVEKIT_URL": "wss://bee-call.livekit.cloud", "LIVEKIT_API_SECRET": "s3cret", "TTS": "elevenlabs",
@@ -149,6 +150,12 @@ def test_secrets_copy_this_macs_settings_except_its_own():
 def test_without_the_workers_arn_the_server_keeps_the_fake_worker():
     chosen, _ = server_settings({})
     assert {name: value for name, (value, _) in chosen.items()} == {"COORDINATOR_LLM": "bedrock"}
+
+
+def test_the_workers_arn_is_found_in_the_macs_data_root(tmp_path):
+    (tmp_path / "harness.json").write_text('{"harnessArn": "arn:aws:bedrock-agentcore:ap-southeast-2:1:harness/w"}')
+    assert harness_on_this_mac({"BEE_CALL_DATA": str(tmp_path)}) == (
+        "arn:aws:bedrock-agentcore:ap-southeast-2:1:harness/w", f"{tmp_path}/harness.json")
 
 
 @pytest.mark.parametrize("pair", ["AWS_PROFILE=bee-call", "BEE_CALL_DEV_PERSON=matt", "lower=x", "NOEQUALS"])
