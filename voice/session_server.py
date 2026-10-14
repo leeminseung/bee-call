@@ -13,7 +13,7 @@ Bearer header or the cookie bee_call_session that the app sets in its web view; 
 lets requests made on the machine itself in without one.
 
 GET /                                          the page (web/index.html)
-GET /static/<file>                             files under web/
+GET /static/<file>                             the page's own files (PAGE_FILES) from web/
 GET /api/sessions                              sessions, newest first
 GET /api/sessions/<date>/<time>/events         Server-Sent Events: every line of events.jsonl
                                                (SSE id = line number, so a reconnect resumes),
@@ -42,6 +42,7 @@ from voice.people import People, dev_person
 
 REPO = Path(__file__).resolve().parent.parent
 WEB_DIR = REPO / "web"
+PAGE_FILES = ("app.js", "style.css")  # what web/index.html loads from /static/
 DEFAULT_PORT = 8788
 SESSION_COOKIE = "bee_call_session"
 
@@ -302,6 +303,14 @@ async def list_sessions(request: web.Request) -> web.Response:
     return web.json_response(indexes[request[PERSON]].sessions(), headers={"Cache-Control": "no-store"})
 
 
+async def page_file(request: web.Request) -> web.FileResponse:
+    """Only the files index.html loads: web/ also holds the page's tests and their made-up fixtures."""
+    name = request.match_info["name"]
+    if name not in PAGE_FILES:
+        raise web.HTTPNotFound()
+    return web.FileResponse(WEB_DIR / name)
+
+
 async def no_cache_static(request: web.Request, response: web.StreamResponse) -> None:
     if request.path.startswith("/static/"):
         response.headers.setdefault("Cache-Control", "no-cache")  # page edits show up on reload
@@ -328,7 +337,8 @@ async def local_hosts_only(request: web.Request, handler):
     public = os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip().lower()  # the server's own name, behind https
     host = (request.url.host or "").lower().rstrip(".")
     if not local_host(request.url.host) and not (public and host == public):
-        raise web.HTTPMisdirectedRequest(text="unknown host name; use this Mac's IP address or .local name\n")
+        hint = "" if public else "; use this computer's IP address or .local name"  # on a server, just refuse
+        raise web.HTTPMisdirectedRequest(text=f"unknown host name{hint}\n")
     return await handler(request)
 
 
@@ -401,7 +411,7 @@ def make_app(people: People) -> web.Application:
     app.router.add_get("/api/sessions/{date}/{time}/events", stream_events, allow_head=False)
     app.router.add_get("/api/sessions/{date}/{time}/files/{path:.+}", session_file)
     app.router.add_get("/api/meta", meta_session)
-    app.router.add_static("/static/", WEB_DIR)
+    app.router.add_get("/static/{name}", page_file)
     return app
 
 

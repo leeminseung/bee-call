@@ -773,3 +773,38 @@ def test_a_setting_of_the_wrong_kind_is_refused_not_a_server_error(tmp_path):
         with pytest.raises(ValueError):
             people.change_settings("matt", {"language": bad})
     assert people.settings("matt").language == "en"
+
+
+def test_the_record_server_serves_only_the_page_s_own_files(tmp_path, monkeypatch):
+    """web/ also holds the page's tests and their made-up fixtures; only what index.html loads is served."""
+    monkeypatch.setenv("BEE_CALL_PUBLIC_HOST", "call.example.com")
+    people = People(tmp_path)
+
+    async def main():
+        app = session_server.make_app(people)
+        async with TestClient(TestServer(app)) as client:
+            statuses = {}
+            for path in ("/static/app.js", "/static/style.css", "/static/test/page.test.js",
+                         "/static/test/fixtures/ai-call.jsonl", "/static/index.html", "/static/"):
+                response = await client.get(path)
+                statuses[path] = response.status
+                if response.status == 200:
+                    assert response.headers.get("Cache-Control") == "no-cache"
+            return statuses
+
+    statuses = asyncio.run(main())
+    assert statuses.pop("/static/app.js") == 200 and statuses.pop("/static/style.css") == 200
+    assert set(statuses.values()) <= {403, 404}, statuses
+
+
+def test_on_a_server_an_unknown_host_name_is_refused_without_a_hint_about_a_mac(tmp_path, monkeypatch):
+    monkeypatch.setenv("BEE_CALL_PUBLIC_HOST", "call.example.com")
+
+    async def main():
+        app = session_server.make_app(People(tmp_path))
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/", headers={"Host": "evil.example"})
+            return response.status, await response.text()
+
+    status, text = asyncio.run(main())
+    assert status == 421 and text == "unknown host name\n"
