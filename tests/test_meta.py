@@ -272,5 +272,5 @@ def test_without_bee_the_meta_agent_has_no_bee_tools_or_words(tmp_path):
     (request,) = model.sent
     names = [t["toolSpec"]["name"] for t in request["toolConfig"]["tools"]]
     assert names == ["list_files", "read_file", "grep", "write_state", "offer_call"]
-    words = request["system"][0]["text"] + json.dumps(request["messages"])
+    words = request["system"][0]["text"] + json.dumps(request["messages"]) + json.dumps(request["toolConfig"])
     assert re.findall(r"\bBee\b(?! Call)", words) == []

@@ -101,6 +101,11 @@ TOOLS = [
            "inbox": {"type": "string", "description": "The inbox/<time> folder of the Bee change, if any."}},
           ["topic", "why"]),
 ]
+# offer_call for a person without Bee: no Bee conversations or Bee changes to name.
+OFFER_CALL_WITHOUT_BEE = _tool(
+    "offer_call", "Ask the user, with a notification, whether they want a short call about one topic.",
+    {"topic": {"type": "string", "description": "What the call is about, in a few words."},
+     "why": {"type": "string", "description": "Why a call would help now, in one sentence."}})
 
 BEE_TOOLS = ("bee_today", "bee_conversation", "search_bee", "bee_day", "bee_pending")  # read-only, for Bee people
 Send = Callable[[Offer, Path, datetime], Awaitable[str]]
@@ -178,7 +183,8 @@ class Thinker:
         self.workspace = workspace
         # The person uses Bee: the Bee tools and the words about Bee. Without Bee, neither (BC-057).
         self.bee = bee
-        self.tools = TOOLS if bee else [t for t in TOOLS if t["toolSpec"]["name"] not in BEE_TOOLS]
+        self.tools = TOOLS if bee else [OFFER_CALL_WITHOUT_BEE if t["toolSpec"]["name"] == "offer_call" else t
+                                         for t in TOOLS if t["toolSpec"]["name"] not in BEE_TOOLS]
         self.instructions = INSTRUCTIONS.format(**(WITH_BEE if bee else WITHOUT_BEE))
         self.model = model or prep_model(os.environ.get("COORDINATOR_LLM", "bedrock")) or \
             ("zai.glm-5", os.environ.get("BEDROCK_REGION", "ap-southeast-2"))
@@ -240,9 +246,9 @@ class Thinker:
                     "Put this on the agenda instead, or offer it after they answer.")
         if any(o.topic == topic for o in store.open(now)):
             return f"An offer about \"{topic}\" is already open; not asked again."
-        inbox = str(args.get("inbox") or "").strip()
+        inbox = str(args.get("inbox") or "").strip() if self.bee else ""  # without Bee there is no Bee change
         inbox_dir = files._inside(self.workspace, inbox) if inbox else None  # never outside the workspace
-        ids = [int(i) for i in args.get("conversation_ids") or []]
+        ids = [int(i) for i in args.get("conversation_ids") or []] if self.bee else []
         plan = Plan(call=True, reason=why, inbox_dir=inbox_dir, conversation_ids=ids, topic=topic,
                     kind="conversation" if ids else None)
         offer = store.ask(plan, now, at=self.call_time)
