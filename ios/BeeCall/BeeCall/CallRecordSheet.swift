@@ -41,11 +41,18 @@ struct CallRecordSheet: View {
         }
     }
 
-    /// The sign-in cookie the page's requests carry (voice/session_server.py reads bee_call_session).
+    /// The sign-in cookie the page's requests carry (voice/session_server.py reads bee_call_session). HttpOnly, so
+    /// scripts in the page cannot read the token.
     static func signInCookie(token: String, for url: URL) -> HTTPCookie? {
         guard let host = url.host else { return nil }
-        return HTTPCookie(properties: [.name: "bee_call_session", .value: token, .domain: host, .path: "/",
-                                       .secure: url.scheme == "https"])
+        var properties: [HTTPCookiePropertyKey: Any] = [.name: "bee_call_session", .value: token, .domain: host,
+                                                        .path: "/", HTTPCookiePropertyKey("HttpOnly"): "TRUE"]
+        // HTTPCookie reads the mere presence of .secure as Secure, whatever its value, and a Secure cookie never
+        // goes to a Debug build's http://<Mac>:8788/. So the key is there for https only.
+        if url.scheme == "https" {
+            properties[.secure] = "TRUE"
+        }
+        return HTTPCookie(properties: properties)
     }
 }
 
