@@ -318,6 +318,78 @@ def test_a_job_cancelled_when_the_call_ends_still_counts_its_rounds_so_far(tmp_p
     assert spent >= 1.00 + WEB_SEARCH_USD  # at least the rounds that finished before the call ended
 
 
+class HeldHarness(FakeHarness):
+    """Round `held` (counting from 0) runs until the test lets it end, as a long round does while the call ends."""
+
+    def __init__(self, rounds, held: int):
+        import threading
+
+        super().__init__(rounds)
+        self.held, self.running, self.release = held, threading.Event(), threading.Event()
+
+    def invoke_harness(self, **params):
+        if len(self.requests) == self.held:
+            self.running.set()
+            self.release.wait(5)
+        return super().invoke_harness(**params)
+
+
+async def until(check, seconds: float = 3.0):
+    for _ in range(int(seconds / 0.02)):
+        if check():
+            return
+        await asyncio.sleep(0.02)
+
+
+def test_a_round_still_running_when_the_call_ends_is_counted(tmp_path):
+    """Review of this round's fixes, finding 8: the harness runs a round it started to its end, and it is paid for,
+    even when the job waiting for it is cancelled because the call ended. It counts at once as the round before it
+    (each round reads the whole session again), and as what it really used once it ends."""
+    from worker.runner import JobRunner
+
+    rounds = searching_rounds(3)
+    rounds[1][-1] = {"metadata": {"usage": {"inputTokens": 1_500_000, "outputTokens": 0}}}
+    harness = HeldHarness(rounds, held=1)
+    usage = tmp_path / "jobs" / "01" / "usage.json"
+
+    async def main():
+        async def notify(news):
+            pass
+
+        runner = JobRunner(tmp_path, lambda *a, **k: None, HarnessWorker("arn:harness", client=harness,
+                                                                        search=fake_search),
+                           notify, clock=lambda: datetime.now(SEOUL))
+        runner.start("research something")
+        await until(harness.running.is_set)
+        await runner.cancel_all()  # the call ended during the second round
+        at_once = json.loads(usage.read_text())
+        harness.release.set()
+        await until(lambda: json.loads(usage.read_text())["input_tokens"] == 2_500_000)
+        return at_once, json.loads(usage.read_text())
+
+    at_once, at_end = asyncio.run(main())
+    assert (at_once["status"], at_once["input_tokens"], at_once.get("estimated")) == ("cancelled", 2_000_000, True)
+    assert (at_end["status"], at_end["input_tokens"], at_end.get("estimated")) == ("cancelled", 2_500_000, None)
+
+
+def test_a_warm_up_still_running_when_the_call_ends_is_counted(tmp_path):
+    harness = HeldHarness([assistant(("text", "ready"), stop="end_turn")], held=0)
+    spend = tmp_path / "state" / "spend.jsonl"
+
+    async def main():
+        worker = HarnessWorker("arn:harness", client=harness, search=fake_search)
+        warm = asyncio.create_task(worker.keep_warm(SpendLog(tmp_path)))
+        await until(harness.running.is_set)
+        warm.cancel()  # the call ended during the warm-up
+        await warm
+        harness.release.set()
+        await until(spend.exists)
+
+    asyncio.run(main())
+    (spent,) = [json.loads(line) for line in spend.read_text().splitlines()]
+    assert (spent["what"], spent["input_tokens"], spent["output_tokens"]) == ("worker_warm_up", 100, 10)
+
+
 def test_the_worker_smoke_test_builds_its_job(monkeypatch, capsys):
     """scripts/deploy_worker.py --smoke runs one job through the worker (a fake one here)."""
     from scripts import deploy_worker

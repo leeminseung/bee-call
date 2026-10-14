@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -304,14 +305,18 @@ class HarnessWorker:
     async def keep_warm(self, spend: SpendLog) -> None:
         """Keeps one harness session awake for the next job. Run it as a task for the length of a
         call and cancel it when the call ends; a job takes the warm session when it starts. What each warm-up
-        costs goes into the person's spend log."""
+        costs goes into the person's spend log, also a warm-up the call's end cut off."""
+        def late(found: Round) -> None:
+            spend.add("worker_warm_up", model=DEFAULT_MODEL, input_tokens=found.input_tokens,
+                      output_tokens=found.output_tokens)
+
         try:
             while True:
                 async with self._warm_lock:
                     self._ready = self._ready or new_session_id("warm")
                     used = [0, 0]
                     try:
-                        await self._ping(self._ready, used)
+                        await self._ping(self._ready, used, late)
                     except Exception:
                         log.warning("worker warm-up failed", exc_info=True)
                         self._ready = None
@@ -323,11 +328,12 @@ class HarnessWorker:
         except asyncio.CancelledError:
             pass  # the call ended
 
-    async def _ping(self, session_id: str, used: list[int]) -> None:
-        """One warm-up; `used` gets its tokens (input, output) as they are reported."""
+    async def _ping(self, session_id: str, used: list[int], late: Callable[[Round], None] = lambda found: None) -> None:
+        """One warm-up; `used` gets its tokens (input, output) as they are reported, and `late` a round still
+        running when the warm-up is cancelled, once it ends."""
         messages = [{"role": "user", "content": [{"text": WARM_TEXT}]}]
         for _ in range(3):
-            found = await asyncio.to_thread(self._invoke, session_id, messages)
+            found = await self._paid_round(session_id, messages, cancelled=lambda: None, late=late)
             used[0] += found.input_tokens
             used[1] += found.output_tokens
             if found.errors:
@@ -349,6 +355,34 @@ class HarnessWorker:
         response = self.client.invoke_harness(harnessArn=self.harness_arn, runtimeSessionId=session_id,
                                               messages=messages)
         return read_round(response["stream"])
+
+    async def _paid_round(self, session_id: str, messages: list[dict[str, Any]], *, cancelled: Callable[[], None],
+                          late: Callable[[Round], None]) -> Round:
+        """One model round. The harness runs a round it started to its end, and it is paid for, even when the work
+        waiting for it is cancelled (the call ended): then `cancelled()` runs at once, and `late(round)` once the
+        round ends, from the thread that reads it (while this process still runs)."""
+        lock = threading.Lock()
+        box: dict[str, Any] = {}
+
+        def invoke() -> Round:
+            found = self._invoke(session_id, messages)
+            with lock:
+                box["found"] = found
+                gone = box.get("cancelled", False)
+            if gone:
+                late(found)
+            return found
+
+        try:
+            return await asyncio.to_thread(invoke)
+        except asyncio.CancelledError:
+            with lock:
+                box["cancelled"] = True
+                found = box.get("found")
+            cancelled()
+            if found is not None:  # it ended just as the wait was cancelled
+                late(found)
+            raise
 
     async def _call(self, use: ToolUse, job: Job, progress: Callable[[str], None],
                     relay: Callable[[str], Awaitable[None]]) -> tuple[str, str]:
@@ -393,15 +427,37 @@ class HarnessWorker:
         usage: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0, "stop_reason": None, "status": "running",
                                  "steps": []}  # seconds per model round (AWS side, built-in tools included) and call
         steps = usage["steps"]
+        # A round still running when the job is cancelled runs on and is paid for. It counts at once as a guess, the
+        # round before it again (each round reads the whole session so far; the first, its own text, bytes / 4),
+        # with "estimated" set, and as what it used once it ends, from its thread: hence the lock.
+        lock = threading.Lock()
+
+        def save() -> None:
+            with lock:
+                write_usage(job, usage)
+
+        def add(input_tokens: int, output_tokens: int, estimated: bool | None) -> None:
+            with lock:
+                usage["input_tokens"] += input_tokens
+                usage["output_tokens"] += output_tokens
+                if estimated:
+                    usage["estimated"] = True
+                elif estimated is False:
+                    usage.pop("estimated", None)
+                write_usage(job, usage)
+
+        guess = (len(json.dumps(messages)) // 4, 0)
         try:
             for _ in range(MAX_ROUNDS):
                 started = time.monotonic()
-                found = await asyncio.to_thread(self._invoke, session_id, messages)
+                found = await self._paid_round(
+                    session_id, messages, cancelled=lambda guess=guess: add(*guess, estimated=True),
+                    late=lambda found, guess=guess: add(found.input_tokens - guess[0],
+                                                        found.output_tokens - guess[1], estimated=False))
                 steps.append({"round_s": round(time.monotonic() - started, 1), "calls": []})
-                usage["input_tokens"] += found.input_tokens
-                usage["output_tokens"] += found.output_tokens
                 usage["stop_reason"] = found.stop_reason
-                write_usage(job, usage)
+                add(found.input_tokens, found.output_tokens, estimated=None)
+                guess = (found.input_tokens, found.output_tokens)
                 if found.errors:
                     raise RuntimeError("; ".join(found.errors))
                 if not found.pending:
@@ -414,7 +470,7 @@ class HarnessWorker:
                     except Exception as exc:  # the agent hears about it and can try another way
                         text, status = f"{use.name} failed: {exc}", "error"
                     steps[-1]["calls"].append({"name": use.name, "s": round(time.monotonic() - started, 1)})
-                    write_usage(job, usage)  # a web search costs as soon as it ran
+                    save()  # a web search costs as soon as it ran
                     results.append({"toolResult": {"toolUseId": use.tool_use_id, "content": [{"text": text}],
                                                    "status": status}})
                 messages = [{"role": "user", "content": results}]
@@ -431,7 +487,7 @@ class HarnessWorker:
             usage["status"] = "failed"
             raise
         finally:
-            write_usage(job, usage)
+            save()
         summary = found.text.strip() or "The worker finished without a summary."
         if not (job.dir / "report.md").exists():
             (job.dir / "report.md").write_text(f"# Report for job {job.job_id}\n\n{summary}\n")

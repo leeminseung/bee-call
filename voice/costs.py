@@ -8,12 +8,13 @@ budget counts as over (Matt, 2026-10-15). It is checked only before a call start
 It is an estimate from what the processes write down, not AWS's bill:
   <date>/<time>/usage.json         a call: minutes, and the models LiveKit saw it use (voice/agent.py, at the end)
   <date>/<time>/jobs/*/usage.json  a background job's model tokens and its web searches, after every round
-                                   (worker/harness.py)
+                                   (worker/harness.py); a round still running when the call ends counts at once
+                                   as a guess ("estimated") and as what it used once it ends
   meta/session.jsonl               each meta agent think's model tokens (meta/agent.py)
   state/spend.jsonl                use recorded where it happens, outside a call's own record (SpendLog): every
                                    call prep (voice/prep.py, in voice/outbound.py before the AI's call rings and in
                                    the voice server while the user's call rings), also for calls nobody answered
-                                   and calls hung up while they rang
+                                   and calls hung up while they rang, and every worker warm-up
 A call still going on has no usage.json yet; it counts by its minutes so far at CALL_USD_PER_MINUTE. A call's
 call_prep event only shows the prep on the call's record; its cost is in state/spend.jsonl.
 
