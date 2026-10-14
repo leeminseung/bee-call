@@ -310,6 +310,7 @@ def test_an_ai_call_declined_while_it_rings_is_declined_not_missed(tmp_path, mon
 def test_after_a_bee_call_failed_writes_are_tried_again_and_one_notification_says_what_went_in(
         tmp_path, monkeypatch, quick, bee_log):
     from beelink.writer import BeeWrites
+    from tests.test_bee_writes import saved
     from voice import voip_push
 
     me = signed_in(tmp_path)
@@ -330,11 +331,8 @@ def test_after_a_bee_call_failed_writes_are_tried_again_and_one_notification_say
         call.join()
         await agent.run_call(call, me.people)
         coordinator = call.session.started["agent"]
-        chat = coordinator.chat_ctx.copy()
-        chat.add_message(role="assistant", content="Shall I add 'note the bug' to your Bee todos?")
-        chat.add_message(role="user", content="Yes.")
-        await coordinator.update_chat_ctx(chat)
-        said = await coordinator.save_to_bee(None, kind="todo_create", text="Note the bug")  # Bee is down for a moment
+        said = await saved(coordinator, "Shall I add 'note the bug' to your Bee todos?", "Yes.",
+                           kind="todo_create", text="Note the bug")  # Bee is down for a moment
         await call.end()
         return said
 

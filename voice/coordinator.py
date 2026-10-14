@@ -10,6 +10,7 @@ them. The voice server picks one by the person's setting when the call starts (v
 
 import asyncio
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import AsyncIterable, Callable
@@ -21,7 +22,7 @@ from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_inst
 
 from beelink import reads
 from beelink.clock import now_text
-from beelink.writer import KINDS, BeeWrites, label
+from beelink.writer import KINDS, BeeWrites, item_label, label
 from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
 from voice.recorder import CallRecorder
@@ -70,19 +71,22 @@ The user wears Bee, a wearable that records and summarizes their conversations. 
 these instructions is what was looked up in Bee just before the call. Bring up things from it only when they \
 connect to what the user is talking about, or once the user's own topic is done. Never interrupt the user's topic \
 with them. For more from Bee during the call, use bee_today, bee_conversation and search_bee.
-Saving to Bee happens right away, in the call. First ask a question that names Bee and the item, such as \
-"Shall I add 'note the bug' to your Bee todos?" (write Bee as "Bee" in every language, as in "Bee에 할 일로 \
-'버그 기록'을 넣을까요?"). Only after a clear yes to that question, call save_to_bee, then \
-tell the user in a few words what you saved. A yes to any other question is no yes to saving. Write the item in \
-the user's language. If the user asks you to take it out, call undo_bee_write. If saving does not go through, \
-say so, and that it will be tried again after the call.
-When the prep note lists unconfirmed Bee facts, check them at a natural moment, naming Bee, for example \
-"Bee heard that your bonus is 15 percent. Is that right?" If the user agrees, save a fact_confirm. If they \
-correct it, ask whether to fix it in Bee, and after a yes save a fact_update with the corrected text.
+Saving to Bee happens right away, in the call, in three steps. First call propose_bee_save with the item, \
+written in the user's language. Then ask one question that names Bee and the item, such as "Shall I add 'note \
+the bug' to your Bee todos?" (write Bee as "Bee" in every language, as in "Bee에 할 일로 '버그 기록'을 \
+넣을까요?"). Only after a clear yes to that question, call save_to_bee with the number propose_bee_save gave, then \
+tell the user in a few words what you saved. A yes to any other question, or one given before you proposed the \
+item, is no yes to saving. If the user asks you to take it out, call undo_bee_write. If saving does not go \
+through, say what save_to_bee tells you to say.
+When the prep note lists unconfirmed Bee facts, check them at a natural moment: propose a fact_confirm, then ask, \
+naming Bee, for example "Bee heard that your bonus is 15 percent. Is that right?" If the user agrees, save it. If \
+they correct it, propose a fact_update with the corrected text, ask whether to fix it in Bee, and after a yes save \
+it.
 """
 
 NOTE_WAIT_S = 2.0  # the first reply waits at most this long for a prep note still being written (arbitrary)
 HANGUL = re.compile(r"[\uac00-\ud7a3]")
+QUESTION = re.compile(r"[?？]")
 ENGLISH = call_language("en")  # what the tools tell the model is in English, like the rest of its instructions
 
 
@@ -319,6 +323,15 @@ class Coordinator(Agent):
         raise StopResponse()
 
 
+@dataclass
+class Proposal:
+    """An item the AI means to ask about saving to Bee. The user's yes counts only if it comes after this point in
+    the conversation (the id of the user's last turn when it was proposed; None: before they spoke)."""
+    item: dict
+    after: str | None
+    saved: bool = False
+
+
 class BeeCoordinator(Coordinator):
     """The voice for a person who connected Bee: it reads their Bee during the call and saves to it what the user
     agrees to."""
@@ -329,6 +342,7 @@ class BeeCoordinator(Coordinator):
     def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, **kwargs) -> None:
         super().__init__(recorder, jobs, workspace, **kwargs)
         self._bee_writes = BeeWrites(recorder.dir)  # this call's Bee writes, kept in its folder
+        self._proposals: dict[int, Proposal] = {}  # items the AI means to ask about, by number (propose_bee_save)
 
     @function_tool
     async def search_bee(self, context: RunContext, query: str) -> str:
@@ -356,10 +370,12 @@ class BeeCoordinator(Coordinator):
         return await reads.conversation(conversation_id, self._clock().tzinfo)
 
     @function_tool
-    async def save_to_bee(self, context: RunContext, kind: str, text: str | None = None, fact_id: int | None = None,
-                          suggestion_id: int | None = None, alarm_at: str | None = None) -> str:
-        """Save one item to the user's Bee now. Only right after you asked a question that names Bee and the item,
-        such as "Shall I add 'note the bug' to your Bee todos?", and the user said yes to that question.
+    async def propose_bee_save(self, context: RunContext, kind: str, text: str | None = None,
+                               fact_id: int | None = None, suggestion_id: int | None = None,
+                               alarm_at: str | None = None) -> str:
+        """Before you ask the user whether to save something to their Bee: fixes the item and gives it a number.
+        Then ask one question that names Bee and the item, and call save_to_bee with the number only after the
+        user says yes to it.
 
         Args:
             kind: One of fact_confirm, fact_update, todo_create, todo_accept.
@@ -368,10 +384,6 @@ class BeeCoordinator(Coordinator):
             suggestion_id: The Bee todo suggestion id (todo_accept).
             alarm_at: Optional ISO 8601 time for a todo alarm (todo_create).
         """
-        question, answer = self._last_exchange()
-        if not question or not answer or "bee" not in question.lower():
-            return ("Not saved: first ask the user a question that names Bee and the item, such as \"Shall I add "
-                    "'note the bug' to your Bee todos?\", and save it only after they say yes to that question.")
         if kind not in KINDS:
             return f"Unknown kind {kind!r}; use one of {', '.join(KINDS)}."
         item: dict = {"kind": kind}
@@ -383,7 +395,7 @@ class BeeCoordinator(Coordinator):
             return "text is required."
         if text:
             if self._language.code == "ko" and not HANGUL.search(text):
-                return "Write the text in Korean, the user's language, then save it."
+                return "Write the text in Korean, the user's language, then propose it again."
             item["text"] = text.strip()
         if kind == "todo_create" and alarm_at:
             item["alarm_at"] = alarm_at
@@ -391,10 +403,35 @@ class BeeCoordinator(Coordinator):
             if suggestion_id is None:
                 return "suggestion_id is required."
             item["suggestion_id"] = suggestion_id
-        write = await self._bee_writes.write(item, question, answer)
+        number = len(self._proposals) + 1
+        self._proposals[number] = Proposal(item, after=self._last_user_turn())
+        return (f"Proposal {number}: {item_label(item, ENGLISH)}. Ask the user now, in one question that names Bee "
+                "and the item, whether to save it (unless you already asked it in this reply). Call save_to_bee with "
+                f"proposal {number} only after they say yes to that question.")
+
+    @function_tool
+    async def save_to_bee(self, context: RunContext, proposal: int) -> str:
+        """Save a proposed item to the user's Bee now, after the user said yes to your question about it.
+
+        Args:
+            proposal: The number propose_bee_save gave the item.
+        """
+        found = self._proposals.get(proposal)
+        if found is None:
+            return f"There is no proposal {proposal}; call propose_bee_save first."
+        if found.saved:
+            return f"Proposal {proposal} was already saved; it is not saved twice."
+        question, answer = self._answer_to(found)
+        if question is None or answer is None:
+            return ("Not saved: no yes to it yet. Ask the user now, in one question that names Bee and the item, "
+                    "such as \"Shall I add 'note the bug' to your Bee todos?\", and call save_to_bee again only after "
+                    "they say yes to that question.")
+        found.saved = True
+        write = await self._bee_writes.write(found.item, question, answer)
         what = label(write, ENGLISH)
-        self._recorder.event("bee_write", key=write.key, kind=kind, text=write.text, item=item, question=question,
-                             answer=answer, result="ok" if write.status == "ok" else "failed", error=write.error)
+        self._recorder.event("bee_write", key=write.key, kind=write.kind, text=write.text, item=write.item,
+                             question=question, answer=answer, result="ok" if write.status == "ok" else "failed",
+                             error=write.error)
         if write.status == "ok":
             return f"Saved to Bee: {what}. Tell the user in a few words what you saved."
         return (f"Saving {what} to Bee did not go through ({write.error}). Tell the user it did not go through and "
@@ -413,15 +450,35 @@ class BeeCoordinator(Coordinator):
         self._recorder.event("bee_write_undone", key=write.key, kind=write.kind, text=write.text)
         return f"Took it out of Bee: {what}. Tell the user in a few words."
 
-    def _last_exchange(self) -> tuple[str | None, str | None]:
-        """The AI's question and the user's answer to it: the last user turn, and the AI's turn before it."""
-        question = answer = None
-        for item in reversed(self.chat_ctx.items):
-            if getattr(item, "type", None) != "message":
-                continue
-            if item.role == "user" and answer is None:
-                answer = item.text_content
-            elif item.role == "assistant" and answer is not None:
-                question = item.text_content
-                break
-        return question, answer
+    def _last_user_turn(self) -> str | None:
+        """The id of the user's last turn so far (None before they said anything)."""
+        users = [m.id for m in self._turns() if m.role == "user"]
+        return users[-1] if users else None
+
+    def _turns(self) -> list:
+        return [item for item in self.chat_ctx.items
+                if getattr(item, "type", None) == "message" and item.role in ("user", "assistant")]
+
+    def _answer_to(self, proposal: Proposal) -> tuple[str | None, str | None]:
+        """The question the AI asked about a proposed item and the user's answer, as the conversation shows them:
+        the user's last turn, if it came after the item was proposed, and the AI's turn right before that turn, if it
+        too came after the proposal, names Bee and asks ("?"). (None, None) when there is no such answer yet: the
+        AI saved in the reply that asked, or the yes was to another question or came before the item was fixed."""
+        turns = self._turns()
+        ids = [turn.id for turn in turns]
+        if proposal.after is None:
+            later = turns
+        elif proposal.after in ids:
+            later = turns[ids.index(proposal.after) + 1:]
+        else:
+            return None, None  # the turn it followed is no longer in the conversation: ask again
+        users = [i for i, turn in enumerate(later) if turn.role == "user"]
+        if not users:
+            return None, None
+        asked = [turn for turn in later[:users[-1]] if turn.role == "assistant"]
+        if not asked:
+            return None, None
+        question = asked[-1].text_content or ""
+        if "bee" not in question.lower() or not QUESTION.search(question):
+            return None, None
+        return question, later[users[-1]].text_content

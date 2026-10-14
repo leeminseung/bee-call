@@ -181,14 +181,19 @@ class BeeWrites:
 
 def label(write: BeeWrite, language: CallLanguage) -> str:
     """One write as the user reads it: "todo 'Note the bug'", "할 일 '버그 기록'"."""
+    return item_label(write.item, language)
+
+
+def item_label(item: dict[str, Any], language: CallLanguage) -> str:
+    kind, text = str(item.get("kind")), str(item.get("text") or "")
     korean = language.code == "ko"
-    if write.kind.startswith("todo"):
+    if kind.startswith("todo"):
         name = "할 일" if korean else "todo"
     else:
         name = "사실" if korean else "fact"
-    if write.text:
-        return f"{name} '{write.text}'"
-    return ("제안된 할 일" if korean else "a suggested todo") if write.kind == "todo_accept" else \
+    if text:
+        return f"{name} '{text}'"
+    return ("제안된 할 일" if korean else "a suggested todo") if kind == "todo_accept" else \
         ("사실 하나" if korean else "a fact")
 
 
