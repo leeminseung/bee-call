@@ -175,14 +175,33 @@ test("taking out with no item named takes out the last saved write", () => {
   assert.deepEqual(beeItems(page).map((item) => [item.text, item.state]), [["First", "saved"], ["Second", "undone"]]);
 });
 
-test("a failed write that is saved later becomes one saved item", () => {
+test("without keys, only a retry after the call updates the failed write with the same kind and text", () => {
   const page = loadPage({ hash: "#/s/2026-10-15/2100" });
   page.feed([
     { t: 3, type: "bee_write", kind: "fact_update", text: "Dana likes easy trails", question: "q", answer: "yes",
       result: "failed" },
-    { t: 30, type: "bee_write", kind: "fact_update", text: "Dana likes easy trails", result: "ok" },
+    { t: 30, type: "bee_write", kind: "fact_update", text: "Dana likes easy trails", result: "ok", retried: true },
+    { t: 40, type: "bee_write", kind: "fact_update", text: "Dana likes easy trails", question: "q2", answer: "yes",
+      result: "ok" },
   ]);
-  assert.deepEqual(beeItems(page).map((item) => [item.text, item.state]), [["Dana likes easy trails", "saved"]]);
+  assert.deepEqual(beeItems(page).map((item) => [item.text, item.state]),
+    [["Dana likes easy trails", "saved"], ["Dana likes easy trails", "saved"]]);
+});
+
+test("two writes without text, one failed and one saved, stay two rows with their own questions", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed([
+    { t: 3, type: "bee_write", key: "w1", kind: "fact_confirm", text: "", item: { kind: "fact_confirm", fact_id: 1 },
+      question: "Shall I mark fact 1 as right in Bee?", answer: "yes", result: "failed" },
+    { t: 6, type: "bee_write", key: "w2", kind: "fact_confirm", text: "", item: { kind: "fact_confirm", fact_id: 2 },
+      question: "Shall I mark fact 2 as right in Bee?", answer: "yes", result: "ok" },
+  ]);
+  const [first, second] = beeItems(page);
+  assert.equal(beeItems(page).length, 2);
+  assert.deepEqual([first.text, first.state], ["Fact #1", "failed"]);
+  assert.match(first.rest, /fact 1/);
+  assert.deepEqual([second.text, second.state], ["Fact #2", "saved"]);
+  assert.match(second.rest, /fact 2/);
 });
 
 test("a write of a kind the page does not know is still shown", () => {
@@ -258,4 +277,39 @@ test("words left unconfirmed when the call ends join the person's last bubble", 
     { t: 8, type: "call_ended" },
   ]);
   assert.deepEqual(userBubbles(page), ["Yes, now is fine. bye then."]);
+});
+
+// The server records each write under a key ("w1"); a retry after the call and an undo carry the same key.
+
+test("a take-out names its write by key", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed([
+    { t: 3, type: "bee_write", key: "w1", kind: "todo_create", text: "Same", question: "q1", answer: "yes", result: "ok" },
+    { t: 5, type: "bee_write", key: "w2", kind: "todo_create", text: "Same", question: "q2", answer: "yes", result: "ok" },
+    { t: 6, type: "bee_write_undone", key: "w1", kind: "todo_create", text: "Same" },
+  ]);
+  assert.deepEqual(beeItems(page).map((item) => item.state), ["undone", "saved"]);
+});
+
+test("the retry after the call updates its write by key, and a second failure promises nothing more", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed([
+    { t: 3, type: "bee_write", key: "w1", kind: "fact_update", text: "A", question: "q", answer: "yes", result: "failed" },
+    { t: 4, type: "bee_write", key: "w2", kind: "todo_create", text: "B", question: "q", answer: "yes", result: "failed" },
+    { t: 30, type: "bee_write", key: "w1", kind: "fact_update", text: "A", result: "ok", retried: true },
+    { t: 31, type: "bee_write", key: "w2", kind: "todo_create", text: "B", result: "failed", retried: true },
+  ]);
+  const [fact, todo] = beeItems(page);
+  assert.equal(beeItems(page).length, 2);
+  assert.deepEqual([fact.state, fact.status], ["saved", "Saved"]);
+  assert.deepEqual([todo.state, todo.status], ["failed", "Not saved"]);
+  assert.match(todo.rest, /Bee Call tried again after the call, and it did not go through\./);
+  assert.doesNotMatch(todo.rest, /tries again/);
+});
+
+test("a write with no text of its own is named by its Bee item", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed([{ t: 3, type: "bee_write", key: "w1", kind: "fact_confirm", text: null,
+    item: { kind: "fact_confirm", fact_id: 8812 }, question: "Bee에 이 사실을 확인할까요?", answer: "응", result: "ok" }]);
+  assert.deepEqual([beeItems(page)[0].kind, beeItems(page)[0].text], ["Confirm fact", "Fact #8812"]);
 });

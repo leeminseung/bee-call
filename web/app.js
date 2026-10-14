@@ -1045,7 +1045,10 @@
     // ---------- Bee writes during the call ----------
 
     // The AI asks ("Shall I put ... in Bee as a to-do?"), writes right after the person's yes, and takes the last
-    // write out again when asked to (bee_write_undone). A failed write is tried again after the call.
+    // write out again when asked to (bee_write_undone). A write that failed is tried once more after the call,
+    // and that result comes as another bee_write with "retried". The server names each write with a key, which
+    // its undo and its retry carry too. Without a key, an undo names its write by kind and text (or takes out
+    // the last saved write), and only a retry updates the failed write with the same kind and text.
     beeWrite(ev) {
       if (!this.writes) {
         const card = el("section", "card bee");
@@ -1059,15 +1062,18 @@
       }
       const items = this.writes.items;
       const kind = String(ev.kind || "");
-      const text = ownText(ev);
+      const text = beeText(ev); // its own text, or the Bee item it confirms or accepts
+      const key = typeof ev.key === "string" && ev.key ? ev.key : null;
+      const sameKey = key ? items.find((i) => i.key === key) : null;
       if (ev.type === "bee_write_undone") {
-        const named = (item) => (!kind || item.kind === kind) && (!text || item.text === text);
-        const item = [...items].reverse().find((i) => i.state === "saved" && named(i));
+        const named = (i) => (!kind || i.kind === kind) && (!text || i.text === text);
+        const item = key ? sameKey : [...items].reverse().find((i) => i.state === "saved" && named(i));
         if (item) this.setWriteState(item, "undone");
       } else {
-        // A later result for a write that failed (its retry) updates the same line.
-        const retried = items.find((i) => i.state === "failed" && i.kind === kind && i.text === text);
-        this.setWriteState(retried || this.addWrite(ev, kind, text), ev.result === "ok" ? "saved" : "failed");
+        const earlier = key ? sameKey
+          : ev.retried ? items.find((i) => i.state === "failed" && i.kind === kind && i.text === text) : null;
+        const item = earlier || this.addWrite(ev, kind, text, key);
+        this.setWriteState(item, ev.result === "ok" ? "saved" : "failed", Boolean(ev.retried));
       }
       const kept = items.filter((i) => i.state !== "undone");
       const saved = kept.filter((i) => i.state === "saved").length;
@@ -1075,7 +1081,7 @@
         : saved === kept.length ? `${saved} saved` : `${saved} of ${kept.length} saved`;
     }
 
-    addWrite(ev, kind, text) {
+    addWrite(ev, kind, text, key) {
       const row = el("li", "bee-item");
       const status = el("span", "bee-status");
       row.append(el("span", "bee-kind", BEE_KIND[kind] || humanize(kind) || "Item"),
@@ -1084,22 +1090,27 @@
       const answer = ownText({ text: ev.answer });
       const asked = [question && `Asked: “${question}”`, answer && `You said: “${answer}”`].filter(Boolean).join(" · ");
       if (asked) row.append(el("p", "bee-asked", asked));
-      const note = el("p", "bee-note", "Bee Call tries again after the call.");
+      const note = el("p", "bee-note");
       row.append(note);
-      const item = { kind, text, row, status, note, state: null };
+      const item = { key, kind, text, row, status, note, state: null };
       this.writes.items.push(item);
       this.writes.list.append(row);
       return item;
     }
 
-    setWriteState(item, state) {
+    // A write that failed in the call is tried once more after it; once that retry has failed too, nothing more
+    // is promised.
+    setWriteState(item, state, retried = false) {
       item.state = state;
       item.row.dataset.state = state;
-      item.note.hidden = state !== "failed";
       item.status.replaceChildren();
       if (state === "saved") item.status.append(icon("check"), "Saved");
-      else if (state === "failed") item.status.append(icon("x"), "Not saved yet");
+      else if (state === "failed") item.status.append(icon("x"), retried ? "Not saved" : "Not saved yet");
       else item.status.append("Taken out");
+      item.note.textContent = state !== "failed" ? ""
+        : retried ? "Bee Call tried again after the call, and it did not go through."
+          : "Bee Call tries again after the call.";
+      item.note.hidden = state !== "failed";
     }
   }
 
