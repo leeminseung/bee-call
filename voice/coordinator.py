@@ -289,21 +289,30 @@ class Coordinator(Agent):
         return "Queued. It will be saved to Bee after the call."
 
     @function_tool
-    async def book_call(self, context: RunContext, at: str, topic: str) -> str:
-        """Book a call back at a time the user asked for or agreed to out loud, such as "call me tomorrow at 8".
-        At that time you call them, picking up from this call. Never book a call the user did not ask for.
+    async def book_call(self, context: RunContext, topic: str, at: str | None = None,
+                        in_minutes: int | None = None) -> str:
+        """Book a call back at a time the user asked for or agreed to out loud, such as "call me tomorrow at 8" or
+        "call me back in ten minutes". At that time you call them, picking up from this call. Never book a call
+        the user did not ask for. Give the time one way: in_minutes for a time counted from now, at for a clock
+        time. The answer says the time booked; read it back to the user.
 
         Args:
-            at: The local date and time to call, in ISO 8601, like 2026-10-15T08:00.
             topic: What the call is for, in a few words.
+            at: For a clock time: the local date and time to call, in ISO 8601, like 2026-10-15T08:00.
+            in_minutes: For a time from now, like "in ten minutes" (10) or "in an hour" (60): minutes from now.
         """
-        try:
-            when = datetime.fromisoformat(at.strip())
-        except ValueError:
-            return "Give the time in ISO 8601, like 2026-10-15T08:00."
-        if when.tzinfo is not None:
-            when = when.astimezone().replace(tzinfo=None)  # this Mac's local time, like the rest of the workspace
-        now = datetime.now()
+        now = datetime.now()  # the clock now, not the time this call started
+        if (at is None) == (in_minutes is None):
+            return "Give the time one way: in_minutes for a time from now, or at for a clock time."
+        if in_minutes is not None:
+            when = now + timedelta(minutes=in_minutes)
+        else:
+            try:
+                when = datetime.fromisoformat(at.strip())
+            except ValueError:
+                return "Give the time in ISO 8601, like 2026-10-15T08:00."
+            if when.tzinfo is not None:
+                when = when.astimezone().replace(tzinfo=None)  # this Mac's local time, like the rest of the workspace
         if when < now + timedelta(minutes=1):
             return "That time has passed. Ask the user for a later time."
         if when > now + timedelta(days=7):
@@ -315,7 +324,10 @@ class Coordinator(Agent):
         self._booked = offer.id  # one call back per call: booking again moves it
         self._recorder.event("call_booked", offer=offer.id, at=offer.call_at, topic=offer.topic)
         verb = "Moved the call back" if moved else "Booked"
-        return f"{verb}: you will call at {when:%a %b %-d, %-I:%M %p}. Confirm it to the user in a few words."
+        day = "today" if when.date() == now.date() else "tomorrow" if when.date() == now.date() + timedelta(days=1) \
+            else f"on {when:%A}"
+        return (f"{verb}: you will call at {when:%-I:%M %p} {day} ({when:%A, %B %-d}); it is {now:%-I:%M %p} now. "
+                "Read this time back to the user in a few words.")
 
     @function_tool
     async def cancel_call(self, context: RunContext) -> str:
