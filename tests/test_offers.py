@@ -745,3 +745,22 @@ def test_the_app_sees_a_booked_call_as_booked_until_its_room_is_being_made(tmp_p
     assert asyncio.run(listed()) == {booked.id: "booked", tapped.id: "calling"}
     store.begin_placing(claims[0], datetime.now(SEOUL))
     assert asyncio.run(listed())[booked.id] == "calling"
+
+
+def test_an_unknown_offer_is_404_whatever_the_request_body(tmp_path):
+    """Contract section 4: whether the offer exists is checked before the body is read (acceptance BC-170)."""
+    from aiohttp.test_utils import TestClient, TestServer
+    from voice.token_server import make_app
+
+    me = signed_in(tmp_path)
+
+    async def main():
+        app = make_app("wss://example", "APIkey", "s" * 32, me.people, room_exists=None)
+        async with TestClient(TestServer(app), headers=me.headers) as client:
+            statuses = []
+            for body in (None, b"", b"not json", b"[]", b'"now"'):
+                response = await client.post("/offers/20261014-183000-abcd", data=body)
+                statuses.append(response.status)
+            return statuses
+
+    assert asyncio.run(main()) == [404] * 5

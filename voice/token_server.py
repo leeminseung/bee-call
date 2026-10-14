@@ -353,12 +353,14 @@ async def list_offers(request: web.Request) -> web.Response:
 
 async def answer_offer(request: web.Request) -> web.Response:
     """A notification button or the app: {"choice": "now" | "later" | "decline"}. voice/outbound.py places the call."""
+    store = OfferStore(workspace(request))
+    if store.get(request.match_info["offer_id"]) is None:  # contract section 4: an unknown offer is 404 first
+        raise web.HTTPNotFound(text="no such offer\n")
     try:
         body = await request.json()
         choice = str(body["choice"])
     except (ValueError, KeyError, TypeError):
         raise web.HTTPBadRequest(text='expected {"choice": "now" | "later" | "decline"}\n')
-    store = OfferStore(workspace(request))
     now = someone(request).now()
     try:
         offer = store.answer(request.match_info["offer_id"], choice, now)
