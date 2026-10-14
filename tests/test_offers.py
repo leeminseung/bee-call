@@ -123,7 +123,7 @@ def test_the_watcher_asks_instead_of_calling(tmp_path, monkeypatch):
 def test_a_yes_is_called_with_how_the_user_agreed(tmp_path):
     workspace = tmp_path / "workspace"
     store = OfferStore(workspace)
-    offer, _ = asked(tmp_path)
+    offer, _ = asked(tmp_path, now=datetime.now())  # asked at a fixed time, it would have closed by tonight
     store.answer(offer.id, "now", datetime.now())
     prepared, placed = [], []
 
