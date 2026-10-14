@@ -85,12 +85,16 @@ async def apply_one(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def made_todo(response: Any) -> dict[str, Any]:
-    """The todo Bee made, from its answer: {"todo": {...}} or the todo itself, as the Bee CLI's own parser takes
-    either (parseTodoResponse in bee 0.7.3)."""
+    """The todo Bee made, from its answer: {"todo": {...}} or the todo itself, which the Bee CLI's own parser
+    (parseTodoResponse in bee 0.7.3) takes only when it has a numeric id and created_at, a text and a completed
+    flag. Anything else is no todo ({}), so an undo never deletes by some other id."""
     if not isinstance(response, dict):
         return {}
-    todo = response.get("todo")
-    return todo if isinstance(todo, dict) else response
+    if isinstance(response.get("todo"), dict):
+        return response["todo"]
+    shaped = (isinstance(response.get("id"), int) and isinstance(response.get("text"), str)
+              and isinstance(response.get("created_at"), (int, float)) and isinstance(response.get("completed"), bool))
+    return response if shaped else {}
 
 
 async def take_back(write: BeeWrite) -> dict[str, Any]:

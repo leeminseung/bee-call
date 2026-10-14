@@ -352,6 +352,21 @@ def test_take_it_out_works_when_bee_answers_with_the_bare_todo(tmp_path, fake_be
     assert ["todos", "delete", "99", "--json"] in calls(fake_bee)
 
 
+def test_take_it_out_never_deletes_by_an_id_that_is_not_a_todo_s(tmp_path, fake_bee, monkeypatch):
+    """Third review of this round's fixes, finding 4: an answer that is not a todo (here the suggestion, id 34) must
+    not be read as one; deleting todo 34 would take out some other todo."""
+    monkeypatch.setenv("FAKE_BEE_ACCEPT_ANSWER", "suggestion")
+
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        await saved(agent, "Bee suggested the todo 'Ask about bonus terms'. Shall I add it?", "Yes.",
+                    kind="todo_accept", suggestion_id=34, text="Ask about bonus terms")
+        return await agent.undo_bee_write(None)
+
+    assert asyncio.run(main()).startswith("Could not take") and writes_to_bee(fake_bee) == [
+        ["todos", "accept-suggestion"]]
+
+
 def test_undoing_a_fact_fix_puts_the_fact_back_as_it_was(tmp_path, fake_bee):
     async def main():
         agent, _ = await in_a_call(tmp_path)
