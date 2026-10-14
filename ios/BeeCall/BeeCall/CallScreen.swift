@@ -17,8 +17,8 @@ struct CallScreen: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                if !server.beeStatus.isEmpty {
-                    Text(server.beeStatus)
+                if !server.bee.status.isEmpty {
+                    Text(server.bee.status)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

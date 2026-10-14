@@ -25,8 +25,8 @@ final class Server {
 
     private(set) var state: State
     private(set) var problem: String? // the last sign-in failure, in words
-    private(set) var beeStatus = "" // shown under the call status when the person uses Bee
     @ObservationIgnored private var nonce: String?
+    @ObservationIgnored let bee = BeeSync(noteStatus: { Server.shared.noteStatus($0) })
     @ObservationIgnored let settings = SettingsSync(tokenReadable: { Server.savedToken() != nil },
                                                     noteStatus: { Server.shared.noteStatus($0) })
 
@@ -182,7 +182,7 @@ final class Server {
         Self.deleteToken()
         UserDefaults.standard.removeObject(forKey: "person")
         state = .signedOut
-        beeStatus = ""
+        bee.clearStatus()
     }
 
     /// Push tokens and settings belong to the person, so they go to the server again after a sign-in.
@@ -197,35 +197,7 @@ final class Server {
     func syncSettings() async {
         guard case .signedIn = state else { return }
         await settings.send().value
-        await syncBee(wanted: AppSettings(.standard).useBee)
-    }
-
-    private func syncBee(wanted: Bool) async {
-        guard let request = Self.request("/me"), let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let me = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let settings = me["settings"] as? [String: Any] else { return }
-        let connected = settings["bee"] as? Bool ?? false
-        let connecting = me["bee_connecting"] as? Bool ?? false
-        if wanted && !connected && !connecting {
-            beeStatus = "Connecting Bee: approve Bee Call in the Bee app"
-            guard let start = Self.request("/bee/connect", method: "POST", timeout: 40),
-                  let (body, answer) = try? await URLSession.shared.data(for: start),
-                  (answer as? HTTPURLResponse)?.statusCode == 200,
-                  let link = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["link"] as? String,
-                  let url = URL(string: link) else {
-                beeStatus = "Bee could not be connected right now"
-                return
-            }
-            await UIApplication.shared.open(url) // Bee's own approval page
-        } else if !wanted && connected {
-            if let stop = Self.request("/bee/disconnect", method: "POST") {
-                _ = try? await URLSession.shared.data(for: stop)
-            }
-            beeStatus = ""
-        } else {
-            beeStatus = connected ? "Bee connected" : connecting ? "Waiting for your approval in the Bee app" : ""
-        }
+        await bee.sync()
     }
 
     // MARK: - Keychain
