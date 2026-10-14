@@ -40,7 +40,7 @@ from pathlib import Path
 import boto3
 from dotenv import load_dotenv
 from livekit import rtc
-from livekit.agents import AgentServer, AgentSession, JobContext, JobProcess, cli, inference, llm
+from livekit.agents import AgentServer, AgentSession, JobContext, JobProcess, RecordingOptions, cli, inference, llm
 from livekit.plugins import aws, silero
 from livekit.plugins.aws.stt import Credentials
 
@@ -331,6 +331,11 @@ async def entrypoint(ctx: JobContext) -> None:
 
 async def run_call(ctx: JobContext, people: People) -> None:
     """One call, from the dispatch to the AI's first words; the rest runs in the session and its shutdown."""
+    # LiveKit's cloud recording keeps nothing of a call, whatever the LiveKit project says. session.start says so
+    # for a call that starts a session (record=False); this says it first, for a job that never does (missed,
+    # declined, refused over budget, hung up while it rang), whose logs LiveKit would otherwise upload when the job
+    # ends (livekit/agents/job.py _on_cleanup).
+    ctx.init_recording(RecordingOptions(audio=False, traces=False, logs=False, transcript=False))
     meta = call_meta(ctx.job.metadata)
     started = time.monotonic()
     room = ctx.job.room.name  # the job's room (LiveKit gives ctx.room this name before the entrypoint runs)

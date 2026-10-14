@@ -169,6 +169,30 @@ def test_livekit_never_records_a_call_and_audio_follows_the_setting_at_answer_ti
     assert next(e for e in events_of(folder) if e["type"] == "coordinator")["audio_on_server"] is False
 
 
+@pytest.mark.parametrize("how", ["missed", "over budget", "hung up while it rang"])
+def test_a_call_that_never_starts_a_session_gives_livekit_nothing_to_record(tmp_path, monkeypatch, quick, how):
+    """Review of this round's fixes, finding 8: when the LiveKit project records, LiveKit keeps the logs of a job
+    that never reaches session.start and uploads them when the job ends (livekit/agents/job.py _on_cleanup). The
+    voice server tells it, before anything else, to keep nothing."""
+    me = signed_in(tmp_path)
+    if how == "over budget":
+        me.people.change_settings("matt", {"daily_budget_usd": 0.5}, allowed=("daily_budget_usd",))
+        spend_today(me.workspace, 0.5)
+    monkeypatch.setattr(agent, "CALLER_WAIT_S", 0.1)
+    call = FakeCall(me.people, {"direction": "outbound" if how == "missed" else "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        if how == "over budget":
+            call.join()
+        await agent.run_call(call, me.people)  # no one answers, the budget is used up, or the caller is gone
+        await call.end()
+
+    asyncio.run(main())
+    assert call.session.started is None
+    assert call.recording == {"audio": False, "traces": False, "logs": False, "transcript": False}
+
+
 # ---------- people without Bee (BC-057): the mode the user's friend uses ----------
 
 BEE_WORDING = r"\bBee\b(?! Call)"  # "Bee" the wearable; "Bee Call" is the product's own name

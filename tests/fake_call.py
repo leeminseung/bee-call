@@ -93,6 +93,7 @@ class FakeCall:
         self.shutdown_callbacks: list = []
         self.shutdown_reason: str | None = None
         self.deleted: str | None = None  # the room deleted, by name
+        self.recording: dict | None = None  # what the job asked LiveKit's cloud recording to keep (init_recording)
         self.ringing: list[str] = []  # "start", "stop" as the voice server's ringback plays and stops
         self.job = SimpleNamespace(metadata=json.dumps(meta), room=SimpleNamespace(name=room))
         self.proc = SimpleNamespace(userdata={"vad": None, "aws": None})
@@ -105,6 +106,10 @@ class FakeCall:
     async def wait_for_participant(self):
         await self.joined.wait()
         return self.caller
+
+    def init_recording(self, options) -> None:
+        if self.recording is None:  # as LiveKit's: the first call decides
+            self.recording = dict(options)
 
     def is_fake_job(self) -> bool:
         """LiveKit's console mode (no room, this Mac's mic) is a fake job; a dispatched call is not."""
