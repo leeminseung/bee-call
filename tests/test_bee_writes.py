@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from beelink import writer
+from beelink import cli, writer
 from beelink.writer import BeeWrites
 from tests.helpers import seoul_now
 from tests.test_beelink import FAKE_BEE, WRITE_COMMANDS, calls
@@ -209,6 +209,52 @@ def test_a_failed_write_is_said_and_retried_after_the_call(tmp_path, fake_bee, m
     assert "did not go through" in said and "tried again after the call" in said
     assert [w.status for w in retried] == ["ok"] and [w.status for w in BeeWrites(rec.dir).all()] == ["ok"]
     assert writes_to_bee(fake_bee) == [["todos", "create"], ["todos", "create"]]  # one failed, one went in
+
+
+def test_a_write_bee_did_not_confirm_is_never_written_again(tmp_path, fake_bee, monkeypatch):
+    """Review of this round's fixes, finding 5: Bee took the todo but answered after the write stopped waiting.
+    Retrying it would make the same todo twice, so it is said as maybe written and left to the user."""
+    monkeypatch.setenv("FAKE_BEE_SLOW", "todos create 3")
+    monkeypatch.setattr(cli, "WRITE_TIMEOUT", 0.5)
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        said = await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
+        retried = await BeeWrites(rec.dir).retry_failed()
+        return said, retried, rec
+
+    said, retried, rec = asyncio.run(main())
+    assert "may or may not be in Bee" in said and "tried again" not in said
+    assert retried == [] and writes_to_bee(fake_bee) == [["todos", "create"]]
+    assert [w.status for w in BeeWrites(rec.dir).all()] == ["unknown"]
+    (event,) = [e for e in events(rec) if e["type"] == "bee_write"]
+    assert (event["result"], event["may_have_gone_in"]) == ("failed", True)  # contract section 8 knows ok and failed
+    body = writer.summary_notification(BeeWrites(rec.dir).all(), call_language("en"))["aps"]["alert"]["body"]
+    assert body == "Not sure it went in, check Bee: todo 'Note the bug'"
+
+
+def test_a_write_cut_off_by_the_end_of_the_call_is_kept_as_maybe_written(tmp_path, fake_bee, monkeypatch):
+    """The call ended while Bee was writing: LiveKit cancels the tool. Bee may have it, so it is not written again."""
+    monkeypatch.setenv("FAKE_BEE_SLOW", "todos create 3")
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        number = await proposed(agent, kind="todo_create", text="Note the bug")
+        await say(agent, ("assistant", ASKED[0]), ("user", ASKED[1]))
+        saving = asyncio.create_task(agent.save_to_bee(None, proposal=number))
+        for _ in range(100):  # until Bee has the todo
+            await asyncio.sleep(0.05)
+            if writes_to_bee(fake_bee):
+                break
+        saving.cancel()
+        await asyncio.gather(saving, return_exceptions=True)
+        return rec, await BeeWrites(rec.dir).retry_failed()
+
+    rec, retried = asyncio.run(main())
+    assert retried == [] and writes_to_bee(fake_bee) == [["todos", "create"]]
+    assert [w.status for w in BeeWrites(rec.dir).all()] == ["unknown"]
+    (event,) = [e for e in events(rec) if e["type"] == "bee_write"]
+    assert (event["result"], event["may_have_gone_in"]) == ("failed", True)
 
 
 def test_a_write_cut_off_mid_way_is_never_repeated(tmp_path, fake_bee):

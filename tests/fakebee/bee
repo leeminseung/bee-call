@@ -18,6 +18,11 @@ if fail_once and os.path.exists(fail_once) and " ".join(cmd).startswith(open(fai
     os.remove(fail_once)
     print("Bee is unavailable right now", file=sys.stderr)
     sys.exit(1)
+# A command Bee carries out but answers late: FAKE_BEE_SLOW holds the command's start and the seconds it takes
+# ("todos create 3"). The call is already in the log (Bee has it) when the wait starts.
+slow = os.environ.get("FAKE_BEE_SLOW")
+if slow and " ".join(cmd).startswith(slow.rsplit(" ", 1)[0]):
+    time.sleep(float(slow.rsplit(" ", 1)[1]))
 
 def out(obj):
     print(json.dumps(obj))

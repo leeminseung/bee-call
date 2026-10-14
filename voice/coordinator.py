@@ -22,7 +22,7 @@ from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_inst
 
 from beelink import reads
 from beelink.clock import now_text
-from beelink.writer import KINDS, BeeWrites, item_label, label
+from beelink.writer import KINDS, BeeWrites, event_fields, item_label, label
 from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
 from voice.recorder import CallRecorder
@@ -427,13 +427,17 @@ class BeeCoordinator(Coordinator):
                     "such as \"Shall I add 'note the bug' to your Bee todos?\", and call save_to_bee again only after "
                     "they say yes to that question.")
         found.saved = True
-        write = await self._bee_writes.write(found.item, question, answer)
+        write = await self._bee_writes.begin(found.item, question, answer)
+        try:
+            await self._bee_writes.apply(write)
+        finally:  # also when the call ends mid-write: the record shows the write, and that Bee may have it
+            self._recorder.event("bee_write", **event_fields(write))
         what = label(write, ENGLISH)
-        self._recorder.event("bee_write", key=write.key, kind=write.kind, text=write.text, item=write.item,
-                             question=question, answer=answer, result="ok" if write.status == "ok" else "failed",
-                             error=write.error)
         if write.status == "ok":
             return f"Saved to Bee: {what}. Tell the user in a few words what you saved."
+        if write.status == "unknown":
+            return (f"Bee did not confirm saving {what} ({write.error}): it may or may not be in Bee, and it will not "
+                    "be saved again by itself. Tell the user that, and that they can check Bee after the call.")
         return (f"Saving {what} to Bee did not go through ({write.error}). Tell the user it did not go through and "
                 "that it will be tried again after the call.")
 

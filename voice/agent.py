@@ -46,7 +46,7 @@ from livekit.plugins.aws.stt import Credentials
 
 from beelink import cli as bee
 from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
-from beelink.writer import BeeWrites, summary_notification
+from beelink.writer import BeeWrites, event_fields, summary_notification
 from voice.aws_session import aws_profile, aws_session
 from voice.claude_llm import ClaudeBedrockLLM
 from voice.continuation import earlier_call
@@ -247,10 +247,8 @@ async def after_bee_writes(rec: CallRecorder, person, language: CallLanguage) ->
     says what went into Bee (contract sections 5 and 6)."""
     writes = BeeWrites(rec.dir)
     try:
-        for write in await asyncio.wait_for(writes.retry_failed(), BEE_RETRY_S):
-            rec.after_call("bee_write", key=write.key, kind=write.kind, text=write.text, item=write.item,
-                           question=write.question, answer=write.answer,
-                           result="ok" if write.status == "ok" else "failed", error=write.error, retried=True)
+        await asyncio.wait_for(writes.retry_failed(
+            done=lambda write: rec.after_call("bee_write", **event_fields(write), retried=True)), BEE_RETRY_S)
     except asyncio.TimeoutError:
         log.warning("retrying the Bee writes of %s took too long", rec.dir)
     except Exception:  # what was written stays in bee-writes.jsonl for the writer command

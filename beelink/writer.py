@@ -1,15 +1,17 @@
 """Bee writes, made during the call right after the user's spoken yes (Matt, 2026-10-15; contract section 6).
 
 The call AI asks a question that names Bee and the item ("Bee에 할 일로 넣을까요?"); after a yes it writes at
-once, with the person's own Bee login, through BeeWrites.write(). Every write is kept in the call folder, in
-bee-writes.jsonl, one line per step and only appended to:
+once, with the person's own Bee login, through BeeWrites.begin() and apply(). Every write is kept in the call
+folder, in bee-writes.jsonl, one line per step and only appended to:
   {"key": "w1", "status": "applying", "item": {...}, "question": ..., "answer": ..., "before": ..., "at": ...}
-  {"key": "w1", "status": "ok", "response": {...}, "at": ...}          or "failed" with "error"
+  {"key": "w1", "status": "ok", "response": {...}, "at": ...}          or "failed" / "unknown" with "error"
   {"key": "w1", "status": "undone", "at": ...}                          the user said "take it out" (or "undo_failed")
-A write's state is its latest line. "applying" is recorded before the Bee call, so a write cut off between the
-call and its result (the process stopped) is never repeated: Bee may already have it, and a todo must not be
-created twice. A write that failed is said out loud in the call and tried once more after it (retry_failed);
-then one notification says what went into Bee (summary_notification).
+A write's state is its latest line. "failed" means Bee said no, so the item is not there: it is said out loud in
+the call and tried once more after it (retry_failed). "unknown" means Bee may have it: the CLI did not answer in
+time, its answer could not be read, or the write was cut off (the call ended mid-write). Such a write, like one
+still "applying" because the process stopped, is never written again by itself, since a todo must not be created
+twice; the user is told to check Bee. After the call, one notification says what went into Bee
+(summary_notification).
 
 Items:
   {"kind": "fact_confirm", "fact_id": 12}
@@ -30,7 +32,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from beelink import cli
 from voice.language import CallLanguage
@@ -38,6 +40,7 @@ from voice.language import CallLanguage
 WRITES = "bee-writes.jsonl"
 OLD_QUEUE = "bee-queue.jsonl"
 KINDS = ("fact_confirm", "fact_update", "todo_create", "todo_accept")
+MAYBE_WRITTEN = ("unknown", "applying")  # Bee may or may not have the item; never written again by itself
 
 
 @dataclass
@@ -46,7 +49,7 @@ class BeeWrite:
     item: dict[str, Any]
     question: str | None
     answer: str | None
-    status: str  # applying, ok, failed, undone, undo_failed
+    status: str  # applying, ok, failed, unknown, undone, undo_failed
     response: dict[str, Any] | None = None
     before: dict[str, Any] | None = None  # the fact as it was, so an update can be taken back
     error: str | None = None
@@ -131,17 +134,9 @@ class BeeWrites:
         with self.path.open("a") as f:
             f.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
 
-    async def _apply(self, write: BeeWrite) -> BeeWrite:
-        try:
-            write.response, write.status, write.error = await apply_one(write.item), "ok", None
-            self._append({"key": write.key, "status": "ok", "response": write.response})
-        except Exception as exc:
-            write.status, write.error = "failed", str(exc)[:300] or type(exc).__name__
-            self._append({"key": write.key, "status": "failed", "error": write.error})
-        return write
-
-    async def write(self, item: dict[str, Any], question: str, answer: str) -> BeeWrite:
-        """Writes one item the user said yes to; `question` is what the AI asked, `answer` the user's reply."""
+    async def begin(self, item: dict[str, Any], question: str, answer: str) -> BeeWrite:
+        """Records a write the user said yes to, as "applying", before anything reaches Bee; `question` is what the
+        AI asked, `answer` the user's reply. apply() then writes it."""
         write = BeeWrite(f"w{len(self.all()) + 1}", item, question, answer, "applying")
         if item.get("kind") == "fact_update":  # kept so the user can take the fix back
             try:
@@ -150,7 +145,27 @@ class BeeWrites:
                 write.before = None
         self._append({"key": write.key, "status": "applying", "item": item, "question": question, "answer": answer,
                       "before": write.before})
-        return await self._apply(write)
+        return write
+
+    async def apply(self, write: BeeWrite) -> BeeWrite:
+        """Writes it to Bee and records how that went: ok, failed (Bee said no) or unknown (Bee may have it)."""
+        try:
+            response = await apply_one(write.item)
+        except cli.BeeOutcomeUnknown as exc:
+            return self._ended(write, "unknown", str(exc)[:300])
+        except asyncio.CancelledError:  # the call ended mid-write, or the retry after it ran out of time
+            self._ended(write, "unknown", "cut off before Bee answered")
+            raise
+        except Exception as exc:
+            return self._ended(write, "failed", str(exc)[:300] or type(exc).__name__)
+        write.response, write.status, write.error = response, "ok", None
+        self._append({"key": write.key, "status": "ok", "response": response})
+        return write
+
+    def _ended(self, write: BeeWrite, status: str, error: str) -> BeeWrite:
+        write.status, write.error = status, error
+        self._append({"key": write.key, "status": status, "error": error})
+        return write
 
     async def undo(self, key: str) -> BeeWrite:
         """Takes a write that went in back out of Bee."""
@@ -166,18 +181,34 @@ class BeeWrites:
             self._append({"key": key, "status": "undo_failed", "error": write.error})
         return write
 
-    async def retry_failed(self) -> list[BeeWrite]:
-        """Tries each failed write once more (after the call). A write cut off mid-way ("applying") is left alone."""
+    async def retry_failed(self, done: Callable[[BeeWrite], None] | None = None) -> list[BeeWrite]:
+        """Tries each failed write once more (after the call); `done` hears each one as it ends, also one cut off.
+        A write Bee may have ("unknown", or "applying" because the process stopped) is left alone."""
         retried = []
         for write in self.all():
             if write.status != "failed":
                 continue
             self._append({"key": write.key, "status": "applying"})
-            retried.append(await self._apply(write))
+            write.status = "applying"
+            try:
+                retried.append(await self.apply(write))
+            finally:
+                if done is not None:
+                    done(write)
         return retried
 
 
-# ---------- what the user reads after the call ----------
+# ---------- what the user reads during and after the call ----------
+
+def event_fields(write: BeeWrite) -> dict[str, Any]:
+    """A write as the call's record shows it (the bee_write event, contract section 8): `result` is "ok" or
+    "failed"; a write Bee may have taken without saying so also carries may_have_gone_in."""
+    fields = {"key": write.key, "kind": write.kind, "text": write.text, "item": write.item, "question": write.question,
+              "answer": write.answer, "result": "ok" if write.status == "ok" else "failed", "error": write.error}
+    if write.status in MAYBE_WRITTEN:
+        fields["may_have_gone_in"] = True
+    return fields
+
 
 def label(write: BeeWrite, language: CallLanguage) -> str:
     """One write as the user reads it: "todo 'Note the bug'", "할 일 '버그 기록'"."""
@@ -202,7 +233,8 @@ def summary_notification(writes: list[BeeWrite], language: CallLanguage) -> dict
     when the call wrote nothing."""
     went_in = [w for w in writes if w.status == "ok"]
     left_out = [w for w in writes if w.status == "failed"]
-    if not went_in and not left_out:
+    maybe = [w for w in writes if w.status in MAYBE_WRITTEN]
+    if not went_in and not left_out and not maybe:
         return None
     korean = language.code == "ko"
 
@@ -215,6 +247,9 @@ def summary_notification(writes: list[BeeWrite], language: CallLanguage) -> dict
         parts.append(f"Bee에 넣었어요: {some(went_in)}" if korean else f"Added to Bee: {some(went_in)}")
     if left_out:
         parts.append(f"넣지 못했어요: {some(left_out)}" if korean else f"Couldn't add: {some(left_out)}")
+    if maybe:
+        parts.append(f"들어갔는지 모르니 Bee에서 확인해 주세요: {some(maybe)}" if korean
+                     else f"Not sure it went in, check Bee: {some(maybe)}")
     return {"aps": {"alert": {"title": "Bee Call", "body": ". ".join(parts)}, "sound": "default", "thread-id": "bee"}}
 
 
@@ -226,7 +261,7 @@ async def run(session_dir: Path, apply: bool) -> list[BeeWrite]:
     for write in writes.all():
         heard = f'asked "{write.question}", heard "{write.answer}"'
         print(f"{write.status}: {write.kind} {json.dumps(write.item, ensure_ascii=False)} ({heard})"
-              + (" - Bee may have it: check before writing it again" if write.status == "applying" else ""))
+              + (" - Bee may have it: check before writing it again" if write.status in MAYBE_WRITTEN else ""))
     old = session_dir / OLD_QUEUE
     if old.exists():
         for raw in old.read_text().splitlines():

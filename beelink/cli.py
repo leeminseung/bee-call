@@ -34,6 +34,10 @@ class BeeError(RuntimeError):
     pass
 
 
+class BeeOutcomeUnknown(BeeError):
+    """Bee may have done what it was asked: the CLI did not answer in time, or its answer could not be read."""
+
+
 @dataclass(frozen=True)
 class BeeLogin:
     folder: Path | None  # None: this person has not connected Bee
@@ -89,13 +93,16 @@ async def run_json(*args: str, timeout: float = TIMEOUT) -> dict[str, Any]:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
     except asyncio.TimeoutError:
         proc.kill()
-        raise BeeError(f"bee {' '.join(args[:2])} timed out after {timeout:.0f}s")
+        raise BeeOutcomeUnknown(f"bee {' '.join(args[:2])} timed out after {timeout:g}s")
     except asyncio.CancelledError:
         proc.kill()  # the caller gave up (for example LiveKit cancelled a tool); leave no stray bee process
         raise
     if proc.returncode != 0:
         raise BeeError(f"bee {' '.join(args[:2])} failed: {err.decode(errors='replace').strip()[:200]}")
-    return json.loads(out or b"{}")
+    try:
+        return json.loads(out or b"{}")
+    except ValueError:
+        raise BeeOutcomeUnknown(f"bee {' '.join(args[:2])} gave an answer that could not be read") from None
 
 
 # ---------- reads ----------
