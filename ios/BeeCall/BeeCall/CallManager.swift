@@ -356,8 +356,10 @@ final class CallManager: NSObject {
     }
 }
 
-/// PushKit's completion handler, passed into CallKit's callback; calling it from any queue is fine.
-private struct Handed: @unchecked Sendable {
+/// PushKit's completion handler, passed into CallKit's callback; calling it from any queue is fine. Nonisolated
+/// against the project's main-actor default, which would make reading `call` from CallKit's queue an error in a
+/// stricter Swift (review finding 9).
+nonisolated private struct Handed: @unchecked Sendable {
     let call: () -> Void
     init(_ call: @escaping () -> Void) { self.call = call }
 }
