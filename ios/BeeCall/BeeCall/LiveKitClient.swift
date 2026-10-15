@@ -17,6 +17,8 @@ final class LiveKitClient: NSObject {
     @ObservationIgnored private var room: Room?
     @ObservationIgnored private var microphoneOn = true // a mute that arrives before the mic is published
     @ObservationIgnored private let phoneRecorder = PhoneRecorder() // "Save call audio on this iPhone"
+    /// Both voices' live levels, for the indicator around the call screen's main button.
+    let voices = VoiceActivity()
 
     // On a fresh install, the first request to the Mac's LAN address makes iOS ask for Local Network
     // access. Waiting for connectivity lets that first call go through once the user taps Allow.
@@ -32,6 +34,7 @@ final class LiveKitClient: NSObject {
     func connect(tokenServerURL: String, answering roomName: String? = nil,
                  continuing earlierCall: String? = nil) async throws -> String {
         captionList = CaptionList()
+        voices.aiHasAnswered = roomName != nil // the AI's own call has no ringing: the first sound is its voice
         let access = try await fetchAccess(from: tokenServerURL, answering: roomName, continuing: earlierCall)
         try Task.checkCancellation() // the call ended while we fetched the token
         return try await connect(access: access)
@@ -56,20 +59,31 @@ final class LiveKitClient: NSObject {
         try await room.connect(url: access.url, token: access.token)
         try await room.localParticipant.setMicrophone(enabled: microphoneOn)
         phoneRecorder.startIfWanted(room: access.room)
+        voices.microphoneOn = microphoneOn
+        voices.start()
         if room.remoteParticipants.values.contains(where: { $0.attributes[Self.stateAttribute] == "answered" }) {
-            onAgentAnswered?() // the AI picked up before we finished joining (its own call, already answered)
+            agentAnswered() // the AI picked up before we finished joining (its own call, already answered)
         }
         return access.room
     }
 
+    /// The voice server marked the call answered: the AI's voice now counts for the indicator, and the call
+    /// manager learns that the AI picked up.
+    private func agentAnswered() {
+        voices.aiHasAnswered = true
+        onAgentAnswered?()
+    }
+
     func setMicrophone(enabled: Bool) async throws {
         microphoneOn = enabled
+        voices.microphoneOn = enabled
         try await room?.localParticipant.setMicrophone(enabled: enabled)
     }
 
     func disconnect() async {
         microphoneOn = true // the next call starts unmuted
         phoneRecorder.stop()
+        voices.stop()
         guard let room else { return }
         self.room = nil
         await room.disconnect()
@@ -155,6 +169,7 @@ extension LiveKitClient: RoomDelegate {
             guard room === self.room else { return } // we left on purpose
             self.room = nil
             self.phoneRecorder.stop()
+            self.voices.stop()
             self.onLinkChange?(.lost(error))
         }
     }
@@ -163,7 +178,7 @@ extension LiveKitClient: RoomDelegate {
         guard participant is RemoteParticipant, participant.attributes[Self.stateAttribute] == "answered" else { return }
         Task { @MainActor in
             guard room === self.room else { return } // a late update from an earlier call
-            self.onAgentAnswered?()
+            self.agentAnswered()
         }
     }
 }
