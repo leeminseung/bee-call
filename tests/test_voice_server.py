@@ -43,6 +43,18 @@ def with_prep_model(monkeypatch, client) -> None:
     monkeypatch.setattr(prep_module, "bedrock_client", lambda region: client)
 
 
+def test_whose_call_it_is_and_what_it_runs_on_is_decided_without_livekit(tmp_path):
+    """Server review 17: run_call's first step on its own: a call for nobody approved is not answered, and a call
+    for an approved person runs on their settings as they are when it starts."""
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"language": "ko", "call_model": "sonnet"})
+    assert agent.caller_for({"person": "ghost"}, me.people) is None
+    caller = agent.caller_for({"person": "matt"}, me.people)
+    assert (caller.id, caller.language.code, caller.call_model.model, caller.uses_bee) == (
+        "matt", "ko", "claude-sonnet-5-5", False)
+    assert caller.workspace == me.workspace and caller.tts_voice.describe()["provider"] == "polly"
+
+
 def test_a_call_the_user_starts_is_picked_up_with_the_prepared_opening(tmp_path, monkeypatch, quick):
     me = signed_in(tmp_path)
     with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
