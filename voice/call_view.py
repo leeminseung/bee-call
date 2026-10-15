@@ -721,7 +721,8 @@ def prep_card(call: Call, by: str, zone: tzinfo) -> dict[str, Any] | None:
         if kind == "conversation":
             at = _time(entry.get("at"), zone)
             shown = {"type": "conversation", "summary": _text(entry.get("summary")), "at": _iso(at, zone) if at else None}
-            key = ("conversation", entry.get("id") if entry.get("id") is not None else (shown["summary"], shown["at"]))
+            named = entry.get("id")  # Bee's id: a number, or a string in a record that kept it so
+            key = ("conversation", named if isinstance(named, (int, str)) else (shown["summary"], shown["at"]))
         elif kind == "day" and isinstance(entry.get("date"), str) and DAY.fullmatch(entry["date"]):
             shown, key = {"type": "day", "date": entry["date"]}, ("day", entry["date"])
         elif kind == "search" and _text(entry.get("query")):

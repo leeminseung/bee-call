@@ -463,6 +463,19 @@ def test_the_prep_note_loses_bee_s_ids_and_older_reads_become_what_it_looked_up(
         "from_bee": True}
 
 
+def test_a_read_naming_a_conversation_by_a_list_or_object_is_shown_like_one_without_an_id(tmp_path):
+    """Records are read as they are: a conversation id that is neither a number nor a string (an older or broken
+    read) does not fail the view; the read shows like one without an id, by what it says."""
+    older = ['bee_conversation {"conversation_id": [1, 2]}', 'bee_conversation {"conversation_id": {"a": 1}}']
+    stored = [{"type": "conversation", "id": [1, 2], "summary": "Hike plans", "at": None},
+              {"type": "conversation", "id": {"a": 1}, "summary": "Dinner", "at": None}]
+    for reads, shown in ((older, [None]), (stored, ["Hike plans", "Dinner"])):
+        shutil.rmtree(tmp_path / "2026-10-15", ignore_errors=True)
+        record(tmp_path, [INBOUND, {"t": 1, "type": "call_prep", "note": "Hi.", "reads": reads}, say(2, "Hi."),
+                          CLOSED, ENDED])
+        assert [e["summary"] for e in view(tmp_path)["prep"]["looked_up"]] == shown
+
+
 def test_a_person_without_bee_has_a_prep_from_earlier_calls_only(tmp_path):
     prep = {"t": 1, "type": "call_prep", "note": "Last time they talked about the hike.", "reads": [], "bee": False}
     record(tmp_path, [INBOUND, prep, say(2, "Hi."), CLOSED, ENDED])
@@ -593,6 +606,9 @@ def test_a_record_is_listed_once_its_first_line_is_whole(tmp_path):
     roomless.mkdir(parents=True)
     (roomless / "events.jsonl").write_text(json.dumps({"t": 0.0, "type": "call_started"}) + "\n")
     assert [c["call_id"] for c in listed(tmp_path)["calls"]] == ["call-matt-1", "rec-2026-10-14-2000"]
+    (roomless / "events.jsonl").write_text(json.dumps({"t": 0.0, "type": "call_started", "room": ["r"]}) + "\n")
+    assert [c["call_id"] for c in listed(tmp_path)["calls"]] == ["call-matt-1", "rec-2026-10-14-2000"]
+    assert view(tmp_path, "rec-2026-10-14-2000")["call"]["call_id"] == "rec-2026-10-14-2000"
 
 
 def test_the_changes_stamp_sees_a_new_record_begin_in_a_day_that_has_calls(tmp_path):
