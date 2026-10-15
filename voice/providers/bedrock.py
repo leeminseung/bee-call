@@ -30,16 +30,32 @@ def bedrock_client(region: str, read_timeout: int, retries: int):
                                               retries={"max_attempts": retries}))
 
 
+def region_of(choice: Choice) -> str:
+    return choice.extra.get("region") or os.environ.get("BEDROCK_REGION", os.environ.get("AWS_REGION", "ap-southeast-2"))
+
+
 class Bedrock:
     def __init__(self, client: Any = None) -> None:
         self._client = client
 
+    def setup_problem(self) -> str | None:
+        return None  # the AWS session finds its own credentials, as every AWS service here does
+
+    def ready(self) -> bool:
+        return True
+
     def client(self, choice: Choice) -> Any:
         if self._client is not None:
             return self._client
-        region = choice.extra.get("region") or os.environ.get("BEDROCK_REGION",
-                                                               os.environ.get("AWS_REGION", "ap-southeast-2"))
-        return bedrock_client(region, int(choice.extra.get("read_timeout", 60)), int(choice.extra.get("retries", 1)))
+        return bedrock_client(region_of(choice), int(choice.extra.get("read_timeout", 60)),
+                              int(choice.extra.get("retries", 1)))
+
+    def call_llm(self, choice: Choice, *, on_event: Callable[..., None] | None = None,
+                 refusal_line: str | None = None) -> Any:
+        """The call AI on a Bedrock model: LiveKit's own Converse plugin."""
+        from livekit.plugins import aws
+
+        return aws.LLM(model=choice.offering.model, region=region_of(choice))
 
     async def reply(self, choice: Choice, system: str, turns: list[Turn], tools: list[ToolSpec], *,
                     on_text: Callable[[str], None] | None = None, usage: Usage | None = None) -> Reply:

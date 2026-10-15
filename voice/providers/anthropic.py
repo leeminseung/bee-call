@@ -14,24 +14,53 @@ from voice.providers import Reply, ToolCall, ToolSpec, Turn, Usage, estimated_to
 PROVIDER = "anthropic"
 STOPS = {"end_turn": "end", "tool_use": "tool_use", "max_tokens": "max_tokens", "refusal": "refusal",
          "pause_turn": "pause", "stop_sequence": "end"}
-TIMEOUT_S = 120.0  # one request, its answer included (the call AI has its own, shorter, in voice/agent.py)
+TIMEOUT_S = 120.0  # one request, its answer included
+# The call AI's requests: the SDK does not retry (a failed first request goes to the standby at once, and LiveKit
+# retries later ones); no route shows within 3 s.
+CALL_TIMEOUT_S, CALL_CONNECT_S = 20.0, 3.0
+
+
+def async_client(**options: Any) -> Any:
+    """Anthropic's async client (tests put a stand-in here)."""
+    import anthropic
+
+    return anthropic.AsyncAnthropic(**options)
+
+
+def api_key() -> str:
+    return os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
 
 class Anthropic:
     def __init__(self, client: Any = None) -> None:
         self._client = client
 
+    def setup_problem(self) -> str | None:
+        """Why this provider cannot be used here, or None."""
+        return None if self._client is not None or api_key() else "ANTHROPIC_API_KEY is not set"
+
     def ready(self) -> bool:
-        """Set up here: a stand-in client, or ANTHROPIC_API_KEY."""
-        return self._client is not None or bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+        return self.setup_problem() is None
 
     def client(self) -> Any:
         if self._client is None:
             import anthropic
 
-            self._client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", "").strip() or None,
-                                                    max_retries=1, timeout=anthropic.Timeout(TIMEOUT_S, connect=5.0))
+            self._client = async_client(api_key=api_key() or None, max_retries=1,
+                                        timeout=anthropic.Timeout(TIMEOUT_S, connect=5.0))
         return self._client
+
+    def call_llm(self, choice: Choice, *, on_event: Callable[..., None], refusal_line: str) -> Any:
+        """The call AI on Claude: voice/claude_llm.py's adapter for LiveKit, its conversation cached as it grows,
+        and `refusal_line` said when Claude declines a turn."""
+        import anthropic
+
+        from voice.claude_llm import ClaudeBedrockLLM
+
+        client = async_client(api_key=api_key(), max_retries=0,
+                              timeout=anthropic.Timeout(CALL_TIMEOUT_S, connect=CALL_CONNECT_S))
+        return ClaudeBedrockLLM(client=client, model=choice.offering.model, thinking=choice.thinking,
+                                effort=choice.effort, auto_cache=True, refusal_line=refusal_line, on_event=on_event)
 
     async def reply(self, choice: Choice, system: str, turns: list[Turn], tools: list[ToolSpec], *,
                     on_text: Callable[[str], None] | None = None, usage: Usage | None = None) -> Reply:

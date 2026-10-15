@@ -48,7 +48,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import anthropic
 import boto3
 from dotenv import load_dotenv
 from livekit import rtc
@@ -61,6 +60,7 @@ from beelink.calls import OurCalls
 from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
 from beelink.writer import BeeWrites, event_fields, summary_notification
 from voice.aws_session import aws_profile, aws_session
+from voice import model_catalog, providers
 from voice.call_models import CallModel, call_model_for, coordinator_llm
 from voice.claude_llm import ClaudeBedrockLLM, default_model
 from voice.continuation import earlier_call
@@ -74,7 +74,7 @@ from voice.fake_claude import FakeAnthropic
 from voice.fallback_llm import FirstRequestFallback
 from voice.language import CallLanguage, call_language
 from voice.people import People, Person, Settings, dev_person
-from voice.prep import GLM_5, INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_role
+from voice.prep import INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_role
 from voice.recorder import CallRecorder
 from voice.titles import title_call
 from voice.ringback import STATE_ATTRIBUTE, ring_back
@@ -89,14 +89,9 @@ PROFILE = aws_profile()  # None on EC2: the instance role
 REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", REGION)
 COORDINATOR_LLM = coordinator_llm()
-# For COORDINATOR_LLM=bedrock. GLM 5 speaks while it calls a tool. MiniMax M2.5 scored best in
-# probes/coordinator_bench.py (2026-10-12) but calls tools without a word, and in the first real
-# call (2026-10-13) the caller heard silence for 23-28 s whenever they kept talking meanwhile.
-COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", GLM_5)
-NOVA = "us.amazon.nova-2-lite-v1:0"
-# Anthropic's API, as the call AI uses it: the SDK does not retry (a failed first request goes to GLM 5 at once, and
-# LiveKit retries later ones); no route to it shows within 3 s.
-ANTHROPIC_TIMEOUT = anthropic.Timeout(20.0, connect=3.0)
+# COORDINATOR_LLM=bedrock runs COORDINATOR_MODEL (GLM 5 when unset; model_catalog.mode_role). GLM 5 speaks while it
+# calls a tool. MiniMax M2.5 scored best in probes/coordinator_bench.py (2026-10-12) but calls tools without a word,
+# and in the first real call (2026-10-13) the caller heard silence for 23-28 s whenever they kept talking meanwhile.
 WORKER = os.environ.get("WORKER", "fake")
 # A call the user started rings until the AI's voice starts, and at most this long after the caller is in the
 # room: the opening is ready within OPENING_BY_S (6 s) and the voice takes about 2 s more (BC-025).
@@ -156,18 +151,20 @@ def coordinator_model(call_model: CallModel) -> str:
         return call_model.model
     if COORDINATOR_LLM == "claude":
         return os.environ.get("COORDINATOR_MODEL") or default_model(BEDROCK_REGION)
-    return {"bedrock": COORDINATOR_MODEL, "nova": NOVA}.get(COORDINATOR_LLM, COORDINATOR_LLM)
+    if COORDINATOR_LLM in ("bedrock", "nova"):
+        return model_catalog.mode_role("call", COORDINATOR_LLM).choices[0].offering.model
+    return COORDINATOR_LLM
 
 
 def make_llm(rec: CallRecorder, language: CallLanguage, call_model: CallModel) -> llm.LLM:
     if COORDINATOR_LLM == "anthropic":
-        return claude_with_glm_standing_by(rec, language, call_model)
+        return call_ai_with_standby(rec, language, call_model)
     if COORDINATOR_LLM == "echo":
         return EchoLLM()
-    if COORDINATOR_LLM == "nova":
-        return aws.LLM(model=NOVA, region="us-east-1")
-    if COORDINATOR_LLM == "bedrock":
-        return aws.LLM(model=COORDINATOR_MODEL, region=BEDROCK_REGION)
+    if COORDINATOR_LLM in ("bedrock", "nova"):  # one Bedrock model, as the model catalog's mode_role names it
+        choice = model_catalog.mode_role("call", COORDINATOR_LLM).choices[0]
+        return providers.adapter(choice.offering.provider).call_llm(choice, on_event=rec.event,
+                                                                     refusal_line=language.refusal)
     if COORDINATOR_LLM == "claude":
         return ClaudeBedrockLLM(profile=PROFILE, region=BEDROCK_REGION, on_event=rec.event)
     if COORDINATOR_LLM == "fake":
@@ -177,32 +174,27 @@ def make_llm(rec: CallRecorder, language: CallLanguage, call_model: CallModel) -
     raise SystemExit(f"unknown COORDINATOR_LLM {COORDINATOR_LLM!r}")
 
 
-def anthropic_client(**options) -> anthropic.AsyncAnthropic:
-    """Anthropic's own API (tests put a fake here)."""
-    return anthropic.AsyncAnthropic(**options)
+def call_ai_with_standby(rec: CallRecorder, language: CallLanguage, call_model: CallModel) -> llm.LLM:
+    """COORDINATOR_LLM=anthropic: the person's call model as the model catalog's call role runs it (Claude on
+    Anthropic's own API), its standby (GLM 5 on Bedrock) answering when the call model's provider is not set up here
+    or its first request fails. The record's coordinator_model event names the model that answered the call, and why
+    it is not the person's when it is not."""
+    first, standby = model_catalog.choice("call", call_model.name), model_catalog.role("call").standby
 
-
-def claude_with_glm_standing_by(rec: CallRecorder, language: CallLanguage, call_model: CallModel) -> llm.LLM:
-    """COORDINATOR_LLM=anthropic: the person's Claude model (voice/call_models.py) on Anthropic's own API, GLM 5 on
-    Bedrock standing by. The record's coordinator_model event names the model that answered the call, and why it
-    is not Claude when it is not."""
-    def glm() -> llm.LLM:
-        return aws.LLM(model=GLM_5, region=BEDROCK_REGION)
+    def build(choice: model_catalog.Choice) -> llm.LLM:
+        return providers.adapter(choice.offering.provider).call_llm(choice, on_event=rec.event,
+                                                                     refusal_line=language.refusal)
 
     def chosen(model: llm.LLM, reason: str | None) -> None:
         rec.event("coordinator_model", model=model.model, provider=model.provider,
-                  **({"instead_of": call_model.model, "reason": reason} if reason else {}))
+                  **({"instead_of": first.offering.model, "reason": reason} if reason else {}))
 
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not key:
-        model = glm()
-        chosen(model, "ANTHROPIC_API_KEY is not set")
+    problem = providers.adapter(first.offering.provider).setup_problem()
+    if problem:
+        model = build(standby)
+        chosen(model, problem)
         return model
-    client = anthropic_client(api_key=key, max_retries=0, timeout=ANTHROPIC_TIMEOUT)
-    claude = ClaudeBedrockLLM(client=client, model=call_model.model, thinking=call_model.thinking,
-                              effort=call_model.effort, auto_cache=True, refusal_line=language.refusal,
-                              on_event=rec.event)
-    return FirstRequestFallback(claude, glm, on_choice=chosen)
+    return FirstRequestFallback(build(first), lambda: build(standby), on_choice=chosen)
 
 
 def as_dict(obj):

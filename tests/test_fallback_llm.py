@@ -171,7 +171,9 @@ def anthropic_mode(monkeypatch, tmp_path, key: str | None, client=None):
         clients.append(kwargs)
         return client
 
-    monkeypatch.setattr(agent, "anthropic_client", fake_client)
+    from voice.providers import anthropic as anthropic_provider
+
+    monkeypatch.setattr(anthropic_provider, "async_client", fake_client)
     return CallRecorder(tmp_path / "workspace", room="r", now=seoul_now()), clients
 
 

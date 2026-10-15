@@ -2,7 +2,7 @@
 
 Runs the real call AI (BeeCoordinator: its instructions, the Korean rule, a call prep note, every tool) in a LiveKit
 text session, with the voice server's own model setup for COORDINATOR_LLM=anthropic (voice/agent.py
-claude_with_glm_standing_by): the person's call model (--call-model haiku or sonnet, voice/call_models.py) with
+call_ai_with_standby): the person's call model (--call-model haiku or sonnet, voice/call_models.py) with
 its thinking and effort, caching on. The caller's turns are the
 caller's lines of a call's transcript.md (--transcript; lines less than a second apart are one turn, as LiveKit hears
 them), or a few built-in Korean ones. Bee answers from the test fake (tests/fakebee), background jobs do not run, and
