@@ -51,6 +51,21 @@ final class ServerSignInTests: XCTestCase {
         XCTAssertEqual(server.state, .signedIn(person: ""))
     }
 
+    /// Review of 2026-10-15, finding 3: after a tap took the value, the loop slept up to 15 s before fetching the
+    /// next one, so the button stayed off after the person closed Apple's sheet or the server refused.
+    @MainActor func testTheNextValueIsReadySoonAfterATapTookOne() async {
+        let nonces = FakeServer()
+        nonces.replies["GET /auth/nonce"] = .json(200, ["nonce": "n"])
+        let server = Server(keychain: keychain(.none), store: freshDefaults(self),
+                            signIn: AppleSignIn(server: nonces.client(token: nil)))
+        let preparing = Task { await server.prepareSignIn() }
+        defer { preparing.cancel() }
+        await waitUntil("the first value is ready") { server.signIn.isReady }
+        XCTAssertNotNil(server.signIn.takeForRequest())
+        XCTAssertFalse(server.signIn.isReady)
+        await waitUntil("the next value is ready", timeout: .seconds(2)) { server.signIn.isReady }
+    }
+
     /// Review finding 17: the result of saving the token was ignored, so a sign-in this iPhone could not keep
     /// showed the person signed in, until the next request signed them out with "Your sign-in ended".
     @MainActor func testASignInThisIPhoneCannotKeepIsNotShownAsSignedIn() async {

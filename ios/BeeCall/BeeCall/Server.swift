@@ -23,7 +23,7 @@ final class Server {
 
     private(set) var state: State
     private(set) var problem: String? // the last sign-in failure, in words
-    @ObservationIgnored let signIn = AppleSignIn()
+    @ObservationIgnored let signIn: AppleSignIn
     @ObservationIgnored let bee = BeeSync()
     @ObservationIgnored let settings = SettingsSync(tokenReadable: { Server.savedToken() != nil })
     @ObservationIgnored private let keychain: SignInKeychain
@@ -31,9 +31,10 @@ final class Server {
     @ObservationIgnored private var keychainOpened: (any NSObjectProtocol)?
 
     /// The system Keychain and defaults, unless a test passes stand-ins.
-    init(keychain: SignInKeychain = .system, store: UserDefaults = .standard) {
+    init(keychain: SignInKeychain = .system, store: UserDefaults = .standard, signIn: AppleSignIn = AppleSignIn()) {
         self.keychain = keychain
         self.store = store
+        self.signIn = signIn
         if case .token = keychain.read() {
             state = .signedIn(person: store.string(forKey: "person") ?? "")
         } else {
@@ -110,12 +111,13 @@ final class Server {
 
     /// While the sign-in screen shows, keeps a one-time value ready for the button: fetches one whenever none is
     /// ready (none yet, the last one went to Apple, or it was kept too long), every 5 s while the server cannot
-    /// be reached.
+    /// be reached. A ready value is looked at twice a second, so a tap that took it is followed by a new one at
+    /// once and the button is not left off after Apple's sheet closes.
     func prepareSignIn() async {
         while !Task.isCancelled {
             signIn.dropIfOld()
             if signIn.isReady {
-                try? await Task.sleep(for: .seconds(15))
+                try? await Task.sleep(for: .milliseconds(500))
             } else if await signIn.prepare() {
                 if problem == Self.unreachable { problem = nil }
             } else {
