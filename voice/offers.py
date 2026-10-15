@@ -465,3 +465,42 @@ def notification(offer: Offer, now: datetime, language: CallLanguage) -> dict[st
     return {"aps": {"alert": {"title": "Bee Call", "body": body}, "sound": "default", "category": category,
                     "thread-id": "offers"},
             "offer": offer.id}
+
+
+def main(argv: list[str] | None = None) -> None:
+    """For tests from outside (README: Testing from outside): make an offer the way the meta agent does, without its
+    model. The offer asks; nothing rings until the user says yes."""
+    import argparse
+    import json as json_module
+    import sys
+
+    from voice.people import CALL_TIME, People
+
+    parser = argparse.ArgumentParser(prog="python -m voice.offers", description=main.__doc__)
+    parser.add_argument("--data", type=Path, help="data root (default: BEE_CALL_DATA or data/)")
+    sub = parser.add_subparsers(dest="command", required=True)
+    ask = sub.add_parser("ask", help="ask an approved person whether they want a call about one topic")
+    ask.add_argument("person")
+    ask.add_argument("--topic", required=True, help="what the call would be about, as the notification says it")
+    ask.add_argument("--reason", required=True, help="why the AI would call (the call's opening reads it)")
+    ask.add_argument("--conversation", type=int, action="append", default=[],
+                     help="a Bee conversation id behind it (one offer per conversation, ever)")
+    ask.add_argument("--at", help="the time to suggest, like 20:30 (default: the person's call_time)")
+    args = parser.parse_args(argv)
+    people = People(args.data)
+    if not people.known(args.person):
+        sys.exit(f"{args.person} is not approved")
+    if args.at and not CALL_TIME.fullmatch(args.at):
+        sys.exit("--at must look like 21:00")
+    person = people.person(args.person)
+    plan = Plan(call=True, reason=args.reason, inbox_dir=None, conversation_ids=args.conversation, topic=args.topic,
+                kind="conversation" if args.conversation else None)
+    try:
+        offer = OfferStore(person.workspace).ask(plan, person.now(), at=args.at or person.settings().call_time)
+    except (QuestionWaiting, AlreadyOffered) as exc:
+        sys.exit(f"not asked: {exc}")
+    print(json_module.dumps(offer.view(), ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

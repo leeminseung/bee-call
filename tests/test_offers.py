@@ -76,6 +76,28 @@ def test_an_offer_suggests_tomorrow_when_today_s_call_time_is_less_than_ten_minu
         assert call_time(now) == at.replace(day=day), minutes_before
 
 
+def test_an_operator_command_makes_an_offer_from_outside(tmp_path, capsys):
+    """Outside test seam 1: offers came only from the meta agent (which needs its model) after a Bee change.
+    `voice.offers ask` makes one for an approved person, under the same rules (one question at a time, one offer
+    per Bee conversation); its notification goes out from voice/outbound.py's loop, like any held one."""
+    from voice import offers as offers_module
+
+    me = signed_in(tmp_path)
+    data = str(me.people.root)
+    offers_module.main(["--data", data, "ask", "matt", "--topic", "Planned a Saturday hike",
+                        "--reason", "Dana asked about Saturday.", "--conversation", "77", "--at", "20:30"])
+    made = json.loads(capsys.readouterr().out)
+    offer = OfferStore(me.workspace).get(made["id"])
+    assert (offer.state, offer.topic, offer.conversation_ids, offer.reason) == (
+        "asked", "Planned a Saturday hike", [77], "Dana asked about Saturday.")
+    assert offer.suggested_at.split("T")[1].startswith("20:30") and offer.notified_at is None
+    assert [o.id for o in OfferStore(me.workspace).unsent(me.person.now())] == [made["id"]]
+    with pytest.raises(SystemExit, match="not answered"):  # one question at a time
+        offers_module.main(["--data", data, "ask", "matt", "--topic", "Another", "--reason", "r"])
+    with pytest.raises(SystemExit, match="not approved"):
+        offers_module.main(["--data", data, "ask", "ghost", "--topic", "t", "--reason", "r"])
+
+
 def test_the_evening_call_time_has_one_default(tmp_path, monkeypatch):
     """Server review 19: 21:00 was written in the person's settings, in voice/offers.py and, with an undocumented
     CALL_TIME environment setting in front of it, in the meta agent's prompt. The person's setting is the rule;
