@@ -113,14 +113,18 @@ def test_a_first_request_that_fails_is_answered_by_glm_and_so_is_the_rest_of_the
     assert [m.metadata.model_name for m in metrics] == ["zai.glm-5"] * 2
 
 
-def test_a_first_request_claude_declines_before_a_word_is_answered_by_glm():
+def test_a_first_request_claude_declines_is_said_as_the_line_and_the_call_stays_with_claude():
+    """A decline is a safety decision, not an outage: it is never handed to another model to answer (Claude Haiku
+    5.5 has no fallback model for its declines). The caller hears the one short line, as with any decline."""
     async def main():
-        client = FakeAnthropic([[{"type": "refusal"}]])
+        client = FakeAnthropic([[{"type": "refusal"}], say("Sure, what else?")])
         model, choices, built = standing_by(client)
-        return await turn(model, "안녕하세요", new_ctx()), choices
+        ctx = new_ctx()
+        return [await turn(model, "something it declines", ctx), await turn(model, "Never mind.", ctx)], choices, built
 
-    said, choices = asyncio.run(main())
-    assert said == GLM_LINE and choices[0][0] == "zai.glm-5" and "declined" in choices[0][1]
+    said, choices, built = asyncio.run(main())
+    assert said == ["Sorry, I can't help with that one.", "Sure, what else?"]
+    assert choices == [("claude-haiku-5-5", None)] and built == []  # GLM 5 was never asked
 
 
 def test_after_the_first_answer_a_failure_is_a_failed_turn_never_a_switch():
