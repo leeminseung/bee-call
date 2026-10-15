@@ -16,7 +16,8 @@ Stage directions too (AsideFilter): in the user's call of 2026-10-15 14:22, afte
 its whole reply as "(사용자가 잠시 멈춤)" and the voice read it out. Every word the AI writes is spoken, so an aside
 that stands as its own sentence, wrapped in (), [] or *...* (or their full-width forms), is dropped: one at the
 start of the reply or of a sentence, followed by a space, a line break or the end. A parenthesis inside a
-sentence, as in "AWS(아마존 웹 서비스)", stays. A reply that is only an aside says nothing.
+sentence, as in "AWS(아마존 웹 서비스)", stays. A reply that is only an aside says nothing at all: no space or
+line break comes out before the first word.
 """
 
 import re
@@ -119,13 +120,23 @@ class SpeechFilter:
         self._open: list[str] = []  # names of tags opened and not yet closed
         self._held = ""  # text held back: a possible tag start, or a tag still waiting for its ">"
         self._asides = AsideFilter(self._drop)
+        self._spoke = False  # whether a word has come out yet
 
     def feed(self, text: str) -> str:
-        return self._asides.feed(self._tags(text))
+        return self._words(self._asides.feed(self._tags(text)))
 
     def flush(self) -> str:
         """Call at the end of the reply: returns any text still held back that is speech."""
-        return self._asides.feed(self._flush_tags()) + self._asides.flush()
+        return self._words(self._asides.feed(self._flush_tags()) + self._asides.flush())
+
+    def _words(self, text: str) -> str:
+        # Nothing comes out before the first word: a reply that says nothing (only an aside, a tag, or a line break
+        # around them) leaves no turn behind. LiveKit would file "\n" in the history, and Bedrock refuses a blank
+        # text block in every request after it.
+        if not self._spoke:
+            text = text.lstrip()
+            self._spoke = bool(text)
+        return text
 
     def _tags(self, text: str) -> str:
         text, self._held = self._held + text, ""

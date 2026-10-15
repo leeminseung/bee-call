@@ -94,3 +94,60 @@ def test_the_call_ai_in_a_livekit_session_logs_each_request_and_never_speaks_an_
     events = [json.loads(line) for line in (rec.dir / "events.jsonl").read_text().splitlines()]
     assert [e["type"] for e in events].count("turn_timing") == 2
 
+
+
+def test_a_reply_that_is_only_a_stage_direction_leaves_no_blank_turn_for_bedrock(tmp_path):
+    """GLM 5 on Bedrock (no Claude adapter, no tags): a reply of "(사용자가 잠시 멈춤)" and a line break leaves no
+    assistant turn behind. A turn of "\n" would go into every later Bedrock request, which refuses a blank text
+    block, so every later reply of the call would fail."""
+    import uuid
+    from types import SimpleNamespace
+    from typing import Any
+
+    from livekit.agents import llm
+    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+
+    from tests.helpers import seoul_now
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    replies = [["(사용자가 잠시 멈춤)", ".\n"], ["\n", "Sure. ", "What should we look at?"]]
+
+    class Plain(llm.LLM):
+        """Streams scripted replies as plain text, the way the Converse plugin does for GLM 5."""
+
+        @property
+        def model(self) -> str:
+            return "plain"
+
+        def chat(self, *, chat_ctx: llm.ChatContext, tools: list[llm.Tool] | None = None,
+                 conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+                 parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+                 tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+                 extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN) -> llm.LLMStream:
+            return PlainStream(self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options)
+
+    class PlainStream(llm.LLMStream):
+        async def _run(self) -> None:
+            chunk_id = uuid.uuid4().hex
+            for piece in replies.pop(0):
+                self._event_ch.send_nowait(llm.ChatChunk(id=chunk_id, delta=llm.ChoiceDelta(role="assistant",
+                                                                                             content=piece)))
+
+    async def main():
+        rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+        coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
+        async with AgentSession(llm=Plain()) as session:
+            await session.start(coordinator)
+            await session.run(user_input="어")
+            await session.run(user_input="Let's plan tomorrow")
+            history = session.history.copy()
+        rec.close()
+        return history
+
+    history = asyncio.run(main())
+    said = [i.text_content for i in history.items if getattr(i, "role", None) == "assistant"]
+    assert said == ["Sure. What should we look at?"]
+    messages, _ = history.to_provider_format("aws")
+    blocks = [b["text"] for m in messages for b in m["content"] if "text" in b]
+    assert blocks and all(text.strip() for text in blocks)

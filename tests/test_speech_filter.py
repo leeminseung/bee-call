@@ -47,10 +47,13 @@ def test_text_without_markup_is_unchanged():
 # ---------- stage directions (the user's 14:22 call of 2026-10-15) ----------
 
 def test_a_reply_that_is_only_a_stage_direction_says_nothing():
-    """The user said only "어"; GLM 5 wrote its whole reply as "(사용자가 잠시 멈춤)" and the voice read it out."""
-    for chunks in (["(사용자가 잠시 멈춤)"], ["(사용자가", " 잠시 멈춤)"], ["(사용자가 잠시 멈춤).\n"]):
+    """The user said only "어"; GLM 5 wrote its whole reply as "(사용자가 잠시 멈춤)" and the voice read it out.
+    Nothing at all comes out, not even the space or line break around it: LiveKit would file a reply of "\n" in the
+    history, and Bedrock refuses a blank text block in every request after it."""
+    for chunks in (["(사용자가 잠시 멈춤)"], ["(사용자가", " 잠시 멈춤)"], ["(사용자가 잠시 멈춤).\n"],
+                   ["(사용자가 잠시 멈춤)", ".\n"], ["\n(pauses)\n"], [" (침묵)"]):
         said, f = speak(chunks)
-        assert said.strip() == "" and "사용자가 잠시 멈춤" in f.dropped, chunks
+        assert said == "" and f.dropped, chunks
 
 
 def test_an_english_pause_in_brackets_is_not_read_out():
