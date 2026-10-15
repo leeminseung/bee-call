@@ -10,7 +10,8 @@ Inline functions (run here, on this Mac):
   relay_to_user(text)                  one or two sentences for the voice to tell the user
   web_search(question)                 Nova Web Grounding (us-east-1): an answer with sources
   save_file(name, content)             a text result file in the job folder (report.md, a CSV table)
-  save_chart(name, title, kind, ...)   a chart from numbers; this Mac draws it as SVG (worker/chart.py)
+  save_chart(name, title, kind, ...)   a chart from numbers; this Mac draws it as SVG, and the same drawing as PNG
+                                       for the app (worker/chart.py)
 Built-in tool (run by AWS): AgentCore Code Interpreter, for calculations, except for models that
 fail with it (NO_CODE_INTERPRETER).
 
@@ -39,7 +40,7 @@ from voice.aws_session import aws_session
 from voice.costs import SpendLog
 from voice.language import LANGUAGES
 from voice.people import data_root
-from worker.chart import render_svg
+from worker.chart import render_svg, svg_to_png
 from worker.runner import Job
 from worker.web_search import LONGEST_S as WEB_SEARCH_LONGEST_S
 from worker.web_search import SearchResult, web_search
@@ -447,6 +448,10 @@ class HarnessWorker:
             svg = render_svg(str(args.get("title", "")), str(args.get("kind", "line")), args.get("series") or [],
                              str(args.get("x_label", "")), str(args.get("y_label", "")))
             (job.dir / name).write_text(svg)
+            try:  # the picture the app shows (contract 2.4); without it the chart is listed as a plain file
+                (job.dir / name).with_suffix(".png").write_bytes(svg_to_png(svg))
+            except Exception:
+                log.exception("could not draw %s as PNG", name)
             return f"Saved {name}. Mention it in the report.", "success"
         log.warning("worker called an unknown tool %r", use.name)
         return f"There is no tool named {use.name}. Use one of: {', '.join(INLINE_FUNCTIONS)}.", "error"

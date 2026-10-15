@@ -27,6 +27,7 @@ from typing import Any
 from beelink.planner import OFFERS_DIR, OUTBOUND_LOG
 from voice.call_folders import CALL_ID, EVENTS, call_ids, read_events, session_id
 from voice.offers import topic_line
+from worker.chart import svg_title
 
 LIVE_S = 120  # no new line or file refresh for this long, and no end: the call no longer reads as live
 RECENT_S = 600  # an ended call is still announced by /changes on connect for this long (contract section 3)
@@ -66,7 +67,7 @@ class BadRequest(ValueError):
 @dataclass
 class JobFolder:
     names: set[str]  # the files in jobs/<NN>/
-    chart_titles: dict[str, str]  # chart file -> its title, from the job's own events.jsonl
+    chart_titles: dict[str, str]  # chart file -> its title, kept in the chart's SVG
 
 
 @dataclass
@@ -125,9 +126,16 @@ def read_record(folder: Path) -> Record:
             names = {p.name for p in job.iterdir() if p.is_file() and not p.name.startswith(".")}
         except OSError:
             names = set()
-        titles = {str(e["file"]): e["title"].strip() for e in read_events(job / "events.jsonl")
-                  if e.get("type") == "chart" and isinstance(e.get("file"), str) and isinstance(e.get("title"), str)
-                  and e["title"].strip()}
+        titles = {}
+        for name in names:
+            if name.lower().endswith(".svg"):  # a chart the worker drew keeps its title in its SVG (worker/chart.py)
+                try:
+                    with (job / name).open(errors="replace") as f:
+                        title = svg_title(f.read(4096))
+                except OSError:
+                    title = None
+                if title:
+                    titles[name] = title
         jobs[job.name] = JobFolder(names, titles)
     writes = read_events(folder / WRITES) if (folder / WRITES).exists() else None
     try:

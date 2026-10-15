@@ -281,11 +281,10 @@ def test_a_finished_job_lists_its_files_charts_first_and_never_its_bookkeeping(t
                                CLOSED, ENDED])
     job = folder / "jobs" / "01"
     job.mkdir(parents=True)
-    for name in ("b.csv", "a.tsv", "notes.txt", "old.svg", "photo.png", "price.png", "price.svg", "report.md",
-                 "usage.json", "request.md"):
+    for name in ("b.csv", "a.tsv", "notes.txt", "old.svg", "photo.png", "price.png", "report.md", "usage.json",
+                 "request.md"):
         (job / name).write_text("x")
-    (job / "events.jsonl").write_text(json.dumps({"type": "chart", "file": "price.svg", "image": "price.png",
-                                                  "title": "Prices"}) + "\n")
+    (job / "price.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><title>Prices</title></svg>')
     (item,) = [i for i in view(tmp_path)["items"] if i["type"] == "job"]
     assert [(f["name"], f["kind"], f["title"], f["image_url"]) for f in item["files"]] == [
         ("photo.png", "chart", None, "/calls/call-matt-1/files/jobs/01/photo.png"),

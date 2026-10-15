@@ -1,5 +1,4 @@
 {"at": 1791948380.0, "type": "started", "task": "Saturday's hourly chance of rain near Bukhansan (Seoul), with a chart by hour, and whether a morning hike stays dry. Bring back a one-line answer.", "title": "토요일 북한산 시간별 비 예보", "language": "ko"}
 {"at": 1791948390.0, "type": "progress", "text": "기상청 시간별 예보 읽는 중"}
-{"at": 1791948417.0, "type": "chart", "file": "rain-chart.svg", "image": "rain-chart.png", "title": "토요일 시간별 강수 확률(%)"}
 {"at": 1791948419.0, "type": "relay", "text": "오전엔 20% 아래고, 오후 2시부터 60%로 올라요."}
 {"at": 1791948420.0, "type": "done", "summary": "토요일 오전에는 북한산 쪽 강수 확률이 20%를 넘지 않아요. 오후 2시부터 60%로 오르니 아침 일찍 출발해서 점심 전에 내려오면 괜찮아요.", "files": ["jobs/01/rain-chart.png", "jobs/01/rain-chart.svg", "jobs/01/usage.json"]}
