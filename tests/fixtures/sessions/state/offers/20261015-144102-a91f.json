@@ -1,0 +1,31 @@
+{
+ "id": "20261015-144102-a91f",
+ "state": "asked",
+ "reason": "오늘 회의에서 토요일 데모 촬영 일정을 정했는데, 장소와 준비물이 아직 정해지지 않았어요.",
+ "topic": "오늘 회의에서 정한 데모 촬영 일정",
+ "kind": "conversation",
+ "source": "bee",
+ "suggested_at": "2026-10-15T20:30:00+09:00",
+ "call_at": null,
+ "expires_at": "2026-10-15T20:30:00+09:00",
+ "inbox": null,
+ "plan": null,
+ "conversation_ids": [
+  10790011
+ ],
+ "continue_from": null,
+ "room": null,
+ "claim": null,
+ "error": null,
+ "notified_at": "2026-10-15T14:41:03+09:00",
+ "notice": "sent",
+ "not_placed": null,
+ "told_at": null,
+ "soon_told_at": null,
+ "history": [
+  {
+   "at": "2026-10-15T14:41:02+09:00",
+   "state": "asked"
+  }
+ ]
+}

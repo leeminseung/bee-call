@@ -1,0 +1,8 @@
+{"t": 0.0, "room": "call-minseung-20261014-214502", "started_at": "2026-10-14T21:45:06+09:00", "type": "call_started"}
+{"t": 0.004, "llm": "anthropic", "model": "claude-haiku-5-5", "call_model": "haiku", "language": "ko", "voice": {"provider": "elevenlabs", "voice": "5n5gqmaQi9Ewevrz7bOS", "model": "eleven_v4_turbo"}, "person": "minseung", "audio_on_server": true, "audio_on_phone": false, "type": "coordinator"}
+{"t": 0.005, "direction": "inbound", "topic": null, "reason": null, "continue_from": null, "type": "call"}
+{"t": 1.1, "after_s": 4.0, "type": "picked_up"}
+{"t": 5.6, "role": "assistant", "text": "네, Bee Call이에요. 어떤 이야기 해 볼까요?", "interrupted": false, "metrics": {"started_speaking_at": 1791981909.0, "stopped_speaking_at": 1791981911.6, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 10.0, "seconds": 6.0, "model": "zai.glm-5", "bee": true, "reads": [{"type": "day", "date": "2026-10-14"}], "note": null, "opening": "네, Bee Call이에요. 어떤 이야기 해 볼까요?", "error": "the note was not ready in time", "input_tokens": 3900, "output_tokens": 0, "type": "call_prep"}
+{"t": 16.0, "reason": "CloseReason.PARTICIPANT_DISCONNECTED", "type": "session_closed"}
+{"t": 16.4, "user_audio_skipped_frames": 0, "ai_audio_skipped_frames": 0, "type": "call_ended"}

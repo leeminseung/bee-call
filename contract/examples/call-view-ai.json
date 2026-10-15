@@ -9,35 +9,107 @@
     "state": "ended",
     "duration_s": 124,
     "continues": null,
-    "marks": {"report": false, "table": false, "chart": false, "bee_writes": 0}
+    "marks": {
+      "report": false,
+      "table": false,
+      "chart": false,
+      "bee_writes": 0
+    }
   },
   "why_calling": {
     "reason": "새 음성 메모에서 토요일 촬영 장소를 아직 못 정했다고 하셨어요. 성현 님과 나눈 이야기로 후보를 같이 추려 보려고 전화했어요.",
     "conversation": {
       "summary": "성현 님과 토요일 데모 촬영 시간과 장소를 이야기함",
       "quotes": [
-        {"speaker": "other", "text": "토요일 오전 10시 괜찮아? 장소는 네가 정해 줘.", "at": "2026-10-13T18:41:00+09:00"},
-        {"speaker": "person", "text": "응, 10시 좋아. 장소는 내일까지 알려 줄게.", "at": "2026-10-13T18:41:00+09:00"}
+        {
+          "speaker": "other",
+          "text": "토요일 오전 10시 괜찮아? 장소는 네가 정해 줘.",
+          "at": "2026-10-13T18:41:00+09:00"
+        },
+        {
+          "speaker": "person",
+          "text": "응, 10시 좋아. 장소는 내일까지 알려 줄게.",
+          "at": "2026-10-13T18:41:00+09:00"
+        }
       ]
     }
   },
   "prep": {
     "note": "10월 13일에 성현 님과 토요일 오전 10시 촬영을 정했고, 장소는 민승 님이 정하기로 했어요. 새 음성 메모에서 장소 후보로 한강공원과 학교 스튜디오를 말했어요.",
     "looked_up": [
-      {"type": "conversation", "summary": "성현 님과의 대화", "at": "2026-10-13T18:40:00+09:00"},
-      {"type": "search", "query": "토요일 촬영 장소"}
+      {
+        "type": "conversation",
+        "summary": "성현 님과 토요일 데모 촬영 시간과 장소를 이야기함",
+        "at": "2026-10-13T18:40:00+09:00"
+      },
+      {
+        "type": "search",
+        "query": "토요일 촬영 장소"
+      }
     ],
     "from_bee": true
   },
   "items": [
-    {"type": "speech", "id": "speech-8", "at": "2026-10-14T18:02:12+09:00", "speaker": "ai", "text": "안녕하세요, 민승 님. 새 음성 메모 때문에 전화드렸어요. 잠깐 통화 괜찮으세요?", "interrupted": false},
-    {"type": "speech", "id": "speech-13", "at": "2026-10-14T18:02:20+09:00", "speaker": "person", "text": "네, 괜찮아요.", "interrupted": false},
-    {"type": "speech", "id": "speech-18", "at": "2026-10-14T18:02:24+09:00", "speaker": "ai", "text": "토요일 촬영 장소를 아직 못 정하셨다고 하셨죠. 메모에서 한강공원과 학교 스튜디오를 말씀하셨는데,", "interrupted": true},
-    {"type": "speech", "id": "speech-24", "at": "2026-10-14T18:02:38+09:00", "speaker": "person", "text": "날씨가 걱정돼서 학교 스튜디오가 나을 것 같아요. 그런데 토요일에 문을 여는지 모르겠어요.", "interrupted": false},
-    {"type": "speech", "id": "speech-31", "at": "2026-10-14T18:03:00+09:00", "speaker": "ai", "text": "그럼 내일 성현 님과 이야기하기 전에 스튜디오가 토요일에 여는지 먼저 확인해 보세요.", "interrupted": false},
-    {"type": "speech", "id": "speech-38", "at": "2026-10-14T18:03:40+09:00", "speaker": "person", "text": "네, 그럴게요. 고마워요.", "interrupted": false},
-    {"type": "speech", "id": "speech-43", "at": "2026-10-14T18:03:46+09:00", "speaker": "ai", "text": "네, 좋은 저녁 보내세요.", "interrupted": false}
+    {
+      "type": "speech",
+      "id": "speech-8",
+      "at": "2026-10-14T18:02:12+09:00",
+      "speaker": "ai",
+      "text": "안녕하세요, 민승 님. 새 음성 메모 때문에 전화드렸어요. 잠깐 통화 괜찮으세요?",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-13",
+      "at": "2026-10-14T18:02:20+09:00",
+      "speaker": "person",
+      "text": "네, 괜찮아요.",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-18",
+      "at": "2026-10-14T18:02:24+09:00",
+      "speaker": "ai",
+      "text": "토요일 촬영 장소를 아직 못 정하셨다고 하셨죠. 메모에서 한강공원과 학교 스튜디오를 말씀하셨는데,",
+      "interrupted": true
+    },
+    {
+      "type": "speech",
+      "id": "speech-24",
+      "at": "2026-10-14T18:02:38+09:00",
+      "speaker": "person",
+      "text": "날씨가 걱정돼서 학교 스튜디오가 나을 것 같아요. 그런데 토요일에 문을 여는지 모르겠어요.",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-31",
+      "at": "2026-10-14T18:03:00+09:00",
+      "speaker": "ai",
+      "text": "그럼 내일 성현 님과 이야기하기 전에 스튜디오가 토요일에 여는지 먼저 확인해 보세요.",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-38",
+      "at": "2026-10-14T18:03:40+09:00",
+      "speaker": "person",
+      "text": "네, 그럴게요. 고마워요.",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-43",
+      "at": "2026-10-14T18:03:46+09:00",
+      "speaker": "ai",
+      "text": "네, 좋은 저녁 보내세요.",
+      "interrupted": false
+    }
   ],
-  "captions_included": {"person": 3, "ai": 4},
-  "version": "9d76748e784b51b8"
+  "captions_included": {
+    "person": 3,
+    "ai": 4
+  },
+  "version": "714de010d848820d"
 }

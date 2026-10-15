@@ -1,0 +1,19 @@
+{"t": 0.0, "room": "call-minseung-20261014-122604", "started_at": "2026-10-14T12:26:08+09:00", "type": "call_started"}
+{"t": 0.004, "llm": "anthropic", "model": "claude-haiku-5-5", "call_model": "haiku", "language": "ko", "voice": {"provider": "elevenlabs", "voice": "5n5gqmaQi9Ewevrz7bOS", "model": "eleven_v4_turbo"}, "person": "minseung", "audio_on_server": true, "audio_on_phone": false, "type": "coordinator"}
+{"t": 0.005, "direction": "inbound", "topic": null, "reason": null, "continue_from": null, "type": "call"}
+{"t": 1.0, "after_s": 3.9, "type": "picked_up"}
+{"t": 5.5, "role": "assistant", "text": "네, Bee Call이에요. 어떤 이야기 해 볼까요?", "interrupted": false, "metrics": {"started_speaking_at": 1791948371.0, "stopped_speaking_at": 1791948373.5, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 8.0, "text": "이번 주 비 온다던데, 토요일에 북한산 가도 괜찮을까요? 시간별로 봐 주세요.", "type": "user_transcript"}
+{"t": 8.3, "role": "user", "text": "이번 주 비 온다던데, 토요일에 북한산 가도 괜찮을까요? 시간별로 봐 주세요.", "interrupted": false, "metrics": {"started_speaking_at": 1791948373.5, "stopped_speaking_at": 1791948375.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
+{"t": 12.0, "job_id": "01", "task": "Saturday's hourly chance of rain near Bukhansan (Seoul), with a chart by hour, and whether a morning hike stays dry. Bring back a one-line answer.", "title": "토요일 북한산 시간별 비 예보", "type": "job_started"}
+{"t": 12.02, "name": "delegate", "arguments": "{\"task\": \"Saturday's hourly chance of rain near Bukhansan (Seoul), with a chart by hour, and whether a morning hike stays dry. Bring back a one-line answer.\", \"title\": \"토요일 북한산 시간별 비 예보\"}", "output": "Job 01 is running.", "type": "tool"}
+{"t": 14.6, "role": "assistant", "text": "토요일 북한산 시간별 비 예보를 찾아볼게요. 1분 정도 걸려요.", "interrupted": false, "metrics": {"started_speaking_at": 1791948379.0, "stopped_speaking_at": 1791948382.6, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 22.0, "job_id": "01", "text": "기상청 시간별 예보 읽는 중", "type": "job_progress"}
+{"t": 51.0, "job_id": "01", "text": "오전엔 20% 아래고, 오후 2시부터 60%로 올라요.", "type": "relay"}
+{"t": 52.0, "job_id": "01", "summary": "토요일 오전에는 북한산 쪽 강수 확률이 20%를 넘지 않아요. 오후 2시부터 60%로 오르니 아침 일찍 출발해서 점심 전에 내려오면 괜찮아요.", "files": ["jobs/01/rain-chart.png", "jobs/01/rain-chart.svg", "jobs/01/usage.json"], "type": "job_done"}
+{"t": 57.0, "role": "assistant", "text": "토요일 오전엔 비 올 확률이 20% 아래예요. 오후 2시부터 60%로 올라가니 아침 일찍 다녀오세요.", "interrupted": false, "metrics": {"started_speaking_at": 1791948421.0, "stopped_speaking_at": 1791948425.0, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 58.0, "text": "좋아요, 고마워요.", "type": "user_transcript"}
+{"t": 58.3, "role": "user", "text": "좋아요, 고마워요.", "interrupted": false, "metrics": {"started_speaking_at": 1791948423.5, "stopped_speaking_at": 1791948425.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
+{"t": 60.0, "reason": "CloseReason.PARTICIPANT_DISCONNECTED", "type": "session_closed"}
+{"t": 60.5, "user_audio_skipped_frames": 0, "ai_audio_skipped_frames": 0, "type": "call_ended"}
+{"t": 61.7, "title": "이번 주 비 소식, 토요일 북한산 등산은 괜찮을지", "model": "claude-haiku-5-5", "input_tokens": 760, "output_tokens": 22, "seconds": 1.0, "type": "call_titled"}
