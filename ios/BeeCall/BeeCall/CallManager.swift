@@ -22,6 +22,9 @@ final class CallManager: NSObject {
     private(set) var isMuted = false // as CallKit last performed it, from this app's screen or its own
     private(set) var isSpeakerOn = false
     private(set) var connectedAt: Date? // when the AI was there: the call screen's clock runs from here
+    /// The room of the call that is on, once known: from the answer for Bee Call's own call, from the pass for a
+    /// call the person starts. The thread shows that call live (contract section 3).
+    private(set) var ownRoom: String?
     let liveKit: LiveKitClient // the call screen shows its captions and voice levels
 
     /// The call's room: `liveKit` in the app, a stand-in in tests.
@@ -367,8 +370,9 @@ final class CallManager: NSObject {
                     await beforeAnswering()
                     try Task.checkCancellation() // the call ended while the settings went out
                 }
-                _ = try await room.connect(answering: roomName, continuing: roomName == nil ? earlierCall : nil)
+                let joined = try await room.connect(answering: roomName, continuing: roomName == nil ? earlierCall : nil)
                 try Task.checkCancellation() // the call ended while we were connecting
+                ownRoom = joined
                 // Only now: a recording started after a hang-up ran on into the next call's file (review finding 15).
                 phoneRecordingProblem = room.recordOnPhoneIfWanted()
                 // Both ways, the call screen says "Connected" once the AI is there (agentPickedUp), which may
@@ -453,6 +457,7 @@ final class CallManager: NSObject {
         if isSpeakerOn { try? speaker(false) } // the loudspeaker is let go with the call
         isSpeakerOn = false
         connectedAt = nil
+        ownRoom = nil
         status = message
     }
 }
@@ -515,6 +520,7 @@ extension CallManager: CXProviderDelegate {
         ringTimeout = nil
         action.fulfill() // CallKit activates the audio session after this.
         connectedAt = .now // CallKit counts the call from its answer, and so does the call screen's clock
+        ownRoom = room
         status = "Answering…"
         join(action.callUUID, answering: room)
     }

@@ -280,6 +280,26 @@ final class CallLifecycleTests: XCTestCase {
         XCTAssertEqual(calls.connectedAt, answered, "the AI's arrival does not restart it")
     }
 
+    /// The thread shows the call that is on by its room (contract section 3): known from the pass for a call the
+    /// person starts, from the answer for Bee Call's own call, and forgotten when the call ends.
+    @MainActor func testTheCallsRoomIsKnownOnceItIsJoinedOrAnswered() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room)
+        let id = try await start(calls, callKit)
+        XCTAssertNil(calls.ownRoom)
+        await waitUntil("the room is joined") { calls.status == "Ringing…" }
+        XCTAssertEqual(calls.ownRoom, "call-matt-20261015-183000")
+        calls.perform(CXEndCallAction(call: id))
+        await waitUntil("the call has ended") { !calls.isInCall }
+        XCTAssertNil(calls.ownRoom)
+
+        calls.ringPhone(for: ring("call-matt-20261015-210000"))
+        await waitUntil("the call rings") { callKit.incoming.count == 1 }
+        await waitUntil("the ring is reported") { calls.isRinging }
+        XCTAssertNil(calls.ownRoom, "not while it rings")
+        calls.perform(CXAnswerCallAction(call: try XCTUnwrap(callKit.incoming.first?.call)))
+        XCTAssertEqual(calls.ownRoom, "call-matt-20261015-210000")
+    }
+
     /// The call screen's clock runs from the moment the AI is there.
     @MainActor func testTheCallsClockStartsWhenTheAIIsThereAndStopsWithTheCall() async throws {
         let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room)
