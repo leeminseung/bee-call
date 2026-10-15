@@ -79,6 +79,9 @@ struct CallScreen: View {
                 .controlSize(.large)
                 .tint(button == .call ? .green : .red)
                 .disabled(calls.isEnding)
+                .background {
+                    if calls.isInCall { VoiceGlow(indicator: calls.liveKit.voices.indicator) }
+                }
             }
         }
         .padding()
@@ -163,5 +166,25 @@ enum CallButton: Equatable {
         case .call: "Call"
         case .end: "End"
         }
+    }
+}
+
+/// The glow behind the main button during a call, following the live voice: blue while the person speaks, Bee
+/// yellow while the AI does, nothing in silence (VoiceIndicator.swift). With Reduce Motion on, only its opacity
+/// follows the voice, without animation.
+private struct VoiceGlow: View {
+    let indicator: VoiceIndicator
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let look = VoiceGlowLook(indicator, reduceMotion: reduceMotion)
+        Capsule()
+            .fill(look.color)
+            .scaleEffect(look.scale)
+            .blur(radius: look.blur)
+            .opacity(look.opacity)
+            .animation(look.animates ? .easeOut(duration: 0.12) : nil, value: look)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
