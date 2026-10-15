@@ -40,6 +40,8 @@ POST /push  {"token": hex, "environment": ...}
                                          the app's token for plain notifications (the offers that ask first),
                                          kept the same way
 GET  /offers                             offers still waiting for an answer or a call
+     /offers carries its body's version as ETag; with If-None-Match the same version answers 304 and no body
+     (contract section 0)
 POST /offers/<id>  {"choice": "now"|"later"|"decline"}
                                          the user's answer; voice/outbound.py places the call. "decline" also
                                          calls off a booked call until its room is being made. 404 unknown
@@ -72,7 +74,7 @@ from beelink import cli as bee
 from beelink.clock import parse_time
 from beelink.planner import OUTBOUND_LOG
 from meta.session import add_event
-from voice import apple_signin, voip_push
+from voice import apple_signin, call_view, voip_push
 from voice.web_headers import plain_server_name
 from voice.continuation import session_dir
 from voice.costs import day_budget
@@ -354,10 +356,22 @@ async def alert_token(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
+def versioned(request: web.Request, body: dict) -> web.Response:
+    """A body with its version as its ETag; 304 and no body when If-None-Match names that version already."""
+    tag = f'"{body["version"]}"'
+    asked = {part.strip().removeprefix("W/").strip('"') for part in request.headers.get("If-None-Match", "").split(",")}
+    if body["version"] in asked or "*" in asked:
+        return web.Response(status=304, headers={"ETag": tag})
+    return web.json_response(body, headers={"ETag": tag}, dumps=lambda data: json.dumps(data, ensure_ascii=False))
+
+
 async def list_offers(request: web.Request) -> web.Response:
     """The offers still waiting for an answer or a call, for the app's first screen."""
     store = OfferStore(workspace(request))
-    return web.json_response({"offers": [o.view() for o in store.open(someone(request).now())]})
+    settings = request.app[PEOPLE].settings(person(request))
+    body = {"offers": [o.view(settings.language, settings.zone()) for o in store.open(someone(request).now())]}
+    body["version"] = call_view.version_of(body)
+    return versioned(request, body)
 
 
 async def answer_offer(request: web.Request) -> web.Response:
@@ -381,7 +395,9 @@ async def answer_offer(request: web.Request) -> web.Response:
         raise web.HTTPConflict(text=f"{exc}\n")
     log.info("offer %s of %s: %s -> %s", offer.id, person(request), choice, offer.state)
     add_event(workspace(request), "offer_answered", now=now, offer=offer.id, choice=choice, topic=offer.topic)
-    return web.json_response({"offer": offer.view()})
+    settings = request.app[PEOPLE].settings(person(request))
+    return web.json_response({"offer": offer.view(settings.language, settings.zone())},
+                             dumps=lambda data: json.dumps(data, ensure_ascii=False))
 
 
 # ---------- Bee ----------

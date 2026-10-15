@@ -29,7 +29,7 @@ import secrets
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -101,15 +101,24 @@ class Offer:
         value = getattr(self, name)
         return parse_time(value) if value else None
 
-    def view(self) -> dict[str, Any]:
-        """What the app shows: the times also as epochs, for a phone in another time zone. The state is what the
-        user can do: the app offers "Call off" for "booked", so a booked call a runner already prepares is still
-        "booked" until its room is being made; from then on, like a "Call me now" being prepared, it is "calling"."""
-        data = {k: getattr(self, k) for k in ("id", "state", "topic", "kind", "source", "suggested_at", "call_at")}
+    def view(self, language: str = "en", zone: tzinfo | None = None) -> dict[str, Any]:
+        """What the app shows (contract section 4). The state is what the user can do: the app offers "Call off" for
+        "booked", so a booked call a runner already prepares is still "booked" until its room is being made; from
+        then on, like a "Call me now" ("now") being prepared, it is "calling". The topic is never empty: without one
+        of its own it is its notification's line in the person's `language`. Times carry the offset of the person's
+        time zone (`zone`). The epochs, kind and source are for app builds from before D."""
+        state = {"now": "calling", "placing": "calling"}.get(self.state, self.state)
         if self.state == "calling" and booked_call(self):
-            data["state"] = "booked"
-        elif self.state == "placing":
-            data["state"] = "calling"
+            state = "booked"
+        created = parse_time(self.history[0]["at"]) if self.history else datetime.strptime(
+            self.id[:15], "%Y%m%d-%H%M%S").astimezone()
+
+        def shown(moment: datetime | None) -> str | None:
+            return None if moment is None else moment.astimezone(zone).isoformat(timespec="seconds")
+
+        data = {"id": self.id, "state": state, "topic": topic_line(self.topic, self.kind, language),
+                "kind": self.kind, "source": self.source, "created_at": shown(created),
+                "suggested_at": shown(self.at("suggested_at")), "call_at": shown(self.at("call_at"))}
         for name in ("suggested_at", "call_at"):
             moment = self.at(name)
             data[name.replace("_at", "_epoch")] = int(moment.timestamp()) if moment else None

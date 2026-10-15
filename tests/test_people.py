@@ -351,7 +351,7 @@ def test_people_see_only_their_own_offers_tokens_and_calls(tmp_path):
             return (listed, answer.status, push.status, others_room.status, own_room.status, continued.status, new)
 
     listed, answer, push, others_room, own_room, continued, new = asyncio.run(main())
-    assert listed == {"offers": []} and answer == 404  # matt's offer is not there for jiwoo
+    assert listed["offers"] == [] and answer == 404  # matt's offer is not there for jiwoo
     assert push == 204 and voip_push.load_device_token(matt.person, "alert") is None
     assert voip_push.load_device_token(matt.people.person("jiwoo"), "alert")["environment"] == "production"
     assert (others_room, own_room, continued) == (400, 200, 400)
