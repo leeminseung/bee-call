@@ -77,7 +77,7 @@ extension OfferCenter.Offer {
         }
         let date = daysAway == 0 ? "today" : daysAway == 1 ? "tomorrow"
             : "\(Self.weekdays[weekday - 1]), \(Self.months[month - 1]) \(day)"
-        return "\(date), \(clock) \(hour < 12 ? "AM" : "PM")"
+        return "\(date), \(clock)\u{00A0}\(hour < 12 ? "AM" : "PM")" // "7:00 PM" never breaks across lines
     }
 
     private static let koreanWeekdays = ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"]

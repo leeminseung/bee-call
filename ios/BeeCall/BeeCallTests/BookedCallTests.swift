@@ -38,26 +38,26 @@ final class BookedCallTests: XCTestCase {
     @MainActor func testTheRowSaysWhatIsBookedAndWhen() {
         let call = booked("2026-10-15T19:00:00+09:00", 1792058400)
         XCTAssertEqual(call.bookedLine(language: "ko", now: now), "오늘 저녁 7:00 전화 예정")
-        XCTAssertEqual(call.bookedLine(language: "en", now: now), "Call booked for today, 7:00 PM")
+        XCTAssertEqual(call.bookedLine(language: "en", now: now), "Call booked for today, 7:00\u{00A0}PM")
     }
 
     @MainActor func testTomorrowAndLaterDays() {
         let tomorrow = booked("2026-10-16T08:30:00+09:00", 1792107000)
         XCTAssertEqual(tomorrow.bookedLine(language: "ko", now: now), "내일 오전 8:30 전화 예정")
-        XCTAssertEqual(tomorrow.bookedLine(language: "en", now: now), "Call booked for tomorrow, 8:30 AM")
+        XCTAssertEqual(tomorrow.bookedLine(language: "en", now: now), "Call booked for tomorrow, 8:30\u{00A0}AM")
         let sunday = booked("2026-10-18T21:00:00+09:00", 1792324800) // a call can be booked up to a week ahead
         XCTAssertEqual(sunday.bookedLine(language: "ko", now: now), "10월 18일 일요일 밤 9:00 전화 예정")
-        XCTAssertEqual(sunday.bookedLine(language: "en", now: now), "Call booked for Sunday, October 18, 9:00 PM")
+        XCTAssertEqual(sunday.bookedLine(language: "en", now: now), "Call booked for Sunday, October 18, 9:00\u{00A0}PM")
     }
 
     /// The Korean times of day are the server's own (voice/offers.py clock_label): 오전, 오후, 저녁, 밤.
     @MainActor func testTimesAroundNoonAndMidnight() {
         let afternoon = booked("2026-10-15T13:05:00+09:00", 1792037100)
         XCTAssertEqual(afternoon.bookedLine(language: "ko", now: now), "오늘 오후 1:05 전화 예정")
-        XCTAssertEqual(afternoon.bookedLine(language: "en", now: now), "Call booked for today, 1:05 PM")
+        XCTAssertEqual(afternoon.bookedLine(language: "en", now: now), "Call booked for today, 1:05\u{00A0}PM")
         let pastMidnight = booked("2026-10-16T00:20:00+09:00", 1792077600)
         XCTAssertEqual(pastMidnight.bookedLine(language: "ko", now: now), "내일 밤 12:20 전화 예정")
-        XCTAssertEqual(pastMidnight.bookedLine(language: "en", now: now), "Call booked for tomorrow, 12:20 AM")
+        XCTAssertEqual(pastMidnight.bookedLine(language: "en", now: now), "Call booked for tomorrow, 12:20\u{00A0}AM")
     }
 
     /// The person's own clock, which the server keeps per person and writes into call_at: a phone set to another
@@ -66,14 +66,14 @@ final class BookedCallTests: XCTestCase {
         let call = booked("2026-10-15T19:00:00+09:00", 1792058400)
         let losAngeles = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
         XCTAssertEqual(call.bookedLine(language: "en", now: now, phoneZone: losAngeles),
-                       "Call booked for today, 7:00 PM")
+                       "Call booked for today, 7:00\u{00A0}PM")
     }
 
     /// An offer stored before the server kept a zone per person carries none: the phone's clock reads it.
     @MainActor func testAnOfferWithoutAZoneIsShownOnThePhonesClock() throws {
         let call = booked("2026-10-15T19:00:00", 1792058400)
         let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
-        XCTAssertEqual(call.bookedLine(language: "en", now: now, phoneZone: utc), "Call booked for today, 10:00 AM")
+        XCTAssertEqual(call.bookedLine(language: "en", now: now, phoneZone: utc), "Call booked for today, 10:00\u{00A0}AM")
     }
 
     @MainActor func testABookedCallWithoutATime() {
@@ -107,7 +107,7 @@ final class BookedCallTests: XCTestCase {
         XCTAssertEqual(OfferCenter.Offer.cancelButton(language: "ko"), "전화 취소")
         XCTAssertEqual(OfferCenter.Offer.cancelButton(language: "en"), "Cancel call")
         XCTAssertEqual(call.cancelQuestion(language: "ko", now: now), "오늘 저녁 7:00 전화를 취소할까요?")
-        XCTAssertEqual(call.cancelQuestion(language: "en", now: now), "Cancel the call for today, 7:00 PM?")
+        XCTAssertEqual(call.cancelQuestion(language: "en", now: now), "Cancel the call for today, 7:00\u{00A0}PM?")
         XCTAssertEqual(OfferCenter.Offer.keepButton(language: "ko"), "그대로 두기")
         XCTAssertEqual(OfferCenter.Offer.keepButton(language: "en"), "Keep the call")
         XCTAssertEqual(booked(nil, nil).cancelQuestion(language: "ko", now: now), "예약된 전화를 취소할까요?")

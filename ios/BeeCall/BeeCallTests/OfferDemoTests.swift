@@ -33,7 +33,7 @@ final class OfferDemoTests: XCTestCase {
                                  noteStatus: { _ in })
         await offers.refresh()
         let call = try XCTUnwrap(offers.open.first)
-        XCTAssertEqual(call.bookedLine(language: "en", now: now), "Call booked for tomorrow, 7:00 PM")
+        XCTAssertEqual(call.bookedLine(language: "en", now: now), "Call booked for tomorrow, 7:00\u{00A0}PM")
         XCTAssertEqual(call.about(language: "en"), "Saturday hike plan")
     }
 }
