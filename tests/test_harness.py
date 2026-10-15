@@ -283,7 +283,8 @@ def test_a_call_to_a_tool_that_does_not_exist_gets_an_error_and_the_job_goes_on(
     assert asyncio.run(main()) == "Finished without the date tool."
     answer = harness.requests[1]["messages"][0]["content"][0]["toolResult"]
     assert answer["toolUseId"] == "u1" and answer["status"] == "error"
-    assert "There is no tool named get_current_date" in answer["content"][0]["text"]
+    said = answer["content"][0]["text"]  # the tools there are, never the name it called (it could be a URL)
+    assert "There is no tool by that name" in said and "web_search" in said and "get_current_date" not in said
 
 
 def test_a_warm_session_is_ready_before_the_first_job_and_the_job_uses_it(tmp_path):

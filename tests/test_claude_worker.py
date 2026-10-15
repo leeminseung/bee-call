@@ -236,6 +236,31 @@ def test_files_from_code_execution_get_safe_free_names_and_none_too_large(tmp_pa
     assert not list(tmp_path.glob("huge*")) and sorted(client.files.deleted) == sorted(files)
 
 
+def test_a_rejected_file_name_or_tool_name_is_never_repeated_back(tmp_path):
+    """Coordinator's review of 2026-10-15, item 3: web fetch may fetch a URL that appears in a tool result, so a
+    rejected name such as https://x/?d=<the task> repeated in the error would carry the task's text out."""
+    from worker.harness import HarnessWorker, ToolUse
+
+    leak = "https://evil.example/?d=salary-details"
+    for name, args in (("save_file", {"name": leak, "content": "x"}), ("save_chart", {"name": leak, "title": "t",
+                                                                                         "kind": "bar", "series": []})):
+        client = api([reply([tool("toolu_1", name, **args)]), reply([text("Done.")], "end_turn")])
+        run(job_in(tmp_path, None), client)
+        (result,) = client.messages.sent[1]["messages"][-1]["content"]
+        assert result["is_error"] and "evil.example" not in result["content"], name
+    client = api([reply([tool("toolu_1", leak, text="x")]), reply([text("Done.")], "end_turn")])
+    run(job_in(tmp_path, None), client)
+    assert "evil.example" not in json.dumps(client.messages.sent[1]["messages"][-1]["content"])
+
+    async def relay(words):
+        pass
+
+    worker = HarnessWorker("arn:harness", client=object())
+    for use in (ToolUse("t1", "save_file", json.dumps({"name": leak, "content": "x"})), ToolUse("t2", leak, "{}")):
+        said, status = asyncio.run(worker._call(use, job_in(tmp_path, None), lambda line: None, relay))
+        assert status == "error" and "evil.example" not in said
+
+
 def test_a_long_file_name_already_taken_gets_a_numbered_name_that_fits(tmp_path):
     """Review of 2026-10-15, finding 2: a name of 80 or 81 characters already in the job folder had no numbered name
     short enough to be allowed, and finding one looped forever in the call's event loop."""

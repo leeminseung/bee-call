@@ -30,7 +30,7 @@ from voice.model_catalog import Choice
 from voice.providers import ToolResult, ToolSpec, Turn, Usage
 from voice.providers import anthropic as anthropic_api
 from worker.runner import Job
-from worker.tools import JOB_TOOLS, MAX_FILE_BYTES, free_name, job_request, use_tool, write_usage
+from worker.tools import JOB_TOOLS, MAX_FILE_BYTES, NO_SUCH_TOOL, free_name, job_request, use_tool, write_usage
 
 log = logging.getLogger("bee-call.worker")
 
@@ -216,7 +216,7 @@ class ClaudeWorker:
             args = block.get("input") if isinstance(block.get("input"), dict) else {}
             if name not in JOB_TOOLS:
                 log.warning("the Claude worker called an unknown tool %r", name)
-                text, ok = f"There is no tool named {name}. Use one of: {', '.join(JOB_TOOLS)}.", False
+                text, ok = NO_SUCH_TOOL.format(tools=", ".join(JOB_TOOLS)), False  # its name never repeated
             else:
                 try:
                     text, ok = await use_tool(name, args, job, progress, relay)

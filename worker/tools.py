@@ -28,6 +28,11 @@ log = logging.getLogger("bee-call.worker")
 
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
 LONGEST_NAME = 81  # what SAFE_NAME allows
+# A rejected name is never repeated back: Anthropic's web fetch may fetch a URL that appears in a tool result, so a
+# "name" such as https://x/?d=<the task> would carry the task's text out (coordinator's review, 2026-10-15).
+NOT_A_NAME = ("Not saved: that is not an allowed file name. Use letters, digits, dots, dashes and underscores, at "
+              "most 81, with no folders, such as report.md or prices.csv.")
+NO_SUCH_TOOL = "There is no tool by that name. Use one of: {tools}."
 RESERVED = {"request.md", "events.jsonl", "usage.json"}  # written by this Mac, never by a worker's model
 MAX_FILE_BYTES = 5_000_000
 
@@ -121,7 +126,7 @@ async def use_tool(name: str, args: dict[str, Any], job: Job, progress: Callable
     if name == "save_file":
         file_name = str(args.get("name", ""))
         if not allowed_name(file_name):
-            return f"Not saved: {file_name!r} is not an allowed file name.", False
+            return NOT_A_NAME, False
         data = str(args.get("content", "")).encode()
         if len(data) > MAX_FILE_BYTES:
             return f"Not saved: {len(data)} bytes is over the {MAX_FILE_BYTES} byte limit.", False
@@ -130,7 +135,7 @@ async def use_tool(name: str, args: dict[str, Any], job: Job, progress: Callable
     if name == "save_chart":
         file_name = f"{str(args.get('name', 'chart')).removesuffix('.svg')}.svg"
         if not allowed_name(file_name):
-            return f"Not saved: {file_name!r} is not an allowed file name.", False
+            return NOT_A_NAME, False
         svg = render_svg(str(args.get("title", "")), str(args.get("kind", "line")), args.get("series") or [],
                          str(args.get("x_label", "")), str(args.get("y_label", "")))
         (job.dir / file_name).write_text(svg)

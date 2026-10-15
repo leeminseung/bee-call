@@ -36,7 +36,7 @@ from voice.costs import SpendLog
 from voice.model_catalog import Choice
 from voice.people import data_root
 from worker.runner import Job
-from worker.tools import JOB_TOOLS, job_request, use_tool, write_usage
+from worker.tools import JOB_TOOLS, NO_SUCH_TOOL, job_request, use_tool, write_usage
 from worker.web_search import LONGEST_S as WEB_SEARCH_LONGEST_S
 from worker.web_search import SearchResult, web_search
 
@@ -392,7 +392,7 @@ class HarnessWorker:
             text, ok = await use_tool(use.name, args, job, progress, relay)
             return text, "success" if ok else "error"
         log.warning("worker called an unknown tool %r", use.name)
-        return f"There is no tool named {use.name}. Use one of: {', '.join(INLINE_FUNCTIONS)}.", "error"
+        return NO_SUCH_TOOL.format(tools=", ".join(INLINE_FUNCTIONS)), "error"  # its name never repeated back
 
     async def run(self, job: Job, progress: Callable[[str], None], relay: Callable[[str], Awaitable[None]]) -> str:
         session_id = await self._take_session(job.job_id)
