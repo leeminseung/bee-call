@@ -15,6 +15,8 @@ from worker.chart import FONT, render_svg, svg_to_png, svg_title
 SERIES = [{"label": "MacBook Air", "points": [["8GB/256GB", 1590000], ["16GB/512GB", 2190000]]},
           {"label": "MacBook Pro", "points": [["8GB/256GB", 2390000], ["16GB/512GB", 2990000]]}]
 TITLE = "한국 가격(원), 에어 & 프로"
+# A chart as the worker drew it before charts had PNGs or kept their title (the renderer up to 35275c1).
+BEFORE_PNGS = Path(__file__).parent / "fixtures" / "chart-before-pngs.svg"
 
 
 def test_the_svg_keeps_the_chart_s_title():
@@ -22,6 +24,21 @@ def test_the_svg_keeps_the_chart_s_title():
     assert svg.startswith("<svg") and "<title>한국 가격(원), 에어 &amp; 프로</title>" in svg
     assert svg_title(svg) == TITLE
     assert svg_title("<svg xmlns='http://www.w3.org/2000/svg'><rect/></svg>") is None
+
+
+def test_a_chart_drawn_before_titles_were_kept_shows_its_drawn_title_and_gets_its_png():
+    """Charts from before 2026-10-15 have no <title>: their title is the bold line the renderer drew at the top, and
+    their PNG is drawn like any other. An SVG this code did not draw has no title even with bold text."""
+    svg = BEFORE_PNGS.read_text()
+    assert "<title>" not in svg
+    assert svg_title(svg) == "Rain chance & wind (%)"
+    image = Image.open(io.BytesIO(svg_to_png(svg)))
+    assert image.size == (2 * chart.WIDTH, 2 * chart.HEIGHT)
+    colors = {color for _, color in image.convert("RGB").getcolors(maxcolors=1 << 20)}
+    assert (47, 111, 223) in colors
+    foreign = ("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 640 360'>"
+               "<text x='5' y='20' font-weight='bold'>Logo</text></svg>")
+    assert svg_title(foreign) is None
 
 
 def test_the_png_is_the_svg_s_drawing_at_twice_its_size():
@@ -49,12 +66,14 @@ def test_older_charts_get_their_png_from_the_one_off_command(tmp_path, capsys):
     jobs = tmp_path / "2026-10-14" / "1226" / "jobs" / "01"
     jobs.mkdir(parents=True)
     (jobs / "rain.svg").write_text(render_svg("비 확률", "line", [{"label": "서울", "points": [[8, 10], [12, 40]]}]))
+    (jobs / "wind.svg").write_text(BEFORE_PNGS.read_text())
     (jobs / "done.svg").write_text(render_svg("done", "bar", SERIES))
     (jobs / "done.png").write_bytes(b"kept")
     (jobs / "foreign.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'><circle r='4'/></svg>")
     (jobs / "broken.svg").write_text("<svg")
     chart.main([str(tmp_path)])
     assert Image.open(jobs / "rain.png").size == (2 * chart.WIDTH, 2 * chart.HEIGHT)
+    assert Image.open(jobs / "wind.png").size == (2 * chart.WIDTH, 2 * chart.HEIGHT)
     assert (jobs / "done.png").read_bytes() == b"kept"
     assert not (jobs / "foreign.png").exists() and not (jobs / "broken.png").exists()
     assert "rain.png" in capsys.readouterr().out

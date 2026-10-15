@@ -3,8 +3,9 @@
 The worker's model cannot practically type out image bytes, so it sends the numbers (save_chart) and this machine
 draws the picture as SVG. The PNG is drawn from that SVG (svg_to_png), so the two always show the same; the app shows
 the PNG, since iOS cannot show SVG without a web view (contract section 2.4, decision 4), and the session screen shows
-either. The chart's title is kept in the SVG's <title>, where the call view reads it (svg_title). Text is drawn with
-Noto Sans KR (worker/fonts/, SIL Open Font License 1.1), which has Korean and Latin letters.
+either. The chart's title is kept in the SVG's <title>, where the call view reads it (svg_title); a chart drawn before
+titles were kept (before 2026-10-15) has it only as the bold line at its top, which is read instead. Text is drawn
+with Noto Sans KR (worker/fonts/, SIL Open Font License 1.1), which has Korean and Latin letters.
 
 Charts drawn before PNGs existed: uv run python -m worker.chart data/people/<id>   draws each missing PNG
 """
@@ -26,6 +27,10 @@ FONT = Path(__file__).with_name("fonts") / "NotoSansKR-Regular.otf"
 PNG_SCALE = 2  # the PNG has twice the SVG's size, sharp on a phone's screen
 SVG = "{http://www.w3.org/2000/svg}"
 TITLE = re.compile(r"<title>(.*?)</title>", re.S)
+# How a chart drawn before titles were kept begins: the renderer's white background, then the title in bold.
+DRAWN_TITLE = re.compile(r'\s*<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"[^>]*>\s*'
+                         r'<rect width="640" height="360" fill="#ffffff"/>\s*'
+                         r'<text [^>]*font-weight="bold"[^>]*>(.*?)</text>', re.S)
 ANCHORS = {"start": "ls", "middle": "ms", "end": "rs"}  # SVG's text-anchor, on the baseline, as Pillow names it
 ROTATED = re.compile(r"rotate\(\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*\)")
 
@@ -119,8 +124,9 @@ def render_svg(title: str, kind: str, series: list[dict[str, Any]], x_label: str
 
 
 def svg_title(svg: str) -> str | None:
-    """The chart's title, as render_svg keeps it; None for an SVG without one."""
-    found = TITLE.search(svg[:4096])
+    """The chart's title, as render_svg keeps it or, for a chart drawn before titles were kept, as it drew it; None
+    for an SVG without one."""
+    found = TITLE.search(svg[:4096]) or DRAWN_TITLE.match(svg[:4096])
     return (unescape(found.group(1)).strip() or None) if found else None
 
 
@@ -146,7 +152,7 @@ def svg_to_png(svg: str, scale: int = PNG_SCALE) -> bytes:
     except ET.ParseError as exc:
         raise ValueError(f"not an SVG: {exc}") from None
     view = (root.get("viewBox") or "").split()
-    if root.tag != f"{SVG}svg" or len(view) != 4 or root.find(f"{SVG}title") is None:
+    if root.tag != f"{SVG}svg" or len(view) != 4 or (root.find(f"{SVG}title") is None and not DRAWN_TITLE.match(svg)):
         raise ValueError("not a chart this code drew")
     width, height = float(view[2]), float(view[3])
     image = Image.new("RGB", (round(width * scale), round(height * scale)), "#ffffff")
