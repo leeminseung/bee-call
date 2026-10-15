@@ -128,7 +128,9 @@ def meta_for(people: People, person: str, continue_from: str | None) -> tuple[st
 
 async def prepared_meta(people: People, person: str, room: str) -> tuple[str, dict]:
     """An agreed AI call placed in `room`: the dispatch metadata it was placed with, its prep made again the way
-    voice/outbound.py makes it before the phone rings (on the prep's model, with its cost recorded)."""
+    voice/outbound.py makes it before the phone rings: with the person's Bee login chosen, as their loops choose it,
+    within the same deadline, on the prep's model, with its cost recorded."""
+    from beelink import cli as bee
     from voice import outbound
     from voice.language import call_language
 
@@ -136,6 +138,7 @@ async def prepared_meta(people: People, person: str, room: str) -> tuple[str, di
     if offer is None:
         raise SystemExit(f"no AI call of {person}'s was placed in room {room}")
     someone = people.person(person)
+    bee.use_bee(people.bee_dir(person) if someone.settings().bee else None)  # as outbound.serve_person does
     prep = await outbound.prepare_offer(offer, someone, language=call_language(someone.settings().language))
     return room, json.loads(call_metadata("outbound", plan_of(offer), prep.to_meta(), offer.continue_from,
                                           agreed(offer), person))

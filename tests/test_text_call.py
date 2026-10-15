@@ -81,6 +81,48 @@ def test_an_ai_call_placed_in_a_room_is_answered_in_text(tmp_path, monkeypatch):
         raise AssertionError("a room no AI call was placed in is not answered")
 
 
+def test_an_ai_call_answered_in_text_is_prepared_as_the_outbound_loop_prepares_it(tmp_path, monkeypatch):
+    """The outbound loop prepares a placed call with the person's Bee login chosen (outbound.serve_person), and a
+    "Call me now" with the shorter deadline (NOW_PREP_S); --answer prepared it with no Bee login, so a person with
+    Use Bee on got a prep with nothing from Bee, and always with the 20 s deadline (review of the final fixes,
+    finding 1). The prep here reads no Bee: the stand-in only notes what the real one would have been given."""
+    from dataclasses import replace
+
+    from beelink import cli as bee
+    from tests.helpers import fake_livekit
+    from tests.test_offers import asked
+    from voice import outbound
+    from voice.dispatch import place_call
+    from voice.offers import OfferStore
+
+    me = signed_in(tmp_path)
+    me.people.save_settings("matt", replace(me.people.settings("matt"), bee=True))
+    monkeypatch.setattr(agent, "COORDINATOR_LLM", "echo")
+    monkeypatch.setattr(agent, "WORKER", "fake")
+    seen: list[dict] = []
+    real = outbound.prepare_offer
+
+    async def prepare_offer(offer, person, **kwargs):
+        async def prepare(plan, *, bee: bool, deadline_s: float, **rest):
+            # Whose Bee the prep would read: the person's folder, not this machine's login (the tests' default).
+            seen.append({"use_bee": bee, "login": (cli.run_env() or {}).get("BEE_CONFIG_DIR"),
+                         "deadline_s": deadline_s})
+            return await outbound.prepare_outbound(plan, bee=False, deadline_s=deadline_s, **rest)
+
+        return await real(offer, person, prepare=prepare, **kwargs)
+
+    cli = bee
+    monkeypatch.setattr(outbound, "prepare_offer", prepare_offer)
+    now = me.person.now()
+    store = OfferStore(me.workspace)
+    offer, _ = asked(tmp_path, now, workspace=me.workspace)
+    store.answer(offer.id, "now", now)  # "Call me now"
+    room = asyncio.run(place_call(store.claim(offer.id, now), me.person, lk=fake_livekit([])))
+    found = asyncio.run(text_call.text_call(me.people, "matt", ["Hi."], answer=room, say=lambda line: None))
+    assert found["call_id"] == room
+    assert seen == [{"use_bee": True, "login": str(me.people.bee_dir("matt")), "deadline_s": outbound.NOW_PREP_S}]
+
+
 def test_the_readme_names_what_placing_an_ai_call_needs(monkeypatch):
     """Outside test seam 4: an AI call is placed through LiveKit's room API, which needs its key and secret as well as
     its URL (a stand-in API takes any); the README named only LIVEKIT_URL (review of 2026-10-15, finding 4)."""
