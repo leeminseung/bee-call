@@ -264,17 +264,48 @@ def test_at_its_search_limit_a_job_is_asked_for_its_answer_without_tools(tmp_pat
     assert note[0]["type"] == "tool_result" and "web searches" in note[-1]["text"]
 
 
-def test_a_job_that_keeps_searching_past_its_limit_or_runs_out_of_requests_fails(tmp_path, monkeypatch):
+def test_a_paused_turn_at_either_limit_still_ends_with_the_answer(tmp_path, monkeypatch):
+    """Review of 2026-10-15, finding 3: a turn that paused (pause_turn) at the request or search limit skipped the
+    request for the answer, so the job failed and its work was lost. Now the answer is asked for at either limit,
+    whatever the stop: a paused turn is cut where its server tools finished (one still running goes, with what it
+    started), and the last request has no tools."""
+    monkeypatch.setattr(claude, "MAX_REQUESTS", 3)
+    client = api([reply([tool("toolu_1", "progress", text="Searching")]),
+                  reply(searched("srvtoolu_1", "q"), "pause_turn", searches=1),
+                  reply([tool("toolu_2", "progress", text="Comparing")]),
+                  reply([text("Air starts at 1.59 million won.")], "end_turn")])
+    summary, progress, _ = run(job_in(tmp_path, None), client)
+    assert summary == "Air starts at 1.59 million won." and progress == ["Searching", "Comparing"]
+    last = client.messages.sent[-1]
+    assert last["tool_choice"] == {"type": "none"} and "requests" in last["messages"][-1]["content"][-1]["text"]
+
+    monkeypatch.setattr(claude, "MAX_REQUESTS", 80)
     monkeypatch.setattr(claude, "JOB_WEB_SEARCHES", 3)
-    failed, _, _ = run(job_in(tmp_path, None), api([reply(searched("srvtoolu_1", "q"), "pause_turn", searches=4)]))
-    assert isinstance(failed, RuntimeError) and "past this job's limit of 3 web searches" in str(failed)
-    assert usage_of(job_in(tmp_path, None))["status"] == "failed"
-    monkeypatch.setattr(claude, "MAX_REQUESTS", 2)
-    pauses = [reply(searched(f"srvtoolu_{n}", "q"), "pause_turn", searches=1) for n in range(2)]
-    failed, _, _ = run(job_in(tmp_path, None), api(pauses))
-    assert isinstance(failed, RuntimeError) and "within 2 requests" in str(failed)
+    # Code execution still running when the turn paused, and a search it started (with its result).
+    running = [{"type": "server_tool_use", "id": "srvtoolu_9", "name": "code_execution", "input": {"code": "..."}},
+               {"type": "server_tool_use", "id": "srvtoolu_8", "name": "web_search", "input": {"query": "q8"},
+                "caller": {"type": "code_execution_20260120", "tool_id": "srvtoolu_9"}},
+               {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_8", "caller": {
+                   "type": "code_execution_20260120", "tool_id": "srvtoolu_9"}, "content": []}]
+    client = api([reply([*searched("srvtoolu_1", "q"), *running], "pause_turn", searches=4),
+                  reply([text("From what I found: the Air.")], "end_turn")])
+    summary, _, _ = run(job_in(tmp_path, None), client)
+    assert summary == "From what I found: the Air."
+    final = client.messages.sent[-1]
+    assert final["tool_choice"] == {"type": "none"}
+    assert final["messages"][1] == {"role": "assistant", "content": json.loads(json.dumps(searched("srvtoolu_1", "q")))}
+    assert final["messages"][2]["role"] == "user" and "web searches" in final["messages"][2]["content"][-1]["text"]
+
+    client = api([reply(running[:1], "pause_turn", searches=4), reply([text("Short answer.")], "end_turn")])
+    summary, _, _ = run(job_in(tmp_path, None), client)
+    asked = client.messages.sent[-1]["messages"]
+    assert summary == "Short answer." and len(asked) == 1 and "web searches" in asked[0]["content"][-1]["text"]
+
+
+def test_a_job_that_stops_for_another_reason_fails(tmp_path):
     stopped, _, _ = run(job_in(tmp_path, None), api([reply([text("Half an answer")], "max_tokens")]))
     assert isinstance(stopped, RuntimeError) and "max_tokens" in str(stopped)
+    assert usage_of(job_in(tmp_path, None))["status"] == "failed"
 
 
 def test_a_job_cancelled_while_a_request_runs_counts_an_estimate(tmp_path):

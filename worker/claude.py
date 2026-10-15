@@ -11,10 +11,11 @@ into the job folder under a free, safe name at once, and deletes it from Anthrop
 (the job's conversation names the file until then, and a request naming a deleted file is refused).
 
 Background jobs need not be quick (the user, 2026-10-15): every request may write up to the role's max_tokens with
-thinking at effort high, a job may make MAX_REQUESTS requests and JOB_WEB_SEARCHES web searches, and at either limit
-Claude is asked for its answer without tools (a turn that goes on searching past the search limit fails the job, so
-a job never searches more than JOB_WEB_SEARCHES + WEB_SEARCHES_PER_REQUEST times). A request that fails midway (a
-dropped connection, an overloaded or failing server) is tried again twice. What each request used goes into usage.json at once (tokens, cache reads and
+thinking at effort high, a job may make MAX_REQUESTS requests and JOB_WEB_SEARCHES web searches, and at either limit,
+whatever the turn's stop, Claude is asked for its answer in one more request without tools (a paused turn is cut
+where its server tools finished first). So a job makes at most MAX_REQUESTS + 1 requests and fewer than
+JOB_WEB_SEARCHES + WEB_SEARCHES_PER_REQUEST searches. A request that fails midway (a dropped connection, an overloaded
+or failing server) is tried again twice. What each request used goes into usage.json at once (tokens, cache reads and
 writes, server tool uses), so the day's budget counts a job that fails, or is cancelled when the call ends (then
 the request still running counts as an estimate), as well as one that finishes (voice/costs.py job_cost).
 """
@@ -33,7 +34,7 @@ from worker.tools import JOB_TOOLS, MAX_FILE_BYTES, free_name, job_request, use_
 
 log = logging.getLogger("bee-call.worker")
 
-MAX_REQUESTS = 80  # a job's requests, its paused turns continued among them (the harness allows 80 rounds too)
+MAX_REQUESTS = 80  # a job's requests before its answer, paused turns continued among them (the harness: 80 rounds)
 JOB_WEB_SEARCHES = 60  # a job's web searches before it is asked for its answer (0.60 USD)
 WEB_SEARCHES_PER_REQUEST = 20  # so one request can pass the job's limit by at most this many
 FETCHED_TOKENS = 30_000  # at most this much of one fetched page or PDF reaches the conversation (about 120 KB)
@@ -132,8 +133,9 @@ class ClaudeWorker:
         container: str | None = None
         last = False  # the next request asks for the answer without tools
         outputs: dict[str, str] = {}  # file id -> what became of it
+        made = 0
         try:
-            for n in range(MAX_REQUESTS):
+            while True:
                 params = anthropic_api.ADAPTER.params(self.choice, SYSTEM_PROMPT, turns, CLIENT_TOOLS)
                 params["tools"] = SERVER_TOOLS + params["tools"]
                 if container:
@@ -142,6 +144,7 @@ class ClaudeWorker:
                     params["tool_choice"] = {"type": "none"}
                 started = time.monotonic()
                 final = await self._request(params, job, usage)
+                made += 1
                 usage["steps"].append({"request_s": round(time.monotonic() - started, 1), "calls": []})
                 usage["stop_reason"] = final.stop_reason
                 write_usage(job, usage)
@@ -149,26 +152,25 @@ class ClaudeWorker:
                 container = getattr(getattr(final, "container", None), "id", None) or container
                 turns.append(Turn("assistant", native=content, native_provider=anthropic_api.PROVIDER))
                 await self._save_outputs(content, job, outputs)
-                searches = usage["server_tools"].get("web_search", 0)
                 if final.stop_reason == "end_turn":
                     break
-                if final.stop_reason == "pause_turn":  # a long server tool turn: sent back as it came
-                    if searches > JOB_WEB_SEARCHES:
-                        raise RuntimeError(f"the worker kept searching past this job's limit of {JOB_WEB_SEARCHES} "
-                                           "web searches")
-                    continue
-                if final.stop_reason != "tool_use" or last:
+                if last or final.stop_reason not in ("pause_turn", "tool_use"):
                     raise RuntimeError(f"the worker stopped before finishing ({final.stop_reason or 'no stop reason'})")
+                limit = "web searches" if usage["server_tools"].get("web_search", 0) >= JOB_WEB_SEARCHES else \
+                    "requests" if made >= MAX_REQUESTS else None
+                if final.stop_reason == "pause_turn":  # a long server tool turn: sent back as it came
+                    if limit:  # cut where its server tools finished, and the answer is asked for
+                        turns.pop()
+                        finished = finished_part(content)
+                        if finished:
+                            turns.append(Turn("assistant", native=finished, native_provider=anthropic_api.PROVIDER))
+                        add_note(turns, LIMIT_NOTE.format(what=limit))
+                        last = True
+                    continue
                 results = await self._use_tools(content, job, progress, relay, usage["steps"][-1]["calls"])
                 write_usage(job, usage)
-                note = None
-                if searches >= JOB_WEB_SEARCHES:
-                    note, last = LIMIT_NOTE.format(what="web searches"), True
-                elif n + 2 >= MAX_REQUESTS:  # the next request is the job's last
-                    note, last = LIMIT_NOTE.format(what="requests"), True
-                turns.append(Turn("user", text=note or "", results=results))
-            else:
-                raise RuntimeError(f"the worker did not finish within {MAX_REQUESTS} requests")
+                turns.append(Turn("user", text=LIMIT_NOTE.format(what=limit) if limit else "", results=results))
+                last = bool(limit)
             usage["status"] = "completed"
         except asyncio.CancelledError:
             usage["status"] = "cancelled"
@@ -266,6 +268,30 @@ class ClaudeWorker:
                 await self.client().files.delete(file_id)
             except Exception:
                 log.warning("job %s: could not delete %s from the Files API", job.job_id, file_id, exc_info=True)
+
+
+def finished_part(content: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A paused turn cut where its server tools finished: a server tool use with no result yet goes, with whatever it
+    started itself (calls whose caller it is, and their results); nothing is kept when no more than thinking is left."""
+    answered = {b.get("tool_use_id") for b in content if b.get("tool_use_id")}
+    gone = {b.get("id") for b in content if b.get("type") == "server_tool_use" and b.get("id") not in answered}
+    while True:  # what a removed call started goes too, and so on down
+        started = {b.get("id") for b in content if b.get("type") == "server_tool_use"
+                   and isinstance(b.get("caller"), dict) and b["caller"].get("tool_id") in gone} - gone
+        if not started:
+            break
+        gone |= started
+    kept = [b for b in content if b.get("id") not in gone and b.get("tool_use_id") not in gone]
+    return kept if any(b.get("type") not in ("thinking", "redacted_thinking") for b in kept) else []
+
+
+def add_note(turns: list[Turn], note: str) -> None:
+    """The note as the user's next words: a turn of its own, or added to the user's last turn when that is last."""
+    if turns and turns[-1].role == "user":
+        last = turns[-1]
+        turns[-1] = Turn("user", text=f"{last.text}\n\n{note}".strip(), results=last.results)
+    else:
+        turns.append(Turn("user", text=note))
 
 
 def _count(usage: dict[str, Any], used: Usage) -> None:
