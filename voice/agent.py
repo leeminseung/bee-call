@@ -439,8 +439,9 @@ def make_session(ctx: JobContext, language: CallLanguage, tts_voice, rec: CallRe
         vad=ctx.proc.userdata["vad"],
         # Named rather than left to LiveKit's defaults, which follow the launch mode: `dev` (a Mac) picks LiveKit's
         # cloud turn detector and adaptive interruptions, `start` (the server) a local model and voice activity only.
-        # The wait before a turn counts as over learns how long this caller pauses mid-sentence (between 0.5 and
-        # 3 s): with LiveKit's fixed 0.3 s, the 2026-10-15 call cut one answer into five turns at pauses of 1-1.9 s.
+        # The wait before a turn counts as over learns how long this caller pauses mid-sentence (TURN_ENDPOINTING:
+        # 0.3-2.5 s): with LiveKit's fixed 0.3 s, the 2026-10-15 call cut one answer into five turns at pauses of
+        # 1-1.9 s.
         turn_handling={"turn_detection": inference.TurnDetector(version="v1"), "interruption": {"mode": "adaptive"},
                        "endpointing": TURN_ENDPOINTING},
     )
