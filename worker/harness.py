@@ -37,6 +37,7 @@ from botocore.exceptions import EventStreamError
 from beelink.clock import now_text
 from voice.aws_session import aws_session
 from voice.costs import SpendLog
+from voice.people import data_root
 from worker.chart import render_svg
 from worker.runner import Job
 from worker.web_search import READ_TIMEOUT_S as WEB_SEARCH_LONGEST_S
@@ -46,8 +47,8 @@ log = logging.getLogger("bee-call.worker")
 
 REGION = "ap-southeast-2"
 HARNESS_NAME = "bee_call_worker"
-# Written by scripts/deploy_worker.py; machine-wide, not one person's (voice/people.py data root).
-STATE_FILE = Path(os.environ.get("BEE_CALL_DATA") or "data") / "harness.json"
+# Written by scripts/deploy_worker.py; machine-wide, not one person's: under the data root (voice/people.py).
+STATE_NAME = "harness.json"
 OLD_STATE_FILE = Path("workspace") / "state" / "harness.json"  # where it was before the per-person folders
 # The product model is Claude Opus 5.5. While Claude on Bedrock is blocked for this account, GLM 5
 # stands in (Matt, 2026-10-13): steps take 1-5 s and it runs the code interpreter. Kimi K3 checked
@@ -309,10 +310,15 @@ def allowed_name(name: str) -> bool:
 def load_harness_arn() -> str | None:
     if os.environ.get("WORKER_HARNESS_ARN"):
         return os.environ["WORKER_HARNESS_ARN"]
-    for path in (STATE_FILE, OLD_STATE_FILE):
+    for path in (state_file(), OLD_STATE_FILE):
         if path.exists():
             return json.loads(path.read_text()).get("harnessArn")
     return None
+
+
+def state_file() -> Path:
+    """Where scripts/deploy_worker.py keeps the harness's ARN: the data root as it is now, not at import time."""
+    return data_root() / STATE_NAME
 
 
 class HarnessWorker:

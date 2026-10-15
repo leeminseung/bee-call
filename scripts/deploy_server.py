@@ -457,16 +457,32 @@ def cmd_logs(args) -> None:
     print(run_on_server(s.client("ssm"), instance_id, script, timeout=60, comment="Bee Call logs"))
 
 
+def unit_environment(unit: str = "bee-call-token.service") -> dict[str, str]:
+    """The Environment= settings of one of the services' units (deploy/systemd/): the one place for them."""
+    found = {}
+    for line in (REPO / "deploy" / "systemd" / unit).read_text().splitlines():
+        if line.startswith("Environment="):
+            name, _, value = line[len("Environment="):].partition("=")
+            found[name] = value
+    return found
+
+
+def people_script(args: list[str]) -> str:
+    """voice.people on the server, as the services' user, with the token server's own environment and its home (the
+    data root): who may use the server."""
+    env = unit_environment()
+    assignments = " ".join(f"{k}={shlex.quote(v)}" for k, v in {"HOME": env["BEE_CALL_DATA"], **env}.items())
+    return (f"cd /opt/bee-call/app && exec runuser -u bee-call -- env {assignments} "
+            ".venv/bin/python -m voice.people " + " ".join(shlex.quote(a) for a in args))
+
+
 def cmd_people(args) -> None:
-    """voice.people on the server, as the services' user and with their data root: who may use the server."""
     if not args.args:
         raise SystemExit("people wants voice.people's own arguments, for example: people waiting")
     s = session()
     instance_id = running_instance(s.client("ec2"))
-    script = ("cd /opt/bee-call/app && exec runuser -u bee-call -- env HOME=/var/lib/bee-call TZ=Asia/Seoul "
-              "BEE_CALL_DATA=/var/lib/bee-call BEE_BIN=/opt/bee-call/bin/bee BEE_FORCE_FILE_STORE=1 "
-              ".venv/bin/python -m voice.people " + " ".join(shlex.quote(a) for a in args.args))
-    print(run_on_server(s.client("ssm"), instance_id, script, timeout=60, comment="Bee Call people"), end="")
+    print(run_on_server(s.client("ssm"), instance_id, people_script(args.args), timeout=60,
+                        comment="Bee Call people"), end="")
 
 
 def cmd_down(args) -> None:

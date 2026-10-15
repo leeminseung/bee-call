@@ -194,6 +194,21 @@ def test_secrets_copy_this_macs_settings_except_its_own():
                             "ELEVENLABS_VOICE"}
 
 
+def test_the_people_command_runs_with_the_services_own_environment():
+    """Server review 19: `deploy_server.py people` repeated the units' environment by hand (data root, Bee CLI, clock
+    zone). It now takes it from the token server's unit, so a change there reaches the operator command too."""
+    from scripts.deploy_server import people_script
+
+    script = people_script(["set", "jiwoo", "language", '"ko"'])
+    unit = {k: v for k, v in (line.split("=", 2)[1:] for line in (UNITS / "bee-call-token.service").read_text().splitlines()
+                              if line.startswith("Environment="))}
+    assert unit["BEE_CALL_DATA"] == "/var/lib/bee-call"
+    for name, value in {**unit, "HOME": unit["BEE_CALL_DATA"]}.items():
+        assert f" {name}={value} " in script, name
+    assert script.startswith("cd /opt/bee-call/app && exec runuser -u bee-call -- env ")
+    assert script.endswith(".venv/bin/python -m voice.people set jiwoo language \'\"ko\"\'")
+
+
 def test_one_list_says_what_never_goes_to_the_server():
     """Server review 19: the Mac's list of settings kept back (MAC_ONLY) and the server's list of settings it never
     takes from SSM (REFUSED) were two lists that disagreed: TZ went to SSM and the server then left it out."""
