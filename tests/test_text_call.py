@@ -29,3 +29,16 @@ def test_a_call_in_text_is_a_call_with_its_record_its_view_and_its_end(tmp_path,
     assert [who for who, _ in speech][0] == "ai"  # the AI picked up first
     assert said[0].startswith("AI: ") and "matt: Hello there" in said
     assert MetaSession(me.workspace).take_events()[-1]["kind"] == "call_ended"
+
+
+def test_the_stand_ins_test_job_starts_a_job_in_a_call_in_text(tmp_path, monkeypatch):
+    """Found by the first call in text: the echo and fake call AIs asked for "test job" with only a task, after
+    delegate came to take a title too (design D), so their job never started."""
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(agent, "WORKER", "fake")
+    for mode in ("echo", "fake"):
+        monkeypatch.setattr(agent, "COORDINATOR_LLM", mode)
+        found = asyncio.run(text_call.text_call(me.people, "matt", ["test job"], say=lambda line: None))
+        events = [json.loads(line) for line in (Path(found["record"]) / "events.jsonl").read_text().splitlines()]
+        started = [e for e in events if e["type"] == "job_started"]
+        assert started and started[0]["title"], mode

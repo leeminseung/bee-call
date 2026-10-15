@@ -69,7 +69,7 @@ def voice_test_policy(params: dict[str, Any]) -> Blocks:
     tool_names = {t["name"] for t in params.get("tools", [])}
     if "test job" in heard.lower() and "delegate" in tool_names:
         return [{"type": "text", "text": "Sure, I'll start that now."},
-                {"type": "tool_use", "id": f"toolu_{len(messages):03d}", "name": "delegate", "input": {"task": heard}}]
+                {"type": "tool_use", "id": f"toolu_{len(messages):03d}", "name": "delegate", "input": {"task": heard, "title": "Test job"}}]
     return [{"type": "text", "text": f'You said: "{heard}". I will keep talking for a while, so that you can '
                                      "try cutting me off in the middle of this sentence."}]
 
