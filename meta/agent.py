@@ -32,6 +32,7 @@ from meta import files
 from meta.session import DAILY_NOTIFICATIONS, MetaSession, quiet, quiet_ends
 from voice.aws_session import aws_session
 from voice.offers import CALL_TIME, AlreadyOffered, Offer, OfferStore, QuestionWaiting
+from voice.call_models import coordinator_llm
 from voice.prep import prep_model
 
 log = logging.getLogger("bee-call.meta")
@@ -189,7 +190,7 @@ class Thinker:
         self.tools = TOOLS if bee else [OFFER_CALL_WITHOUT_BEE if t["toolSpec"]["name"] == "offer_call" else t
                                          for t in TOOLS if t["toolSpec"]["name"] not in BEE_TOOLS]
         self.instructions = INSTRUCTIONS.format(**(WITH_BEE if bee else WITHOUT_BEE))
-        self.model = model or prep_model(os.environ.get("COORDINATOR_LLM", "bedrock")) or \
+        self.model = model or prep_model(coordinator_llm()) or \
             ("zai.glm-5", os.environ.get("BEDROCK_REGION", "ap-southeast-2"))
         self.client = client
         self.send = send

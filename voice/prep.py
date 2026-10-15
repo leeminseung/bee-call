@@ -35,6 +35,7 @@ from beelink.clock import now_text
 from beelink.context import CallInputs, fetch_call_inputs
 from beelink.planner import Plan
 from voice.aws_session import aws_session
+from voice.call_models import coordinator_llm
 from voice.costs import SpendLog
 from voice.language import CallLanguage, call_language
 from voice.speech_filter import speech_only
@@ -435,7 +436,7 @@ async def prepare_outbound(plan: Plan, *, spend: SpendLog, bee: bool, now: datet
     started = time.monotonic()
     inputs = await fetch_call_inputs(plan.inbox_dir, plan.conversation_ids, ours=ours)
     prep = await prepare_call(inputs, {**plan_meta(plan), **(extra or {})},
-                              prep_model(mode or os.environ.get("COORDINATOR_LLM", "bedrock")), spend=spend, bee=bee,
+                              prep_model(mode or coordinator_llm()), spend=spend, bee=bee,
                               now=now, deadline_s=deadline_s, language=language, ours=ours)
     prep.seconds = round(time.monotonic() - started, 2)
     return prep

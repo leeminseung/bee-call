@@ -5,8 +5,19 @@ the other modes read (COORDINATOR_MODEL, COORDINATOR_THINKING, COORDINATOR_EFFOR
 finds one set says so in its log and its record (voice/agent.py ignored_settings).
 """
 
+import os
 from dataclasses import dataclass
 from typing import Any
+
+# Which models the call AI, the prep and the meta agent use (voice/agent.py lists the values). Unset: the echo
+# stand-in, which costs nothing; a server gets its own from scripts/deploy_server.py.
+COORDINATOR_LLM_DEFAULT = "echo"
+
+
+def coordinator_llm() -> str:
+    """COORDINATOR_LLM, read the same way by every process (server review 19): voice/outbound.py's prep never
+    prepares with another model than the one the voice server answers with."""
+    return os.environ.get("COORDINATOR_LLM", "").strip() or COORDINATOR_LLM_DEFAULT
 
 
 @dataclass(frozen=True)

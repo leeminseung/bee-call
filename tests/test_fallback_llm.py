@@ -281,3 +281,32 @@ def test_every_call_language_has_a_line_for_a_declined_turn():
     from voice.language import LANGUAGES
 
     assert all(language.refusal for language in LANGUAGES.values())
+
+
+def test_every_process_reads_the_same_coordinator_mode_with_the_same_default(tmp_path, monkeypatch):
+    """Server review 19: unset, COORDINATOR_LLM meant "echo" to the voice server but "bedrock" to the prep in
+    voice/outbound.py and to the meta agent, so a Mac's AI calls were prepared by another model than the one that
+    answered them. One function reads it now, with one default."""
+    from datetime import datetime
+
+    from meta.agent import Thinker
+    from tests.helpers import SEOUL
+    from voice import prep as prep_module
+    from voice.call_models import coordinator_llm
+    from voice.costs import SpendLog
+    from beelink.planner import Plan
+
+    monkeypatch.delenv("COORDINATOR_LLM", raising=False)
+    monkeypatch.setenv("BEDROCK_REGION", "ap-southeast-2")
+    assert coordinator_llm() == "echo"
+    from meta import agent as meta_agent
+
+    modes = []
+    monkeypatch.setattr(prep_module, "prep_model", lambda mode: modes.append(mode))
+    monkeypatch.setattr(meta_agent, "prep_model", lambda mode: modes.append(mode))
+    asyncio.run(prep_module.prepare_outbound(Plan(call=True, reason="r", inbox_dir=None), spend=SpendLog(tmp_path),
+                                             bee=False, now=datetime.now(SEOUL)))
+    Thinker(tmp_path, bee=False)
+    assert modes == ["echo", "echo"]
+    monkeypatch.setenv("COORDINATOR_LLM", "anthropic")
+    assert coordinator_llm() == "anthropic"

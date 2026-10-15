@@ -57,7 +57,7 @@ from beelink.calls import OurCalls
 from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
 from beelink.writer import BeeWrites, event_fields, summary_notification
 from voice.aws_session import aws_profile, aws_session
-from voice.call_models import CallModel, call_model_for
+from voice.call_models import CallModel, call_model_for, coordinator_llm
 from voice.claude_llm import ClaudeBedrockLLM, default_model
 from voice.continuation import earlier_call
 from voice.costs import SpendLog, day_budget
@@ -83,7 +83,7 @@ load_dotenv(".env.local")
 PROFILE = aws_profile()  # None on EC2: the instance role
 REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", REGION)
-COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
+COORDINATOR_LLM = coordinator_llm()
 # For COORDINATOR_LLM=bedrock. GLM 5 speaks while it calls a tool. MiniMax M2.5 scored best in
 # probes/coordinator_bench.py (2026-10-12) but calls tools without a word, and in the first real
 # call (2026-10-13) the caller heard silence for 23-28 s whenever they kept talking meanwhile.
