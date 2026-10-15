@@ -167,6 +167,27 @@ def test_the_anthropic_adapter_speaks_the_messages_api():
     assert second.stop == "end" and second.model == "claude-sonnet-5-5"
 
 
+def test_a_claude_turn_goes_back_as_the_sdk_itself_would_send_it():
+    """A turn with server tool results must go back as it came: every field the API sent, null ones too, and none it
+    did not (the SDK's own rule for response blocks put in a request)."""
+    from anthropic.types import Message
+
+    from voice.providers.anthropic import content_of
+
+    message = Message.model_validate({
+        "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5",
+        "content": [{"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "q"}},
+                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_1", "content": [
+                        {"type": "web_search_result", "url": "https://a.example", "title": "A",
+                         "encrypted_content": "enc", "page_age": None}]},
+                    {"type": "text", "text": "Found it."}],
+        "stop_reason": "end_turn", "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 5}})
+    sent = content_of(message)
+    assert sent[1]["content"][0] == {"type": "web_search_result", "url": "https://a.example", "title": "A",
+                                     "encrypted_content": "enc", "page_age": None}
+    assert sent[2] == {"type": "text", "text": "Found it."}
+
+
 # ---------- Bedrock's Converse API ----------
 
 def test_the_bedrock_adapter_speaks_converse_and_streams_text():

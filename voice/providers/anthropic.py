@@ -1,8 +1,9 @@
 """Anthropic's Messages API (ANTHROPIC_API_KEY), for the model catalog's Claude choices.
 
 reply() streams one request: the choice's model, max_tokens, thinking and effort; the conversation with each Claude
-turn sent back exactly as it came (thinking blocks and their signatures must not change); client tools as
-Anthropic's tool definitions.
+turn sent back exactly as it came (thinking blocks and their signatures, server tool results and their encrypted
+content must not change); client tools as Anthropic's tool definitions. stream() is that one request for callers
+that add more of the API's own (the Claude worker, worker/claude.py: server tools and its container).
 """
 
 import os
@@ -62,8 +63,8 @@ class Anthropic:
         return ClaudeBedrockLLM(client=client, model=choice.offering.model, thinking=choice.thinking,
                                 effort=choice.effort, auto_cache=True, refusal_line=refusal_line, on_event=on_event)
 
-    async def reply(self, choice: Choice, system: str, turns: list[Turn], tools: list[ToolSpec], *,
-                    on_text: Callable[[str], None] | None = None, usage: Usage | None = None) -> Reply:
+    def params(self, choice: Choice, system: str, turns: list[Turn], tools: list[ToolSpec]) -> dict[str, Any]:
+        """A Messages API request for a choice: its model, max_tokens, thinking, effort and other fields."""
         params: dict[str, Any] = {"model": choice.offering.model, "max_tokens": choice.max_tokens, "system": system,
                                   "messages": [message(turn) for turn in turns]}
         if tools:
@@ -74,9 +75,15 @@ class Anthropic:
         if choice.effort:
             params["output_config"] = {"effort": choice.effort}
         params.update(choice.extra.get("anthropic", {}))
+        return params
+
+    async def stream(self, params: dict[str, Any], *, on_text: Callable[[str], None] | None = None,
+                     usage: Usage | None = None, client: Any = None) -> Any:
+        """One streamed request: the final message. `usage` is added what the API counted, or, for a request cut
+        short once its answer began, an estimate from what was sent and said."""
         text, answering, counted = "", False, False
         try:
-            async with self.client().messages.stream(**params) as stream:
+            async with (client or self.client()).messages.stream(**params) as stream:
                 async for event in stream:
                     answering = True
                     delta = getattr(event, "delta", None)
@@ -89,16 +96,32 @@ class Anthropic:
             counted = True
         finally:
             if answering and not counted and usage is not None:  # cut short: what was sent and said, estimated
-                usage.add(Usage(input_tokens=estimated_tokens(system, params["messages"]),
+                usage.add(Usage(input_tokens=estimated_tokens(params.get("system"), params["messages"]),
                                 output_tokens=estimated_tokens(text), estimated=True))
         if usage is not None:
             usage.add(used)
-        content = [block.model_dump(exclude_none=True) if hasattr(block, "model_dump") else dict(block)
-                   for block in final.content]
+        return final
+
+    async def reply(self, choice: Choice, system: str, turns: list[Turn], tools: list[ToolSpec], *,
+                    on_text: Callable[[str], None] | None = None, usage: Usage | None = None) -> Reply:
+        used = Usage()
+        try:
+            final = await self.stream(self.params(choice, system, turns, tools), on_text=on_text, usage=used)
+        finally:
+            if usage is not None:
+                usage.add(used)
+        content = content_of(final)
         said = "".join(b.get("text", "") for b in content if b.get("type") == "text")
         calls = [ToolCall(b["id"], b["name"], b.get("input") or {}) for b in content if b.get("type") == "tool_use"]
         return Reply(Turn("assistant", said, calls, native=content, native_provider=PROVIDER),
                      STOPS.get(final.stop_reason, final.stop_reason or "end"), used, choice.offering.model, PROVIDER)
+
+
+def content_of(final: Any) -> list[dict[str, Any]]:
+    """A message's content blocks as the SDK itself sends response blocks back: every field the API sent, null ones
+    too, and none it did not."""
+    return [block.model_dump(mode="json", exclude_unset=True, by_alias=True) if hasattr(block, "model_dump")
+            else dict(block) for block in final.content]
 
 
 def counted_usage(usage: Any) -> Usage:
