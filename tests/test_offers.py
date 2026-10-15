@@ -281,7 +281,11 @@ def test_a_call_me_now_that_was_never_placed_closes(tmp_path):
     assert store.get(offer.id).state == "expired"
 
 
-def test_only_one_runner_places_a_call_and_a_call_off_wins(tmp_path):
+def test_a_claimed_call_is_not_claimed_twice_and_a_call_off_before_its_turn_wins(tmp_path):
+    """What this checks, as its name says (server review 16): a second claim of a claimed offer gets nothing, and a
+    call called off while another one is prepared is never placed. Runners at the same moment, and a call-off
+    while the call itself is prepared, are in test_a_booked_call_called_off_while_it_is_prepared_never_rings and
+    the tests after it."""
     me = signed_in(tmp_path)
     store = OfferStore(me.workspace)
     claimed = store.book("claimed", datetime.now(SEOUL) - timedelta(seconds=3), datetime.now(SEOUL))
@@ -356,7 +360,10 @@ def test_looking_ahead_for_booked_calls_does_not_close_questions_early(tmp_path)
 
 
 
-def test_notifications_wait_for_morning_and_for_tomorrow_after_four(tmp_path, monkeypatch):
+def test_notifications_wait_for_morning_and_a_fifth_of_the_day_is_held(tmp_path, monkeypatch):
+    """A notification asked for at night waits for 08:00, and the fifth of a day is held (server review 16: the old
+    name promised it went out tomorrow; the rule is now that it never does, which
+    test_the_fifth_offer_of_a_day_is_never_notified_even_when_it_suggests_tomorrow checks)."""
     from voice.outbound import send_held, send_offer
 
     sent = []
