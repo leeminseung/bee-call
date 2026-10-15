@@ -289,6 +289,23 @@ def test_the_agent_hears_only_of_conversations_the_watcher_kept(tmp_path):
     assert "Weighing two job offers" in line and "Our own AI call" not in line
 
 
+def test_file_tools_leave_out_the_model_log_and_claude_s_history(tmp_path):
+    """A call's model log repeats the whole conversation in every request (and the Bee context with it), so a search
+    would match it on every line and push the transcripts out of the 50 matches; like Claude's history, it is a
+    private debugging record that is never served, and the timeline shows what the meta agent reads."""
+    ws = workspace_with_a_call(tmp_path)
+    call = ws / "2026-10-14" / "1200"
+    (call / "transcript.md").write_text("- 00:05.0 **User:** the interview is on Friday\n")
+    (call / "model-log.jsonl").write_text('{"chat": "interview"}\n' * 30)
+    (call / "claude-history.json").write_text('[{"content": "interview"}]')
+    found = files.grep(ws, "interview")
+    assert "transcript.md" in found and "model-log" not in found and "claude-history" not in found
+    assert "model-log" not in files.list_files(ws, "2026-10-14/1200")
+    for private in ("model-log.jsonl", "claude-history.json"):
+        with pytest.raises(files.FileError):
+            files.read_file(ws, f"2026-10-14/1200/{private}")
+
+
 def test_file_tools_skip_links_out_hidden_folders_and_locations(tmp_path):
     import os
 

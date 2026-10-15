@@ -3,7 +3,8 @@
 The workspace is plain files (each call's transcript.md, events.jsonl, prep.md and job files; Bee batches under
 inbox/; the meta session itself), so three familiar tools let the agent find what it needs, including the raw
 record of a call when a summary is not enough. They cannot leave the workspace (no symlinks followed out of it),
-cannot write, and skip what is not for reading: push tokens and keys, audio, and hidden files. Bee's locations
+cannot write, and skip what is not for reading: push tokens and keys, audio, hidden files, and a call's model log
+and Claude history. Bee's locations
 (addresses, coordinates) are blanked in what they return, since the timeline shows tool results on the LAN.
 A pattern gets a time budget, so a pattern that backtracks without end cannot stall the process.
 """
@@ -21,8 +22,11 @@ MAX_MATCHES = 50
 MAX_FILE_BYTES = 5_000_000
 GREP_SECONDS = 3.0  # a whole grep (arbitrary)
 LINE_SECONDS = 0.05  # one line against the pattern (arbitrary)
-# Secrets (push tokens, keys, a Bee CLI login: token-prod, pairing-prod.json), audio, half-written files.
-HIDDEN = ("*token*", "pairing-*", "proxy-*", "*.p8", "*.wav", "*.mp3", "*.m4a", "*.tmp", ".*")
+# Secrets (push tokens, keys, a Bee CLI login: token-prod, pairing-prod.json), audio, half-written files, and a call's
+# private debugging records (voice/session_server.py PRIVATE): the model log repeats the whole conversation in every
+# request, so it would fill every search, and the timeline shows what the meta agent reads.
+HIDDEN = ("*token*", "pairing-*", "proxy-*", "*.p8", "*.wav", "*.mp3", "*.m4a", "*.tmp", ".*",
+          "model-log.jsonl", "claude-history.json", "fake-claude.jsonl")
 LOCATION = re.compile(r'"(primary_location|location|address|latitude|longitude|lat|lng|lon)"\s*:\s*'
                       r'(\{[^{}]*\}|"[^"]*"|-?\d+(?:\.\d+)?)', re.IGNORECASE)
 
