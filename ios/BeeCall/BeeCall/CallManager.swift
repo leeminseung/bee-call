@@ -42,18 +42,18 @@ final class CallManager: NSObject {
     @ObservationIgnored private var pickUpTimeout: Task<Void, Never>?
     @ObservationIgnored private var pickedUp = false
     @ObservationIgnored private let pickUpWait: Duration
-    @ObservationIgnored private let decline = CallDecline()
+    @ObservationIgnored private let decline: CallDecline
     /// The name of every call, both ways, on CallKit's call screen and in the Phone app's Recents.
     private static let handle = CXHandle(type: .generic, value: "Bee Call")
 
-    /// CallKit's provider and controller, the microphone prompt, the LiveKit room and the settings sent before an
-    /// answer, unless a test passes stand-ins. `pickUpWait`: how long a call waits for the AI to pick up; the
-    /// voice server picks up within about 8 s, so this catches a stuck one.
+    /// CallKit's provider and controller, the microphone prompt, the LiveKit room, the settings sent before an
+    /// answer and the decline sent to the server, unless a test passes stand-ins. `pickUpWait`: how long a call
+    /// waits for the AI to pick up; the voice server picks up within about 8 s, so this catches a stuck one.
     init(callKit: (any CallKitReports)? = nil, calls: (any CallKitRequests)? = nil,
          microphone: @escaping () async -> Bool = { await LiveKitSDK.ensureDeviceAccess(for: [.audio]) },
          room: (any CallRoom)? = nil,
          beforeAnswering: @escaping () async -> Void = { await Server.shared.settings.sendBeforeAnswering() },
-         pickUpWait: Duration = .seconds(30)) {
+         decline: CallDecline = CallDecline(), pickUpWait: Duration = .seconds(30)) {
         let provider: CXProvider? = callKit == nil ? Self.provider() : nil
         self.callKit = callKit ?? provider!
         self.calls = calls ?? CXCallController()
@@ -62,6 +62,7 @@ final class CallManager: NSObject {
         self.liveKit = liveKit
         self.room = room ?? liveKit
         self.beforeAnswering = beforeAnswering
+        self.decline = decline
         self.pickUpWait = pickUpWait
         super.init()
         provider?.setDelegate(self, queue: nil) // nil = main queue

@@ -4,9 +4,10 @@ import XCTest
 
 /// A call from CallKit's start or answer to its end, with stand-ins for CallKit and the LiveKit room.
 final class CallLifecycleTests: XCTestCase {
-    @MainActor private func calls(_ callKit: FakeCallKit, _ room: FakeRoom) -> CallManager {
-        CallManager(callKit: callKit, calls: callKit, microphone: { true }, room: room, beforeAnswering: {},
-                    pickUpWait: .milliseconds(300))
+    @MainActor private func calls(_ callKit: FakeCallKit, _ room: FakeRoom, server: FakeServer = FakeServer(),
+                                  microphone: Bool = true) -> CallManager {
+        CallManager(callKit: callKit, calls: callKit, microphone: { microphone }, room: room, beforeAnswering: {},
+                    decline: CallDecline(server: server.client()), pickUpWait: .milliseconds(300))
     }
 
     /// The person taps Call; CallKit hands the start back, as it does once the call is on its screen.
@@ -121,5 +122,64 @@ final class CallLifecycleTests: XCTestCase {
         await waitUntil("the call screen says so") { !calls.isInCall }
         XCTAssertEqual(calls.status, "That call already ended")
         XCTAssertEqual(room.leaves, 1)
+    }
+
+    // MARK: - CallKit's own controls (the call screen, the lock screen, AirPods)
+
+    /// BC-143, contract section 2: declining the AI's call where CallKit shows it tells the server which call.
+    @MainActor func testDecliningTheAIsCallTellsTheServerAndSaysDeclined() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom(), server = FakeServer()
+        let calls = calls(callKit, room, server: server)
+        calls.ringPhone(for: ring())
+        await waitUntil("the call rings") { callKit.incoming.count == 1 }
+        calls.perform(CXEndCallAction(call: try XCTUnwrap(callKit.incoming.first?.call)))
+        await waitUntil("the decline is sent") { server.sent == ["POST /calls/decline"] }
+        XCTAssertEqual(try server.body(of: "POST /calls/decline") as NSDictionary,
+                       ["room": "call-matt-20261015-210000"] as NSDictionary)
+        await waitUntil("the call screen says so") { !calls.isInCall }
+        XCTAssertEqual(calls.status, "Declined")
+        XCTAssertTrue(room.joins.isEmpty)
+    }
+
+    @MainActor func testEndingACallOnCallKitsScreenLeavesTheRoom() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom(), server = FakeServer()
+        let calls = calls(callKit, room, server: server)
+        let id = try await start(calls, callKit)
+        await waitUntil("the room is joined") { calls.status == "Ringing…" }
+        room.aiAnswers()
+        calls.perform(CXEndCallAction(call: id))
+        await waitUntil("the call has ended") { !calls.isInCall }
+        XCTAssertEqual(calls.status, "Call ended")
+        XCTAssertEqual(room.leaves, 1)
+        XCTAssertEqual(server.sent, []) // only a ringing AI call is declined
+    }
+
+    @MainActor func testMutingOnCallKitsScreenMutesTheMicrophone() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room)
+        let id = try await start(calls, callKit)
+        await waitUntil("the room is joined") { calls.status == "Ringing…" }
+        calls.perform(CXSetMutedCallAction(call: id, muted: true))
+        calls.perform(CXSetMutedCallAction(call: id, muted: false))
+        await waitUntil("both reach the room") { room.microphone.count == 2 }
+        XCTAssertEqual(room.microphone, [false, true])
+    }
+
+    // MARK: - Microphone access (BC-142)
+
+    @MainActor func testWithoutMicrophoneAccessACallThePersonStartsSaysSoAndDoesNotStart() async {
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room, microphone: false)
+        await calls.startCall()
+        XCTAssertEqual(calls.status, "Microphone access is off. Turn it on in Settings.")
+        XCTAssertTrue(callKit.requested.isEmpty)
+        XCTAssertFalse(calls.isInCall)
+    }
+
+    /// The ring stream's ring (app open) asks first; a call that could not be heard does not ring.
+    @MainActor func testWithoutMicrophoneAccessTheRingStreamsCallDoesNotRing() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room, microphone: false)
+        calls.ringPhone(for: ring())
+        await waitUntil("the call is given up") { !calls.isInCall }
+        XCTAssertEqual(calls.status, "Microphone access is off. Turn it on in Settings.")
+        XCTAssertTrue(callKit.incoming.isEmpty)
     }
 }

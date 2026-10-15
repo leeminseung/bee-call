@@ -6,8 +6,10 @@ import XCTest
 /// iOS ends an app that does not report one call to CallKit for every VoIP push, so every push is reported at
 /// once, exactly once, and PushKit's completion is handed back exactly once.
 final class RingingTests: XCTestCase {
+    /// Stand-ins for everything outside the app: CallKit, the room, and the server a decline goes to.
     @MainActor private func calls(_ callKit: FakeCallKit) -> CallManager {
-        CallManager(callKit: callKit, calls: callKit, microphone: { true })
+        CallManager(callKit: callKit, calls: callKit, microphone: { true }, room: FakeRoom(), beforeAnswering: {},
+                    decline: CallDecline(server: FakeServer().client()))
     }
 
     // MARK: - VoIP push
@@ -59,6 +61,35 @@ final class RingingTests: XCTestCase {
         XCTAssertEqual(callKit.incoming.count, 2)
         XCTAssertEqual(Set(callKit.incoming.map(\.call)).count, 1)
         XCTAssertTrue(callKit.ended.isEmpty)
+    }
+
+    /// BC-136: a late push for a call that already rang and is over is still reported to CallKit, and ended at once.
+    @MainActor func testALatePushForACallThatIsOverIsReportedAndEnded() async throws {
+        let callKit = FakeCallKit(), calls = calls(callKit)
+        calls.ringPhone(for: ring())
+        await waitUntil("the ring stream's call rings") { callKit.incoming.count == 1 }
+        calls.perform(CXEndCallAction(call: try XCTUnwrap(callKit.incoming.first?.call))) // declined
+        await waitUntil("the call is over") { !calls.isInCall }
+        var completions = 0
+        calls.reportPushedCall(ring()) { completions += 1 }
+        await waitUntil("the late push's call is ended") { callKit.ended.count == 1 }
+        XCTAssertEqual(callKit.incoming.count, 2)
+        XCTAssertEqual(callKit.ended[callKit.incoming[1].call], .unanswered)
+        XCTAssertEqual(completions, 1)
+        XCTAssertFalse(calls.isRinging)
+    }
+
+    /// BC-137: the ringing ends with the call: a ring nobody answers stops in time for the AI's deadline.
+    @MainActor func testARingNobodyAnswersStopsAtItsDeadline() async throws {
+        let callKit = FakeCallKit(), calls = calls(callKit)
+        let soon = ring(expiringIn: 7.4) // answerBy is 7 s before expires_at: 0.4 s from now
+        calls.ringPhone(for: soon)
+        await waitUntil("the call rings") { callKit.incoming.count == 1 }
+        let id = try XCTUnwrap(callKit.incoming.first?.call)
+        await waitUntil("the ringing stops", timeout: .seconds(3)) { callKit.ended[id] != nil }
+        XCTAssertEqual(callKit.ended[id], .unanswered)
+        await waitUntil("the call screen says so") { !calls.isInCall }
+        XCTAssertEqual(calls.status, "Missed a call from Bee Call")
     }
 
     // MARK: - Ring stream

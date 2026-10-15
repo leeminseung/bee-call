@@ -15,6 +15,7 @@ final class FakeRoom: CallRoom {
     private(set) var joins: [String?] = [] // the room asked for: nil for a call the person starts
     private(set) var leaves = 0
     private(set) var recordingStarts = 0 // asked to record on this iPhone
+    private(set) var microphone: [Bool] = [] // each mute (false) and unmute (true) from CallKit
     var recordingProblem: String? // what the recording on this iPhone answers
 
     func connect(answering roomName: String?, continuing earlierCall: String?) async throws -> String {
@@ -30,7 +31,9 @@ final class FakeRoom: CallRoom {
         return recordingProblem
     }
 
-    func setMicrophone(enabled: Bool) async throws {}
+    func setMicrophone(enabled: Bool) async throws {
+        microphone.append(enabled)
+    }
 
     func disconnect() async {
         leaves += 1
