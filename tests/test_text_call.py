@@ -5,6 +5,8 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from meta.session import MetaSession
 from tests.helpers import SEOUL, signed_in
 from voice import agent, call_view, text_call
@@ -77,6 +79,28 @@ def test_an_ai_call_placed_in_a_room_is_answered_in_text(tmp_path, monkeypatch):
         assert "no AI call" in str(exc)
     else:
         raise AssertionError("a room no AI call was placed in is not answered")
+
+
+def test_the_readme_names_what_placing_an_ai_call_needs(monkeypatch):
+    """Outside test seam 4: an AI call is placed through LiveKit's room API, which needs its key and secret as well as
+    its URL (a stand-in API takes any); the README named only LIVEKIT_URL (review of 2026-10-15, finding 4)."""
+    import re
+
+    from livekit import api
+
+    readme = (Path(__file__).parent.parent / "README.md").read_text()
+    (documented,) = re.findall(r"- \*\*An AI call\.\*\*.*", readme)
+    for name in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
+        assert f"`{name}`" in documented, name
+
+    async def without_key() -> None:
+        monkeypatch.setenv("LIVEKIT_URL", "http://127.0.0.1:9")
+        monkeypatch.delenv("LIVEKIT_API_KEY", raising=False)
+        monkeypatch.delenv("LIVEKIT_API_SECRET", raising=False)
+        api.LiveKitAPI()  # what voice/dispatch.py makes when it places a call
+
+    with pytest.raises(ValueError):
+        asyncio.run(without_key())
 
 
 def test_a_call_in_text_leaves_the_voice_server_as_it_found_it(tmp_path, monkeypatch):

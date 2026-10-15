@@ -1107,3 +1107,45 @@ def test_a_call_record_s_line_format_is_the_one_the_readme_documents(tmp_path, m
     seen |= {e["type"] for e in lines}
     assert {kind for kind in seen if f"`{kind}`" not in documented} == set()
 
+
+def record_kinds_in_the_code() -> dict[str, set[str]]:
+    """Every kind of line the code writes to a call's events.jsonl, read from the code itself: the recorder's event
+    and after_call, the after-call title line (append_event), the Claude adapter's events (_emit, which goes to the
+    recorder through on_event) and the job runner's (its emit is the recorder's event). Each kind is named in place,
+    as a string, wherever one is written."""
+    import ast
+
+    repo = Path(__file__).parent.parent
+    kinds: dict[str, set[str]] = {}
+    for path in sorted([*(repo / "voice").rglob("*.py"), *(repo / "worker").rglob("*.py")]):
+        where = str(path.relative_to(repo))
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            f, args = node.func, node.args
+            named = None
+            if isinstance(f, ast.Attribute) and (f.attr in ("event", "after_call", "_emit")
+                                                 or (f.attr == "emit" and where == "worker/runner.py")):
+                named = args[0] if args else None
+            elif isinstance(f, ast.Name) and f.id == "append_event":
+                named = args[1] if len(args) > 1 else None
+            if named is None:
+                continue
+            assert isinstance(named, ast.Constant) and isinstance(named.value, str), \
+                f"{where}:{node.lineno} writes a kind of record line not named in place"
+            kinds.setdefault(named.value, set()).add(where)
+    return kinds
+
+
+def test_every_kind_of_line_the_code_writes_to_a_call_s_record_is_in_the_readme():
+    """Outside test seam 5, from the code's side: the record test above sees only what an echo call and the kept
+    records write, which left claude_turn, the Claude adapter's other events and job_standby out of the README
+    (review of 2026-10-15, finding 4). Every kind the code can write must be named there."""
+    import re
+
+    readme = (Path(__file__).parent.parent / "README.md").read_text()
+    (documented,) = re.findall(r"- \*\*A call's record\.\*\*.*", readme)
+    kinds = record_kinds_in_the_code()
+    assert {"call_started", "claude_turn", "job_standby", "call_titled", "bee_write"} <= set(kinds)  # the walk works
+    assert {kind: sorted(where) for kind, where in kinds.items() if f"`{kind}`" not in documented} == {}
+
