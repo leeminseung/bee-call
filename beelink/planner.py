@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from beelink.calls import our_call_windows
+from voice.call_folders import EVENTS, call_folders, read_events
 from beelink.clock import parse_time
 from beelink.watcher import Trigger
 
@@ -50,20 +51,26 @@ class Plan:
 
 
 def call_in_progress(workspace: Path, now: datetime) -> bool:
-    for events in sorted(workspace.glob("*/*/events.jsonl"), reverse=True)[:3]:
-        if now.timestamp() - events.stat().st_mtime > LIVE_WINDOW_S:
+    for folder in call_folders(workspace)[-3:]:
+        events = folder / EVENTS
+        try:
+            if now.timestamp() - events.stat().st_mtime > LIVE_WINDOW_S:
+                continue
+        except OSError:
             continue
-        if '"type": "call_ended"' not in events.read_text():
+        if not any(event.get("type") == "call_ended" for event in read_events(events)):
             return True
     return False
 
 
 def last_outbound(workspace: Path) -> datetime | None:
-    log = workspace / OUTBOUND_LOG
-    if not log.exists():
-        return None
-    lines = [l for l in log.read_text().splitlines() if l.strip()]
-    return parse_time(json.loads(lines[-1])["at"]) if lines else None
+    """When the last AI call was placed (state/outbound.jsonl, whose last line may still be being written)."""
+    for entry in reversed(read_events(workspace / OUTBOUND_LOG)):
+        try:
+            return parse_time(str(entry["at"]))
+        except (KeyError, ValueError):
+            continue
+    return None
 
 
 def last_offer(workspace: Path) -> datetime | None:

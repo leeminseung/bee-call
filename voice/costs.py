@@ -37,13 +37,18 @@ from pathlib import Path
 from typing import Any
 
 from beelink.clock import parse_time
+from voice.call_folders import EVENTS, read_events
 from voice.people import Person
 
 STT_USD_PER_SECOND = 0.0001667
 POLLY_USD_PER_CHAR = {"standard": 4 / 1_000_000, "neural": 16 / 1_000_000, "generative": 30 / 1_000_000}
 LLM_USD_PER_TOKEN = {  # (input, output)
     "zai.glm-5": (1.00 / 1_000_000, 3.20 / 1_000_000),
+    # Anthropic's list price for prompts of 100K tokens or fewer (each request of a call is far below that).
+    "claude-haiku-5-5": (0.10 / 1_000_000, 0.50 / 1_000_000),
 }
+# Prompt caching (Anthropic): a cache read costs this share of an input token, a 5-minute cache write this much.
+CACHE_READ_SHARE, CACHE_WRITE_SHARE = 0.1, 1.25
 # A model not in the table is priced like this: Claude Sonnet 5.5's list price, above every stand-in we use.
 UNKNOWN_LLM_USD_PER_TOKEN = (3.00 / 1_000_000, 15.00 / 1_000_000)
 WEB_SEARCH_USD = 0.03
@@ -52,9 +57,13 @@ WEB_SEARCH_USD = 0.03
 CALL_USD_PER_MINUTE = 0.10
 
 
-def llm_cost(model: str | None, input_tokens: Any, output_tokens: Any) -> float:
+def llm_cost(model: str | None, input_tokens: Any, output_tokens: Any, cached: Any = 0, cache_writes: Any = 0) -> float:
+    """`input_tokens` counts every prompt token, `cached` (cache reads) and `cache_writes` among them."""
     price_in, price_out = LLM_USD_PER_TOKEN.get(model or "", UNKNOWN_LLM_USD_PER_TOKEN)
-    return price_in * _number(input_tokens) + price_out * _number(output_tokens)
+    cached, cache_writes = _number(cached), _number(cache_writes)
+    fresh = max(0.0, _number(input_tokens) - cached - cache_writes)
+    prompt = fresh + CACHE_READ_SHARE * cached + CACHE_WRITE_SHARE * cache_writes
+    return price_in * prompt + price_out * _number(output_tokens)
 
 
 def _number(value: Any) -> float:
@@ -77,7 +86,8 @@ def call_cost(usage: dict[str, Any]) -> float:
             continue
         kind, provider = entry.get("type"), str(entry.get("provider", "")).lower()
         if kind == "llm_usage":
-            total += llm_cost(entry.get("model"), entry.get("input_tokens"), entry.get("output_tokens"))
+            total += llm_cost(entry.get("model"), entry.get("input_tokens"), entry.get("output_tokens"),
+                              entry.get("input_cached_tokens"), entry.get("input_cache_creation_tokens"))
         elif kind == "stt_usage" and "transcribe" in provider:
             total += STT_USD_PER_SECOND * _number(entry.get("audio_duration"))
         elif kind == "tts_usage" and "polly" in provider:
@@ -88,19 +98,7 @@ def call_cost(usage: dict[str, Any]) -> float:
 
 def _call_minutes(folder: Path) -> float:
     """How long the call has gone on, from the call's events.jsonl."""
-    last = 0.0
-    try:
-        with (folder / "events.jsonl").open("rb") as f:
-            for raw in f:
-                try:
-                    event = json.loads(raw)
-                except ValueError:
-                    continue
-                if isinstance(event, dict):
-                    last = max(last, _number(event.get("t")))
-    except OSError:
-        pass
-    return last / 60
+    return max((_number(event.get("t")) for event in read_events(folder / EVENTS)), default=0.0) / 60
 
 
 def job_cost(usage: dict[str, Any]) -> float:

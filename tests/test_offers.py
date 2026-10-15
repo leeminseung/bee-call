@@ -16,7 +16,7 @@ from voice.language import call_language
 from voice.offers import LATE_BY, OfferStore, agreed, call_time, notification, plan_of
 from voice.outbound import call_due, handle, saved_trigger
 from voice.prep import Prep
-from tests.helpers import SEOUL, fake_livekit, placing, seoul_now, signed_in
+from tests.helpers import SEOUL, another_conversation, fake_livekit, placing, seoul_now, signed_in
 from tests.test_outbound import inbox
 
 NOW = datetime(2026, 10, 14, 18, 30, tzinfo=SEOUL)
@@ -26,6 +26,40 @@ def asked(tmp_path, now=NOW, workspace=None):
     workspace = workspace or tmp_path / "workspace"
     plan = RulePlanner(workspace, now=lambda: now).decide(saved_trigger(inbox(tmp_path)))
     return OfferStore(workspace).ask(plan, now), plan
+
+
+def test_the_offer_hold_and_the_planner_read_past_lines_still_being_written(tmp_path):
+    """Server review finding 13: a call's events.jsonl and the outbound log are appended to while they are read; a
+    half-written last line made the 30-minute hold, the planner's last call and the busy check raise."""
+    from beelink.planner import last_call
+    from voice.outbound import last_call_end, notification_wait
+
+    me = signed_in(tmp_path)
+    now = datetime(2026, 10, 15, 21, 0, tzinfo=SEOUL)
+    folder = me.workspace / "2026-10-15" / "2040"
+    folder.mkdir(parents=True)
+    started = datetime(2026, 10, 15, 20, 40, tzinfo=SEOUL)
+    (folder / "events.jsonl").write_text(
+        json.dumps({"t": 0.0, "type": "call_started", "started_at": started.isoformat()}) + "\n"
+        + json.dumps({"t": 300.0, "type": "call_ended"}) + "\n" + '{"t": 301.0, "type": "bee_wri')
+    log = me.workspace / OUTBOUND_LOG
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(json.dumps({"at": started.isoformat()}) + "\n" + '{"at": "2026-10-15T20:5')
+    assert last_call_end(me.workspace) == started + timedelta(minutes=5)
+    assert last_call(me.workspace) >= started
+    assert notification_wait(me.person, now).startswith("the last call ended at 20:45")
+
+
+def test_one_bee_conversation_leads_to_at_most_one_offer(tmp_path):
+    """BC-014, at the one place every offer is made (OfferStore.ask): the rule path and the meta agent alike."""
+    from voice.offers import AlreadyOffered
+
+    offer, plan = asked(tmp_path)
+    store = OfferStore(tmp_path / "workspace")
+    store.answer(offer.id, "decline", NOW)
+    with pytest.raises(AlreadyOffered):
+        store.ask(plan, NOW + timedelta(hours=1))
+    assert [o.id for o in store.all()] == [offer.id]
 
 
 def test_an_offer_suggests_the_evening_call_time_today_or_tomorrow():
@@ -57,10 +91,10 @@ def test_the_users_answer_decides_if_and_when_the_ai_calls(tmp_path):
     assert (answered.state, answered.call_at) == ("now", "2026-10-14T18:31:00+09:00")
     with pytest.raises(ValueError):  # one answer only
         store.answer(now_offer.id, "decline", NOW + timedelta(minutes=2))
-    later = store.answer(store.ask(plan_of(now_offer), NOW).id, "later", NOW)
+    later = store.answer(store.ask(another_conversation(plan_of(now_offer), 1), NOW).id, "later", NOW)
     assert (later.state, later.call_at) == ("booked", "2026-10-14T21:00:00+09:00")
     assert store.answer(later.id, "decline", NOW).state == "declined"  # a booked call can be called off
-    no = store.answer(store.ask(plan_of(now_offer), NOW).id, "decline", NOW)
+    no = store.answer(store.ask(another_conversation(plan_of(now_offer), 2), NOW).id, "decline", NOW)
     assert no.state == "declined"
     for bad in ("../../x", "20261014-183000-zzzz"):
         with pytest.raises(KeyError):
@@ -74,7 +108,7 @@ def test_unanswered_and_missed_offers_close_and_only_yeses_come_due(tmp_path):
     offer, plan = asked(tmp_path)
     assert [o.id for o in store.open(NOW)] == [offer.id] and store.due(NOW) == []
     assert store.open(datetime(2026, 10, 14, 21, 0, tzinfo=SEOUL)) == [] and store.get(offer.id).state == "expired"
-    booked = store.answer(store.ask(plan, NOW).id, "later", NOW)
+    booked = store.answer(store.ask(another_conversation(plan), NOW).id, "later", NOW)
     assert [o.id for o in store.due(datetime(2026, 10, 14, 21, 0, tzinfo=SEOUL))] == [booked.id]
     store.expire(datetime(2026, 10, 14, 21, 0, tzinfo=SEOUL) + LATE_BY + timedelta(seconds=1))
     assert store.get(booked.id).state == "expired"
@@ -84,7 +118,7 @@ def test_how_the_user_agreed_reaches_the_opening(tmp_path):
     store = OfferStore(tmp_path / "workspace")
     offer, plan = asked(tmp_path)
     assert agreed(store.answer(offer.id, "now", NOW)) == 'the user tapped "Call me now" on your notification at 18:30'
-    later = store.answer(store.ask(plan, NOW).id, "later", NOW + timedelta(minutes=5))
+    later = store.answer(store.ask(another_conversation(plan), NOW).id, "later", NOW + timedelta(minutes=5))
     assert agreed(later) == "at 18:35 the user accepted the time your notification suggested"
     booked = store.book("check how the interview went", datetime(2026, 10, 15, 8, 0, tzinfo=SEOUL), NOW, "2026-10-14/1820")
     assert agreed(booked) == "the user asked for this call back during an earlier call, at 18:30"
@@ -275,8 +309,8 @@ def test_no_call_while_another_rings_and_a_new_question_replaces_the_old(tmp_pat
         raise AssertionError("must wait")
 
     assert asyncio.run(call_due(me.person, place=place)) == [] and store.get(offer.id).state == "now"
-    older = store.ask(plan, NOW)
-    newer = store.ask(plan, NOW + timedelta(minutes=40))
+    older = store.ask(another_conversation(plan, 1), NOW)
+    newer = store.ask(another_conversation(plan, 2), NOW + timedelta(minutes=40))
     assert store.get(older.id).state == "expired" and store.get(newer.id).state == "asked"
 
 
@@ -327,9 +361,9 @@ def test_notifications_wait_for_morning_and_for_tomorrow_after_four(tmp_path, mo
     asyncio.run(send_held(me.person, morning))
     assert sent == [offer.id] and store.get(offer.id).notified_at == "2026-10-15T08:00:00+09:00"
     for i in range(3):  # three more today, each 30 minutes after the last (2026-10-15): four in all
-        o = store.ask(plan, morning + timedelta(minutes=40 * (i + 1)))
+        o = store.ask(another_conversation(plan, i), morning + timedelta(minutes=40 * (i + 1)))
         asyncio.run(send_offer(o, me.person, morning + timedelta(minutes=40 * (i + 1))))
-    fifth = store.ask(plan, morning + timedelta(hours=3))
+    fifth = store.ask(another_conversation(plan, 9), morning + timedelta(hours=3))
     assert asyncio.run(send_offer(fifth, me.person, morning + timedelta(hours=3))).startswith("held: 4 notifications")
 
 
@@ -500,10 +534,10 @@ def test_two_senders_at_once_keep_to_the_daily_limit(tmp_path, monkeypatch):
     monkeypatch.setattr(voip_push, "alert", slow)
     _, plan = asked(tmp_path, now=now, workspace=me.workspace)
     for i in range(3):
-        sent = store.ask(plan, now - timedelta(hours=3 - i))
+        sent = store.ask(another_conversation(plan, i), now - timedelta(hours=3 - i))
         asyncio.run(send_offer(sent, me.person, now - timedelta(hours=3 - i)))
     pushed.clear()
-    last = store.ask(plan, now)
+    last = store.ask(another_conversation(plan, 9), now)
 
     async def both():
         return await asyncio.gather(send_offer(last, me.person, now), send_offer(last, me.person, now))
@@ -685,7 +719,7 @@ def test_an_offer_waits_thirty_minutes_after_the_last_offer_notification(tmp_pat
     first, plan = asked(tmp_path, now=datetime(2026, 10, 15, 12, 0, tzinfo=SEOUL), workspace=me.workspace)
     assert asyncio.run(send_offer(first, me.person, datetime(2026, 10, 15, 12, 0, tzinfo=SEOUL))).startswith("notification sent")
     OfferStore(me.workspace).answer(first.id, "decline", datetime(2026, 10, 15, 12, 5, tzinfo=SEOUL))
-    second = OfferStore(me.workspace).ask(plan, datetime(2026, 10, 15, 12, 10, tzinfo=SEOUL))
+    second = OfferStore(me.workspace).ask(another_conversation(plan), datetime(2026, 10, 15, 12, 10, tzinfo=SEOUL))
     assert "12:30" in asyncio.run(send_offer(second, me.person, datetime(2026, 10, 15, 12, 10, tzinfo=SEOUL)))
     assert asyncio.run(send_offer(second, me.person, datetime(2026, 10, 15, 12, 30, tzinfo=SEOUL))).startswith("notification sent")
     assert sent == [first.id, second.id]
@@ -715,10 +749,10 @@ def test_the_fifth_offer_of_a_day_is_never_notified_even_when_it_suggests_tomorr
     morning = datetime(2026, 10, 15, 8, 0, tzinfo=SEOUL)
     _, plan = asked(tmp_path, now=morning, workspace=me.workspace)
     for i in range(4):  # four sent, 40 minutes apart
-        o = store.ask(plan, morning + timedelta(minutes=40 * i))
+        o = store.ask(another_conversation(plan, i), morning + timedelta(minutes=40 * i))
         assert asyncio.run(send_offer(o, me.person, morning + timedelta(minutes=40 * i))).startswith("notification")
     late = datetime(2026, 10, 15, 20, 55, tzinfo=SEOUL)  # suggests 21:00 tomorrow
-    fifth = store.ask(plan, late)
+    fifth = store.ask(another_conversation(plan, 9), late)
     assert asyncio.run(send_offer(fifth, me.person, late)).startswith("held: 4 notifications")
     asyncio.run(send_held(me.person, datetime(2026, 10, 16, 8, 0, tzinfo=SEOUL)))  # a new day, with the offer still open
     assert fifth.id not in sent and [o.id for o in store.open(datetime(2026, 10, 16, 8, 0, tzinfo=SEOUL))] == [fifth.id]

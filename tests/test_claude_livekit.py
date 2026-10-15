@@ -59,3 +59,115 @@ def test_adapter_in_a_livekit_session():
         assert len(assistant_turns) == 4
 
     asyncio.run(main())
+
+
+def test_the_call_ai_in_a_livekit_session_logs_each_request_and_never_speaks_an_aside(tmp_path):
+    """The coordinator itself (not a stand-in agent) in a real LiveKit session: its llm_node keeps the model log,
+    the speech filter drops a reply that is only a stage direction, and the record gets a turn_timing per turn."""
+    import json
+    from types import SimpleNamespace
+    from tests.helpers import seoul_now
+    from voice.agent import wire_events
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    async def main():
+        rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+        coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
+        client = FakeAnthropic([[{"type": "text", "text": "(사용자가 잠시 멈춤)"}],
+                                [{"type": "text", "text": "Sure. [pause] What should we look at?"}]])
+        async with AgentSession(llm=ClaudeBedrockLLM(client=client)) as session:
+            wire_events(session, rec)
+            await session.start(coordinator)
+            await session.run(user_input="어")
+            await session.run(user_input="Let's plan tomorrow")
+            said = [i.text_content.strip() for i in session.history.items if getattr(i, "role", None) == "assistant"]
+        rec.close()
+        return rec, said
+
+    rec, said = asyncio.run(main())
+    assert [text for text in said if text] == ["Sure. What should we look at?"]  # the aside alone said nothing
+    log = [json.loads(line) for line in (rec.dir / "model-log.jsonl").read_text().splitlines()]
+    assert [entry["reply"]["text"].strip() for entry in log] == ["(사용자가 잠시 멈춤)",
+                                                                "Sure. [pause] What should we look at?"]
+    assert "Let's plan tomorrow" in json.dumps(log[1]["chat"], ensure_ascii=False)
+    events = [json.loads(line) for line in (rec.dir / "events.jsonl").read_text().splitlines()]
+    assert [e["type"] for e in events].count("turn_timing") == 2
+
+
+
+def test_a_reply_that_is_only_a_stage_direction_leaves_no_blank_turn_for_bedrock(tmp_path):
+    """GLM 5 on Bedrock (no Claude adapter, no tags): a reply of "(사용자가 잠시 멈춤)" and a line break leaves no
+    assistant turn behind. A turn of "\n" would go into every later Bedrock request, which refuses a blank text
+    block, so every later reply of the call would fail."""
+    from types import SimpleNamespace
+
+    from tests.helpers import ScriptedLLM, seoul_now
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    async def main():
+        rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+        coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
+        glm = ScriptedLLM([["(사용자가 잠시 멈춤)", ".\n"], ["\n", "Sure. ", "What should we look at?"]])
+        async with AgentSession(llm=glm) as session:
+            await session.start(coordinator)
+            await session.run(user_input="어")
+            await session.run(user_input="Let's plan tomorrow")
+            history = session.history.copy()
+        rec.close()
+        return history
+
+    history = asyncio.run(main())
+    said = [i.text_content for i in history.items if getattr(i, "role", None) == "assistant"]
+    assert said == ["Sure. What should we look at?"]
+    messages, _ = history.to_provider_format("aws")
+    blocks = [b["text"] for m in messages for b in m["content"] if "text" in b]
+    assert blocks and all(text.strip() for text in blocks)
+
+
+def test_when_claude_fails_the_first_request_glm_answers_and_the_model_log_says_so(tmp_path):
+    """COORDINATOR_LLM=anthropic in a real LiveKit session: Anthropic refuses the key on the first request, so GLM 5
+    answers it and the next one. The model log names the model that answered each request, and the record says why
+    GLM 5 took the call."""
+    import json
+    from types import SimpleNamespace
+
+    import anthropic
+    import httpx2
+
+    from tests.helpers import ScriptedLLM, seoul_now
+    from voice.agent import wire_events
+    from voice.coordinator import Coordinator
+    from voice.fallback_llm import FirstRequestFallback
+    from voice.recorder import CallRecorder
+
+    response = httpx2.Response(401, request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"))
+    refused = anthropic.AuthenticationError(
+        "invalid x-api-key", response=response,
+        body={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}})
+
+    async def main():
+        rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+        coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
+        claude = ClaudeBedrockLLM(client=FakeAnthropic([refused]), model="claude-haiku-5-5", thinking="disabled")
+        glm = ScriptedLLM([["네, 말씀하세요."], ["내일 일정을 같이 볼까요?"]])
+        model = FirstRequestFallback(claude, lambda: glm, on_choice=lambda chosen, reason: rec.event(
+            "coordinator_model", model=chosen.model, reason=reason))
+        async with AgentSession(llm=model) as session:
+            wire_events(session, rec)
+            await session.start(coordinator)
+            await session.run(user_input="여보세요?")
+            await session.run(user_input="내일 계획 세우자")
+            said = [i.text_content for i in session.history.items if getattr(i, "role", None) == "assistant"]
+        rec.close()
+        return rec, said
+
+    rec, said = asyncio.run(main())
+    assert said == ["네, 말씀하세요.", "내일 일정을 같이 볼까요?"]
+    log = [json.loads(line) for line in (rec.dir / "model-log.jsonl").read_text().splitlines()]
+    assert [entry["model"] for entry in log] == ["zai.glm-5", "zai.glm-5"]
+    events = [json.loads(line) for line in (rec.dir / "events.jsonl").read_text().splitlines()]
+    (choice,) = [e for e in events if e["type"] == "coordinator_model"]
+    assert choice["model"] == "zai.glm-5" and "401" in choice["reason"]
+    assert not [e for e in events if e["type"] == "error"]  # the failed first try is no failed turn

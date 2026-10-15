@@ -127,7 +127,8 @@ if cmd[:2] == ["todos", "accept-suggestion"]:
     made({"id": 100, "text": "Ask about bonus terms", "created_at": now_ms, "completed": False})
 if cmd[:2] == ["todos", "delete"]:
     out({"deleted": True, "id": int(cmd[2])})
-if cmd[:2] == ["facts", "get"]:
-    out({"fact": {"id": int(cmd[2]), "text": "Bonus is 15%", "confirmed": False}})
+if cmd[:2] == ["facts", "get"]:  # wrapped, or bare with FAKE_BEE_BARE_FACT=1 (the CLI's parseFactResponse takes both)
+    fact = {"id": int(cmd[2]), "text": "Bonus is 15%", "created_at": now_ms, "confirmed": False, "tags": ["work"]}
+    out(fact if os.environ.get("FAKE_BEE_BARE_FACT") else {"fact": fact})
 print("unknown fake bee command: " + " ".join(cmd), file=sys.stderr)
 sys.exit(2)

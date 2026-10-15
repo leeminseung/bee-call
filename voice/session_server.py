@@ -18,10 +18,11 @@ GET /api/sessions                              sessions, newest first
 GET /api/sessions/<date>/<time>/events         Server-Sent Events: every line of events.jsonl
                                                (SSE id = line number, so a reconnect resumes),
                                                then new lines as they are written, until call_ended
-GET /api/sessions/<date>/<time>/files/<path>   one file inside that session folder, never audio/ or inputs/
+GET /api/sessions/<date>/<time>/files/<path>   one file inside that session folder, never a PRIVATE one
 GET /api/meta                                  the meta agent's session (newest first) and its notes
 
-Raw call audio (audio/) and raw Bee data (inputs/, which carries places and coordinates) are never served.
+Raw call audio (audio/), raw Bee data (inputs/, which carries places and coordinates) and what the call AI's model
+was given (model-log.jsonl, claude-history.json: Bee data again) are never served.
 """
 
 import argparse
@@ -38,6 +39,7 @@ from typing import Any
 
 from aiohttp import web
 
+from voice.call_folders import read_events
 from voice.people import People, dev_person
 
 REPO = Path(__file__).resolve().parent.parent
@@ -60,7 +62,9 @@ FILE_HEADERS = {"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"
 # Host names a request may use. Anything else is refused, so a web page cannot point its own
 # domain at this Mac (DNS rebinding) and read calls from a browser on the same network.
 LOCAL_SUFFIXES = (".local", ".localhost", ".lan", ".home.arpa", ".internal")
-PRIVATE_DIRS = ("audio", "inputs")  # raw call audio and raw Bee data stay off the network
+# Never served: raw call audio, raw Bee data, and everything the call AI's model was given (which holds Bee data):
+# the model log of every call and the Claude adapter's history (BC-095).
+PRIVATE = ("audio", "inputs", "model-log.jsonl", "claude-history.json")
 
 
 def parse_event(raw: bytes) -> dict[str, Any] | None:
@@ -81,27 +85,23 @@ def read_summary(events: Path) -> dict[str, Any]:
     """What the session list needs, from one pass over events.jsonl."""
     s: dict[str, Any] = {"started_at": None, "room": None, "ended": False, "closed": False,
                          "end_t": None, "last_t": 0.0, "why": None, "first_user": None}
-    with events.open("rb") as f:
-        for raw in f:
-            event = parse_event(raw) if raw.endswith(b"\n") else None  # skip a line still being written
-            if event is None:
-                continue
-            t = number(event.get("t"))
-            if t is not None:
-                s["last_t"] = max(s["last_t"], t)
-            kind = event.get("type")
-            if kind == "call_started":
-                s["started_at"], s["room"] = event.get("started_at"), event.get("room")
-            elif kind in ("session_closed", "call_ended"):
-                s["closed"] = True
-                s["ended"] = s["ended"] or kind == "call_ended"
-                if s["end_t"] is None:
-                    s["end_t"] = t
-            elif kind == "why_calling" and not s["why"] and isinstance(event.get("summary"), str):
-                s["why"] = event["summary"]
-            elif (kind == "message" and event.get("role") == "user" and not s["first_user"]
-                  and isinstance(event.get("text"), str)):
-                s["first_user"] = event["text"]
+    for event in read_events(events):  # a line still being written is skipped
+        t = number(event.get("t"))
+        if t is not None:
+            s["last_t"] = max(s["last_t"], t)
+        kind = event.get("type")
+        if kind == "call_started":
+            s["started_at"], s["room"] = event.get("started_at"), event.get("room")
+        elif kind in ("session_closed", "call_ended"):
+            s["closed"] = True
+            s["ended"] = s["ended"] or kind == "call_ended"
+            if s["end_t"] is None:
+                s["end_t"] = t
+        elif kind == "why_calling" and not s["why"] and isinstance(event.get("summary"), str):
+            s["why"] = event["summary"]
+        elif (kind == "message" and event.get("role") == "user" and not s["first_user"]
+              and isinstance(event.get("text"), str)):
+            s["first_user"] = event["text"]
     return s
 
 
@@ -262,7 +262,7 @@ def resolve_inside(folder: Path, rel: str) -> Path:
     if (rel.startswith("/") or "\\" in rel or "\x00" in rel
             or any(part in ("", ".", "..") for part in parts)):
         raise web.HTTPForbidden(text="path not allowed\n")
-    if parts[0].casefold() in PRIVATE_DIRS:
+    if parts[0].casefold() in PRIVATE:
         raise web.HTTPForbidden(text=f"{parts[0]} is never served\n")
     base = folder.resolve()
     try:
@@ -272,7 +272,7 @@ def resolve_inside(folder: Path, rel: str) -> Path:
     if target == base or not target.is_relative_to(base):
         raise web.HTTPForbidden(text="path leaves the session folder\n")
     first = base / target.relative_to(base).parts[0]  # catches a symlink into audio/ and AUDIO/ on macOS
-    for name in PRIVATE_DIRS:
+    for name in PRIVATE:
         private = base / name
         if first.name.casefold() == name or (private.exists() and os.path.samefile(first, private)):
             raise web.HTTPForbidden(text=f"{name} is never served\n")

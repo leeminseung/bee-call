@@ -7,11 +7,12 @@ Nothing restarts by itself: a stopped job is only mentioned, and the user decide
 never calls back on its own to continue; a continued call is always one the user starts.
 """
 
-import json
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from voice.call_folders import EVENTS, read_events
 
 SESSION_ID = re.compile(r"\d{4}-\d{2}-\d{2}/\d{4}(?:-\d+)?")  # workspace/<date>/<time>, see voice/recorder.py
 MAX_TALK_CHARS = 6000  # arbitrary: about ten minutes of talk; an older start is left out
@@ -28,15 +29,7 @@ def session_dir(workspace: Path, session_id: Any) -> Path | None:
 
 
 def _events(folder: Path) -> list[dict[str, Any]]:
-    events = []
-    for line in (folder / "events.jsonl").read_text(errors="replace").splitlines():
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(event, dict):
-            events.append(event)
-    return events
+    return read_events(folder / EVENTS)
 
 
 def _talk(folder: Path) -> str:

@@ -32,7 +32,7 @@ def quick(monkeypatch):
     """Seconds shortened so a test call takes a fraction of a second."""
     monkeypatch.setattr(agent, "RING_SECONDS", 0.3)
     monkeypatch.setattr(agent, "OPENING_BY_S", 0.5)
-    monkeypatch.setattr(agent, "FIRST_WORDS_WAIT_S", 0.5)
+    monkeypatch.setattr(agent, "RINGING_AT_MOST_S", 1.0)
 
 
 def with_prep_model(monkeypatch, client) -> None:
@@ -62,6 +62,25 @@ def test_a_call_the_user_starts_is_picked_up_with_the_prepared_opening(tmp_path,
     assert [e["kind"] for e in MetaSession(me.workspace).take_events()] == ["call_ended"]
 
 
+def test_the_caller_hears_ringing_for_at_most_about_8_seconds(tmp_path, monkeypatch, quick):
+    """BC-025: the opening is ready within 6 s and the ringing lasts at most about 8 s. The ringing went on after
+    the opening's 6 s for up to 6 s more while the voice had not started."""
+    me = signed_in(tmp_path)
+    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE), gap=0.2))  # the opening misses its time
+    monkeypatch.setattr(agent, "RINGING_AT_MOST_S", 0.8)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"}, session=FakeSession(first_words_after=None))
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        await call.end()
+
+    asyncio.run(main())
+    assert call.session.said == ["Hi, it's Bee Call. What's on your mind?"]  # the fixed greeting, at 0.5 s
+    assert call.rang < 0.8 + 0.15
+
+
 def test_an_opening_not_ready_in_time_falls_back_to_the_fixed_greeting(tmp_path, monkeypatch, quick):
     """Confirmed rule (2026-10-15): an opening not ready within 6 s falls back to the fixed greeting."""
     me = signed_in(tmp_path)
@@ -76,6 +95,69 @@ def test_an_opening_not_ready_in_time_falls_back_to_the_fixed_greeting(tmp_path,
 
     asyncio.run(main())
     assert call.session.said == ["Hi, it's Bee Call. What's on your mind?"]
+
+
+def test_an_ai_call_s_opening_never_waits_for_the_bee_read_kept_for_the_record(tmp_path, monkeypatch, quick):
+    """BC-022: the AI's call was prepared before it rang; Bee is read again only for the record (and, without a
+    prep note, for the plain Bee context). Answered while that read was slow, the AI said nothing for up to 4 s."""
+    import time
+    from beelink.context import CallInputs
+
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"bee": True}, allowed=("bee",))
+    call = FakeCall(me.people, {"direction": "outbound", "person": "matt", "topic": "the interview"})
+    use_fakes(monkeypatch, call)
+
+    async def slow_read(*a, **kw):
+        await asyncio.sleep(1.5)
+        return CallInputs(facts=[{"id": 7, "text": "Bonus is 15%"}])
+
+    monkeypatch.setattr(agent, "fetch_call_inputs", slow_read)
+    said_at = []
+    real_say = call.session.say
+    call.session.say = lambda text: (said_at.append(time.monotonic()), real_say(text))
+
+    async def main():
+        running = asyncio.create_task(agent.run_call(call, me.people))
+        await asyncio.sleep(0.05)
+        answered = time.monotonic()
+        call.join()
+        await running
+        await asyncio.sleep(1.7)  # the read lands meanwhile
+        instructions = call.session.started["agent"].instructions
+        await call.end()
+        return answered, instructions
+
+    answered, instructions = asyncio.run(main())
+    assert said_at and said_at[0] - answered < 0.3
+    assert "Bonus is 15%" in instructions  # the plain Bee context still reached the AI, once read
+    (folder,) = call_folders(me.workspace)
+    assert (folder / "inputs" / "unconfirmed_facts.json").exists()  # and the record keeps the read
+
+
+def test_a_booked_call_is_told_to_the_ai_as_its_own_call_continuing_the_earlier_one(tmp_path, monkeypatch, quick):
+    """BC-042: a call booked out loud continues the call it was booked in; the AI places it, so it must not be told
+    the user started it."""
+    me = signed_in(tmp_path)
+    earlier = me.workspace / "2026-10-15" / "2100"
+    earlier.mkdir(parents=True)
+    (earlier / "events.jsonl").write_text(json.dumps({"t": 0, "type": "call_started", "room": "r"}) + "\n")
+    (earlier / "transcript.md").write_text("- 00:05.0 **User:** Call me back about the dentist at nine.\n")
+    call = FakeCall(me.people, {"direction": "outbound", "person": "matt", "topic": "the dentist",
+                                "continue_from": "2026-10-15/2100"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        instructions = call.session.started["agent"].instructions
+        await call.end()
+        return instructions
+
+    instructions = asyncio.run(main())
+    assert "The user started this call" not in instructions
+    assert "You placed this call, as the user booked it in an earlier call with you" in instructions
+    assert "dentist" in instructions  # the earlier call, as it was recorded
 
 
 def test_an_ai_call_unanswered_in_time_is_missed_and_not_called_again(tmp_path, monkeypatch, quick):
@@ -302,11 +384,39 @@ def test_a_caller_gone_before_the_voice_server_joined_leaves_nothing(tmp_path, m
 
     asyncio.run(main())
     assert call.session.started is None and call_folders(me.workspace) == []
-    assert MetaSession(me.workspace).take_events() == [] and call.shutdown_reason == "the caller hung up while it rang"
+    assert MetaSession(me.workspace).take_events() == []
+    assert call.shutdown_reason == "no caller came into the room within 0.1 s"  # told apart from a hang-up
+
+
+def test_the_voice_server_waits_for_the_caller_as_long_as_the_app_rings():
+    """Round 2 (pre-deploy review): a phone slow to join was given up after 5 s and then rang in silence until the
+    app's own limit (CallManager.pickUpSeconds, 30 s after it joined) said Bee Call did not pick up."""
+    assert agent.CALLER_WAIT_S >= 30
+
+
+def test_a_room_that_closes_before_the_caller_is_seen_ends_the_call_quietly(tmp_path, monkeypatch, quick):
+    """LiveKit's wait for a participant raises when the room goes away; that is a caller who never came."""
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def closed():
+        await asyncio.sleep(0.1)
+        raise RuntimeError("room disconnected while waiting for participant")
+
+    call.wait_for_participant = closed
+
+    async def main():
+        await asyncio.wait_for(agent.run_call(call, me.people), 2)
+        await call.end()
+
+    asyncio.run(main())
+    assert call.session.started is None and call_folders(me.workspace) == []
+    assert call.shutdown_reason.startswith("the room closed before the caller came into it")
 
 
 def test_a_call_hung_up_after_the_ringing_but_before_the_ai_spoke_leaves_nothing(tmp_path, monkeypatch, quick):
-    """Review of this round's fixes, finding 3: the ringing stops after FIRST_WORDS_WAIT_S, but the watch goes on
+    """Review of this round's fixes, finding 3: the ringing stops after RINGING_AT_MOST_S, but the watch goes on
     until the AI's first words (BC-027)."""
     me = signed_in(tmp_path)
     with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
@@ -339,6 +449,31 @@ def test_a_hang_up_after_the_ai_spoke_keeps_the_call(tmp_path, monkeypatch, quic
     asyncio.run(main())
     (folder,) = call_folders(me.workspace)
     assert [e["kind"] for e in MetaSession(me.workspace).take_events()] == ["call_ended"]
+
+
+def test_claude_s_history_is_kept_when_it_answers_with_glm_5_standing_by(tmp_path, monkeypatch, quick):
+    """COORDINATOR_LLM=anthropic: the session's model is the stand-by wrapper, and Claude's history (exactly what
+    Claude was sent) is still kept for checking the call afterwards."""
+    from tests.helpers import ScriptedLLM
+    from voice.claude_llm import ClaudeBedrockLLM
+    from voice.fake_claude import FakeAnthropic
+    from voice.fallback_llm import FirstRequestFallback
+
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    claude = ClaudeBedrockLLM(client=FakeAnthropic(), model="claude-haiku-5-5", thinking="disabled")
+    call.session.llm = FirstRequestFallback(claude, lambda: ScriptedLLM([]), on_choice=lambda model, reason: None)
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    (folder,) = call_folders(me.workspace)
+    assert json.loads((folder / "claude-history.json").read_text()) == {"system": None, "messages": []}
 
 
 def test_a_caller_whose_phone_drops_and_comes_back_before_the_ai_speaks_keeps_the_call(tmp_path, monkeypatch, quick):
@@ -499,3 +634,118 @@ def test_an_ai_call_whose_room_drops_while_it_rings_is_missed_not_answered(tmp_p
     assert call.session.started is None and call_folders(me.workspace) == []
     (event,) = MetaSession(me.workspace).take_events()
     assert event["kind"] == "call_missed"
+
+
+# ---------- the model log: everything the call AI's model received (the user's decision, 2026-10-15) ----------
+
+def test_every_model_request_of_a_call_is_kept_whole_on_the_server(tmp_path, monkeypatch):
+    """Whatever the model: the instructions, the whole chat with tool calls and their results, the tools offered,
+    and what came back, one line per request in the call folder's model-log.jsonl."""
+    from types import SimpleNamespace
+    from livekit.agents import Agent, llm
+    from tests.helpers import seoul_now
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+    coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
+
+    async def model(agent_, chat_ctx, tools, model_settings):
+        yield llm.ChatChunk(id="1", delta=llm.ChoiceDelta(role="assistant", content="Let me check."))
+        yield llm.ChatChunk(id="1", delta=llm.ChoiceDelta(role="assistant", tool_calls=[
+            llm.FunctionToolCall(name="job_status", arguments="{}", call_id="c1")]))
+
+    monkeypatch.setattr(Agent.default, "llm_node", staticmethod(model))
+
+    async def main():
+        chat = llm.ChatContext()
+        chat.add_message(role="system", content=coordinator.instructions)
+        chat.add_message(role="user", content="Did Bee hear about the trip?")
+        chat.insert(llm.FunctionCall(call_id="c0", name="search_bee", arguments='{"query": "trip"}'))
+        chat.insert(llm.FunctionCallOutput(call_id="c0", name="search_bee", output="A trip to Busan", is_error=False))
+        return [chunk async for chunk in coordinator.llm_node(chat, list(coordinator.tools), None)]
+
+    asyncio.run(main())
+    rec.close()
+    (entry,) = [json.loads(line) for line in (rec.dir / "model-log.jsonl").read_text().splitlines()]
+    items = entry["chat"]
+    assert items[0]["role"] == "system" and "Bee Call" in items[0]["content"][0]
+    assert [i.get("type") for i in items[2:]] == ["function_call", "function_call_output"]
+    assert items[3]["output"] == "A trip to Busan"
+    assert "delegate" in [tool["name"] for tool in entry["tools"]]
+    assert entry["reply"] == {"text": "Let me check.",
+                              "tool_calls": [{"name": "job_status", "arguments": "{}", "call_id": "c1"}]}
+
+
+def test_the_record_server_never_serves_the_model_log_or_the_claude_history(tmp_path, monkeypatch):
+    """BC-095: both hold what the model was given, Bee's raw data included."""
+    from aiohttp.test_utils import TestClient, TestServer
+    from voice import session_server
+
+    me = signed_in(tmp_path)
+    folder = me.workspace / "2026-10-15" / "2100"
+    folder.mkdir(parents=True)
+    (folder / "events.jsonl").write_text('{"t": 0, "type": "call_started", "room": "call-matt-x"}\n')
+    for name in ("model-log.jsonl", "claude-history.json", "transcript.md"):
+        (folder / name).write_text("{}")
+
+    async def main():
+        async with TestClient(TestServer(session_server.make_app(me.people)), headers=me.headers) as client:
+            return {name: (await client.get(f"/api/sessions/2026-10-15/2100/files/{name}")).status
+                    for name in ("model-log.jsonl", "MODEL-LOG.JSONL", "claude-history.json", "transcript.md")}
+
+    statuses = asyncio.run(main())
+    assert statuses.pop("transcript.md") == 200 and set(statuses.values()) == {403}, statuses
+
+
+# ---------- where the time of each turn went (the user's request, 2026-10-15) ----------
+
+def test_each_user_turn_records_where_its_time_went(tmp_path):
+    """One turn_timing event per user turn, from LiveKit's per-message metrics: when the user's speech ended, the
+    transcription and end-of-turn delays, the model's first token, the voice's first audio, and the total."""
+    from types import SimpleNamespace
+    from livekit.agents import llm
+    from tests.helpers import seoul_now
+    from voice.recorder import CallRecorder
+
+    rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+    session = FakeSession()
+    agent.wire_events(session, rec)
+
+    def said(role, text, metrics):
+        session.emit("conversation_item_added", SimpleNamespace(item=llm.ChatMessage(role=role, content=[text],
+                                                                                    metrics=metrics)))
+
+    said("user", "어", {"started_speaking_at": 99.0, "stopped_speaking_at": 100.0, "transcription_delay": 0.2,
+                       "end_of_turn_delay": 0.8, "on_user_turn_completed_delay": 0.01})
+    said("user", "그러니까 내일 회의 말이야", {"stopped_speaking_at": 104.0, "transcription_delay": 0.3,
+                                      "end_of_turn_delay": 0.5})
+    said("assistant", "내일 회의요?", {"started_speaking_at": 105.6, "llm_node_ttft": 0.6, "llm_node_ttfs": 0.7,
+                                    "tts_node_ttfb": 0.25, "e2e_latency": 1.6})
+    said("user", "응", {})  # a turn LiveKit gave no metrics for
+    session.emit("close", SimpleNamespace(reason="user hung up"))
+    rec.close()
+    timings = [e for e in events_of(rec.dir) if e["type"] == "turn_timing"]
+    assert [t["user_stopped_at"] for t in timings] == [100.0, 104.0, None]
+    first, second, third = timings
+    assert first["reply"] is None and first["end_of_turn_delay"] == 0.8  # the next turn came before any reply
+    assert (second["transcription_delay"], second["end_of_turn_delay"], second["llm_ttft"], second["tts_ttfb"],
+            second["ai_started_at"], second["speech_end_to_first_audio"]) == (0.3, 0.5, 0.6, 0.25, 105.6, 1.6)
+    assert third["reply"] is None
+
+
+def test_turn_timing_never_breaks_a_call(tmp_path):
+    from types import SimpleNamespace
+    from tests.helpers import seoul_now
+    from voice.recorder import CallRecorder
+
+    rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+    session = FakeSession()
+    agent.wire_events(session, rec)
+    session.emit("conversation_item_added", SimpleNamespace(item=SimpleNamespace(
+        role="user", text_content="hi", interrupted=False, metrics={"stopped_speaking_at": "not a time"})))
+    session.emit("conversation_item_added", SimpleNamespace(item=SimpleNamespace(
+        role="assistant", text_content="Hi!", interrupted=False, metrics=object())))
+    rec.close()
+    assert [e["type"] for e in events_of(rec.dir)].count("turn_timing") == 1
+

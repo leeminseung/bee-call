@@ -24,6 +24,18 @@ def fake_bee(tmp_path, monkeypatch):
     return log
 
 
+def test_no_test_can_run_the_real_bee_cli():
+    """A test that reads Bee without setting up the fake still gets the fake: the real `bee` on this Mac is signed in
+    to the user's own Bee account (the review of 2026-10-15 found a prep test running five real reads)."""
+    import os
+
+    from beelink import cli
+
+    assert Path(cli.bee_bin()).resolve() == FAKE_BEE.resolve()
+    asyncio.run(context.fetch_call_inputs())
+    assert calls(Path(os.environ["FAKE_BEE_LOG"]))  # every read went to the fake
+
+
 def calls(log: Path) -> list[list[str]]:
     return [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
 
@@ -73,6 +85,99 @@ def test_watcher_skips_our_calls_and_keeps_cursor(tmp_path, fake_bee, monkeypatc
     assert json.loads((workspace / "state" / "bee_cursor.json").read_text())["cursor"] == "cursor-2"
     asyncio.run(watcher.catch_up("again"))
     assert ["changed", "--cursor", "cursor-2", "--json"] in calls(fake_bee)
+
+
+def test_what_bee_made_of_our_own_call_is_never_new_context(tmp_path, fake_bee, monkeypatch):
+    """BC-060: for the time of one of our calls our own record is the source; Bee's conversation, and the facts,
+    todos and notes it made from it (some minutes after it ended), are left out, also from the saved batch."""
+    workspace = tmp_path / "workspace"
+    our_call = datetime.fromtimestamp(time.time() - 3600)
+    make_session(workspace, our_call, 600)
+    during, soon_after = (int((our_call.timestamp() + s) * 1000) for s in (120, 600 + 300))
+    later = int((our_call.timestamp() + 600 + 3 * 3600) * 1000)
+    changed = {"meta": {"next_cursor": "c2"},
+               "conversations": [{"id": 2, "start_time": during, "end_time": during + 60000}],
+               "facts": [{"id": 1, "text": "Said to the AI", "created_at": soon_after},
+                         {"id": 2, "text": "Said to a friend", "created_at": later}],
+               "todos": [{"id": 3, "text": "From our call", "created_at": during}],
+               "journals": [{"id": 4, "text": "A note while on our call", "created_at": during},
+                            {"id": 5, "text": "A voice note right after the call", "created_at": soon_after}],
+               "dailies": []}
+    (tmp_path / "changed.json").write_text(json.dumps(changed))
+    monkeypatch.setenv("FAKE_BEE_CHANGED", str(tmp_path / "changed.json"))
+
+    async def on_trigger(trigger):
+        pass
+
+    trigger = asyncio.run(BeeWatcher(workspace, on_trigger).catch_up("test"))
+    assert trigger.counts == {"conversations": 0, "facts": 1, "todos": 0, "journals": 1, "dailies": 0}
+    saved = json.loads((trigger.inbox_dir / "changed.json").read_text())
+    assert [f["id"] for f in saved["facts"]] == [2] and saved["conversations"] == saved["todos"] == []
+    # A voice note is the user's own words: Bee makes none from a conversation, so one recorded in the minutes after
+    # our call is kept; only one recorded during the call is left out (the wearable heard the call).
+    assert [j["id"] for j in saved["journals"]] == [5]
+    assert "Said to the AI" not in json.dumps(saved, ensure_ascii=False)  # the meta agent can read this file
+
+
+def test_a_call_s_bee_inputs_leave_out_what_bee_made_of_our_calls(tmp_path, fake_bee):
+    """BC-060, the prep's reads: the fake's recent conversation 5 and fact 7 fall in an earlier call of ours."""
+    from beelink.calls import OurCalls
+
+    workspace = tmp_path / "workspace"
+    make_session(workspace, datetime.fromtimestamp(time.time() - 3600 - 120), 3600)  # covers the fake's "an hour ago"
+    plain = asyncio.run(context.fetch_call_inputs())
+    assert [c["id"] for c in plain.recent] == [5, 4] and [f["id"] for f in plain.facts] == [7]
+    inputs = asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
+    assert [c["id"] for c in inputs.recent] == [4]
+    assert inputs.today["recentConversations"] == [] and inputs.facts == []
+
+
+def test_the_call_ai_the_prep_and_the_meta_agent_read_nothing_bee_made_of_our_calls(tmp_path, fake_bee):
+    """BC-060 for the reads made while working: the fake's conversation 5 and fact 7 fall in an earlier call."""
+    from types import SimpleNamespace
+    from meta.agent import Thinker
+    from tests.helpers import seoul_now
+    from voice.coordinator import BeeCoordinator
+    from voice.prep import Prep, _read
+    from voice.recorder import CallRecorder
+    from beelink.calls import OurCalls
+
+    workspace = tmp_path / "workspace"
+    make_session(workspace, datetime.fromtimestamp(time.time() - 3600 - 120), 3600)
+    rec = CallRecorder(workspace, room="r", now=seoul_now())
+    coordinator = BeeCoordinator(rec, SimpleNamespace(), workspace, clock=seoul_now)
+    thinker = Thinker(workspace, ("m", "r"), client=None, bee=True)
+
+    async def main():
+        today = await coordinator.bee_today(None)
+        conversation = await coordinator.bee_conversation(None, 5)
+        meta_today = await thinker._tool("bee_today", {}, seoul_now(), [])
+        pending = await thinker._tool("bee_pending", {}, seoul_now(), [])
+        read = await _read({"name": "bee_conversation", "input": {"conversation_id": 5}, "toolUseId": "t"}, Prep(),
+                           seoul_now().tzinfo, ours=OurCalls.of(workspace))
+        return today, conversation, meta_today, pending, read["toolResult"]["content"][0]["text"]
+
+    today, conversation, meta_today, pending, read = asyncio.run(main())
+    rec.close()
+    assert "[conversation 5]" not in today and "[conversation 5]" not in meta_today
+    assert "[unconfirmed fact 7]" not in pending
+    for text in (conversation, read):
+        assert "left out" in text and "Talked through a job offer" not in text
+
+
+def test_our_call_windows_survive_a_line_still_being_written(tmp_path):
+    """The call AI's Bee reads now look at our calls' records, including the call in progress, whose last line
+    may be half-written when it is read (server review finding 13)."""
+    from beelink.calls import our_call_windows
+
+    workspace = tmp_path / "workspace"
+    started = datetime.fromtimestamp(time.time() - 120)
+    make_session(workspace, started, 60)
+    events = next(workspace.glob("*/*/events.jsonl"))
+    events.write_text(events.read_text().replace('{"t": 60', '{"t": 30.0, "type": "x"}\n{"t": 60')
+                      + '{"t": 61.0, "type": "bee_wr')
+    (window,) = our_call_windows(workspace)
+    assert window[1] - window[0] == 60
 
 
 def test_watcher_ignores_empty_batches(tmp_path, fake_bee, monkeypatch):

@@ -25,12 +25,13 @@ from typing import Any
 from botocore.config import Config
 
 from beelink import cli, reads
+from beelink.calls import OurCalls
 from beelink.clock import now_text
 from beelink.planner import Plan
 from meta import files
 from meta.session import DAILY_NOTIFICATIONS, MetaSession, quiet, quiet_ends
 from voice.aws_session import aws_session
-from voice.offers import CALL_TIME, Offer, OfferStore
+from voice.offers import CALL_TIME, AlreadyOffered, Offer, OfferStore
 from voice.prep import prep_model
 
 log = logging.getLogger("bee-call.meta")
@@ -46,8 +47,10 @@ You only propose: nothing happens until the user says yes.
 What you can do:
 - offer_call: ask the user, with a notification, whether they want a short call about one topic, at the evening \
 call time or right now. Offer a call only when talking would clearly help: a decision to make, something to sort \
-out, a result to go over. Never for small talk, never about something the user turned down. One question at a \
-time: while the user has not answered an offer, put new topics on the agenda instead.
+out. Never for small talk, never about something the user turned down. Never offer a call because a background \
+job finished or stopped after its call ended: the user continues that call from its record when they want to, so \
+put the job's result on the agenda instead. One question at a time: while the user has not answered an offer, put \
+new topics on the agenda instead.
 - write_state: rewrite your notes, state.md. Keep the open threads (each with where it came from), the agenda for \
 the next call (the next call's AI reads it before it picks up, whoever calls), what the user turned down, and what \
 you learned the user prefers.{bee_changes}
@@ -207,16 +210,19 @@ class Thinker:
                 return await asyncio.to_thread(files.grep, ws, str(args["pattern"]), str(args.get("path") or "."),
                                                str(args.get("glob") or "*"))
             if name == "bee_today":
-                return await reads.today(now.tzinfo)
+                return await reads.today(now.tzinfo, ours=OurCalls.of(ws))
             if name == "bee_conversation":
-                return await reads.conversation(int(args["conversation_id"]), now.tzinfo)
+                return await reads.conversation(int(args["conversation_id"]), now.tzinfo, ours=OurCalls.of(ws))
             if name == "search_bee":
-                return await reads.search(str(args.get("query", "")))
+                return await reads.search(str(args.get("query", "")), ours=OurCalls.of(ws))
             if name == "bee_day":
                 return await reads.day(str(args.get("date", "")))
             if name == "bee_pending":
                 facts, suggestions = await asyncio.gather(cli.unconfirmed_facts(), cli.todo_suggestions(),
                                                           return_exceptions=True)
+                ours = OurCalls.of(ws)  # what Bee made of our own calls is left out (BC-060)
+                facts = facts if isinstance(facts, BaseException) else ours.others(facts)
+                suggestions = suggestions if isinstance(suggestions, BaseException) else ours.others(suggestions)
                 parts = []
                 parts.append("Unconfirmed facts:\n" + (reads.facts_text(facts) or "none") if not isinstance(facts, BaseException)
                              else f"Unconfirmed facts: read failed ({facts})")
@@ -251,7 +257,11 @@ class Thinker:
         ids = [int(i) for i in args.get("conversation_ids") or []] if self.bee else []
         plan = Plan(call=True, reason=why, inbox_dir=inbox_dir, conversation_ids=ids, topic=topic,
                     kind="conversation" if ids else None)
-        offer = store.ask(plan, now, at=self.call_time)
+        try:
+            offer = store.ask(plan, now, at=self.call_time)
+        except AlreadyOffered as exc:
+            return (f"Not asked: {exc}; one Bee conversation leads to at most one offer. Put it on the agenda for the "
+                    "next call instead.")
         sent = await self.send(offer, self.workspace, now) if self.send else "not sent (no sender)"
         actions.append({"tool": "offer_call", "offer": offer.id, "topic": topic, "result": sent})
         return f"Asked: offer {offer.id}, suggesting {offer.suggested_at}. {sent}"

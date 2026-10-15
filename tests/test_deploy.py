@@ -154,7 +154,22 @@ def test_secrets_copy_this_macs_settings_except_its_own():
 
 def test_without_the_workers_arn_the_server_keeps_the_fake_worker():
     chosen, _ = server_settings({})
-    assert {name: value for name, (value, _) in chosen.items()} == {"COORDINATOR_LLM": "bedrock"}
+    assert {name: value for name, (value, _) in chosen.items()} == {"COORDINATOR_LLM": "anthropic"}
+
+
+def test_the_server_runs_claude_haiku_on_anthropic_s_api_with_the_key_from_this_mac():
+    """The call AI on the server is Claude Haiku 5.5 on Anthropic's own API (2026-10-15); its key goes to SSM like
+    the other settings of .env.local. Without it on either side, secrets says every call will run on GLM 5."""
+    from scripts.deploy_server import coordinator_note
+
+    chosen, skipped = server_settings({"ANTHROPIC_API_KEY": "sk-ant-test"})
+    assert chosen["COORDINATOR_LLM"] == ("anthropic", "server default")
+    assert chosen["ANTHROPIC_API_KEY"] == ("sk-ant-test", ".env.local") and not skipped
+    assert coordinator_note(chosen, existing=set()) is None
+    assert coordinator_note(server_settings({})[0], existing={"ANTHROPIC_API_KEY"}) is None  # already on the server
+    note = coordinator_note(server_settings({})[0], existing=set())
+    assert "ANTHROPIC_API_KEY" in note and "GLM 5" in note
+    assert coordinator_note(server_settings({"COORDINATOR_LLM": "bedrock"})[0], existing=set()) is None
 
 
 def test_the_workers_arn_is_found_in_the_macs_data_root(tmp_path):

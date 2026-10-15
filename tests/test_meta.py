@@ -5,7 +5,7 @@ No network: the model is a fake Converse client, and the notification sender is 
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -139,6 +139,33 @@ def test_doing_nothing_is_logged_too_and_a_failure_proposes_nothing(tmp_path):
     assert len(MetaSession(ws).entries()) == 2
 
 
+def test_the_meta_agent_is_told_never_to_call_back_about_a_job_s_result():
+    """BC-039: the AI never calls back on its own to continue a call, also when a background job finishes or stops
+    after the call ended; the user continues it from the call's record."""
+    from meta.agent import INSTRUCTIONS
+
+    assert "a result to go over" not in INSTRUCTIONS
+    assert "Never offer a call because a background job finished or stopped" in INSTRUCTIONS
+
+
+def test_a_bee_conversation_that_had_an_offer_gets_no_second_one(tmp_path):
+    """BC-014: one Bee conversation leads to at most one offer, also after the user declined it."""
+    ws = workspace_with_a_call(tmp_path)
+
+    def offering():
+        return ScriptedModel([
+            {"role": "assistant", "content": [tool_use(1, "offer_call", topic="Weighing two job offers", why="w",
+                                                       conversation_ids=[77])]},
+            {"role": "assistant", "content": [{"text": "Done."}]}])
+
+    asyncio.run(Thinker(ws, ("m", "r"), client=offering(), bee=True).think([], NOW))
+    (first,) = OfferStore(ws).all()
+    OfferStore(ws).answer(first.id, "decline", NOW)
+    entry = asyncio.run(Thinker(ws, ("m", "r"), client=offering(), bee=True).think([], NOW + timedelta(hours=2)))
+    assert [o.id for o in OfferStore(ws).all()] == [first.id]
+    assert entry["tools"][0]["result"].startswith("Not asked: Bee conversation 77 already had an offer")
+
+
 def test_one_question_at_a_time_and_a_short_plain_topic(tmp_path):
     ws = workspace_with_a_call(tmp_path)
     model = ScriptedModel([
@@ -194,36 +221,60 @@ def test_the_calls_get_the_meta_agents_notes_and_answers_wake_it(tmp_path):
 
 
 
-def test_a_failed_think_keeps_its_events_for_another_try_then_gives_up(tmp_path):
-    from voice.outbound import META_TRIES, think_about_new_events
+class Flaky:
+    """A model that fails `fails` times, then answers."""
+
+    def __init__(self, fails):
+        self.fails, self.calls = fails, 0
+
+    def converse(self, **request):
+        self.calls += 1
+        if self.fails:
+            self.fails -= 1
+            raise RuntimeError("read timeout")
+        return {"output": {"message": {"role": "assistant", "content": [{"text": "Looked; nothing to do."}]}}}
+
+
+def test_a_failed_think_keeps_its_events_until_a_think_works(tmp_path):
+    """BC-061: a change whose handling failed is seen again; it is never given up (it was after 3 tries, so a
+    Bedrock outage of 10-30 s lost a Bee change)."""
+    from voice.outbound import think_about_new_events
 
     ws = tmp_path / "workspace"
     session = MetaSession(ws)
-    add_event(ws, "call_ended", now=NOW, call="2026-10-14/1200")
-
-    class Flaky:
-        def __init__(self, fails):
-            self.fails = fails
-
-        def converse(self, **request):
-            if self.fails:
-                self.fails -= 1
-                raise RuntimeError("read timeout")
-            return {"output": {"message": {"role": "assistant", "content": [{"text": "Looked; nothing to do."}]}}}
-
-    thinker = Thinker(ws, ("m", "r"), client=Flaky(fails=1), bee=True)
-    tries = asyncio.run(think_about_new_events(session, thinker, NOW, 0))
-    assert tries == 1 and session.peek_events()[0]  # still there
-    assert asyncio.run(think_about_new_events(session, thinker, NOW, tries)) == 0
+    add_event(ws, "bee_change", now=NOW, inbox="inbox/x")
+    broken, tries = Thinker(ws, ("m", "r"), client=Flaky(fails=10), bee=True), 0
+    for _ in range(10):
+        tries = asyncio.run(think_about_new_events(session, broken, NOW, tries))
+    assert tries == 10 and session.peek_events()[0]  # still there
+    assert "gave up" not in json.dumps(session.entries())
+    assert asyncio.run(think_about_new_events(session, broken, NOW, tries)) == 0
     assert session.peek_events()[0] == []  # handled once it worked
     assert "Failed: RuntimeError: read timeout" in session.recent_text()
 
-    add_event(ws, "bee_change", now=NOW, inbox="inbox/x")
-    broken, tries = Thinker(ws, ("m", "r"), client=Flaky(fails=99), bee=True), 0
-    for _ in range(META_TRIES):
-        tries = asyncio.run(think_about_new_events(session, broken, NOW, tries))
-    assert tries == 0 and session.peek_events()[0] == []
-    assert session.entries()[-1]["error"] == f"gave up on these events after {META_TRIES} failed tries"
+
+def test_the_meta_loop_waits_longer_after_each_failed_think(tmp_path, monkeypatch):
+    """Tried again and again, but not every few seconds against a model that is down."""
+    from voice import outbound
+    from tests.helpers import signed_in
+
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(outbound, "META_CHECK_S", 0.01)
+    monkeypatch.setattr(outbound, "META_RETRY_S", (0.05, 0.1))
+    model = Flaky(fails=4)
+    thinker = Thinker(me.workspace, ("m", "r"), client=model, bee=False)
+    add_event(me.workspace, "call_ended", now=me.person.now(), call="x")
+
+    async def main():
+        loop = asyncio.create_task(outbound.serve_meta(me.person, thinker))
+        await asyncio.sleep(0.6)
+        loop.cancel()
+        await asyncio.gather(loop, return_exceptions=True)
+
+    asyncio.run(main())
+    assert model.calls == 5  # four failures, spaced out, then the think that worked
+    assert MetaSession(me.workspace).peek_events()[0] == []
+    assert "gave up" not in json.dumps(MetaSession(me.workspace).entries())
 
 
 def test_the_agent_hears_only_of_conversations_the_watcher_kept(tmp_path):
@@ -236,6 +287,23 @@ def test_the_agent_hears_only_of_conversations_the_watcher_kept(tmp_path):
     changed.write_text(json.dumps(data))
     line = _event_line(ws, {"kind": "bee_change", "at": "x", "inbox": "inbox/2026-10-14-182500", "conversation_ids": [77]})
     assert "Weighing two job offers" in line and "Our own AI call" not in line
+
+
+def test_file_tools_leave_out_the_model_log_and_claude_s_history(tmp_path):
+    """A call's model log repeats the whole conversation in every request (and the Bee context with it), so a search
+    would match it on every line and push the transcripts out of the 50 matches; like Claude's history, it is a
+    private debugging record that is never served, and the timeline shows what the meta agent reads."""
+    ws = workspace_with_a_call(tmp_path)
+    call = ws / "2026-10-14" / "1200"
+    (call / "transcript.md").write_text("- 00:05.0 **User:** the interview is on Friday\n")
+    (call / "model-log.jsonl").write_text('{"chat": "interview"}\n' * 30)
+    (call / "claude-history.json").write_text('[{"content": "interview"}]')
+    found = files.grep(ws, "interview")
+    assert "transcript.md" in found and "model-log" not in found and "claude-history" not in found
+    assert "model-log" not in files.list_files(ws, "2026-10-14/1200")
+    for private in ("model-log.jsonl", "claude-history.json"):
+        with pytest.raises(files.FileError):
+            files.read_file(ws, f"2026-10-14/1200/{private}")
 
 
 def test_file_tools_skip_links_out_hidden_folders_and_locations(tmp_path):
