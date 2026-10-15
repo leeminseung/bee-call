@@ -26,13 +26,15 @@ struct BeeCallApp: App {
             // The switches live in the Settings app. SettingsSync sends them at launch and on every change; coming
             // back to the app sends them again too, and brings Bee in line with "Use Bee".
             .task(id: scenePhase) {
-                if scenePhase == .active { await server.syncSettings() }
+                guard scenePhase == .active else { return }
+                server.readSignInAgain() // the Keychain may have been locked at launch
+                await server.syncSettings()
             }
             // A Bee Call entry tapped in the Phone app's Recents: a new call, as the Call button makes.
             .onContinueUserActivity(RecentsCall.activityType) { activity in
                 guard RecentsCall.startsCall(activity, signedIn: server.isSignedIn, inCall: calls.isInCall)
                 else { return }
-                Task { await calls.startCall(tokenServerURL: Server.tokenURL) }
+                Task { await calls.startCall() }
             }
             #if DEBUG
             .task {
@@ -42,10 +44,11 @@ struct BeeCallApp: App {
         }
     }
 
-    /// The call screen once signed in; in a Debug build, also for the voice demo (VoiceDemo.swift).
+    /// The call screen once signed in; in a Debug build, also for the voice and offer demos (VoiceDemo.swift,
+    /// OfferDemo.swift).
     private var showsCallScreen: Bool {
         #if DEBUG
-        if VoiceDemo.requested() != nil { return true }
+        if VoiceDemo.requested() != nil || OfferDemo.requested() { return true }
         #endif
         return server.isSignedIn
     }

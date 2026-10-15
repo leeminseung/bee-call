@@ -17,12 +17,19 @@ final class CallManager: NSObject {
     private(set) var isInCall = false
     private(set) var isRinging = false // the AI's call, until it is answered or ends
     private(set) var isEnding = false
-    let liveKit = LiveKitClient()
+    /// "Save on this iPhone" is on but the call's recording did not start: shown until the next call joins.
+    private(set) var phoneRecordingProblem: String?
+    let liveKit: LiveKitClient // the call screen shows its captions and voice levels
 
-    @ObservationIgnored private let provider: CXProvider
-    @ObservationIgnored private let controller = CXCallController()
+    /// The call's room: `liveKit` in the app, a stand-in in tests.
+    @ObservationIgnored private let room: any CallRoom
+    /// Before an answered call joins: the Settings-app switches go to the server (contract section 1).
+    @ObservationIgnored private let beforeAnswering: () async -> Void
+
+    @ObservationIgnored private let callKit: any CallKitReports
+    @ObservationIgnored private let calls: any CallKitRequests
+    @ObservationIgnored private let microphone: () async -> Bool
     @ObservationIgnored private var callID: UUID?
-    @ObservationIgnored private var tokenServerURL = ""
     @ObservationIgnored private var earlierCall: String? // the record id of the call a new call continues
     @ObservationIgnored private var connecting: Task<Void, Never>?
     // Room → CallKit call, for every AI call rung. The ring stream replays the last minute on each reconnect.
@@ -30,22 +37,35 @@ final class CallManager: NSObject {
     @ObservationIgnored private var ringTimeout: Task<Void, Never>?
     // VoIP pushes ring the AI's calls while the app is closed or the phone is locked.
     @ObservationIgnored private let pushRegistry = PKPushRegistry(queue: .main)
-    // A call the user starts rings until the AI picks up (it reads Bee first, at most about 8 s).
+    // Each call waits for the AI: a call the user starts rings until it picks up (it reads Bee first, at most
+    // about 8 s), and an answered call until it is there.
     @ObservationIgnored private var pickUpTimeout: Task<Void, Never>?
     @ObservationIgnored private var pickedUp = false
-    @ObservationIgnored private let decline = CallDecline(transport: URLSession.shared,
-                                                          noteStatus: { Server.shared.noteStatus($0) })
-    private static let pickUpSeconds = 30 // the voice server picks up within about 8 s; this catches a stuck one
+    @ObservationIgnored private let pickUpWait: Duration
+    @ObservationIgnored private let decline: CallDecline
+    /// The name of every call, both ways, on CallKit's call screen and in the Phone app's Recents.
+    private static let handle = CXHandle(type: .generic, value: "Bee Call")
 
-    override init() {
-        let configuration = CXProviderConfiguration()
-        configuration.supportsVideo = false
-        configuration.maximumCallGroups = 1
-        configuration.maximumCallsPerCallGroup = 1
-        configuration.supportedHandleTypes = [.generic]
-        provider = CXProvider(configuration: configuration)
+    /// CallKit's provider and controller, the microphone prompt, the LiveKit room, the settings sent before an
+    /// answer and the decline sent to the server, unless a test passes stand-ins. `pickUpWait`: how long a call
+    /// waits for the AI to pick up; the voice server picks up within about 8 s, so this catches a stuck one.
+    init(callKit: (any CallKitReports)? = nil, calls: (any CallKitRequests)? = nil,
+         microphone: @escaping () async -> Bool = { await LiveKitSDK.ensureDeviceAccess(for: [.audio]) },
+         room: (any CallRoom)? = nil,
+         beforeAnswering: @escaping () async -> Void = { await Server.shared.settings.sendBeforeAnswering() },
+         decline: CallDecline = CallDecline(), pickUpWait: Duration = .seconds(30)) {
+        let provider: CXProvider? = callKit == nil ? Self.provider() : nil
+        self.callKit = callKit ?? provider!
+        self.calls = calls ?? CXCallController()
+        self.microphone = microphone
+        let liveKit = LiveKitClient()
+        self.liveKit = liveKit
+        self.room = room ?? liveKit
+        self.beforeAnswering = beforeAnswering
+        self.decline = decline
+        self.pickUpWait = pickUpWait
         super.init()
-        provider.setDelegate(self, queue: nil) // nil = main queue
+        provider?.setDelegate(self, queue: nil) // nil = main queue
 
         // CallKit is the only owner of the audio session. The SDK must not configure the session,
         // and its audio engine may run only between didActivate and didDeactivate below
@@ -53,11 +73,20 @@ final class CallManager: NSObject {
         AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
         try? AudioManager.shared.setEngineAvailability(.none)
 
-        liveKit.onLinkChange = { [weak self] link in
+        self.room.onLinkChange = { [weak self] link in
             self?.linkChanged(link)
         }
         pushRegistry.delegate = self
         pushRegistry.desiredPushTypes = [.voIP]
+    }
+
+    private static func provider() -> CXProvider {
+        let configuration = CXProviderConfiguration()
+        configuration.supportsVideo = false
+        configuration.maximumCallGroups = 1
+        configuration.maximumCallsPerCallGroup = 1
+        configuration.supportedHandleTypes = [.generic]
+        return CXProvider(configuration: configuration)
     }
 
     /// Asks for the microphone while the app is on screen. A call rung by a VoIP push cannot show the prompt.
@@ -65,27 +94,26 @@ final class CallManager: NSObject {
         #if DEBUG
         guard VoiceDemo.requested() == nil else { return } // a pretend call needs no microphone
         #endif
-        _ = await LiveKitSDK.ensureDeviceAccess(for: [.audio])
+        _ = await microphone()
     }
 
     /// Calls Bee Call. With `continuing`, the new call picks up from that earlier call (its record id).
-    func startCall(tokenServerURL: String, continuing earlierCall: String? = nil) async {
+    func startCall(continuing earlierCall: String? = nil) async {
         guard !isInCall else { return }
         isInCall = true
         self.earlierCall = earlierCall
         status = earlierCall == nil ? "Calling…" : "Calling to continue…"
         // Ask now, while the app is on screen. Inside the CallKit audio window the SDK
         // cannot show the prompt, and turning the engine on fails without permission.
-        guard await LiveKitSDK.ensureDeviceAccess(for: [.audio]) else {
+        guard await microphone() else {
             finish("Microphone access is off. Turn it on in Settings.")
             return
         }
         let id = UUID()
         callID = id
-        self.tokenServerURL = tokenServerURL
-        let start = CXStartCallAction(call: id, handle: CXHandle(type: .generic, value: "AI"))
+        let start = CXStartCallAction(call: id, handle: Self.handle)
         do {
-            try await controller.request(CXTransaction(action: start))
+            try await calls.request(CXTransaction(action: start))
         } catch {
             finish("Could not start the call: \(error.localizedDescription)")
         }
@@ -95,11 +123,11 @@ final class CallManager: NSObject {
         guard let id = callID, !isEnding else { return }
         isEnding = true
         do {
-            try await controller.request(CXTransaction(action: CXEndCallAction(call: id)))
+            try await calls.request(CXTransaction(action: CXEndCallAction(call: id)))
         } catch {
             // CallKit no longer knows this call, so clean up here.
             connecting?.cancel()
-            await liveKit.disconnect()
+            await room.disconnect()
             finish("Call ended")
         }
     }
@@ -107,24 +135,23 @@ final class CallManager: NSObject {
     // MARK: - The AI's calls
 
     /// Keeps the token server's ring stream open until this task is cancelled (the app left the
-    /// foreground, or the address changed), reconnecting after a drop.
-    func listenForRings(tokenServerURL: String) async {
+    /// foreground, or a Debug build's typed address changed), reconnecting after a drop.
+    func listenForRings() async {
         ringStatus = ""
-        guard let url = RingStream.url(tokenServerURL: tokenServerURL) else { return }
-        try? await Task.sleep(for: .milliseconds(500)) // the address may still be being typed
+        guard !Server.api.isEmpty else { return }
+        try? await Task.sleep(for: .milliseconds(500)) // a typed address may still be being typed
         var delay = 1
         while !Task.isCancelled {
             var problem = "The ring stream closed."
             do {
-                try await RingStream.read(from: url, onOpen: {
+                try await RingStream.read(onOpen: {
                     ringStatus = "Waiting for calls"
                     delay = 1
                     Task { await PushTokens.shared.deliver(.voip) } // the address may be new
                 }, onRing: {
-                    ringPhone(for: $0, tokenServerURL: tokenServerURL)
+                    ringPhone(for: $0)
                 })
             } catch let error as RingStream.BadStatus {
-                Server.shared.noteStatus(error.code) // 401: the sign-in ended
                 problem = "The token server answered \(error.code) to the ring stream."
             } catch {
                 problem = "Can't reach the token server for calls."
@@ -136,23 +163,40 @@ final class CallManager: NSObject {
         }
     }
 
-    /// Rings the phone through CallKit for the AI's call, unless the ring has expired,
-    /// this room rang already, or another call is on.
-    private func ringPhone(for ring: Ring, tokenServerURL: String) {
-        guard Self.answerBy(ring) > .now, rungRooms[ring.room] == nil, !isInCall else { return }
+    /// The ring stream's ring: rings the phone through CallKit, if the one gate lets it.
+    func ringPhone(for ring: Ring) {
+        guard let id = beginRinging(ring) else { return }
+        Task { await reportIncoming(id, ring) }
+    }
+
+    /// The one way into ringing, for the ring stream and a VoIP push alike: a ring that has not expired, for a
+    /// room that has not rung yet, while no other call is on and the app knows its server. Returns the new
+    /// call's id, or nil when the ring must not ring.
+    private func beginRinging(_ ring: Ring) -> UUID? {
+        guard Self.answerBy(ring) > .now, rungRooms[ring.room] == nil, !isInCall, !Server.api.isEmpty else {
+            return nil
+        }
         let id = UUID()
         rungRooms[ring.room] = id
         callID = id
-        self.tokenServerURL = tokenServerURL
         isInCall = true
         isRinging = true
         status = ring.topic.map { "Bee Call is calling about: \($0)" } ?? "Bee Call is calling…"
-        Task { await reportIncoming(id, ring) }
+        return id
+    }
+
+    /// What CallKit shows for the AI's call: Bee Call, and what it is about.
+    private func callUpdate(topic: String?) -> CXCallUpdate {
+        let update = CXCallUpdate()
+        update.remoteHandle = Self.handle
+        update.localizedCallerName = callerName(topic: topic)
+        update.hasVideo = false
+        return update
     }
 
     private func reportIncoming(_ id: UUID, _ ring: Ring) async {
         // Same reason as in startCall: once CallKit owns the audio, the prompt cannot appear.
-        let micAllowed = await LiveKitSDK.ensureDeviceAccess(for: [.audio])
+        let micAllowed = await microphone()
         guard callID == id else { return } // ended while we asked
         guard micAllowed else {
             finish("Microphone access is off. Turn it on in Settings.")
@@ -162,12 +206,13 @@ final class CallManager: NSObject {
             finish("Missed a call from Bee Call")
             return
         }
-        let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: "Bee Call")
-        update.localizedCallerName = callerName(topic: ring.topic)
-        update.hasVideo = false
+        let update = callUpdate(topic: ring.topic)
         do {
-            try await provider.reportNewIncomingCall(with: id, update: update)
+            try await withCheckedThrowingContinuation { (reported: CheckedContinuation<Void, Error>) in
+                callKit.reportIncoming(id, update) { error in
+                    if let error { reported.resume(throwing: error) } else { reported.resume() }
+                }
+            }
         } catch {
             guard callID == id else { return }
             if (error as? CXErrorCodeIncomingCallError)?.code == .callUUIDAlreadyExists {
@@ -178,7 +223,7 @@ final class CallManager: NSObject {
             return
         }
         guard callID == id else {
-            provider.reportCall(with: id, endedAt: nil, reason: .remoteEnded) // ended while CallKit set it up
+            callKit.reportEnded(id, reason: .remoteEnded) // ended while CallKit set it up
             return
         }
         stopRingingAtExpiry(id, ring)
@@ -205,36 +250,25 @@ final class CallManager: NSObject {
 
     /// iOS ends an app that does not report a call to CallKit for every VoIP push, and may stop its pushes, so
     /// this reports one at once, before anything else: also for a ring that expired, rang already, or cannot ring.
-    private func reportPushedCall(_ ring: Ring?, completion: @escaping () -> Void) {
+    func reportPushedCall(_ ring: Ring?, completion: @escaping () -> Void) {
         let done = Handed(completion)
-        let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: "Bee Call")
-        update.localizedCallerName = callerName(topic: ring?.topic)
-        update.hasVideo = false
+        let update = callUpdate(topic: ring?.topic)
         if let ring, let rung = rungRooms[ring.room], callID == rung {
             // The ring stream rang this call (or is about to): reporting it again changes nothing on screen,
             // and if this report wins the race the stream's own report gets callUUIDAlreadyExists.
-            provider.reportNewIncomingCall(with: rung, update: update) { _ in done.call() }
+            callKit.reportIncoming(rung, update) { _ in done.call() }
             return
         }
-        let address = Server.tokenURL
-        guard let ring, rungRooms[ring.room] == nil, Self.answerBy(ring) > .now, !isInCall, !address.isEmpty else {
+        guard let ring, let id = beginRinging(ring) else {
             // Unreadable, already rung and over, expired, during another call, or no token server set.
             let id = UUID()
-            provider.reportNewIncomingCall(with: id, update: update) { [weak self] _ in
-                Task { @MainActor in self?.provider.reportCall(with: id, endedAt: nil, reason: .unanswered) }
+            callKit.reportIncoming(id, update) { [weak self] _ in
+                Task { @MainActor in self?.callKit.reportEnded(id, reason: .unanswered) }
                 done.call()
             }
             return
         }
-        let id = UUID()
-        rungRooms[ring.room] = id
-        callID = id
-        tokenServerURL = address
-        isInCall = true
-        isRinging = true
-        status = ring.topic.map { "Bee Call is calling about: \($0)" } ?? "Bee Call is calling…"
-        provider.reportNewIncomingCall(with: id, update: update) { [weak self] error in
+        callKit.reportIncoming(id, update) { [weak self] error in
             let failure = error.map(Self.ringFailure)
             Task { @MainActor in
                 guard let self, self.callID == id else { return }
@@ -268,31 +302,35 @@ final class CallManager: NSObject {
     /// Gets a pass and joins the room: a new room for a call the user starts,
     /// or with `answering`, the room of the AI's call.
     private func join(_ id: UUID, answering roomName: String?) {
-        let url = tokenServerURL
         pickedUp = false
-        liveKit.onAgentAnswered = { [weak self] in self?.agentPickedUp(id) }
+        phoneRecordingProblem = nil
+        room.onAgentAnswered = { [weak self] in self?.agentPickedUp(id) }
         connecting = Task {
             do {
                 if roomName != nil {
                     // The voice server reads "Save on the server" when the phone joins, so the switches go first;
                     // a slow network holds the call at most SettingsSync.answerWait (contract section 1).
-                    await Server.shared.settings.sendBeforeAnswering()
+                    await beforeAnswering()
                     try Task.checkCancellation() // the call ended while the settings went out
                 }
-                let room = try await liveKit.connect(tokenServerURL: url, answering: roomName,
-                                                     continuing: roomName == nil ? earlierCall : nil)
+                _ = try await room.connect(answering: roomName, continuing: roomName == nil ? earlierCall : nil)
                 try Task.checkCancellation() // the call ended while we were connecting
-                // CallKit counts an answered call as connected once the answer action is fulfilled. A call the
-                // user starts counts as connected when the AI picks up, which may already have happened.
-                if roomName == nil && !pickedUp {
-                    status = "Ringing…"
-                    pickUpTimeout = Task {
-                        try? await Task.sleep(for: .seconds(Self.pickUpSeconds))
-                        guard !Task.isCancelled, callID == id, !pickedUp else { return }
+                // Only now: a recording started after a hang-up ran on into the next call's file (review finding 15).
+                phoneRecordingProblem = room.recordOnPhoneIfWanted()
+                // Both ways, the call screen says "Connected" once the AI is there (agentPickedUp), which may
+                // already be so. Until then a call the person starts rings, and an answered call waits: a join
+                // that lands after the AI gave up opens an empty room, which would sit "Connected" in silence
+                // (review finding 14). If the AI never comes, the call is given up.
+                guard !pickedUp else { return }
+                if roomName == nil { status = "Ringing…" }
+                pickUpTimeout = Task {
+                    try? await Task.sleep(for: pickUpWait)
+                    guard !Task.isCancelled, callID == id, !pickedUp else { return }
+                    if roomName == nil {
                         hangUp(.failed, "Bee Call didn't pick up")
+                    } else {
+                        hangUp(.remoteEnded, "That call already ended")
                     }
-                } else {
-                    status = "Connected · \(room)"
                 }
             } catch {
                 guard !Task.isCancelled else { return } // whoever ended the call cleans up
@@ -305,14 +343,14 @@ final class CallManager: NSObject {
         }
     }
 
-    /// The voice server marked the call answered: for a call the user started, it is now connected.
+    /// The voice server marked the call answered: the AI is there. A call the person started is now connected
+    /// for CallKit too; CallKit counted the AI's own call as connected when it was answered.
     private func agentPickedUp(_ id: UUID) {
         guard callID == id, !pickedUp, !isEnding else { return }
         pickedUp = true
         pickUpTimeout?.cancel()
         pickUpTimeout = nil
-        guard !rungRooms.values.contains(id) else { return } // the AI's own call: connected when answered
-        provider.reportOutgoingCall(with: id, connectedAt: nil)
+        if !rungRooms.values.contains(id) { callKit.reportConnected(id) }
         status = "Connected"
     }
 
@@ -333,10 +371,10 @@ final class CallManager: NSObject {
     private func hangUp(_ reason: CXCallEndedReason, _ message: String) {
         guard let id = callID, !isEnding else { return }
         isEnding = true
-        provider.reportCall(with: id, endedAt: nil, reason: reason)
+        callKit.reportEnded(id, reason: reason)
         connecting?.cancel()
         Task {
-            await liveKit.disconnect()
+            await room.disconnect()
             finish(message)
         }
     }
@@ -348,7 +386,7 @@ final class CallManager: NSObject {
         ringTimeout = nil
         pickUpTimeout?.cancel()
         pickUpTimeout = nil
-        liveKit.onAgentAnswered = nil
+        room.onAgentAnswered = nil
         pickedUp = false
         callID = nil
         earlierCall = nil
@@ -389,18 +427,25 @@ extension CallManager: CXProviderDelegate {
         try? AudioManager.shared.setEngineAvailability(.none)
         connecting?.cancel()
         Task {
-            await liveKit.disconnect()
+            await room.disconnect()
             finish("iOS reset the call")
         }
     }
 
-    func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
+    func provider(_ provider: CXProvider, perform action: CXStartCallAction) { perform(action) }
+    func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) { perform(action) }
+    func provider(_ provider: CXProvider, perform action: CXEndCallAction) { perform(action) }
+    func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) { perform(action) }
+
+    // What CallKit asks of a call, apart from the provider that asks it, so tests can ask it too.
+
+    func perform(_ action: CXStartCallAction) {
         action.fulfill() // CallKit activates the audio session after this.
-        provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
+        callKit.reportStartedConnecting(action.callUUID)
         join(action.callUUID, answering: nil)
     }
 
-    func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+    func perform(_ action: CXAnswerCallAction) {
         guard isRinging, action.callUUID == callID,
               let room = rungRooms.first(where: { $0.value == action.callUUID })?.key else {
             action.fail()
@@ -414,7 +459,7 @@ extension CallManager: CXProviderDelegate {
         join(action.callUUID, answering: room)
     }
 
-    func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+    func perform(_ action: CXEndCallAction) {
         // Also reached when iOS ends the call (lock screen, AirPods, Dynamic Island).
         let declined = isRinging // the AI's call, ended before it was answered
         if declined, let room = rungRooms.first(where: { $0.value == action.callUUID })?.key {
@@ -429,16 +474,16 @@ extension CallManager: CXProviderDelegate {
         isEnding = true
         connecting?.cancel()
         Task {
-            await liveKit.disconnect()
+            await room.disconnect()
             action.fulfill()
             finish(declined ? "Declined" : "Call ended")
         }
     }
 
-    func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
+    func perform(_ action: CXSetMutedCallAction) {
         Task {
             do {
-                try await liveKit.setMicrophone(enabled: !action.isMuted)
+                try await room.setMicrophone(enabled: !action.isMuted)
                 action.fulfill()
             } catch {
                 action.fail()

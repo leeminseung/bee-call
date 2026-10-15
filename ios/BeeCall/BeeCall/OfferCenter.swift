@@ -10,13 +10,13 @@ enum OfferAnswer: Equatable {
     case unreachable // no reply at all
     case failed(Int) // any other reply, such as a 502 while the server restarts
 
-    init(status: Int?) {
-        switch status {
-        case nil: self = .unreachable
-        case let code? where (200..<300).contains(code): self = .accepted
-        case 401?: self = .signedOut
-        case 404?, 409?: self = .closed
-        case let code?: self = .failed(code)
+    init(_ answer: ServerAnswer) {
+        switch answer {
+        case .ok: self = .accepted
+        case .signedOut: self = .signedOut
+        case .refused(404, _), .refused(409, _): self = .closed
+        case .refused(let code, _): self = .failed(code)
+        case .unreachable: self = .unreachable
         }
     }
 
@@ -32,14 +32,19 @@ enum OfferAnswer: Equatable {
     }
 }
 
-/// The AI asks before it calls (voice/offers.py on the Mac): a notification such as "About “Planned a Saturday
+/// The AI asks before it calls (voice/offers.py on the server): a notification such as "About “Planned a Saturday
 /// hike”: free for a quick call at 9:00 PM today?" with three buttons, which also show on the lock screen and
-/// Apple Watch. A button sends the answer to the token server, even while the app is closed; the Mac then calls
+/// Apple Watch. A button sends the answer to the token server, even while the app is closed; the server then calls
 /// at once, at the accepted time, or not at all. Offers still open are listed on the app's first screen too, so
 /// a missed notification can still be answered there.
 @Observable
 final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
-    static let shared = OfferCenter()
+    static let shared: OfferCenter = {
+        #if DEBUG
+        if OfferDemo.requested() { return OfferCenter(server: ServerClient(transport: OfferDemo.StandIn())) }
+        #endif
+        return OfferCenter()
+    }()
 
     struct Offer: Decodable, Identifiable, Equatable {
         let id: String
@@ -49,11 +54,15 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         let source: String
         let suggestedEpoch: Int?
         let callAtEpoch: Int?
+        /// The same moment as ISO 8601 on the person's own clock, such as 2026-10-15T19:00:00+09:00: its offset is
+        /// the person's time zone, which the server keeps (BookedCall.swift).
+        var callAt: String? = nil
 
-        enum CodingKeys: String, CodingKey {
+        enum CodingKeys: String, CodingKey { // as voice/offers.py Offer.view() names them
             case id, state, topic, kind, source
             case suggestedEpoch = "suggested_epoch"
-            case callAtEpoch = "call_at_epoch"
+            case callAtEpoch = "call_epoch"
+            case callAt = "call_at"
         }
 
         var title: String {
@@ -65,27 +74,23 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     enum Choice: String { case now, later, decline }
 
     private(set) var open: [Offer] = []
-    private(set) var notificationsOn = false
     private(set) var notice: String? // one line under the list when an answer did not go through
     private(set) var answering: Set<String> = [] // offers whose answer is on its way; their buttons are off
-    @ObservationIgnored private let transport: any HTTPTransport
-    @ObservationIgnored private let noteStatus: (Int) -> Void
+    @ObservationIgnored private let server: ServerClient
 
-    init(transport: any HTTPTransport = URLSession.shared,
-         noteStatus: @escaping (Int) -> Void = { Server.shared.noteStatus($0) }) {
-        self.transport = transport
-        self.noteStatus = noteStatus
+    init(server: ServerClient = ServerClient()) {
+        self.server = server
         super.init()
     }
 
-    // The buttons. Two sets of titles, picked by the Mac's call language (CALL_LANGUAGE).
+    // The buttons. Two sets of titles: the server picks one by the person's call language.
     private static let categories: Set<UNNotificationCategory> = [
         category("CALL_OFFER", later: "At the suggested time", now: "Call me now", decline: "Not now"),
         category("CALL_OFFER_KO", later: "제안한 시간에", now: "지금 전화해 줘", decline: "괜찮아요"),
     ]
 
     private static func category(_ id: String, later: String, now: String, decline: String) -> UNNotificationCategory {
-        // No .foreground: an answer is a message to the Mac, so it works from the lock screen and the watch.
+        // No .foreground: an answer is a message to the server, so it works from the lock screen and the watch.
         UNNotificationCategory(identifier: id, actions: [
             UNNotificationAction(identifier: Choice.later.rawValue, title: later),
             UNNotificationAction(identifier: Choice.now.rawValue, title: now),
@@ -100,20 +105,19 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         center.setNotificationCategories(Self.categories)
         Task {
             let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
-            notificationsOn = granted
             if granted { UIApplication.shared.registerForRemoteNotifications() }
         }
     }
 
     func refresh() async {
         await PushTokens.shared.deliverIfNeeded(.alert) // the server may have been unreachable at launch
-        guard let request = Server.request("/offers"),
-              let (data, response) = try? await transport.send(request) else { return }
-        noteStatus(response.httpStatus)
-        guard response.httpStatus == 200 else { return }
+        guard case .ok(200, let data) = await server.send("/offers") else { return }
         struct Listing: Decodable { let offers: [Offer] }
         guard let listing = try? JSONDecoder().decode(Listing.self, from: data) else { return }
         if listing.offers != open { open = listing.offers }
+        if let asked = cancelling, !listing.offers.contains(where: { $0.id == asked.id && $0.state == "booked" }) {
+            cancelling = nil // its room is being made, or it is gone: there is nothing left to cancel
+        }
         Self.clearClosed(keeping: Set(listing.offers.map(\.id)))
     }
 
@@ -133,14 +137,34 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     func answer(_ offerID: String, _ choice: Choice) async -> OfferAnswer? {
         guard answering.insert(offerID).inserted else { return nil }
         defer { answering.remove(offerID) } // after the refresh, so the row does not come back for a moment
-        guard let request = Server.request("/offers/\(offerID)", method: "POST", json: ["choice": choice.rawValue])
-        else { return .unreachable }
-        let response = try? await transport.send(request)
-        let result = OfferAnswer(status: response?.1.httpStatus)
-        if result == .signedOut { noteStatus(401) }
+        let result = OfferAnswer(await server.send("/offers/\(offerID)", method: "POST",
+                                                   json: ["choice": choice.rawValue]))
         notice = result.notice
         await refresh()
         return result
+    }
+
+    // MARK: - Cancelling a booked call
+
+    /// The booked call whose cancel question is on screen. A tap on "Cancel call" only asks: the system alert names
+    /// the time, and nothing goes to the server before the person confirms (the user's report of 2026-10-15, a
+    /// booked call called off by a tap on a button that did not say what it did).
+    private(set) var cancelling: Offer?
+
+    func askToCancel(_ offer: Offer) {
+        cancelling = offer
+    }
+
+    /// The person kept the call: nothing is sent.
+    func keepBooked() {
+        cancelling = nil
+    }
+
+    /// The person confirmed: the server calls the booked call off ("decline", until its room exists, contract
+    /// section 4). The offer comes from the alert itself, since the alert may let go of `cancelling` first.
+    func confirmCancel(_ offer: Offer) async {
+        cancelling = nil
+        await answer(offer.id, .decline)
     }
 
     /// After a button on a notification did not go through: say so, since the notification itself is gone.
@@ -179,7 +203,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         #if DEBUG
-        guard VoiceDemo.requested() == nil else { return true } // a pretend call: no notifications, no server
+        // A pretend call or offer: no notifications, no server.
+        guard VoiceDemo.requested() == nil, !OfferDemo.requested() else { return true }
         #endif
         OfferCenter.shared.setUp() // before launch ends, so a button tapped while the app was closed is delivered
         // Every kind of launch, also one for a VoIP push or a notification button, which never reach the
@@ -201,20 +226,32 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 /// The offers on the first screen: what the AI would like to call about, and when.
 struct OfferList: View {
     let offers: OfferCenter
+    @AppStorage("language") private var language = "en" // the person's call language (Settings: Language)
 
     var body: some View {
         if !offers.open.isEmpty || offers.notice != nil {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(offers.open) { offer in
-                    OfferRow(offer: offer, isAnswering: offers.answering.contains(offer.id)) { choice in
-                        Task { await offers.answer(offer.id, choice) }
-                    }
+                    OfferRow(offer: offer, isAnswering: offers.answering.contains(offer.id),
+                             answer: { choice in Task { await offers.answer(offer.id, choice) } },
+                             cancel: { offers.askToCancel(offer) })
                 }
                 if let notice = offers.notice {
                     Text(notice)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+            }
+            // A booked call is called off only after the system's alert, which names the time (BookedCall.swift).
+            .alert(offers.cancelling?.cancelQuestion(language: language) ?? "",
+                   isPresented: Binding(get: { offers.cancelling != nil }, set: { if !$0 { offers.keepBooked() } }),
+                   presenting: offers.cancelling) { offer in
+                Button(OfferCenter.Offer.cancelButton(language: language), role: .destructive) {
+                    Task { await offers.confirmCancel(offer) }
+                }
+                Button(OfferCenter.Offer.keepButton(language: language), role: .cancel) { offers.keepBooked() }
+            } message: { offer in
+                Text(offer.about(language: language))
             }
         }
     }
@@ -224,15 +261,27 @@ private struct OfferRow: View {
     let offer: OfferCenter.Offer
     let isAnswering: Bool // the answer is on its way: the buttons wait for it
     let answer: (OfferCenter.Choice) -> Void
+    let cancel: () -> Void // a booked call: asks first (OfferCenter.askToCancel)
+    @AppStorage("language") private var language = "en" // the person's call language (Settings: Language)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(offer.title)
-                .font(.headline)
-                .lineLimit(2)
-            Text(offer.status)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            if offer.state == "booked" { // when, then about what (BookedCall.swift)
+                Text(offer.bookedLine(language: language))
+                    .font(.headline)
+                    .lineLimit(2)
+                Text(offer.about(language: language))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else {
+                Text(offer.title)
+                    .font(.headline)
+                    .lineLimit(2)
+                Text(offer.status)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
             HStack(spacing: 8) {
                 switch offer.state {
                 case "asked":
@@ -242,7 +291,8 @@ private struct OfferRow: View {
                     Button("Now") { answer(.now) }.buttonStyle(.bordered)
                     Button("Not now", role: .destructive) { answer(.decline) }.buttonStyle(.bordered)
                 case "booked":
-                    Button("Call off", role: .destructive) { answer(.decline) }.buttonStyle(.bordered)
+                    Button(OfferCenter.Offer.cancelButton(language: language), role: .destructive) { cancel() }
+                        .buttonStyle(.bordered)
                 default:
                     EmptyView()
                 }
@@ -257,15 +307,13 @@ private struct OfferRow: View {
 }
 
 extension OfferCenter.Offer {
-    /// The line under the offer's title in the app's list.
+    /// The line under the offer's title in the app's list while Bee Call asks (asked), or calls (now, calling). A
+    /// booked call's row has its own lines (bookedLine and about, BookedCall.swift).
     var status: String {
         switch state {
         case "asked":
             return suggestedEpoch.map { "Bee Call asks: a quick call \(Self.day($0)) at \(Self.time($0))?" }
                 ?? "Bee Call asks for a quick call"
-        case "booked":
-            let who = source == "call" ? "You asked for a call back" : "You said yes"
-            return callAtEpoch.map { "\(who): \(Self.day($0)) at \(Self.time($0))" } ?? who
         default:
             return "Calling you now…"
         }

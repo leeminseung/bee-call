@@ -1,8 +1,6 @@
 import AuthenticationServices
-import CryptoKit
 import Foundation
 import Observation
-import Security
 import UIKit
 
 /// The Bee Call server this build talks to, and who is signed in to it (voice/token_server.py).
@@ -25,29 +23,48 @@ final class Server {
 
     private(set) var state: State
     private(set) var problem: String? // the last sign-in failure, in words
-    @ObservationIgnored private var nonce: String?
-    @ObservationIgnored let bee = BeeSync(noteStatus: { Server.shared.noteStatus($0) })
-    @ObservationIgnored let settings = SettingsSync(tokenReadable: { Server.savedToken() != nil },
-                                                    noteStatus: { Server.shared.noteStatus($0) })
+    @ObservationIgnored let signIn = AppleSignIn()
+    @ObservationIgnored let bee = BeeSync()
+    @ObservationIgnored let settings = SettingsSync(tokenReadable: { Server.savedToken() != nil })
+    @ObservationIgnored private let keychain: SignInKeychain
+    @ObservationIgnored private let store: UserDefaults // keeps who is signed in ("person")
+    @ObservationIgnored private var keychainOpened: (any NSObjectProtocol)?
 
-    private init() {
-        state = Self.savedToken() == nil ? .signedOut : .signedIn(person: UserDefaults.standard.string(forKey: "person") ?? "")
+    /// The system Keychain and defaults, unless a test passes stand-ins.
+    init(keychain: SignInKeychain = .system, store: UserDefaults = .standard) {
+        self.keychain = keychain
+        self.store = store
+        if case .token = keychain.read() {
+            state = .signedIn(person: store.string(forKey: "person") ?? "")
+        } else {
+            state = .signedOut
+        }
+        keychainOpened = NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.readSignInAgain() }
+        }
+    }
+
+    isolated deinit {
+        if let keychainOpened { NotificationCenter.default.removeObserver(keychainOpened) }
     }
 
     // MARK: - Address
 
-    /// "<scheme>://<host>:<port>" of the token server.
+    /// "<scheme>://<host>:<port>" of the token server: the one address every request is built from
+    /// (ServerClient). Empty when the build has none.
     nonisolated static var api: String {
         #if DEBUG
-        if let typed = UserDefaults.standard.string(forKey: "tokenServerURL"), let base = origin(of: typed) {
+        if let typed = UserDefaults.standard.string(forKey: typedAddressKey), let base = origin(of: typed) {
             return base
         }
         #endif
         return origin(of: Bundle.main.object(forInfoDictionaryKey: "BeeCallServer") as? String ?? "") ?? ""
     }
 
-    /// What the rest of the app calls the token server address: its /token URL.
-    nonisolated static var tokenURL: String { api.isEmpty ? "" : api + "/token" }
+    /// Where a Debug build keeps the address typed on its first screen.
+    nonisolated static let typedAddressKey = "tokenServerURL"
 
     /// The call record page (voice/session_server.py). In a Debug build: the same host as the token server,
     /// port 8788, with ?debug=1, the only address on which the page offers its debug events (web/app.js).
@@ -60,43 +77,11 @@ final class Server {
         return URL(string: Bundle.main.object(forInfoDictionaryKey: "BeeCallRecords") as? String ?? "")
     }
 
-    /// Apple's push service this build gets pushes from: Xcode builds the development one, TestFlight and
-    /// App Store builds the production one.
-    nonisolated static var pushEnvironment: String {
-        #if DEBUG
-        "development"
-        #else
-        "production"
-        #endif
-    }
-
     nonisolated private static func origin(of address: String) -> String? {
         guard let parts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = parts.scheme, scheme == "http" || scheme == "https",
               let host = parts.host, !host.isEmpty else { return nil }
         return "\(scheme)://\(host)" + (parts.port.map { ":\($0)" } ?? "")
-    }
-
-    // MARK: - Requests
-
-    /// A request to `path` on the token server, signed in.
-    nonisolated static func request(_ path: String, method: String = "GET", json: Any? = nil,
-                                    timeout: TimeInterval = 10) -> URLRequest? {
-        guard !api.isEmpty, let url = URL(string: api + path) else { return nil }
-        var request = URLRequest(url: url, timeoutInterval: timeout)
-        request.httpMethod = method
-        authorize(&request)
-        if let json {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try? JSONSerialization.data(withJSONObject: json)
-        }
-        return request
-    }
-
-    nonisolated static func authorize(_ request: inout URLRequest) {
-        if let token = savedToken() {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
     }
 
     /// Every kind of launch, also one for a VoIP push or a notification button, which never reach the foreground:
@@ -111,84 +96,80 @@ final class Server {
         if case .signedIn = state { true } else { false }
     }
 
-    /// Every answer goes through here: a 401 means the sign-in is gone (expired, or the person was removed).
-    func noteStatus(_ code: Int) {
-        if code == 401, case .signedIn = state {
-            forget()
-            problem = "Your sign-in ended. Sign in again."
-        }
+    /// The token server answered 401 to a request that carried the sign-in (ServerClient, which every request
+    /// goes through): the sign-in has ended, because it expired or the person was removed.
+    func signInEnded() {
+        guard case .signedIn = state else { return }
+        forget()
+        problem = "Your sign-in ended. Sign in again."
     }
 
     // MARK: - Signing in
 
-    /// A one-time value from the server, fetched before the Sign in with Apple button is tapped (its request
-    /// is made synchronously).
-    func prepare() async {
-        guard let request = Self.request("/auth/nonce"),
-              let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            nonce = nil
-            problem = "The server cannot be reached right now."
-            return
-        }
-        nonce = body["nonce"] as? String
-        problem = nil
-    }
+    private static let unreachable = "The server cannot be reached right now."
 
-    /// For Apple's request: the nonce's SHA-256, which Apple puts into the identity token.
-    func hashedNonce() -> String {
-        SHA256.hash(data: Data((nonce ?? "").utf8)).map { String(format: "%02x", $0) }.joined()
+    /// While the sign-in screen shows and no one-time value is ready for the button (none yet, or the last one
+    /// went to Apple), fetches one, every 5 s while the server cannot be reached.
+    func prepareSignIn() async {
+        while !signIn.isReady, !Task.isCancelled {
+            if await signIn.prepare() {
+                if problem == Self.unreachable { problem = nil }
+            } else {
+                problem = Self.unreachable
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
     }
 
     func finish(_ result: Result<ASAuthorization, any Error>) async {
-        defer { Task { await prepare() } } // a nonce works once
-        guard case .success(let authorization) = result,
-              let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
-              let tokenData = credential.identityToken, let identityToken = String(data: tokenData, encoding: .utf8),
-              let nonce else {
-            if case .failure(let error) = result, (error as? ASAuthorizationError)?.code == .canceled { return }
-            problem = "Sign in with Apple did not finish."
-            return
+        var identityToken: String?
+        var cancelled = false
+        switch result {
+        case .success(let authorization):
+            if let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+               let data = credential.identityToken {
+                identityToken = String(data: data, encoding: .utf8)
+            }
+        case .failure(let error):
+            cancelled = (error as? ASAuthorizationError)?.code == .canceled
         }
-        guard let request = Self.request("/auth/apple", method: "POST",
-                                         json: ["identity_token": identityToken, "nonce": nonce]),
-              let (data, response) = try? await URLSession.shared.data(for: request) else {
-            problem = "The server cannot be reached right now."
-            return
-        }
-        let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-        switch (response as? HTTPURLResponse)?.statusCode {
-        case 200:
-            guard let token = body["token"] as? String, let person = body["person"] as? String else { break }
-            Self.save(token: token)
-            UserDefaults.standard.set(person, forKey: "person")
+        await complete(signIn.finish(identityToken: identityToken, cancelled: cancelled))
+    }
+
+    /// The Keychain is locked from a restart until the first unlock, so a launch then (for a VoIP push) cannot read
+    /// the sign-in and starts signed out. It is read again when the Keychain opens and when the app comes to the
+    /// front (review finding 17); a sign-in that ended has no token left, and stays ended.
+    func readSignInAgain() {
+        guard case .signedOut = state, case .token = keychain.read() else { return }
+        state = .signedIn(person: store.string(forKey: "person") ?? "")
+    }
+
+    /// What the sign-in came to.
+    func complete(_ outcome: AppleSignIn.Outcome) async {
+        switch outcome {
+        case .signedIn(let token, let person):
+            let saved = keychain.save(token)
+            guard saved == errSecSuccess else { // signed in on the server, but every request would go without it
+                problem = "This iPhone could not keep your sign-in (Keychain error \(saved)). Try again."
+                return
+            }
+            store.set(person, forKey: "person")
             state = .signedIn(person: person)
             problem = nil
             await afterSignIn()
-            return
-        case 403:
-            if let code = body["waiting"] as? String {
-                state = .waiting(code: code)
-                problem = nil
-                return
-            }
-        default:
+        case .waiting(let code):
+            state = .waiting(code: code)
+            problem = nil
+        case .cancelled:
             break
+        case .failed(let message):
+            problem = message
         }
-        problem = "The server did not accept the sign-in."
-    }
-
-    func signOut() async {
-        if let request = Self.request("/auth/signout", method: "POST") {
-            _ = try? await URLSession.shared.data(for: request)
-        }
-        forget()
     }
 
     private func forget() {
-        Self.deleteToken()
-        UserDefaults.standard.removeObject(forKey: "person")
+        keychain.delete()
+        store.removeObject(forKey: "person")
         state = .signedOut
         bee.clearStatus()
     }
@@ -211,27 +192,8 @@ final class Server {
 
     // MARK: - Keychain
 
-    nonisolated private static let account = "bee-call-sign-in"
-
+    /// The sign-in token every request carries, when the Keychain gives one (SignInKeychain.swift).
     nonisolated static func savedToken() -> String? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: account,
-                                    kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    nonisolated private static func save(token: String) {
-        deleteToken()
-        let item: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: account,
-                                   kSecValueData as String: Data(token.utf8),
-                                   // Readable after the first unlock, so a VoIP push can answer a call on a locked phone.
-                                   kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
-        SecItemAdd(item as CFDictionary, nil)
-    }
-
-    nonisolated private static func deleteToken() {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: account]
-        SecItemDelete(query as CFDictionary)
+        if case .token(let token) = SystemKeychain.read() { token } else { nil }
     }
 }

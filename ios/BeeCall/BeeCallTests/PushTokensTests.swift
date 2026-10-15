@@ -8,7 +8,7 @@ final class PushTokensTests: XCTestCase {
 
     @MainActor func testANewAlertTokenIsSentAtOnce() async throws {
         let server = FakeServer()
-        let tokens = PushTokens(transport: server, environment: "development")
+        let tokens = PushTokens(server: server.client(), environment: "development")
         await tokens.received(alertToken, kind: .alert)
         XCTAssertEqual(server.sent, ["POST /push"])
         XCTAssertEqual(try server.body(of: "POST /push") as NSDictionary,
@@ -17,7 +17,7 @@ final class PushTokensTests: XCTestCase {
 
     @MainActor func testANewVoIPTokenIsSentAtOnce() async throws {
         let server = FakeServer()
-        let tokens = PushTokens(transport: server, environment: "production")
+        let tokens = PushTokens(server: server.client(), environment: "production")
         await tokens.received(voipToken, kind: .voip)
         XCTAssertEqual(server.sent, ["POST /voip"])
         XCTAssertEqual(try server.body(of: "POST /voip") as NSDictionary,
@@ -28,7 +28,7 @@ final class PushTokensTests: XCTestCase {
     @MainActor func testAnAlertTokenIsSentAgainUntilTheServerHasIt() async {
         let server = FakeServer()
         server.replies["POST /push"] = .unreachable
-        let tokens = PushTokens(transport: server, environment: "development")
+        let tokens = PushTokens(server: server.client(), environment: "development")
         await tokens.received(alertToken, kind: .alert)
         server.replies["POST /push"] = nil
         await tokens.deliverIfNeeded(.alert) // the offer list's refresh
@@ -39,14 +39,28 @@ final class PushTokensTests: XCTestCase {
     @MainActor func testARefusedVoIPTokenDoesNotRingAClosedApp() async {
         let server = FakeServer()
         server.replies["POST /voip"] = .status(400)
-        let tokens = PushTokens(transport: server, environment: "development")
+        let tokens = PushTokens(server: server.client(), environment: "development")
         await tokens.received(voipToken, kind: .voip)
         XCTAssertFalse(tokens.voipRegistered)
     }
 
+    /// Review finding 5: the tokens' delivery skipped the sign-in rule, so a 401 to it left the person looking
+    /// signed in while the server no longer knew them.
+    @MainActor func testA401ToATokenSignsThePersonOut() async {
+        for kind in [PushTokens.Kind.alert, .voip] {
+            let server = FakeServer()
+            server.replies["POST \(kind.rawValue)"] = .status(401)
+            var ended = 0
+            let tokens = PushTokens(server: server.client(signInEnded: { ended += 1 }), environment: "development")
+            await tokens.received(voipToken, kind: kind)
+            XCTAssertEqual(ended, 1, "\(kind)")
+            XCTAssertFalse(tokens.voipRegistered)
+        }
+    }
+
     @MainActor func testATakenBackTokenIsNotSent() async {
         let server = FakeServer()
-        let tokens = PushTokens(transport: server, environment: "development")
+        let tokens = PushTokens(server: server.client(), environment: "development")
         await tokens.received(voipToken, kind: .voip)
         tokens.invalidated(.voip)
         await tokens.deliver(.voip)
@@ -57,7 +71,7 @@ final class PushTokensTests: XCTestCase {
     /// The tokens belong to the person who signed in: the server moves them to that person (contract section 3).
     @MainActor func testASignInSendsBothTokensAgain() async throws {
         let server = FakeServer()
-        let tokens = PushTokens(transport: server, environment: "development")
+        let tokens = PushTokens(server: server.client(), environment: "development")
         await tokens.received(alertToken, kind: .alert)
         await tokens.received(voipToken, kind: .voip)
         await tokens.signedIn()
@@ -67,7 +81,7 @@ final class PushTokensTests: XCTestCase {
 
     @MainActor func testASignInBeforeAnyTokenSendsNothing() async {
         let server = FakeServer()
-        await PushTokens(transport: server, environment: "development").signedIn()
+        await PushTokens(server: server.client(), environment: "development").signedIn()
         XCTAssertEqual(server.sent, [])
     }
 }

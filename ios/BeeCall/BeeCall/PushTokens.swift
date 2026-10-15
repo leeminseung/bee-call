@@ -17,11 +17,11 @@ final class PushTokens {
     private(set) var voipRegistered = false
     @ObservationIgnored private var tokens: [Kind: String] = [:]
     @ObservationIgnored private var delivered: Set<Kind> = []
-    @ObservationIgnored private let transport: any HTTPTransport
+    @ObservationIgnored private let server: ServerClient
     @ObservationIgnored private let environment: String
 
-    init(transport: any HTTPTransport = URLSession.shared, environment: String = Server.pushEnvironment) {
-        self.transport = transport
+    init(server: ServerClient = ServerClient(), environment: String = PushEnvironment.current) {
+        self.server = server
         self.environment = environment
     }
 
@@ -47,10 +47,9 @@ final class PushTokens {
 
     /// Sends the token now.
     func deliver(_ kind: Kind) async {
-        guard let token = tokens[kind],
-              let request = Server.request(kind.rawValue, method: "POST",
-                                           json: ["token": token, "environment": environment]) else { return }
-        let accepted = (try? await transport.send(request))?.1.httpStatus == 204
+        guard let token = tokens[kind] else { return }
+        let answer = await server.send(kind.rawValue, method: "POST", json: ["token": token, "environment": environment])
+        let accepted = if case .ok(204, _) = answer { true } else { false } // a 401 has signed the person out
         if accepted { delivered.insert(kind) } else { delivered.remove(kind) }
         if kind == .voip { voipRegistered = accepted }
     }

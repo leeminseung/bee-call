@@ -21,6 +21,20 @@ final class RingStreamTests: XCTestCase {
         XCTAssertNil(ring.topic)
     }
 
+    /// Review finding 11: without an epoch, expires_at was read as "the Mac's" local time, with no zone. The server
+    /// writes it on the person's clock with its zone (voice/dispatch.py), and it is read with that zone.
+    @MainActor func testAPushWithoutAnEpochIsReadWithItsZone() throws {
+        let ring = try XCTUnwrap(RingStream.ring(fromPush: [
+            "room": "call-matt-20261015-210000", "expires_at": "2026-10-15T21:01:00+09:00",
+        ]))
+        XCTAssertEqual(ring.expiresAt, Date(timeIntervalSince1970: 1_792_065_660))
+    }
+
+    /// A time with no zone says nothing certain about when the ring ends, so it does not ring.
+    @MainActor func testAPushWithoutAnEpochOrAZoneIsNotARing() {
+        XCTAssertNil(RingStream.ring(fromPush: ["room": "call-matt-20261015-210000", "expires_at": "2026-10-15T21:01:00"]))
+    }
+
     @MainActor func testAPushWithoutARoomIsNotARing() {
         XCTAssertNil(RingStream.ring(fromPush: ["topic": "x", "expires_at": "2026-10-15T21:01:00"]))
     }
