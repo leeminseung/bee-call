@@ -1095,13 +1095,16 @@ def test_a_sign_out_also_takes_the_push_tokens_kept_before_the_registry(tmp_path
 
 def test_the_person_picks_the_call_ai_s_model_haiku_by_default_or_sonnet(tmp_path):
     """Setting call_model (2026-10-15): "haiku" (the default) or "sonnet". The app sends it with its settings, a
-    bad value is refused like any bad setting, and a broken stored value keeps the default."""
+    bad value is refused like any bad setting, and a broken stored value keeps the default (no pick, read as
+    haiku)."""
+    from voice.call_models import call_model_for
+
     me = signed_in(tmp_path)
-    assert me.people.settings("matt").call_model == "haiku"
+    assert me.people.settings("matt").call_model is None and call_model_for(me.people.settings("matt")).name == "haiku"
     for bad in ("opus", "Sonnet", "", None, 5, ["sonnet"]):
         with pytest.raises(ValueError):
             me.people.change_settings("matt", {"call_model": bad})
-    assert me.people.settings("matt").call_model == "haiku"
+    assert call_model_for(me.people.settings("matt")).name == "haiku"
 
     async def main():
         async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
@@ -1114,7 +1117,7 @@ def test_the_person_picks_the_call_ai_s_model_haiku_by_default_or_sonnet(tmp_pat
     good, bad, mine = asyncio.run(main())
     assert good == 200 and bad == 400 and mine["settings"]["call_model"] == "sonnet"
     (me.people.folder("matt") / "settings.json").write_text('{"call_model": "opus", "language": "ko"}')
-    assert (me.people.settings("matt").call_model, me.people.settings("matt").language) == ("haiku", "ko")
+    assert (call_model_for(me.people.settings("matt")).name, me.people.settings("matt").language) == ("haiku", "ko")
 
 
 def test_each_call_model_has_its_claude_settings_and_a_price():
@@ -1144,16 +1147,49 @@ def test_an_approved_person_starts_with_these_settings(tmp_path):
     assert asdict(people.settings("jiwoo")) == {
         "language": "en", "call_time": "21:00", "record_on_server": True, "record_on_phone": False,
         "daily_budget_usd": 3.0, "bee": False, "voice": None, "time_zone": "Asia/Seoul",
-        "call_model": "haiku", "worker_model": "glm"}
+        "call_model": None, "worker_model": None}  # no pick: each role's default where it is used
 
 
 def test_a_model_id_the_catalog_no_longer_has_reads_as_the_role_s_default(tmp_path):
     """Contract section 6: call_model and worker_model hold catalog ids (voice/model_catalog.py)."""
+    from voice.people import settings_body
+
     people = People(tmp_path)
     people.add("matt")
     (people.folder("matt") / "settings.json").write_text(json.dumps({"call_model": "opus-9", "worker_model": "gpt"}))
-    assert (people.settings("matt").call_model, people.settings("matt").worker_model) == ("haiku", "glm")
+    assert (people.settings("matt").call_model, people.settings("matt").worker_model) == (None, None)
+    shown = settings_body(people.settings("matt"))
+    assert (shown["call_model"], shown["worker_model"]) == ("haiku", "sonnet")
     assert people.change_settings("matt", {"worker_model": "glm"}).worker_model == "glm"
+
+
+def test_a_model_the_person_never_picked_follows_the_catalog_s_default(tmp_path, monkeypatch):
+    """Review of 2026-10-15: saving every setting froze the models' defaults of the day into settings.json at the
+    first change of any other setting (the app sends one at every launch), as if the person had picked them. A model
+    never picked is stored as null and resolved to its role's default where it is used: /me, the call, the job."""
+    from dataclasses import replace
+
+    from voice import model_catalog
+    from voice.agent import job_worker
+    from voice.call_models import call_model_for
+    from voice.model_catalog import Role
+    from voice.people import settings_body
+
+    people = People(tmp_path)
+    people.add("matt")
+    people.change_settings("matt", {"language": "ko", "time_zone": "Asia/Seoul"})
+    stored = json.loads((people.folder("matt") / "settings.json").read_text())
+    assert (stored["call_model"], stored["worker_model"]) == (None, None)
+    settings = people.settings("matt")
+    assert call_model_for(settings).name == "haiku" and settings_body(settings)["worker_model"] == "sonnet"
+    worker = model_catalog.role("worker")
+    glm_first = Role("worker", person=True, choices=tuple(replace(c, default=c.id == "glm") for c in worker.choices))
+    monkeypatch.setitem(model_catalog.ROLES, "worker", glm_first)  # the catalog's default changes
+    assert settings_body(people.settings("matt"))["worker_model"] == "glm"
+    assert job_worker(people.settings("matt").worker_model, "fake") is not None  # a job resolves it as it starts
+    people.change_settings("matt", {"worker_model": "sonnet"})  # a pick is kept as picked
+    assert json.loads((people.folder("matt") / "settings.json").read_text())["worker_model"] == "sonnet"
+    assert settings_body(people.settings("matt"))["worker_model"] == "sonnet"
 
 
 def test_the_app_picks_a_voice_of_the_call_language(tmp_path):

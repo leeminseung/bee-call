@@ -167,6 +167,65 @@ def test_the_anthropic_adapter_speaks_the_messages_api():
     assert second.stop == "end" and second.model == "claude-sonnet-5-5"
 
 
+def test_a_claude_turn_goes_back_as_the_sdk_itself_would_send_it():
+    """A turn with server tool results must go back as it came: every field the API sent, null ones too, and none it
+    did not (the SDK's own rule for response blocks put in a request)."""
+    from anthropic.types import Message
+
+    from voice.providers.anthropic import content_of
+
+    message = Message.model_validate({
+        "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5",
+        "content": [{"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "q"}},
+                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_1", "content": [
+                        {"type": "web_search_result", "url": "https://a.example", "title": "A",
+                         "encrypted_content": "enc", "page_age": None}]},
+                    {"type": "text", "text": "Found it."}],
+        "stop_reason": "end_turn", "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 5}})
+    sent = content_of(message)
+    assert sent[1]["content"][0] == {"type": "web_search_result", "url": "https://a.example", "title": "A",
+                                     "encrypted_content": "enc", "page_age": None}
+    assert sent[2] == {"type": "text", "text": "Found it."}
+
+
+def test_a_claude_request_cut_short_counts_all_it_wrote_and_the_searches_that_ran():
+    """Review of 2026-10-15, finding 4: the estimate for a request cut off counted only its text, not its thinking
+    or the input of the tools it called (a report written through save_file), nor the searches that already ran."""
+    from voice.providers.anthropic import Anthropic
+
+    def start(block: dict):
+        return SimpleNamespace(type="content_block_start", content_block=SimpleNamespace(**block))
+
+    def delta(**fields):
+        return SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(**fields))
+
+    class CutOff(Stream):
+        def __aiter__(self):
+            async def events():
+                yield SimpleNamespace(type="message_start")
+                yield start({"type": "thinking"})
+                yield delta(type="thinking_delta", thinking="t" * 400)
+                yield start({"type": "server_tool_use", "name": "web_search", "id": "srvtoolu_1"})
+                yield start({"type": "web_search_tool_result", "tool_use_id": "srvtoolu_1"})
+                yield start({"type": "text"})
+                yield delta(type="text_delta", text="Found it. ")
+                yield start({"type": "tool_use", "name": "save_file", "id": "toolu_1"})
+                yield delta(type="input_json_delta", partial_json="r" * 800)
+                raise RuntimeError("connection reset")
+            return events()
+
+    class Cut(Messages):
+        def stream(self, **params):
+            return CutOff({}, [])
+
+    usage = Usage()
+    adapter = Anthropic(client=SimpleNamespace(messages=Cut()))
+    with pytest.raises(RuntimeError):
+        asyncio.run(adapter.stream({"model": "m", "system": "s", "messages": []}, usage=usage))
+    assert usage.estimated and usage.output_tokens >= (400 + 800) // 4
+    assert usage.server_tools == {"web_search": 1}
+
+
 # ---------- Bedrock's Converse API ----------
 
 def test_the_bedrock_adapter_speaks_converse_and_streams_text():

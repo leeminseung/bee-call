@@ -99,6 +99,36 @@ def test_the_worker_has_room_for_long_research_and_reports():
     assert "additionalParams" not in other["model"]["bedrockModelConfig"]  # the switch is GLM 5's own
 
 
+def test_the_harness_runs_glm_5_as_the_model_catalog_says(monkeypatch):
+    """The model catalog is the one place for a role's run settings: the harness takes the glm worker choice's output
+    limit and reasoning effort (deployed with scripts/deploy_worker.py)."""
+    from dataclasses import replace
+
+    from voice import model_catalog
+    from voice.model_catalog import Role
+
+    changed = replace(model_catalog.choice("worker", "glm"), max_tokens=1000, extra={"reasoning_effort": "medium"})
+    monkeypatch.setitem(model_catalog.ROLES, "worker", Role("worker", person=True, choices=(changed,)))
+    model = harness_definition("arn:aws:iam::123456789012:role/bee-call-worker", "zai.glm-5")["model"]
+    assert model["bedrockModelConfig"]["maxTokens"] == 1000
+    assert model["bedrockModelConfig"]["additionalParams"] == {
+        "additionalModelRequestFields": {"reasoning_effort": "medium"}}
+
+
+def test_the_harness_s_model_is_the_catalog_s_unless_a_machine_sets_another(monkeypatch):
+    """Review of the Claude worker, finding 6: the harness's model id came from its own default, not the catalog's;
+    WORKER_MODEL stays a machine's override for trying another model (then the catalog's settings do not apply)."""
+    import worker.harness as harness
+    from voice import costs, model_catalog
+
+    monkeypatch.delenv("WORKER_MODEL", raising=False)
+    monkeypatch.setattr(model_catalog, "GLM_5_WORKER", model_catalog.Offering("agentcore", "zai.glm-6", 1e-6, 3e-6))
+    assert harness.default_model() == "zai.glm-6"
+    assert costs.job_model({}) == "zai.glm-6"  # a harness job's usage.json from before it named its model
+    monkeypatch.setenv("WORKER_MODEL", "moonshotai.kimi-k3")
+    assert harness.default_model() == costs.job_model({}) == "moonshotai.kimi-k3"
+
+
 def test_the_worker_s_reasoning_is_counted_in_its_usage(tmp_path):
     """How the reasoning switch shows in a job: the harness streams GLM 5's reasoning, and the job's usage.json
     counts its characters."""
@@ -153,7 +183,8 @@ def test_worker_serves_inline_functions_until_the_agent_finishes(tmp_path):
         assert summary == "Compared the two trails; Gwanaksan is gentler."
         assert progress == ["Searching trails"] and relayed == ["Gwanaksan is the gentler hike."]
         assert (tmp_path / "report.md").read_text() == report and not (tmp_path.parent / "escape.md").exists()
-        assert json.loads((tmp_path / "usage.json").read_text())["output_tokens"] == 50
+        used = json.loads((tmp_path / "usage.json").read_text())
+        assert (used["provider"], used["model"], used["output_tokens"]) == ("agentcore", "zai.glm-5", 50)
 
     asyncio.run(main())
     first, second, third, fourth, fifth = harness.requests
@@ -266,7 +297,8 @@ def test_a_call_to_a_tool_that_does_not_exist_gets_an_error_and_the_job_goes_on(
     assert asyncio.run(main()) == "Finished without the date tool."
     answer = harness.requests[1]["messages"][0]["content"][0]["toolResult"]
     assert answer["toolUseId"] == "u1" and answer["status"] == "error"
-    assert "There is no tool named get_current_date" in answer["content"][0]["text"]
+    said = answer["content"][0]["text"]  # the tools there are, never the name it called (it could be a URL)
+    assert "There is no tool by that name" in said and "web_search" in said and "get_current_date" not in said
 
 
 def test_a_warm_session_is_ready_before_the_first_job_and_the_job_uses_it(tmp_path):

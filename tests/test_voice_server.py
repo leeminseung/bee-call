@@ -656,6 +656,32 @@ def test_the_call_ai_is_the_person_s_call_model_and_the_record_names_it(tmp_path
     assert coordinator["call_model"] == "sonnet" and coordinator["settings_not_used"] == ["COORDINATOR_THINKING"]
 
 
+@pytest.mark.parametrize("elevenlabs_key, tags", [("an-elevenlabs-key", True), ("", False)])
+def test_the_call_ai_may_write_audio_tags_only_when_its_voice_performs_them(tmp_path, monkeypatch, quick,
+                                                                            elevenlabs_key, tags):
+    """voice/audio_tags.py: with an ElevenLabs v4 voice the call AI is told of [laughs] and [sighs], and its voice
+    gets them; without the ElevenLabs key the call speaks with Polly, so it is told to write none, and a tag it writes
+    anyway is removed before speaking."""
+    me = signed_in(tmp_path)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", elevenlabs_key)
+    monkeypatch.delenv("TTS", raising=False)
+    monkeypatch.delenv("ELEVENLABS_MODEL", raising=False)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        started = call.session.started["agent"]
+        call.hang_up()
+        await call.end()
+        return started
+
+    started = asyncio.run(main())
+    assert ("[laughs]" in started.instructions and "sparingly" in started.instructions) is tags
+    assert started._audio_tags is tags
+
+
 def test_a_caller_whose_phone_drops_and_comes_back_before_the_ai_speaks_keeps_the_call(tmp_path, monkeypatch, quick):
     """Second review of this round's fixes, finding 3: LiveKit keeps the session through a dropped network and the
     caller comes back to it; that call is not one hung up while it rang."""
@@ -1048,4 +1074,36 @@ def test_turn_timing_never_breaks_a_call(tmp_path):
         role="assistant", text_content="Hi!", interrupted=False, metrics=object())))
     rec.close()
     assert [e["type"] for e in events_of(rec.dir)].count("turn_timing") == 1
+
+
+def test_a_call_record_s_line_format_is_the_one_the_readme_documents(tmp_path, monkeypatch, quick):
+    """Outside test seam 5: a call's events.jsonl, as the README's "A call's record" documents it. Each line has
+    `type` and `t` (seconds since the record began); the first is call_started with the room and the start on the
+    person's clock; and every event type in the call records kept as fixtures is named there."""
+    import re
+    from datetime import datetime
+
+    readme = (Path(__file__).parent.parent / "README.md").read_text()
+    (documented,) = re.findall(r"- \*\*A call's record\.\*\*.*", readme)
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    (folder,) = call_folders(me.workspace)
+    lines = events_of(folder)
+    assert all(isinstance(e["type"], str) and isinstance(e["t"], (int, float)) and e["t"] >= 0 for e in lines)
+    first = lines[0]
+    assert (first["type"], first["room"]) == ("call_started", call.room_name)
+    assert datetime.fromisoformat(first["started_at"]).utcoffset() is not None
+    kept = Path(__file__).parent / "fixtures" / "sessions"
+    seen = {e["type"] for path in kept.glob("*/*/events.jsonl") for e in map(json.loads, path.read_text().splitlines())}
+    seen |= {e["type"] for e in lines}
+    assert {kind for kind in seen if f"`{kind}`" not in documented} == set()
 

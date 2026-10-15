@@ -36,7 +36,7 @@ class Choice:
     """One model for one role, and how that role runs it."""
     id: str  # the catalog id: what a person's setting holds, never a provider's id
     name: str  # as shown: "Claude Haiku 5.5"
-    maker: str  # who makes or runs it, as shown
+    maker: str  # who makes it, as shown ("Z.ai" for GLM 5; where it runs goes in the description)
     description: dict[str, str]  # one short line for this role, {"ko", "en"}
     offering: Offering
     default: bool = False
@@ -72,7 +72,13 @@ UNKNOWN = Offering("unknown", "unknown", 3.00 / MILLION, 15.00 / MILLION)
 # fetch has no charge, code execution none with web search or web fetch in the request).
 SERVER_TOOL_USD = {("anthropic", "web_search"): 10.00 / 1000}
 
-GLM_STANDBY = Choice("glm", "GLM 5", "AWS", {"ko": "대기 모델", "en": "Standing by"}, GLM_5, max_tokens=2000)
+# Z.ai makes GLM 5; AWS runs it (Bedrock, and the AgentCore harness for the worker).
+GLM_STANDBY = Choice("glm", "GLM 5", "Z.ai", {"ko": "대기 모델", "en": "Standing by"}, GLM_5, max_tokens=2000)
+# The worker's GLM 5 on the AgentCore harness: a choice of its own, and the worker role's standby. It reasons only when
+# asked to (probed 2026-10-15); 32K holds any report in one call and leaves about 170K of its 202,752-token context
+# for the job's conversation (worker/harness.py).
+GLM_WORKER = Choice("glm", "GLM 5", "Z.ai", {"ko": "AWS에서 돌아가요", "en": "Runs on AWS"}, GLM_5_WORKER,
+                    max_tokens=32768, extra={"reasoning_effort": "high"})
 
 ROLES: dict[str, Role] = {role.name: role for role in (
     Role("call", person=True, standby=GLM_STANDBY, choices=(
@@ -87,22 +93,25 @@ ROLES: dict[str, Role] = {role.name: role for role in (
                {"ko": "더 깊이 생각하고, 조금 느려요", "en": "Thinks more, a little slower"},
                CLAUDE_SONNET, thinking="between_tools", effort="low"),
     )),
-    # Only choices that run are listed (the coordinator, 2026-10-15): Claude Sonnet 5.5 joins as the default with the
-    # Claude worker runner (the user's choice: thinking adaptive, effort high); until then GLM 5 is the one worker.
-    Role("worker", person=True, choices=(
-        # GLM 5 reasons only when asked to (probed 2026-10-15); 32K holds any report in one call and leaves about
-        # 170K of its 202,752-token context for the job's conversation (worker/harness.py).
-        Choice("glm", "GLM 5", "AWS", {"ko": "AWS에서 돌아가요", "en": "Runs on AWS"}, GLM_5_WORKER, default=True,
-               max_tokens=32768, extra={"reasoning_effort": "high"}),
+    # A job Claude cannot run (a refused key, no credit, overloaded after retries) runs again on GLM 5 when the first
+    # attempt produced nothing (worker/runner.py StandingBy); a decline never does.
+    Role("worker", person=True, standby=GLM_WORKER, choices=(
+        # The user's choice (2026-10-15): our own runner on Anthropic's API (worker/claude.py), thinking on and effort
+        # high, as background work need not be quick. A job is a tool loop: its conversation is cached as it grows.
+        Choice("sonnet", "Claude Sonnet 5.5", "Anthropic",
+               {"ko": "조사와 보고서가 가장 꼼꼼해요", "en": "Most thorough research and reports"},
+               CLAUDE_SONNET, default=True, thinking="adaptive", effort="high", max_tokens=32000,
+               extra={"anthropic": {"cache_control": {"type": "ephemeral"}}}),
+        GLM_WORKER,
     )),
-    Role("meta", standby=Choice("glm", "GLM 5", "AWS", {"ko": "대기 모델", "en": "Standing by"}, GLM_5,
+    Role("meta", standby=Choice("glm", "GLM 5", "Z.ai", {"ko": "대기 모델", "en": "Standing by"}, GLM_5,
                                 max_tokens=2000, extra={"read_timeout": 90, "retries": 3}), choices=(
         # A think is a tool loop: each request repeats the one before, so the conversation is cached as it grows.
         Choice("sonnet", "Claude Sonnet 5.5", "Anthropic", {"ko": "통화 사이의 판단", "en": "Decides between calls"},
                CLAUDE_SONNET, default=True, thinking="adaptive", effort="medium", max_tokens=8000,
                extra={"anthropic": {"cache_control": {"type": "ephemeral"}}}),
     )),
-    Role("prep", standby=Choice("glm", "GLM 5", "AWS", {"ko": "대기 모델", "en": "Standing by"}, GLM_5,
+    Role("prep", standby=Choice("glm", "GLM 5", "Z.ai", {"ko": "대기 모델", "en": "Standing by"}, GLM_5,
                                 max_tokens=500, extra={"temperature": 0.3, "read_timeout": 20}), choices=(
         # The opening has to be written within seconds of the phone coming into the room: no thinking.
         Choice("haiku", "Claude Haiku 5.5", "Anthropic", {"ko": "통화 준비", "en": "Prepares the call"},

@@ -16,13 +16,16 @@ Stage directions too (AsideFilter): in the user's call of 2026-10-15 14:22, afte
 its whole reply as "(사용자가 잠시 멈춤)" and the voice read it out. Every word the AI writes is spoken, so an aside
 that stands as its own sentence, wrapped in () or [] (or their full-width forms), is dropped: one at the start of
 the reply or of a sentence, followed by a space, a line break or the end, and only a few plain words long (no
-digits, no commas or sentence marks inside). A parenthesis inside a sentence, as in "AWS(아마존 웹 서비스)",
+digits, no commas or sentence marks inside). An ElevenLabs audio tag such as [laughs] is kept: a voice that performs
+it makes the sound, and for any other voice it is removed later (voice/audio_tags.py). A parenthesis inside a sentence, as in "AWS(아마존 웹 서비스)",
 stays, and so do "(02) 1234-5678" and a parenthetical sentence of real words. Asterisks are never taken for an
 aside: "**Saturday**" and "* item" are markdown, which LiveKit's own filter turns into plain words. A reply that is
 only an aside says nothing at all: no space or line break comes out before the first word.
 """
 
 import re
+
+from voice.audio_tags import is_tag
 
 TAG_START = re.compile(r"<\s*[/|｜!?]?\s*[A-Za-z_｜|]")  # "<word", "</word", "<|word", "<｜word"
 PARTIAL = re.compile(r"<\s*[/|｜!?]?\s*$")  # could still become a tag when more text arrives
@@ -64,8 +67,8 @@ class AsideFilter:
                     if decided is None:  # its end has not come yet
                         self._held = text[i:]
                         break
-                    length, aside = decided
-                    if aside:
+                    length, kind = decided
+                    if kind == "aside":
                         self._drop(text[i:i + length])
                         i += length
                         while i < len(text) and text[i] in " \t":
@@ -74,6 +77,8 @@ class AsideFilter:
                     out.append(text[i:i + length])
                     self._last = text[i + length - 1]
                     i += length
+                    if kind == "tag":
+                        continue  # an audio tag is a sound, not words: the sentence still starts after it
                 self._start = False
                 continue
             c = text[i]
@@ -90,28 +95,30 @@ class AsideFilter:
         if not held:
             return ""
         decided = self._aside(held + " ")
-        if decided is not None and decided[1] and not held[decided[0]:].strip():
+        if decided is not None and decided[1] == "aside" and not held[decided[0]:].strip():
             self._drop(held)
             return ""
         self._start = False
         return held
 
     @staticmethod
-    def _aside(text: str) -> tuple[int, bool] | None:
-        """For text that starts with an opener: (its length, whether it stands alone as an aside), or None while
-        more text is needed to tell."""
+    def _aside(text: str) -> tuple[int, str] | None:
+        """For text that starts with an opener: (its length, what it is: an "aside" standing alone, an audio "tag",
+        or "speech"), or None while more text is needed to tell."""
         closers = ASIDE_CLOSERS[text[0]]
         end = next((k for k in range(1, min(len(text), MAX_ASIDE)) if text[k] in closers), None)
         if end is None:
-            return (1, False) if len(text) >= MAX_ASIDE else None
+            return (1, "speech") if len(text) >= MAX_ASIDE else None
+        if is_tag(text[:end + 1]):
+            return end + 1, "tag"
         if NOT_IN_ASIDES.search(text[1:end]):
-            return end + 1, False
+            return end + 1, "speech"
         stop = end + 1
         while stop < len(text) and text[stop] in SENTENCE_ENDS:
             stop += 1
         if stop == len(text):
             return None  # what comes next decides
-        return (stop, True) if text[stop].isspace() else (stop, False)
+        return (stop, "aside") if text[stop].isspace() else (stop, "speech")
 
 
 class SpeechFilter:

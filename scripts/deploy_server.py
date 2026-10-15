@@ -58,8 +58,8 @@ UNITS = {"token": "bee-call-token", "session": "bee-call-session", "agent": "bee
 MAC_ONLY = {**NOT_FOR_THE_SERVER, HOST_PARAMETER: "set by dns"}
 # Settings this Mac passes on the command line rather than in .env.local, as the server should run them:
 # the model catalog's Claude models on Anthropic's own API (voice/model_catalog.py: the call AI, the prep, the meta
-# agent, the title), GLM 5 on Bedrock standing by (the key is .env.local's ANTHROPIC_API_KEY), and the AgentCore
-# worker (only when its ARN is known).
+# agent, the title, the Claude worker), GLM 5 on Bedrock standing by (the key is .env.local's ANTHROPIC_API_KEY), and
+# real background workers, each person's worker_model (when the Claude worker's key or the harness's ARN is known).
 SERVER_DEFAULTS = {"COORDINATOR_LLM": "anthropic", "WORKER": "harness"}
 
 STATUS_SCRIPT = r"""
@@ -108,8 +108,8 @@ def server_settings(local: Mapping[str, str | None], harness: tuple[str, str] | 
     if harness and "WORKER_HARNESS_ARN" not in chosen:
         chosen["WORKER_HARNESS_ARN"] = harness
     for name, value in SERVER_DEFAULTS.items():
-        if name == "WORKER" and "WORKER_HARNESS_ARN" not in chosen:
-            continue  # the harness worker cannot start without its ARN; the server then runs the fake worker
+        if name == "WORKER" and not {"WORKER_HARNESS_ARN", "ANTHROPIC_API_KEY"} & chosen.keys():
+            continue  # no real worker can run (neither the harness's ARN nor the Claude worker's key): the fake one
         chosen.setdefault(name, (value, "server default"))
     for name, value in (extra or {}).items():
         chosen[name] = (value, "--set")

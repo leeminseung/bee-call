@@ -34,7 +34,7 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -112,10 +112,11 @@ class Settings:
     bee: bool = False  # Bee is connected (POST /bee/connect)
     voice: str | None = None  # a catalog id of the call language's voices (voice/catalog.py); None: its default
     time_zone: str = DEFAULT_TIME_ZONE  # an IANA name; the app sends the phone's (contract section 1)
-    # The call AI's and the background worker's models: catalog ids of the call and worker roles, by default each
-    # role's default (voice/model_catalog.py).
-    call_model: str = field(default_factory=lambda: model_catalog.choice("call").id)
-    worker_model: str = field(default_factory=lambda: model_catalog.choice("worker").id)
+    # The call AI's and the background worker's models: catalog ids of the call and worker roles the person picked,
+    # or None for no pick, which reads as the role's default wherever it is used (settings_body for /me, the call,
+    # the job), so a person who never picked follows the catalog when its default changes (voice/model_catalog.py).
+    call_model: str | None = None
+    worker_model: str | None = None
 
     def zone(self) -> ZoneInfo:
         return ZoneInfo(self.time_zone)
@@ -193,6 +194,15 @@ class Settings:
 
 APP_SETTINGS = ("language", "voice", "call_time", "record_on_server", "record_on_phone", "time_zone",
                 "call_model", "worker_model")  # the app's
+
+
+def settings_body(settings: Settings) -> dict[str, Any]:
+    """The settings as GET /me and PUT /settings answer them (contract section 6): a model the person never picked
+    as its role's default, since the app shows a model by its id."""
+    body = asdict(settings)
+    for name in ("call_model", "worker_model"):
+        body[name] = model_catalog.choice(name.removesuffix("_model"), body[name]).id
+    return body
 
 
 @dataclass(frozen=True)
