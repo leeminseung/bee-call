@@ -183,6 +183,39 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(view.drawnItems.count, 22, "the unknown item and the speech of an unknown speaker are not drawn")
     }
 
+    /// Section 0: every key a schema requires is always present, null when it does not apply. A required key that
+    /// is missing (a renamed field, as `call_at_epoch` once was) fails instead of reading as null (second review of
+    /// the D wiring, finding 8).
+    @MainActor func testAMissingNullableKeyFails() throws {
+        func without(_ name: String, _ remove: (inout [String: Any]) -> Void) throws -> Data {
+            var body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.example(name)) as? [String: Any])
+            remove(&body)
+            return try JSONSerialization.data(withJSONObject: body)
+        }
+        XCTAssertThrowsError(try Contract.decode(CallView.self, from: without("call-view") { body in
+            var call = body["call"] as? [String: Any] ?? [:]
+            call["continue"] = call.removeValue(forKey: "continues") // renamed
+            body["call"] = call
+        }))
+        XCTAssertThrowsError(try Contract.decode(CallView.self, from: without("call-view") { body in
+            var items = body["items"] as? [[String: Any]] ?? []
+            items[15].removeValue(forKey: "failure")
+            body["items"] = items
+        }))
+        XCTAssertThrowsError(try Contract.decode(CallView.self, from: without("call-view") { $0.removeValue(forKey: "why_calling") }))
+        XCTAssertThrowsError(try Contract.decode(OpenOffers.self, from: without("offers") { body in
+            var offers = body["offers"] as? [[String: Any]] ?? []
+            offers[0].removeValue(forKey: "suggested_at")
+            body["offers"] = offers
+        }))
+        XCTAssertThrowsError(try Contract.decode(Me.self, from: without("me") { body in
+            var settings = body["settings"] as? [String: Any] ?? [:]
+            settings.removeValue(forKey: "voice")
+            body["settings"] = settings
+        }))
+        XCTAssertThrowsError(try Contract.decode(CallList.self, from: without("calls") { $0.removeValue(forKey: "before") }))
+    }
+
     @MainActor func testABodyThatBreaksTheContractFails() throws {
         var body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.example("calls")) as? [String: Any])
         var calls = try XCTUnwrap(body["calls"] as? [[String: Any]])

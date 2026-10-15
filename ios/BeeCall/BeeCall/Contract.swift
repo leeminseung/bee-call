@@ -15,7 +15,7 @@ enum Contract {
 
 /// A moment as the server writes it, "2026-10-15T01:23:05+09:00", to the second and with the UTC offset of the
 /// person's time zone, which the app keeps to show times on the person's own clock (section 0, Times).
-struct ZonedTime: Decodable, Hashable, Comparable {
+nonisolated struct ZonedTime: Decodable, Hashable, Comparable {
     let date: Date
     let zone: TimeZone
 
@@ -55,7 +55,7 @@ struct ZonedTime: Decodable, Hashable, Comparable {
 }
 
 /// A calendar day, "2026-10-15".
-struct CalendarDay: Decodable, Hashable {
+nonisolated struct CalendarDay: Decodable, Hashable {
     let year: Int
     let month: Int
     let day: Int
@@ -82,6 +82,23 @@ struct CalendarDay: Decodable, Hashable {
     }
 }
 
+/// A field the contract always sends, whose value may be null (section 0, Bodies: "Every key a schema requires is
+/// always present. A value that does not apply is null, never left out."). Decoding needs the key, so a renamed or
+/// missing field fails instead of reading as null, as `call_at_epoch` once read as no time at all.
+@propertyWrapper
+nonisolated struct Present<Value: Decodable & Hashable>: Decodable, Hashable {
+    var wrappedValue: Value?
+
+    init(wrappedValue: Value?) {
+        self.wrappedValue = wrappedValue
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        wrappedValue = container.decodeNil() ? nil : try container.decode(Value.self)
+    }
+}
+
 /// A value from one of the contract's closed lists. One this build does not know decodes as `unrecognized`.
 nonisolated protocol ContractValue: RawRepresentable<String>, Decodable, Hashable {
     static var unrecognized: Self { get }
@@ -94,22 +111,22 @@ extension ContractValue {
 }
 
 /// Who placed a call, and who said a piece of speech.
-enum Speaker: String, ContractValue {
+nonisolated enum Speaker: String, ContractValue {
     case person, ai, unrecognized
 }
 
 // MARK: - The call list and the call view (sections 1 and 2)
 
-enum TitleSource: String, ContractValue {
+nonisolated enum TitleSource: String, ContractValue {
     case summary, topic, firstSentence = "first_sentence", none, unrecognized
 }
 
-enum CallState: String, ContractValue {
+nonisolated enum CallState: String, ContractValue {
     case live, ended, dropped, missed, declined, unrecognized
 }
 
 /// What a call's finished jobs made, and how many of its Bee writes are in Bee now.
-struct Marks: Decodable, Hashable {
+nonisolated struct Marks: Decodable, Hashable {
     let report: Bool
     let table: Bool
     let chart: Bool
@@ -122,16 +139,16 @@ struct Marks: Decodable, Hashable {
 }
 
 /// A call as the list and the view both describe it (section 1).
-struct CallSummary: Decodable, Hashable, Identifiable {
+nonisolated struct CallSummary: Decodable, Hashable, Identifiable {
     let callID: String
     let startedAt: ZonedTime
     let startedBy: Speaker
-    let topic: String?
-    let title: String?
+    @Present var topic: String?
+    @Present var title: String?
     let titleSource: TitleSource
     let state: CallState
-    let durationS: Int?
-    let continues: String?
+    @Present var durationS: Int?
+    @Present var continues: String?
     let marks: Marks
 
     var id: String { callID }
@@ -149,7 +166,7 @@ struct CallSummary: Decodable, Hashable, Identifiable {
 }
 
 /// A call in the list: its summary, and its jobs and Bee writes for the folded section.
-struct CallEntry: Decodable, Hashable, Identifiable {
+nonisolated struct CallEntry: Decodable, Hashable, Identifiable {
     let call: CallSummary
     let results: [CallItem]
 
@@ -171,24 +188,24 @@ struct CallEntry: Decodable, Hashable, Identifiable {
 }
 
 /// GET /calls: newest first.
-struct CallList: Decodable, Hashable {
+nonisolated struct CallList: Decodable, Hashable {
     let calls: [CallEntry]
     let more: Bool
-    let before: String?
+    @Present var before: String?
     let version: String
 }
 
 /// How many caption lines of each speaker the view's items already hold (section 3).
-struct CaptionCounts: Decodable, Hashable {
+nonisolated struct CaptionCounts: Decodable, Hashable {
     let person: Int
     let ai: Int
 }
 
 /// GET /calls/{call_id}: one call as its thread.
-struct CallView: Decodable, Hashable {
+nonisolated struct CallView: Decodable, Hashable {
     let call: CallSummary
-    let whyCalling: WhyCalling?
-    let prep: Prep?
+    @Present var whyCalling: WhyCalling?
+    @Present var prep: Prep?
     let items: [CallItem]
     let captionsIncluded: CaptionCounts
     let version: String
@@ -208,7 +225,7 @@ struct CallView: Decodable, Hashable {
 }
 
 /// One item of a call's thread (2.4).
-enum CallItem: Decodable, Hashable, Identifiable {
+nonisolated enum CallItem: Decodable, Hashable, Identifiable {
     case speech(Speech)
     case job(Job)
     case beeWrite(BeeWrite)
@@ -249,7 +266,7 @@ enum CallItem: Decodable, Hashable, Identifiable {
 }
 
 /// One bubble: a run of one speaker's speech.
-struct Speech: Decodable, Hashable {
+nonisolated struct Speech: Decodable, Hashable {
     let id: String
     let at: ZonedTime
     let speaker: Speaker
@@ -257,26 +274,26 @@ struct Speech: Decodable, Hashable {
     let interrupted: Bool
 }
 
-enum JobState: String, ContractValue {
+nonisolated enum JobState: String, ContractValue {
     case running, done, failed, unrecognized
 }
 
-enum JobFailure: String, ContractValue {
+nonisolated enum JobFailure: String, ContractValue {
     case callEnded = "call_ended", error, unrecognized
 }
 
 /// A background job: running with its newest step, or finished with what it found and made.
-struct Job: Decodable, Hashable {
+nonisolated struct Job: Decodable, Hashable {
     let id: String
     let at: ZonedTime
     let title: String
     let state: JobState
     let startedAt: ZonedTime
-    let durationS: Int?
-    let step: String?
-    let summary: String?
+    @Present var durationS: Int?
+    @Present var step: String?
+    @Present var summary: String?
     let files: [JobFile]
-    let failure: JobFailure?
+    @Present var failure: JobFailure?
 
     enum CodingKeys: String, CodingKey {
         case id, at, title, state
@@ -286,17 +303,17 @@ struct Job: Decodable, Hashable {
     }
 }
 
-enum FileKind: String, ContractValue {
+nonisolated enum FileKind: String, ContractValue {
     case report, table, chart, other, unrecognized
 }
 
 /// A file a job made. `url` and `imageURL` are paths on the token server, loaded with the sign-in.
-struct JobFile: Decodable, Hashable {
+nonisolated struct JobFile: Decodable, Hashable {
     let name: String
     let kind: FileKind
     let url: String
-    let title: String?
-    let imageURL: String?
+    @Present var title: String?
+    @Present var imageURL: String?
 
     enum CodingKeys: String, CodingKey {
         case name, kind, url, title
@@ -304,21 +321,21 @@ struct JobFile: Decodable, Hashable {
     }
 }
 
-enum BeeWriteKind: String, ContractValue {
+nonisolated enum BeeWriteKind: String, ContractValue {
     case todoCreate = "todo_create", todoAccept = "todo_accept", factConfirm = "fact_confirm",
          factUpdate = "fact_update", unrecognized
 }
 
-enum BeeWriteState: String, ContractValue {
+nonisolated enum BeeWriteState: String, ContractValue {
     case written, undone, unknown, failed, unrecognized // `unknown` is the contract's: Bee may or may not have it
 }
 
 /// A fact or to-do written to Bee after the person's spoken yes.
-struct BeeWrite: Decodable, Hashable {
+nonisolated struct BeeWrite: Decodable, Hashable {
     let id: String
     let at: ZonedTime
     let kind: BeeWriteKind
-    let text: String?
+    @Present var text: String?
     let state: BeeWriteState
     let willRetry: Bool
     let undoable: Bool
@@ -331,30 +348,30 @@ struct BeeWrite: Decodable, Hashable {
 }
 
 /// The card of a call the AI placed (2.2).
-struct WhyCalling: Decodable, Hashable {
-    let reason: String?
-    let conversation: BeeConversation?
+nonisolated struct WhyCalling: Decodable, Hashable {
+    @Present var reason: String?
+    @Present var conversation: BeeConversation?
 }
 
 /// The Bee conversation behind an AI call: Bee's short summary and its last lines, oldest first.
-struct BeeConversation: Decodable, Hashable {
-    let summary: String?
+nonisolated struct BeeConversation: Decodable, Hashable {
+    @Present var summary: String?
     let quotes: [Quote]
 }
 
-enum QuoteSpeaker: String, ContractValue {
+nonisolated enum QuoteSpeaker: String, ContractValue {
     case person, other, unrecognized
 }
 
-struct Quote: Decodable, Hashable {
+nonisolated struct Quote: Decodable, Hashable {
     let speaker: QuoteSpeaker
     let text: String
-    let at: ZonedTime?
+    @Present var at: ZonedTime?
 }
 
 /// "통화 전에 Bee에서 본 것" (2.3).
-struct Prep: Decodable, Hashable {
-    let note: String?
+nonisolated struct Prep: Decodable, Hashable {
+    @Present var note: String?
     let lookedUp: [LookedUp]
     let fromBee: Bool
 
@@ -366,7 +383,7 @@ struct Prep: Decodable, Hashable {
 }
 
 /// One thing the prep read: a Bee conversation, a day's summary, or a search.
-enum LookedUp: Decodable, Hashable {
+nonisolated enum LookedUp: Decodable, Hashable {
     case conversation(summary: String?, at: ZonedTime?)
     case day(CalendarDay)
     case search(query: String)
@@ -392,26 +409,26 @@ enum LookedUp: Decodable, Hashable {
 // MARK: - Live updates (section 3)
 
 /// One `changed` event of GET /changes: the resource at `path` now has `version`.
-struct Change: Decodable, Hashable {
+nonisolated struct Change: Decodable, Hashable {
     let path: String
     let version: String
 }
 
 // MARK: - Offers (section 4)
 
-enum OfferState: String, ContractValue {
+nonisolated enum OfferState: String, ContractValue {
     case asked, booked, calling, declined, unrecognized
 }
 
 /// A call the AI asked about, or one booked for a time. `topic` is never null: the server writes the line its
 /// notification uses when the offer has none, so the app keeps no wording of its own.
-struct Offer: Decodable, Hashable, Identifiable {
+nonisolated struct Offer: Decodable, Hashable, Identifiable {
     let id: String
     let state: OfferState
     let topic: String
     let createdAt: ZonedTime
-    let suggestedAt: ZonedTime?
-    let callAt: ZonedTime?
+    @Present var suggestedAt: ZonedTime?
+    @Present var callAt: ZonedTime?
 
     enum CodingKeys: String, CodingKey {
         case id, state, topic
@@ -422,26 +439,26 @@ struct Offer: Decodable, Hashable, Identifiable {
 }
 
 /// GET /offers: the open offers, in the order they were made.
-struct OpenOffers: Decodable, Hashable {
+nonisolated struct OpenOffers: Decodable, Hashable {
     let offers: [Offer]
     let version: String
 }
 
 /// POST /offers/{offer_id}: the offer after the answer.
-struct OfferAnswerBody: Decodable, Hashable {
+nonisolated struct OfferAnswerBody: Decodable, Hashable {
     let offer: Offer
 }
 
 // MARK: - Voices and settings (sections 5 and 6)
 
 /// How a voice sounds, in both languages, so the app's words can differ from the call's.
-struct VoiceCharacter: Decodable, Hashable {
+nonisolated struct VoiceCharacter: Decodable, Hashable {
     let ko: String
     let en: String
 }
 
 /// A voice of the catalog. `sampleURL` is a path on the token server that needs no sign-in.
-struct Voice: Decodable, Hashable, Identifiable {
+nonisolated struct Voice: Decodable, Hashable, Identifiable {
     let id: String
     let name: String
     let character: VoiceCharacter
@@ -456,26 +473,26 @@ struct Voice: Decodable, Hashable, Identifiable {
 }
 
 /// GET /voices?language=: one language's voices, the default first.
-struct VoiceList: Decodable, Hashable {
+nonisolated struct VoiceList: Decodable, Hashable {
     let language: CallLanguage
     let voices: [Voice]
 }
 
 // MARK: - Models (section 5b)
 
-enum ModelRole: String, ContractValue {
+nonisolated enum ModelRole: String, ContractValue {
     case call, worker, unrecognized
 }
 
 /// One short line on a model for its role, in both languages.
-struct ModelDescription: Decodable, Hashable {
+nonisolated struct ModelDescription: Decodable, Hashable {
     let ko: String
     let en: String
 }
 
 /// A model of the server's catalog, as the settings sheet lists it. `id` is the catalog's (haiku, sonnet, glm),
 /// never a provider's own model id.
-struct CatalogModel: Decodable, Hashable, Identifiable {
+nonisolated struct CatalogModel: Decodable, Hashable, Identifiable {
     let id: String
     let name: String
     let maker: String
@@ -489,15 +506,15 @@ struct CatalogModel: Decodable, Hashable, Identifiable {
 }
 
 /// GET /models?role=: one role's choices, 1 to 12, the default first.
-struct ModelList: Decodable, Hashable {
+nonisolated struct ModelList: Decodable, Hashable {
     let role: ModelRole
     let models: [CatalogModel]
 }
 
 /// The person's settings as the server holds them.
-struct PersonSettings: Decodable, Hashable {
+nonisolated struct PersonSettings: Decodable, Hashable {
     let language: CallLanguage
-    let voice: String? // null: the language's default voice
+    @Present var voice: String? // null: the language's default voice
     let callModel: String // a catalog id of GET /models?role=call
     let workerModel: String // a catalog id of GET /models?role=worker
     let callTime: String
@@ -521,7 +538,7 @@ struct PersonSettings: Decodable, Hashable {
 }
 
 /// GET /me.
-struct Me: Decodable, Hashable {
+nonisolated struct Me: Decodable, Hashable {
     let person: String
     let settings: PersonSettings
     let spentTodayUSD: Double
@@ -535,14 +552,15 @@ struct Me: Decodable, Hashable {
 }
 
 /// PUT /settings: the settings after the change.
-struct SettingsAnswer: Decodable, Hashable {
+nonisolated struct SettingsAnswer: Decodable, Hashable {
     let settings: PersonSettings
 }
 
 // MARK: - Endpoints D keeps (section 7)
 
-/// A ring of GET /ring and of a VoIP push. D reads these three fields only.
-struct RingEvent: Decodable, Hashable {
+/// A ring of GET /ring and of a VoIP push. D reads these three fields only. Its topic may be left out: the ring
+/// path stays lenient, since a push the app cannot read is still reported to CallKit, but cannot ring.
+nonisolated struct RingEvent: Decodable, Hashable {
     let room: String
     let expiresAt: ZonedTime
     let topic: String?
@@ -555,7 +573,7 @@ struct RingEvent: Decodable, Hashable {
 }
 
 /// GET /token: the pass into a call's room.
-struct CallPass: Decodable, Hashable {
+nonisolated struct CallPass: Decodable, Hashable {
     let url: String
     let token: String
     let room: String
@@ -563,22 +581,22 @@ struct CallPass: Decodable, Hashable {
 }
 
 /// GET /auth/nonce.
-struct Nonce: Decodable, Hashable {
+nonisolated struct Nonce: Decodable, Hashable {
     let nonce: String
 }
 
 /// POST /auth/apple: the server's own sign-in token.
-struct AppleSignInAnswer: Decodable, Hashable {
+nonisolated struct AppleSignInAnswer: Decodable, Hashable {
     let token: String
     let person: String
 }
 
 /// POST /auth/apple answered 403: the code the operator approves.
-struct Waiting: Decodable, Hashable {
+nonisolated struct Waiting: Decodable, Hashable {
     let waiting: String
 }
 
 /// POST /bee/connect: the page where the person approves Bee.
-struct BeeConnectLink: Decodable, Hashable {
+nonisolated struct BeeConnectLink: Decodable, Hashable {
     let link: String
 }

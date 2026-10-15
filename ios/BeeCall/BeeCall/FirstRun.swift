@@ -27,7 +27,7 @@ enum FirstRun {
 
 /// The two languages Bee Call speaks (the contract's `language`). A row shows the language's own name and, under
 /// it, its name in the other language, so a reader of either finds theirs.
-enum CallLanguage: String, ContractValue, Identifiable {
+nonisolated enum CallLanguage: String, ContractValue, Identifiable {
     case ko, en, unrecognized
 
     /// The languages to pick from, in the list's order.
