@@ -1,0 +1,175 @@
+{
+ "ko": [
+  {
+   "id": "ko-sian",
+   "name": "Sian",
+   "character": {
+    "ko": "차분함",
+    "en": "Calm"
+   },
+   "default": true,
+   "provider": "elevenlabs",
+   "provider_voice": "5n5gqmaQi9Ewevrz7bOS",
+   "sample": "ko-sian-225fbd22.mp3",
+   "tuning": {}
+  },
+  {
+   "id": "ko-han",
+   "name": "Han",
+   "character": {
+    "ko": "친근함",
+    "en": "Friendly"
+   },
+   "default": false,
+   "provider": "elevenlabs",
+   "provider_voice": "8jHHF8rMqMlg8if2mOUe",
+   "sample": "ko-han-c67d6873.mp3",
+   "tuning": {}
+  },
+  {
+   "id": "ko-anna",
+   "name": "Anna Kim",
+   "character": {
+    "ko": "다정함",
+    "en": "Tender"
+   },
+   "default": false,
+   "provider": "elevenlabs",
+   "provider_voice": "uyVNoMrnUku1dZyVEXwD",
+   "sample": "ko-anna-c5f42cea.mp3",
+   "tuning": {}
+  },
+  {
+   "id": "ko-yooni",
+   "name": "Yooni",
+   "character": {
+    "ko": "또렷함",
+    "en": "Clear"
+   },
+   "default": false,
+   "provider": "elevenlabs",
+   "provider_voice": "n2fbxG88jqAoaVPUy3IG",
+   "sample": "ko-yooni-4176e159.mp3",
+   "tuning": {}
+  },
+  {
+   "id": "ko-seulki",
+   "name": "Seulki",
+   "character": {
+    "ko": "안정감",
+    "en": "Steady"
+   },
+   "default": false,
+   "provider": "elevenlabs",
+   "provider_voice": "ksaI0TCD9BstzEzlxj4q",
+   "sample": "ko-seulki-668d9801.mp3",
+   "tuning": {}
+  },
+  {
+   "id": "ko-kyle",
+   "name": "Kyle",
+   "character": {
+    "ko": "묵직함",
+    "en": "Deep"
+   },
+   "default": false,
+   "provider": "elevenlabs",
+   "provider_voice": "RU7aSi6lT4uQBXMLgDxK",
+   "sample": "ko-kyle-6dbe380f.mp3",
+   "tuning": {}
+  },
+  {
+   "id": "ko-mrk",
+   "name": "Mr. K",
+   "character": {
+    "ko": "자연스러움",
+    "en": "Natural"
+   },
+   "default": false,
+   "provider": "elevenlabs",
+   "provider_voice": "LKOcTG4J4tYTPR9DnLeM",
+   "sample": "ko-mrk-e61cfa94.mp3",
+   "tuning": {}
+  },
+  {
+   "id": "ko-jason",
+   "name": "Jason",
+   "character": {
+    "ko": "잔잔함",
+    "en": "Soothing"
+   },
+   "default": false,
+   "provider": "elevenlabs",
+   "provider_voice": "YBRudLRm83BV5Mazcr42",
+   "sample": "ko-jason-eb7756da.mp3",
+   "tuning": {}
+  }
+ ],
+ "en": [
+  {
+   "id": "en-zara",
+   "name": "Zara",
+   "character": {
+    "ko": "따뜻함",
+    "en": "Warm"
+   },
+   "default": true,
+   "provider": "elevenlabs",
+   "provider_voice": "jqcCZkN6Knx8BJ5TBdYR",
+   "sample": "en-zara-5c7ac050.mp3",
+   "tuning": {}
+  },
+  {
+   "id": "en-amelia",
+   "name": "Amelia",
+   "character": {
+    "ko": "생기",
+    "en": "Lively"
+   },
+   "default": false,
+   "provider": "elevenlabs",
+   "provider_voice": "ZF6FPAbjXT4488VcRRnw",
+   "sample": "en-amelia-38d0dc98.mp3",
+   "tuning": {}
+  },
+  {
+   "id": "en-hope",
+   "name": "Hope",
+   "character": {
+    "ko": "발랄함",
+    "en": "Bubbly"
+   },
+   "default": false,
+   "provider": "elevenlabs",
+   "provider_voice": "uYXf8XasLslADfZ2MB4u",
+   "sample": "en-hope-f1323db9.mp3",
+   "tuning": {}
+  },
+  {
+   "id": "en-will",
+   "name": "Will",
+   "character": {
+    "ko": "여유로움",
+    "en": "Relaxed"
+   },
+   "default": false,
+   "provider": "elevenlabs",
+   "provider_voice": "bIHbv24MWmeRgasZH58o",
+   "sample": "en-will-756c2123.mp3",
+   "tuning": {}
+  },
+  {
+   "id": "en-chris",
+   "name": "Chris",
+   "character": {
+    "ko": "소탈함",
+    "en": "Down-to-earth"
+   },
+   "default": false,
+   "provider": "elevenlabs",
+   "provider_voice": "iP95p4xoKVk53GoZ742B",
+   "sample": "en-chris-75f501af.mp3",
+   "tuning": {}
+  }
+ ]
+}

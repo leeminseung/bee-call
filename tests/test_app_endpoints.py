@@ -25,6 +25,7 @@ def minseung(tmp_path, monkeypatch):
     me = signed_in(tmp_path, "minseung")
     shutil.copytree(FIXTURES, me.workspace, dirs_exist_ok=True)
     me.people.change_settings("minseung", {"language": "ko", "call_time": "20:30"})
+    me.people.change_settings("minseung", {"bee": True, "daily_budget_usd": 10.0}, allowed=("bee", "daily_budget_usd"))
     clock = tmp_path / "clock"
     clock.write_text("2026-10-15T15:00:00+09:00")
     monkeypatch.setenv("BEE_CALL_CLOCK_FILE", str(clock))
@@ -290,3 +291,44 @@ def test_a_quiet_change_stream_sends_keepalives(minseung, monkeypatch):
             return lines
 
     assert b": keepalive\n" in asyncio.run(main())
+
+
+# ---------- voices and settings ----------
+
+def test_voices_list_the_call_language_s_catalog_and_samples_need_no_sign_in(minseung):
+    """Contract section 5: 1 to 12 voices per language, the default first; samples are the same for everyone, so
+    they need no sign-in and may be cached for good (their names carry their content's hash)."""
+    (ko, _, ko_body), (en, _, en_body), *bad = get(minseung, "/voices?language=ko", "/voices?language=en",
+                                                   "/voices", "/voices?language=fr")
+    korean, english = json.loads(ko_body), json.loads(en_body)
+    check_body("voices", korean)
+    check_body("voices", english)
+    assert (ko, en, [s for s, _, _ in bad]) == (200, 200, [400, 400])
+    assert korean["voices"][0] == {"id": "ko-sian", "name": "Sian", "character": {"ko": "차분함", "en": "Calm"},
+                                   "sample_url": korean["voices"][0]["sample_url"], "default": True}
+    write_example("voices", korean)
+    sample = korean["voices"][1]["sample_url"]
+    found = run(minseung.people, {}, [("GET", sample, None, None), ("GET", "/voices/samples/ko-han-00000000.mp3", None,
+                                                                     None), ("GET", "/voices?language=ko", None, None)])
+    (status, headers, body), (missing, _, _), (listing, _, _) = found
+    assert (status, headers["Content-Type"], body[:3]) == (200, "audio/mpeg", b"ID3")
+    assert headers["Cache-Control"] == "public, max-age=31536000, immutable"
+    assert (missing, listing) == (404, 401)  # the list is the person's; a sample is anyone's
+
+
+def test_me_and_settings_answer_the_contract_s_settings_and_the_voice_follows_the_language(minseung):
+    """Contract section 6: GET /me and PUT /settings bodies, a voice of the call language, and 400 for another."""
+    found = run(minseung.people, minseung.headers, [
+        ("PUT", "/settings", None, {"voice": "ko-yooni"}),
+        ("PUT", "/settings", None, {"voice": "en-zara"}),
+        ("GET", "/me", None, None),
+        ("PUT", "/settings", None, {"language": "en"}),
+        ("PUT", "/settings", None, {"language": "ko", "voice": "ko-anna"})])
+    (picked, _, picked_body), (wrong, _, wrong_body), (me, _, me_body), (_, _, english), (_, _, both) = found
+    check_body("settings", json.loads(picked_body))
+    check_body("me", json.loads(me_body))
+    assert (picked, wrong, me) == (200, 400, 200) and b"not one of the ko voices" in wrong_body
+    assert json.loads(me_body)["settings"]["voice"] == "ko-yooni" and "tts" not in json.loads(me_body)["settings"]
+    assert json.loads(english)["settings"]["voice"] is None and json.loads(both)["settings"]["voice"] == "ko-anna"
+    write_example("settings", json.loads(picked_body))
+    write_example("me", json.loads(me_body))

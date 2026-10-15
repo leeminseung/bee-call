@@ -496,7 +496,7 @@ def caller_for(meta: dict, people: People) -> Caller | None:
     settings = people.settings(person)
     language = call_language(settings.language)
     return Caller(person, people.person(person), people.workspace(person), settings, language,
-                  call_model_for(settings), voice_choice(language, {**os.environ, **settings.voice_env()}),
+                  call_model_for(settings), voice_choice(language, settings.voice),
                   settings.bee)
 
 

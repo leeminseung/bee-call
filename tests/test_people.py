@@ -1135,8 +1135,40 @@ def test_an_approved_person_starts_with_these_settings(tmp_path):
     people.add("jiwoo")
     assert asdict(people.settings("jiwoo")) == {
         "language": "en", "call_time": "21:00", "record_on_server": True, "record_on_phone": False,
-        "daily_budget_usd": 3.0, "bee": False, "tts": None, "voice": None, "time_zone": "Asia/Seoul",
+        "daily_budget_usd": 3.0, "bee": False, "voice": None, "time_zone": "Asia/Seoul",
         "call_model": "haiku"}
+
+
+def test_the_app_picks_a_voice_of_the_call_language(tmp_path):
+    """Contract section 6: the app sets voice, a catalog id of the call language's voices (GET /voices), or null for
+    the language's default. A change of language alone sets voice to null, unless the voice is the new language's."""
+    people = People(tmp_path)
+    people.add("matt")
+    assert people.change_settings("matt", {"voice": "en-hope"}).voice == "en-hope"
+    for bad in ({"voice": "ko-sian"}, {"voice": "nonsense"}, {"voice": 3}, {"language": "en", "voice": "ko-han"}):
+        with pytest.raises(ValueError):
+            people.change_settings("matt", bad)
+    assert people.settings("matt").voice == "en-hope"  # a refused change changes nothing
+    assert people.change_settings("matt", {"language": "ko"}).voice is None
+    assert people.change_settings("matt", {"language": "ko", "voice": "ko-han"}).voice == "ko-han"
+    assert people.change_settings("matt", {"language": "ko"}).voice == "ko-han"  # the same language: kept
+    assert people.change_settings("matt", {"voice": None}).voice is None
+
+
+def test_a_hand_set_voice_and_the_retired_tts_move_to_the_catalog(tmp_path):
+    """Decision 9 of the contract: tts (the operator's provider switch) retires, and a hand-set provider voice id moves
+    to its catalog id, or to null when the catalog has no such voice of the person's language."""
+    people = People(tmp_path)
+    people.add("matt")
+    settings = people.folder("matt") / "settings.json"
+    settings.write_text(json.dumps({"language": "ko", "tts": "elevenlabs", "voice": "5n5gqmaQi9Ewevrz7bOS"}))
+    assert (people.settings("matt").voice, people.settings("matt").language) == ("ko-sian", "ko")
+    settings.write_text(json.dumps({"language": "en", "voice": "5n5gqmaQi9Ewevrz7bOS"}))
+    assert people.settings("matt").voice is None  # Sian is a Korean voice
+    settings.write_text(json.dumps({"language": "ko", "voice": "Seoyeon"}))
+    assert people.settings("matt").voice is None
+    with pytest.raises(ValueError):
+        people.change_settings("matt", {"tts": "polly"}, allowed=("tts",))
 
 
 def test_a_person_s_bee_login_folder_is_theirs_alone(tmp_path, fake_bee):

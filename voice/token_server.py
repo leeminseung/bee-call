@@ -17,7 +17,9 @@ POST /auth/signout                       ends this sign-in; the push tokens it r
 GET  /me                                 who is signed in, their settings and today's estimated spend
 PUT  /settings {"language": "ko", ...}   the settings the app may change (voice/people.py APP_SETTINGS), with
                                          time_zone, the phone's IANA zone (400 for a name zoneinfo does not know),
-                                         and call_model, "haiku" or "sonnet" (voice/call_models.py)
+                                         call_model, "haiku" or "sonnet" (voice/call_models.py), and voice, a
+                                         catalog id of the call language's voices or null (400 for another
+                                         language's; a change of language alone resets it unless it fits)
 
 Calls:
 GET  /token                              a token for a new call the user starts; the voice server is dispatched
@@ -46,6 +48,8 @@ GET  /calls/<call_id>/files/<path>       one of its files, by the records server
 GET  /changes                            Server-Sent Events: `changed` {path, version} for /calls, /offers and each
                                          call live or ended in the last ten minutes, on connect and whenever a
                                          version changes, so the app fetches only what changed (contract section 3)
+GET  /voices?language=ko                 the voices the person can pick for a call language (voice/catalog.py)
+GET  /voices/samples/<file>              a voice's sample, MP3: open to anyone and cached for good
 GET  /offers                             offers still waiting for an answer or a call
      /calls, /calls/<call_id> and /offers carry their body's version as ETag; with If-None-Match the same
      version answers 304 and no body (contract section 0)
@@ -84,6 +88,7 @@ from beelink.planner import OUTBOUND_LOG
 from meta.session import add_event
 from voice import apple_signin, call_view, voip_push
 from voice.call_folders import CALL_ID, NotServed, find_call, resolve_inside, served_headers
+from voice.catalog import SAMPLES, catalog, sample_files
 from voice.web_headers import plain_server_name
 from voice.continuation import session_dir
 from voice.costs import day_budget
@@ -102,7 +107,8 @@ BEE_APPROVAL_SECONDS = 330  # Bee's approval link lasts about 5 minutes (bee log
 # A Bee login waiting for the person's approval, kept in their Bee folder, so a restart of this server goes on
 # waiting for it: {"started_at": epoch seconds}.
 BEE_PENDING = "pending.json"
-OPEN_PATHS = ("/auth/nonce", "/auth/apple")  # the only paths that need no sign-in
+OPEN_PATHS = ("/auth/nonce", "/auth/apple")  # the only paths that need no sign-in, with the voice samples:
+SAMPLES_PATH = "/voices/samples/"  # the same for everyone, nothing personal: open and cached for good (section 5)
 BUNDLE_ID = os.environ.get("APNS_BUNDLE_ID") or voip_push.DEFAULT_BUNDLE_ID
 
 PERSON = web.RequestKey("person", str)  # who is asking, set by signed_in()
@@ -141,7 +147,7 @@ async def known_hosts_only(request: web.Request, handler):
 
 @web.middleware
 async def signed_in(request: web.Request, handler):
-    if request.path in OPEN_PATHS:
+    if request.path in OPEN_PATHS or request.path.startswith(SAMPLES_PATH):
         return await handler(request)
     person = request.app[PEOPLE].who(bearer(request))
     if person is None and not bearer(request):
@@ -528,6 +534,27 @@ async def changes(request: web.Request) -> web.StreamResponse:
     return response
 
 
+# ---------- voices (contract section 5) ----------
+
+async def list_voices(request: web.Request) -> web.Response:
+    """GET /voices?language=ko: the voices the person can pick for that call language, the default first."""
+    language = request.query.get("language", "")
+    voices = catalog(language)
+    if not voices:
+        raise web.HTTPBadRequest(text="language must be one of en, ko\n")
+    return web.json_response({"language": language, "voices": [
+        {"id": v.id, "name": v.name, "character": dict(v.character), "sample_url": f"{SAMPLES_PATH}{v.sample}",
+         "default": v.default} for v in voices]}, dumps=lambda data: json.dumps(data, ensure_ascii=False))
+
+
+async def voice_sample(request: web.Request) -> web.FileResponse:
+    """GET /voices/samples/<file>: one of the catalog's samples, to anyone."""
+    name = request.match_info["file"]
+    if name not in sample_files():
+        raise web.HTTPNotFound()
+    return web.FileResponse(SAMPLES / name, headers={"Content-Type": "audio/mpeg"})
+
+
 # ---------- Bee ----------
 
 def wait_for_bee_approval(app: web.Application, who: str, seconds: float) -> None:
@@ -628,8 +655,12 @@ async def stop_bee_logins(app: web.Application) -> None:
 
 
 async def private_answers(request: web.Request, response: web.StreamResponse) -> None:
-    """Every answer is one person's (a call pass, settings, offers): never kept by a cache (black-box probe 3)."""
-    response.headers["Cache-Control"] = "no-store"
+    """Every answer is one person's (a call pass, settings, offers): never kept by a cache (black-box probe 3). The
+    one exception is a voice sample, the same for everyone, whose name changes with its content."""
+    if request.path.startswith(SAMPLES_PATH) and response.status == 200:
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    else:
+        response.headers["Cache-Control"] = "no-store"
 
 
 def make_app(url: str, key: str, secret: str, people: People, room_exists=livekit_room_exists,
@@ -654,6 +685,8 @@ def make_app(url: str, key: str, secret: str, people: People, room_exists=liveki
     app.router.add_get("/calls/{call_id}", show_call)
     app.router.add_get("/calls/{call_id}/files/{path:.+}", call_file)
     app.router.add_get("/changes", changes)
+    app.router.add_get("/voices", list_voices)
+    app.router.add_get(SAMPLES_PATH + "{file}", voice_sample)
     app.router.add_post("/voip", voip_token)
     app.router.add_post("/push", alert_token)
     app.router.add_get("/offers", list_offers)

@@ -1,10 +1,85 @@
 {
   "language": "ko",
   "voices": [
-    {"id": "ko-harin", "name": "하린", "character": {"ko": "친근함", "en": "Friendly"}, "sample_url": "/voices/samples/ko-harin-3f9c2a1b.mp3", "default": true},
-    {"id": "ko-seojun", "name": "서준", "character": {"ko": "차분함", "en": "Calm"}, "sample_url": "/voices/samples/ko-seojun-8d04e7c2.mp3", "default": false},
-    {"id": "ko-daon", "name": "다온", "character": {"ko": "또렷함", "en": "Clear"}, "sample_url": "/voices/samples/ko-daon-51b6fa90.mp3", "default": false},
-    {"id": "ko-narae", "name": "나래", "character": {"ko": "밝음", "en": "Bright"}, "sample_url": "/voices/samples/ko-narae-c27e1d43.mp3", "default": false},
-    {"id": "ko-doyoon", "name": "도윤", "character": {"ko": "묵직함", "en": "Deep"}, "sample_url": "/voices/samples/ko-doyoon-0a9b35e6.mp3", "default": false}
+    {
+      "id": "ko-sian",
+      "name": "Sian",
+      "character": {
+        "ko": "차분함",
+        "en": "Calm"
+      },
+      "sample_url": "/voices/samples/ko-sian-225fbd22.mp3",
+      "default": true
+    },
+    {
+      "id": "ko-han",
+      "name": "Han",
+      "character": {
+        "ko": "친근함",
+        "en": "Friendly"
+      },
+      "sample_url": "/voices/samples/ko-han-c67d6873.mp3",
+      "default": false
+    },
+    {
+      "id": "ko-anna",
+      "name": "Anna Kim",
+      "character": {
+        "ko": "다정함",
+        "en": "Tender"
+      },
+      "sample_url": "/voices/samples/ko-anna-c5f42cea.mp3",
+      "default": false
+    },
+    {
+      "id": "ko-yooni",
+      "name": "Yooni",
+      "character": {
+        "ko": "또렷함",
+        "en": "Clear"
+      },
+      "sample_url": "/voices/samples/ko-yooni-4176e159.mp3",
+      "default": false
+    },
+    {
+      "id": "ko-seulki",
+      "name": "Seulki",
+      "character": {
+        "ko": "안정감",
+        "en": "Steady"
+      },
+      "sample_url": "/voices/samples/ko-seulki-668d9801.mp3",
+      "default": false
+    },
+    {
+      "id": "ko-kyle",
+      "name": "Kyle",
+      "character": {
+        "ko": "묵직함",
+        "en": "Deep"
+      },
+      "sample_url": "/voices/samples/ko-kyle-6dbe380f.mp3",
+      "default": false
+    },
+    {
+      "id": "ko-mrk",
+      "name": "Mr. K",
+      "character": {
+        "ko": "자연스러움",
+        "en": "Natural"
+      },
+      "sample_url": "/voices/samples/ko-mrk-e61cfa94.mp3",
+      "default": false
+    },
+    {
+      "id": "ko-jason",
+      "name": "Jason",
+      "character": {
+        "ko": "잔잔함",
+        "en": "Soothing"
+      },
+      "sample_url": "/voices/samples/ko-jason-eb7756da.mp3",
+      "default": false
+    }
   ]
 }

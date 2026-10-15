@@ -40,6 +40,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from voice.catalog import catalog, catalog_id
+
 PERSON_ID = re.compile(r"[a-z][a-z0-9-]{0,31}")
 CALL_TIME = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 DEFAULT_CALL_TIME = "21:00"  # the evening time an offer suggests until the person sets theirs (the one default)
@@ -107,8 +109,7 @@ class Settings:
     record_on_phone: bool = False  # the app records the call on the iPhone itself; the server only notes it
     daily_budget_usd: float = DEFAULT_BUDGET_USD
     bee: bool = False  # Bee is connected (POST /bee/connect)
-    tts: str | None = None  # the voice, for Matt to change by hand; None means the language's default
-    voice: str | None = None
+    voice: str | None = None  # a catalog id of the call language's voices (voice/catalog.py); None: its default
     time_zone: str = DEFAULT_TIME_ZONE  # an IANA name; the app sends the phone's (contract section 1)
     call_model: str = "haiku"  # the call AI's model: haiku or sonnet (voice/call_models.py)
 
@@ -132,10 +133,13 @@ class Settings:
             return cls(record_on_server=False)
         settings = cls(record_on_server=False)  # until the file itself says to keep audio
         for name, value in data.items() if isinstance(data, dict) else ():
+            if name == "voice":  # a provider's voice id set by hand before the catalog: its catalog id
+                value = catalog_id(value)
             try:
                 settings.change(name, value)
             except ValueError:
-                pass  # an unknown or broken value keeps the default
+                pass  # an unknown or broken value keeps the default (tts, the retired provider switch, too)
+        settings.settle_voice(named=False)
         return settings
 
     def change(self, name: str, value: Any) -> None:
@@ -154,9 +158,9 @@ class Settings:
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 100:
                 raise ValueError("daily_budget_usd must be a number from 0 to 100")
             value = float(value)
-        elif name in ("tts", "voice"):
-            if value is not None and (not isinstance(value, str) or not re.fullmatch(r"[\w.-]{1,64}", value)):
-                raise ValueError(f"{name} must be a short name or null")
+        elif name == "voice":
+            if value is not None and (not isinstance(value, str) or catalog_id(value) != value):
+                raise ValueError("voice must be the id of a voice GET /voices lists, or null for the default")
         elif name == "time_zone":
             try:
                 ZoneInfo(value)
@@ -170,17 +174,20 @@ class Settings:
             raise ValueError(f"unknown setting {name!r}")
         setattr(self, name, value)
 
-    def voice_env(self) -> dict[str, str]:
-        """The voice settings in the form voice/voices.py reads (TTS, ELEVENLABS_VOICE or POLLY_VOICE)."""
-        env = {}
-        if self.tts:
-            env["TTS"] = self.tts
-        if self.voice:
-            env["ELEVENLABS_VOICE" if (self.tts or os.environ.get("TTS")) == "elevenlabs" else "POLLY_VOICE"] = self.voice
-        return env
+    def settle_voice(self, named: bool) -> None:
+        """Keeps the voice one of the call language's (contract section 6). A voice the change `named` must be one;
+        otherwise (a change of language alone, or a stored value) a voice of another language becomes None, the
+        new language's default."""
+        if self.voice is None or any(v.id == self.voice for v in catalog(self.language)):
+            return
+        if named:
+            raise ValueError(f"voice {self.voice} is not one of the {self.language} voices (GET /voices?language="
+                             f"{self.language})")
+        self.voice = None
 
 
-APP_SETTINGS = ("language", "call_time", "record_on_server", "record_on_phone", "time_zone", "call_model")  # the app's
+APP_SETTINGS = ("language", "voice", "call_time", "record_on_server", "record_on_phone", "time_zone",
+                "call_model")  # the app's
 
 
 @dataclass(frozen=True)
@@ -294,6 +301,7 @@ class People:
                 if name not in allowed:
                     raise ValueError(f"{name!r} cannot be changed here")
                 settings.change(name, value)
+            settings.settle_voice(named="voice" in changes)
             self.save_settings(person, settings)
         return settings
 

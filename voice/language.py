@@ -3,7 +3,8 @@
 English is the default and the language of the demo; Korean is for trying real situations in the user's own
 language. The language sets what Amazon Transcribe listens for, Amazon Polly's voice, the language the
 coordinator speaks (one rule added to its instructions; the rest of the instructions stay in English), the
-prep's opening line, the fallback greetings, the line for a turn Claude declines, and the voice (voice/voices.py). LiveKit's turn detector follows the transcript's language.
+prep's opening line, the fallback greetings, the line for a turn Claude declines, and which voices the person can
+pick (voice/voice_catalog.json). LiveKit's turn detector follows the transcript's language.
 One call is in one language: Transcribe listens for one language per stream.
 """
 
@@ -23,16 +24,12 @@ class CallLanguage:
     greetings: dict[str, str] = field(default_factory=dict)
     waiting: str = ""  # said once when a tool the call AI waits on takes a while (voice/coordinator.py)
     refusal: str = ""  # said when Claude declines a turn (stop_reason "refusal", voice/claude_llm.py)
-    elevenlabs_voice: str = ""  # an ElevenLabs voice id for TTS=elevenlabs (voice/voices.py)
 
 
 LANGUAGES = {
     "en": CallLanguage(
         code="en", name="English", transcribe="en-US", voice="Ruth", engine="generative",
         opening="under 20 words of spoken English",
-        # Sarah, an ElevenLabs default voice; Jessica (cgSgspJ2msm6clMCkdW9) and Chris (iP95p4xoKVk53GoZ742B)
-        # are the other English picks (Matt, 2026-10-14), not yet decided between.
-        elevenlabs_voice="EXAVITQu4vr4xnSDxMaL",
         waiting="One moment, I'm checking.",
         refusal="Sorry, I can't help with that one.",
         greetings={
@@ -49,8 +46,6 @@ LANGUAGES = {
         # into 15.6 s of unintelligible speech, and its length varied run to run (4.3 s, 5.9 s); neural stayed 3.8 s.
         code="ko", name="Korean", transcribe="ko-KR", voice="Seoyeon", engine="neural",
         opening="one or two short sentences of spoken Korean, in the polite style",
-        # Sian - Tender, Calm & Clear, from the Voice Library (Matt's pick, 2026-10-14); add it to My Voices to use it.
-        elevenlabs_voice="5n5gqmaQi9Ewevrz7bOS",
         waiting="잠깐만요, 확인하고 있어요.",
         refusal="죄송해요, 그건 도와드리기 어려워요.",
         rule=("Speak Korean with the user, in natural, polite spoken Korean. The app's notes, the call prep note "
