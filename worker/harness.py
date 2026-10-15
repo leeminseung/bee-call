@@ -40,7 +40,7 @@ from voice.costs import SpendLog
 from voice.people import data_root
 from worker.chart import render_svg
 from worker.runner import Job
-from worker.web_search import READ_TIMEOUT_S as WEB_SEARCH_LONGEST_S
+from worker.web_search import LONGEST_S as WEB_SEARCH_LONGEST_S
 from worker.web_search import SearchResult, web_search
 
 log = logging.getLogger("bee-call.worker")
@@ -74,10 +74,12 @@ MODEL_MAX_TOKENS = 32768
 # its Converse request as they are, so the field goes inside additionalModelRequestFields (a bare reasoning_effort
 # failed every round: "Unknown parameter in input").
 REASONING = {"zai.glm-5": {"additionalModelRequestFields": {"reasoning_effort": "high"}}}
-# A session outlives the longest wait between a job's rounds (a web search, run on this Mac) and a long call with a
-# full-length job at its end; AgentCore ends an idle one after IDLE_SESSION_S.
-IDLE_SESSION_S = 900
-SESSION_LIFETIME_S = 7200
+# A session outlives the longest wait between a job's rounds: this Mac runs a round's calls one after another, and
+# two web searches at their longest (WEB_SEARCH_LONGEST_S each) still fit. It is warmed when a call starts and serves
+# that call's jobs until the call ends, so it may live as long as AgentCore allows (8 hours, its default): a job late
+# in a long call is never cut short.
+IDLE_SESSION_S = 1800
+SESSION_LIFETIME_S = 28800
 INVOKE_READ_TIMEOUT_S = HARNESS_TIMEOUT_S + 60  # this Mac never gives up on a round the harness still runs
 MAX_FILE_BYTES = 5_000_000
 MAX_TOOL_TEXT = 8000

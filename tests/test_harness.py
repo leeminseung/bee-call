@@ -86,10 +86,14 @@ def test_the_worker_has_room_for_long_research_and_reports():
     assert model["additionalParams"] == {"additionalModelRequestFields": {"reasoning_effort": "high"}}
     assert (d["maxIterations"], d["timeoutSeconds"], MAX_ROUNDS) == (120, 1800, 80) == (120, HARNESS_TIMEOUT_S, 80)
     lifecycle = d["environment"]["agentCoreRuntimeEnvironment"]["lifecycleConfiguration"]
-    # A session outlives the longest wait between a job's rounds (a web search), and a long call with a full-length
-    # job at its end; the warm-up keeps it from idling out between jobs.
-    assert lifecycle["idleRuntimeSessionTimeout"] > WEB_SEARCH_LONGEST_S and KEEP_WARM_S < lifecycle["idleRuntimeSessionTimeout"]
-    assert lifecycle["maxLifetime"] >= 3600 + 2 * HARNESS_TIMEOUT_S
+    # A session outlives the longest wait between a job's rounds: this Mac runs one round's calls one after another,
+    # so two web searches that each take their longest (with their one retry) still fit; the warm-up keeps it from
+    # idling out between jobs.
+    assert lifecycle["idleRuntimeSessionTimeout"] > 2 * WEB_SEARCH_LONGEST_S
+    assert KEEP_WARM_S < lifecycle["idleRuntimeSessionTimeout"]
+    # A session is warmed when the call starts and serves its jobs until it ends: AgentCore's own limit, 8 hours,
+    # so a job late in a long call is never cut short.
+    assert lifecycle["maxLifetime"] == 28800
     assert INVOKE_READ_TIMEOUT_S > HARNESS_TIMEOUT_S  # this Mac never gives up on a round the harness still runs
     other = harness_definition("arn:aws:iam::123456789012:role/bee-call-worker", "global.amazon.nova-2-lite-v1:0")
     assert "additionalParams" not in other["model"]["bedrockModelConfig"]  # the switch is GLM 5's own
