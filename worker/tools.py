@@ -12,6 +12,7 @@ first message (job_request) and its usage.json (write_usage), the same for every
 """
 
 import asyncio
+import itertools
 import json
 import logging
 import re
@@ -26,6 +27,7 @@ from worker.runner import Job
 log = logging.getLogger("bee-call.worker")
 
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
+LONGEST_NAME = 81  # what SAFE_NAME allows
 RESERVED = {"request.md", "events.jsonl", "usage.json"}  # written by this Mac, never by a worker's model
 MAX_FILE_BYTES = 5_000_000
 
@@ -79,14 +81,20 @@ def free_name(folder: Path, name: str, fallback: str) -> str:
     name = name.replace("\\", "/").rsplit("/", 1)[-1]
     if not allowed_name(name):
         name = fallback
+    if not (folder / name).exists():
+        return name
     stem, dot, suffix = name.rpartition(".")
     if not dot or not stem:
         stem, suffix = name, ""
-    found, n = name, 2
-    while (folder / found).exists() or not allowed_name(found):
-        found = f"{stem}-{n}.{suffix}" if suffix else f"{stem}-{n}"
-        n += 1
-    return found
+    for n in itertools.count(2):
+        # The number goes before the kind (prices-2.csv), the stem cut to make room (a long name has no numbered
+        # form otherwise); a kind too long to leave room goes with the rest of the name.
+        tail = f"-{n}.{suffix}" if suffix else f"-{n}"
+        found = stem[:LONGEST_NAME - len(tail)] + tail if len(tail) < LONGEST_NAME else \
+            name[:LONGEST_NAME - len(f"-{n}")] + f"-{n}"
+        if allowed_name(found) and not (folder / found).exists():
+            return found
+    raise AssertionError("unreachable")
 
 
 def job_request(job: Job) -> str:

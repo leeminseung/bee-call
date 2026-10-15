@@ -236,6 +236,22 @@ def test_files_from_code_execution_get_safe_free_names_and_none_too_large(tmp_pa
     assert not list(tmp_path.glob("huge*")) and sorted(client.files.deleted) == sorted(files)
 
 
+def test_a_long_file_name_already_taken_gets_a_numbered_name_that_fits(tmp_path):
+    """Review of 2026-10-15, finding 2: a name of 80 or 81 characters already in the job folder had no numbered name
+    short enough to be allowed, and finding one looped forever in the call's event loop."""
+    from worker.tools import SAFE_NAME, free_name
+
+    for length in (79, 80, 81):
+        name = "r" * (length - 4) + ".csv"
+        (tmp_path / name).write_text("taken")
+        found = free_name(tmp_path, name, "output-1.csv")
+        assert found != name and SAFE_NAME.fullmatch(found) and found.endswith("-2.csv") and not (tmp_path / found).exists()
+    long_kind = "a." + "x" * 79  # no room for a number before its kind
+    (tmp_path / long_kind).write_text("taken")
+    found = free_name(tmp_path, long_kind, "output-1")
+    assert found != long_kind and SAFE_NAME.fullmatch(found) and not (tmp_path / found).exists()
+
+
 def test_at_its_search_limit_a_job_is_asked_for_its_answer_without_tools(tmp_path, monkeypatch):
     monkeypatch.setattr(claude, "JOB_WEB_SEARCHES", 3)
     client = api([reply([*searched("srvtoolu_1", "q"), tool("toolu_1", "progress", text="Searching")], searches=3),
