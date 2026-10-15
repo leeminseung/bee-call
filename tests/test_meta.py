@@ -482,3 +482,43 @@ def test_without_bee_the_meta_agent_has_no_bee_tools_or_words(tmp_path):
     assert names == ["list_files", "read_file", "grep", "write_state", "offer_call"]
     words = request["system"][0]["text"] + json.dumps(request["messages"]) + json.dumps(request["toolConfig"])
     assert re.findall(r"\bBee\b(?! Call)", words) == []
+
+
+# ---------- the meta agent without a model (outside test seam 6) ----------
+
+def test_with_meta_agent_rules_the_meta_agent_needs_no_model(tmp_path, monkeypatch):
+    """META_AGENT=rules: every event gets its think, logged as the model's are, with no model and no network. A Bee
+    conversation of at least four utterances (the rule-based planner's rule) gets one offer about it, by its short
+    summary, in the person's language; anything else gets nothing."""
+    from meta.agent import RuleThinker, thinker_for
+
+    monkeypatch.setenv("META_AGENT", "rules")
+    ws = workspace_with_a_call(tmp_path)
+    short = ws / "inbox" / "2026-10-14-183000"
+    short.mkdir(parents=True)
+    (short / "changed.json").write_text(json.dumps({"conversations": [
+        {"id": 78, "utterances_count": 2, "short_summary": "Said hello"}]}))
+    sent = []
+
+    async def send(offer, workspace, now):
+        sent.append(offer.id)
+        return "notification sent"
+
+    thinker = thinker_for(ws, send=send, call_time="20:30", bee=True, language="ko")
+    assert isinstance(thinker, RuleThinker)
+    add_event(ws, "bee_change", now=NOW, inbox="inbox/2026-10-14-182500", conversation_ids=[77])
+    add_event(ws, "bee_change", now=NOW, inbox="inbox/2026-10-14-183000", conversation_ids=[78])
+    add_event(ws, "call_ended", now=NOW, call="2026-10-14/1200", direction="inbound")
+    entry = asyncio.run(thinker.think(MetaSession(ws).take_events(), NOW))
+    (offer,) = OfferStore(ws).all()
+    assert (offer.topic, offer.conversation_ids, offer.state, sent) == ("Weighing two job offers", [77], "asked",
+                                                                         [offer.id])
+    assert offer.suggested_at.endswith("20:30:00+09:00") and "대화" in offer.reason  # the person's language
+    (logged,) = MetaSession(ws).entries()
+    assert (logged["model"], [t["name"] for t in logged["tools"]], len(logged["events"])) == ("rules", ["offer_call"], 3)
+    assert "Weighing two job offers" in logged["decision"] and "error" not in logged and entry is not None
+    entry = asyncio.run(thinker.think([{"at": NOW.isoformat(), "kind": "offer_answered", "offer": offer.id,
+                                        "choice": "later"}], NOW))
+    assert entry["tools"] == [] and entry["decision"] and len(MetaSession(ws).entries()) == 2
+    monkeypatch.delenv("META_AGENT")
+    assert not isinstance(thinker_for(ws, send=send, call_time=None, bee=True), RuleThinker)
