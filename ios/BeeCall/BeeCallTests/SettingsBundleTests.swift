@@ -22,11 +22,48 @@ final class SettingsBundleTests: XCTestCase {
         }
     }
 
+    /// Review finding 10: the app's defaults (AppSettings.defaults, used before the Settings app has written
+    /// anything) are written apart from the page's own; they must say the same.
+    @MainActor func testTheAppsDefaultsAreThePagesDefaults() throws {
+        var page: [String: NSObject] = [:]
+        for item in try specifiers() {
+            if let key = item["Key"] as? String, let value = item["DefaultValue"] as? NSObject { page[key] = value }
+        }
+        XCTAssertEqual(page as NSDictionary, AppSettings.defaults as NSDictionary)
+    }
+
+    /// The language and the models are not on the page: they belong to the app after D (contract section 6), set in
+    /// its first run and settings sheet (the models from GET /models), and every launch used to send the page's
+    /// values over the person's picks.
+    @MainActor func testThePageHasNoLanguageAndNoModel() throws {
+        let items = try specifiers()
+        let keys = items.compactMap { $0["Key"] as? String }
+        XCTAssertEqual(keys.first, "call_time")
+        XCTAssertFalse(keys.contains("language"))
+        XCTAssertFalse(keys.contains("call_model"))
+        let footer = try XCTUnwrap(items.first { $0["Title"] as? String == "Calls" }?["FooterText"] as? String)
+        XCTAssertFalse(footer.contains("Haiku"), footer)
+    }
+
     /// The user's decision of 2026-10-15: turning "Save on the server" off keeps the recordings made before.
     @MainActor func testTheAudioFooterSaysRecordingsMadeBeforeStay() throws {
         let footer = try XCTUnwrap(specifiers().first { $0["Title"] as? String == "Call audio" }?["FooterText"] as? String)
         XCTAssertTrue(footer.contains("Turning “Save on the server” off stops recording new calls there."), footer)
         XCTAssertTrue(footer.contains("Recordings made before stay."), footer)
+    }
+
+    /// With only ko.lproj, the Settings app showed the page in Korean on a phone set to English: a bundle falls
+    /// back to the only localization it has (seen on the Simulator in English, round 2's review). English is the
+    /// page's own language, so it has its own table too.
+    @MainActor func testThePageReadsInEnglishOnAPhoneNotSetToKorean() throws {
+        let english = try XCTUnwrap(NSDictionary(contentsOf: try bundle().appendingPathComponent("en.lproj/Root.strings"))
+                                    as? [String: String], "Settings.bundle/en.lproj/Root.strings")
+        for text in try texts() {
+            XCTAssertEqual(english[text], text)
+        }
+        let page = try XCTUnwrap(Bundle(url: try bundle()))
+        XCTAssertEqual(Bundle.preferredLocalizations(from: page.localizations, forPreferences: ["en-US"]).first, "en")
+        XCTAssertEqual(Bundle.preferredLocalizations(from: page.localizations, forPreferences: ["ko-KR"]).first, "ko")
     }
 
     @MainActor func testThePageReadsInKoreanToo() throws {

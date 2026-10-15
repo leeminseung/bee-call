@@ -17,11 +17,15 @@ struct BeeCallApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if showsCallScreen {
-                    CallScreen(calls: calls)
+                #if DEBUG
+                if let design = DesignDemo.requested() {
+                    DesignDemoView(demo: design, calls: calls)
                 } else {
-                    SignInView(server: server)
+                    root
                 }
+                #else
+                root
+                #endif
             }
             // The switches live in the Settings app. SettingsSync sends them at launch and on every change; coming
             // back to the app sends them again too, and brings Bee in line with "Use Bee".
@@ -44,12 +48,25 @@ struct BeeCallApp: App {
         }
     }
 
-    /// The call screen once signed in; in a Debug build, also for the voice and offer demos (VoiceDemo.swift,
-    /// OfferDemo.swift).
-    private var showsCallScreen: Bool {
+    /// Design D's app once signed in (AppRoot), else the sign-in screen. In a Debug build the voice demo shows the
+    /// call screen with its orb on synthetic levels (VoiceDemo.swift).
+    @ViewBuilder private var root: some View {
         #if DEBUG
-        if VoiceDemo.requested() != nil || OfferDemo.requested() { return true }
+        if VoiceDemo.requested() != nil {
+            CallModeView(calls: calls, job: nil, showConversation: {})
+        } else {
+            signedInOrNot
+        }
+        #else
+        signedInOrNot
         #endif
-        return server.isSignedIn
+    }
+
+    @ViewBuilder private var signedInOrNot: some View {
+        if server.isSignedIn {
+            AppRoot(calls: calls)
+        } else {
+            SignInView(server: server)
+        }
     }
 }

@@ -31,8 +31,18 @@ final class FakeRoom: CallRoom {
         return recordingProblem
     }
 
+    /// A mute or unmute waits for `releaseMicrophone()`, as when the audio engine is slow.
+    var holdsMicrophone = false
+    private var heldMicrophone: CheckedContinuation<Void, Never>?
+
     func setMicrophone(enabled: Bool) async throws {
+        if holdsMicrophone { await withCheckedContinuation { heldMicrophone = $0 } }
         microphone.append(enabled)
+    }
+
+    func releaseMicrophone() {
+        heldMicrophone?.resume()
+        heldMicrophone = nil
     }
 
     func disconnect() async {

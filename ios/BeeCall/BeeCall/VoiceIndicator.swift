@@ -135,35 +135,3 @@ struct VoiceMix {
         }
     }
 }
-
-/// What the glow behind the main button looks like: blue for the person, Bee yellow for the AI, nothing at rest.
-/// It grows, softens and brightens with the voice; with Reduce Motion on, only its opacity follows the voice.
-struct VoiceGlowLook: Equatable {
-    static let personBlue = Color(red: 0.24, green: 0.55, blue: 1)
-    static let beeYellow = Color(red: 1, green: 0xD9 / 255.0, blue: 0) // #FFD900
-
-    var color: Color
-    var opacity: Double
-    var blur: CGFloat
-    var scale: CGFloat
-    var animates: Bool
-
-    init(_ indicator: VoiceIndicator, reduceMotion: Bool) {
-        let amount = CGFloat(indicator.amount)
-        switch indicator.side {
-        case .person?: color = Self.personBlue
-        case .ai?: color = Self.beeYellow
-        case nil: color = .clear
-        }
-        opacity = indicator.side == nil || amount <= 0 ? 0 : 0.35 + 0.55 * Double(amount)
-        if reduceMotion {
-            blur = 14
-            scale = 1.06
-            animates = false
-        } else {
-            blur = 8 + 18 * amount
-            scale = 1 + 0.12 * amount
-            animates = true
-        }
-    }
-}

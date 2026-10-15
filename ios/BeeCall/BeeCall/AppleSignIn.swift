@@ -21,10 +21,23 @@ final class AppleSignIn {
         didSet { isReady = ready != nil }
     }
     @ObservationIgnored private var taken: String? // the value Apple was given, for the server
+    @ObservationIgnored private var readyAt: Date? // when the ready value came
     @ObservationIgnored private let server: ServerClient
+    @ObservationIgnored private let clock: () -> Date
 
-    init(server: ServerClient = ServerClient()) {
+    /// The server forgets a value after 10 minutes (voice/apple_signin.py). One kept 8 minutes is let go, which
+    /// leaves time for Apple's sheet, so the first tap after a long wait for approval does not fail.
+    static let lifetime: TimeInterval = 8 * 60
+
+    init(server: ServerClient = ServerClient(), clock: @escaping () -> Date = Date.init) {
         self.server = server
+        self.clock = clock
+    }
+
+    /// Lets go of a value kept too long: the button then waits for a new one.
+    func dropIfOld() {
+        guard ready != nil, let readyAt, clock().timeIntervalSince(readyAt) >= Self.lifetime else { return }
+        ready = nil
     }
 
     /// Fetches a value for the next attempt; false when the server could not give one.
@@ -33,6 +46,7 @@ final class AppleSignIn {
               let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let value = body["nonce"] as? String else { return false }
         ready = value
+        readyAt = clock()
         return true
     }
 

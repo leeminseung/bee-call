@@ -49,6 +49,12 @@
 			path = BeeCallTests;
 			sourceTree = "<group>";
 		};
+		BEECA1100000000000000030 /* examples */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			name = ContractExamples;
+			path = ../../contract/examples;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -75,6 +81,7 @@
 			children = (
 				BEECA1100000000000000005 /* BeeCall */,
 				BEECA1100000000000000021 /* BeeCallTests */,
+				BEECA1100000000000000030 /* examples */,
 				BEECA1100000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -105,6 +112,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				BEECA1100000000000000005 /* BeeCall */,
+				BEECA1100000000000000030 /* examples */,
 			);
 			name = BeeCall;
 			packageProductDependencies = (
@@ -345,7 +353,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				BEE_CALL_RECORDS = "";
 				BEE_CALL_SERVER = "http://192.168.219.106:8787";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = BeeCall.entitlements;
@@ -383,8 +390,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				BEE_CALL_RECORDS = "https://call.mslee.dev:8443/";
 				BEE_CALL_SERVER = "https://call.mslee.dev";
+				EXCLUDED_SOURCE_FILE_NAMES = "*/contract/examples/*";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = BeeCall.entitlements;
 				CODE_SIGN_STYLE = Automatic;

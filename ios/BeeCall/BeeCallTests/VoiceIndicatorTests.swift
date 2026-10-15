@@ -144,37 +144,4 @@ final class VoiceIndicatorTests: XCTestCase {
         XCTAssertEqual(shown.side, .ai)
         XCTAssertGreaterThan(shown.amount, 0.4)
     }
-
-    // MARK: - The glow it makes
-
-    @MainActor func testAtRestThereIsNoGlow() {
-        XCTAssertEqual(VoiceGlowLook(VoiceIndicator.rest, reduceMotion: false).opacity, 0)
-        XCTAssertEqual(VoiceGlowLook(VoiceIndicator.rest, reduceMotion: true).opacity, 0)
-    }
-
-    @MainActor func testThePersonGlowsBlueAndTheAIBeeYellow() {
-        XCTAssertEqual(VoiceGlowLook(VoiceIndicator(side: .person, amount: 0.5), reduceMotion: false).color,
-                       VoiceGlowLook.personBlue)
-        XCTAssertEqual(VoiceGlowLook(VoiceIndicator(side: .ai, amount: 0.5), reduceMotion: false).color,
-                       Color(red: 1, green: 0xD9 / 255.0, blue: 0)) // Bee yellow, #FFD900
-    }
-
-    @MainActor func testALouderVoiceGlowsWiderAndBrighter() {
-        let soft = VoiceGlowLook(VoiceIndicator(side: .person, amount: 0.2), reduceMotion: false)
-        let loud = VoiceGlowLook(VoiceIndicator(side: .person, amount: 0.9), reduceMotion: false)
-        XCTAssertGreaterThan(loud.opacity, soft.opacity)
-        XCTAssertGreaterThan(loud.blur, soft.blur)
-        XCTAssertGreaterThan(loud.scale, soft.scale)
-        XCTAssertTrue(loud.animates)
-    }
-
-    /// With Reduce Motion on, only the opacity follows the voice: no growing, no animation.
-    @MainActor func testReduceMotionOnlyChangesOpacity() {
-        let soft = VoiceGlowLook(VoiceIndicator(side: .ai, amount: 0.2), reduceMotion: true)
-        let loud = VoiceGlowLook(VoiceIndicator(side: .ai, amount: 0.9), reduceMotion: true)
-        XCTAssertGreaterThan(loud.opacity, soft.opacity)
-        XCTAssertEqual(loud.blur, soft.blur)
-        XCTAssertEqual(loud.scale, soft.scale)
-        XCTAssertFalse(loud.animates)
-    }
 }

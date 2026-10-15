@@ -12,27 +12,7 @@
 			<key>Title</key>
 			<string>Calls</string>
 			<key>FooterText</key>
-			<string>The language you and the AI speak, and the evening time Bee Call suggests when it asks to call (24-hour, like 21:00).</string>
-		</dict>
-		<dict>
-			<key>Type</key>
-			<string>PSMultiValueSpecifier</string>
-			<key>Title</key>
-			<string>Language</string>
-			<key>Key</key>
-			<string>language</string>
-			<key>DefaultValue</key>
-			<string>en</string>
-			<key>Titles</key>
-			<array>
-				<string>English</string>
-				<string>한국어</string>
-			</array>
-			<key>Values</key>
-			<array>
-				<string>en</string>
-				<string>ko</string>
-			</array>
+			<string>The evening time Bee Call suggests when it asks to call (24-hour, like 21:00). The call language, the voice and the models are in Bee Call's own settings.</string>
 		</dict>
 		<dict>
 			<key>Type</key>

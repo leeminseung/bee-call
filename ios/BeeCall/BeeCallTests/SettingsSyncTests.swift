@@ -18,22 +18,21 @@ final class SettingsSyncTests: XCTestCase {
         await sync(freshDefaults(self), server).send().value
         XCTAssertEqual(server.sent, ["PUT /settings"])
         let body = try server.body(of: "PUT /settings")
-        XCTAssertEqual(body["language"] as? String, "en")
+        XCTAssertNil(body["language"], "the language belongs to the app: sent when picked, never from the Settings app")
         XCTAssertEqual(body["call_time"] as? String, "21:00")
         XCTAssertEqual(body["record_on_server"] as? Bool, true)
         XCTAssertEqual(body["record_on_phone"] as? Bool, false)
+        XCTAssertNil(body["call_model"], "the models belong to the app's settings sheet (contract section 6)")
         XCTAssertNil(body["use_bee"], "Bee is connected with /bee/connect, not with a setting")
     }
 
     @MainActor func testChangedSwitchesAreSent() async throws {
         let store = freshDefaults(self), server = FakeServer()
-        store.set("ko", forKey: "language")
         store.set("07:30", forKey: "call_time")
         store.set(false, forKey: "record_on_server")
         store.set(true, forKey: "record_on_phone")
         await sync(store, server).send().value
         let body = try server.body(of: "PUT /settings")
-        XCTAssertEqual(body["language"] as? String, "ko")
         XCTAssertEqual(body["call_time"] as? String, "07:30")
         XCTAssertEqual(body["record_on_server"] as? Bool, false)
         XCTAssertEqual(body["record_on_phone"] as? Bool, true)
@@ -122,6 +121,18 @@ final class SettingsSyncTests: XCTestCase {
         _ = sync
     }
 
+    /// Contract section 6: the app keeps the call language in the defaults for its own words (PersonStore); that
+    /// is not a Settings-app switch, and sending it would overwrite the person's pick on the server.
+    @MainActor func testTheAppsLanguageIsNotASwitchToSend() async throws {
+        let store = freshDefaults(self), server = FakeServer()
+        let sync = sync(store, server)
+        await sync.send().value
+        store.set("ko", forKey: "language")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(server.sent, ["PUT /settings"])
+        _ = sync
+    }
+
     @MainActor func testAChangeToSomethingElseSendsNothing() async throws {
         let store = freshDefaults(self), server = FakeServer()
         let sync = sync(store, server)
@@ -151,12 +162,12 @@ final class SettingsSyncTests: XCTestCase {
         let sync = sync(store, server)
         let first = sync.send()
         await waitUntil("the first send is out") { server.sent.count == 1 }
-        store.set("ko", forKey: "language")
+        store.set("07:30", forKey: "call_time")
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(server.sent.count, 1, "the second send waits for the first")
         await first.value
         await waitUntil("the second send is out") { server.sent.count == 2 }
-        XCTAssertEqual(try server.body(of: "PUT /settings")["language"] as? String, "ko")
+        XCTAssertEqual(try server.body(of: "PUT /settings")["call_time"] as? String, "07:30")
     }
 
     // MARK: - Before an answered call joins

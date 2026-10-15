@@ -16,9 +16,21 @@ final class CallManager: NSObject {
     private(set) var ringStatus = "" // whether the app can hear the AI's calls; empty while not listening
     private(set) var isInCall = false
     private(set) var isRinging = false // the AI's call, until it is answered or ends
+    /// A call is on: placed, or answered, not just ringing. Design D shows the call screen and the call bar only
+    /// then; while Bee Call's call rings, iOS shows its own screen (review of 2026-10-15, finding 5).
+    var callIsOn: Bool { isInCall && !isRinging }
     private(set) var isEnding = false
     /// "Save on this iPhone" is on but the call's recording did not start: shown until the next call joins.
     private(set) var phoneRecordingProblem: String?
+    private(set) var isMuted = false // as CallKit last performed it, from this app's screen or its own
+    private(set) var isSpeakerOn = false
+    private(set) var connectedAt: Date? // when the AI was there: the call screen's clock runs from here
+    /// The room of the call that is on, once known: from the answer for Bee Call's own call, from the pass for a
+    /// call the person starts. The thread shows that call live (contract section 3).
+    private(set) var ownRoom: String?
+    /// The AI is in the call: until then design D's call screen says it is connecting (review of 2026-10-15,
+    /// finding 8).
+    private(set) var aiIsThere = false
     let liveKit: LiveKitClient // the call screen shows its captions and voice levels
 
     /// The call's room: `liveKit` in the app, a stand-in in tests.
@@ -30,7 +42,7 @@ final class CallManager: NSObject {
     @ObservationIgnored private let calls: any CallKitRequests
     @ObservationIgnored private let microphone: () async -> Bool
     @ObservationIgnored private var callID: UUID?
-    @ObservationIgnored private var earlierCall: String? // the record id of the call a new call continues
+    @ObservationIgnored private var earlierCall: String? // the call id of the call a new call continues
     @ObservationIgnored private var connecting: Task<Void, Never>?
     // Room → CallKit call, for every AI call rung. The ring stream replays the last minute on each reconnect.
     @ObservationIgnored private var rungRooms: [String: UUID] = [:]
@@ -42,6 +54,10 @@ final class CallManager: NSObject {
     @ObservationIgnored private var pickUpTimeout: Task<Void, Never>?
     @ObservationIgnored private var pickedUp = false
     @ObservationIgnored private let pickUpWait: Duration
+    @ObservationIgnored private let speaker: (Bool) throws -> Void
+    /// Whether the call's sound is on the iPhone's loudspeaker now, however it got there.
+    @ObservationIgnored private let speakerRoute: () -> Bool
+    @ObservationIgnored private var routeObserver: (any NSObjectProtocol)?
     @ObservationIgnored private let decline: CallDecline
     /// The name of every call, both ways, on CallKit's call screen and in the Phone app's Recents.
     private static let handle = CXHandle(type: .generic, value: "Bee Call")
@@ -53,7 +69,8 @@ final class CallManager: NSObject {
          microphone: @escaping () async -> Bool = { await LiveKitSDK.ensureDeviceAccess(for: [.audio]) },
          room: (any CallRoom)? = nil,
          beforeAnswering: @escaping () async -> Void = { await Server.shared.settings.sendBeforeAnswering() },
-         decline: CallDecline = CallDecline(), pickUpWait: Duration = .seconds(30)) {
+         decline: CallDecline = CallDecline(), speaker: @escaping (Bool) throws -> Void = CallManager.routeToSpeaker,
+         speakerRoute: @escaping () -> Bool = CallManager.soundIsOnSpeaker, pickUpWait: Duration = .seconds(30)) {
         let provider: CXProvider? = callKit == nil ? Self.provider() : nil
         self.callKit = callKit ?? provider!
         self.calls = calls ?? CXCallController()
@@ -63,6 +80,8 @@ final class CallManager: NSObject {
         self.room = room ?? liveKit
         self.beforeAnswering = beforeAnswering
         self.decline = decline
+        self.speaker = speaker
+        self.speakerRoute = speakerRoute
         self.pickUpWait = pickUpWait
         super.init()
         provider?.setDelegate(self, queue: nil) // nil = main queue
@@ -75,6 +94,12 @@ final class CallManager: NSObject {
 
         self.room.onLinkChange = { [weak self] link in
             self?.linkChanged(link)
+        }
+        // The sound moves without the app too: CallKit's own speaker button, AirPods, a route picked in CallKit's
+        // menu. The call screen's speaker button shows where it is (review of 2026-10-15, finding 2).
+        routeObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification,
+                                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.routeChanged() }
         }
         pushRegistry.delegate = self
         pushRegistry.desiredPushTypes = [.voIP]
@@ -97,7 +122,8 @@ final class CallManager: NSObject {
         _ = await microphone()
     }
 
-    /// Calls Bee Call. With `continuing`, the new call picks up from that earlier call (its record id).
+    /// Calls Bee Call. With `continuing`, the new call picks up from that earlier call, by its call id ("이 통화
+    /// 이어서 하기", GET /token?continue=<call_id>, contract section 7).
     func startCall(continuing earlierCall: String? = nil) async {
         guard !isInCall else { return }
         isInCall = true
@@ -117,6 +143,44 @@ final class CallManager: NSObject {
         } catch {
             finish("Could not start the call: \(error.localizedDescription)")
         }
+    }
+
+    /// The call screen's mute (design D). It asks CallKit, so CallKit's own screen shows the same; `isMuted`
+    /// follows once CallKit performs it (perform(_: CXSetMutedCallAction)).
+    func setMuted(_ muted: Bool) async {
+        guard let id = callID else { return }
+        try? await calls.request(CXTransaction(action: CXSetMutedCallAction(call: id, muted: muted)))
+    }
+
+    isolated deinit {
+        if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
+    }
+
+    /// The call screen's speaker (design D): the call's sound from the iPhone's loudspeaker, or back to the
+    /// receiver or headphones. When iOS refuses, the button shows where the sound still is.
+    func setSpeaker(_ on: Bool) {
+        guard isInCall else { return }
+        do {
+            try speaker(on)
+            isSpeakerOn = on
+        } catch {
+            isSpeakerOn = speakerRoute()
+        }
+    }
+
+    private func routeChanged() {
+        guard isInCall else { return }
+        isSpeakerOn = speakerRoute()
+    }
+
+    /// The loudspeaker on or off for the call's audio session, which CallKit has activated.
+    nonisolated static func routeToSpeaker(_ on: Bool) throws {
+        try AVAudioSession.sharedInstance().overrideOutputAudioPort(on ? .speaker : .none)
+    }
+
+    /// Whether the audio session's sound goes to the iPhone's loudspeaker now.
+    nonisolated static func soundIsOnSpeaker() -> Bool {
+        AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
     }
 
     func endCall() async {
@@ -313,8 +377,9 @@ final class CallManager: NSObject {
                     await beforeAnswering()
                     try Task.checkCancellation() // the call ended while the settings went out
                 }
-                _ = try await room.connect(answering: roomName, continuing: roomName == nil ? earlierCall : nil)
+                let joined = try await room.connect(answering: roomName, continuing: roomName == nil ? earlierCall : nil)
                 try Task.checkCancellation() // the call ended while we were connecting
+                ownRoom = joined
                 // Only now: a recording started after a hang-up ran on into the next call's file (review finding 15).
                 phoneRecordingProblem = room.recordOnPhoneIfWanted()
                 // Both ways, the call screen says "Connected" once the AI is there (agentPickedUp), which may
@@ -348,8 +413,10 @@ final class CallManager: NSObject {
     private func agentPickedUp(_ id: UUID) {
         guard callID == id, !pickedUp, !isEnding else { return }
         pickedUp = true
+        aiIsThere = true
         pickUpTimeout?.cancel()
         pickUpTimeout = nil
+        if connectedAt == nil { connectedAt = .now } // Bee Call's own call counts from its answer
         if !rungRooms.values.contains(id) { callKit.reportConnected(id) }
         status = "Connected"
     }
@@ -388,12 +455,18 @@ final class CallManager: NSObject {
         pickUpTimeout = nil
         room.onAgentAnswered = nil
         pickedUp = false
+        aiIsThere = false
         callID = nil
         earlierCall = nil
         isInCall = false
         isRinging = false
         isEnding = false
         isReconnecting = false
+        isMuted = false
+        if isSpeakerOn { try? speaker(false) } // the loudspeaker is let go with the call
+        isSpeakerOn = false
+        connectedAt = nil
+        ownRoom = nil
         status = message
     }
 }
@@ -455,6 +528,8 @@ extension CallManager: CXProviderDelegate {
         ringTimeout?.cancel() // answered in time; if the AI gave up anyway, the token server says 410
         ringTimeout = nil
         action.fulfill() // CallKit activates the audio session after this.
+        connectedAt = .now // CallKit counts the call from its answer, and so does the call screen's clock
+        ownRoom = room
         status = "Answering…"
         join(action.callUUID, answering: room)
     }
@@ -484,6 +559,8 @@ extension CallManager: CXProviderDelegate {
         Task {
             do {
                 try await room.setMicrophone(enabled: !action.isMuted)
+                // A call that ended meanwhile keeps its mute to itself: the next call starts unmuted.
+                if action.callUUID == callID { isMuted = action.isMuted }
                 action.fulfill()
             } catch {
                 action.fail()
@@ -515,7 +592,21 @@ extension CallManager {
     func playVoiceDemo(_ demo: VoiceDemo) {
         isInCall = true
         status = "Connected"
+        connectedAt = .now
+        aiIsThere = true
         liveKit.playVoiceDemo(demo)
+    }
+
+    /// Debug builds only (DesignDemo.swift): a pretend call in `room` with these lines, connected `connectedAgo`
+    /// seconds ago, for design D's call screen. Nothing goes to CallKit, no room is joined, nothing is recorded.
+    func playDesignDemo(lines: [(mine: Bool, text: String)], voice: VoiceDemo, connectedAgo: TimeInterval,
+                        room: String) {
+        isInCall = true
+        status = "Connected"
+        connectedAt = Date.now.addingTimeInterval(-connectedAgo)
+        ownRoom = room
+        aiIsThere = true
+        liveKit.playDemo(lines: lines, voice: voice)
     }
 }
 #endif

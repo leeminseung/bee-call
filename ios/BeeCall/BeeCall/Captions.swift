@@ -6,6 +6,7 @@ struct Caption: Identifiable {
     /// id) and its newest text.
     struct Line {
         let id: String
+        let number: Int // the speaker's 1, 2, 3... in the order lines first arrived (contract section 3)
         var text: String
         var sentAt: Date
     }
@@ -28,6 +29,15 @@ struct CaptionList {
     static let limit = 30 // bubbles kept on screen
 
     private(set) var captions: [Caption] = []
+    private var counts: [Bool: Int] = [:] // lines so far per side, keyed by isMine
+
+    /// Every line, numbered per speaker, in the order they first arrived: what the thread draws beyond the
+    /// lines the call view holds already.
+    var lines: [CaptionLine] {
+        captions.flatMap { caption in
+            caption.lines.map { CaptionLine(speaker: caption.isMine ? .person : .ai, number: $0.number, text: $0.text) }
+        }
+    }
 
     /// The newest text of the line `id`. A version older than the one shown is dropped.
     mutating func show(_ text: String, line id: String, isMine: Bool, sentAt: Date) {
@@ -37,7 +47,9 @@ struct CaptionList {
             captions[bubble].lines[line].sentAt = sentAt
             return
         }
-        let line = Caption.Line(id: id, text: text, sentAt: sentAt)
+        let number = (counts[isMine] ?? 0) + 1
+        counts[isMine] = number
+        let line = Caption.Line(id: id, number: number, text: text, sentAt: sentAt)
         if isMine, let last = captions.indices.last, captions[last].isMine {
             captions[last].lines.append(line) // the user is still talking: no AI line since their last one
             return
@@ -51,5 +63,49 @@ struct CaptionList {
             if let line = caption.lines.firstIndex(where: { $0.id == id }) { return (bubble, line) }
         }
         return nil
+    }
+}
+
+/// One caption line as the thread uses it: its speaker, its number among that speaker's lines, and its text.
+struct CaptionLine: Hashable {
+    let speaker: Speaker
+    let number: Int
+    let text: String
+}
+
+/// Whether the caption numbers still line up with the server's counts (contract section 3, rule 6). They do while
+/// one connection lasts and one voice server is in the room. A reconnect of the phone's room loses the lines sent
+/// meanwhile; a voice server leaving, or a new one joining, is a restart, whose cut-off reply was captioned but
+/// never recorded; and the voice server marks its own reconnect by changing its bee_call.captions attribute, which
+/// it first sets when it picks up (so the first value is the start, not a change). After any of these the thread
+/// draws the call view alone for the rest of the call.
+struct CaptionNumbering {
+    private(set) var holds = true
+    private var voiceServerSeen = false
+    private var mark: String? // the voice server's first bee_call.captions value
+
+    mutating func roomReconnecting() {
+        holds = false
+    }
+
+    /// The voice server is in the room: when the phone joins, or when it arrives later. A second arrival is a
+    /// restart.
+    mutating func voiceServerJoined(captions value: String?) {
+        if voiceServerSeen { holds = false }
+        voiceServerSeen = true
+        captionsMark(value)
+    }
+
+    mutating func voiceServerLeft() {
+        holds = false
+    }
+
+    mutating func captionsMark(_ value: String?) {
+        guard let value else { return } // not set yet: the voice server has not picked up
+        guard let first = mark else {
+            mark = value
+            return
+        }
+        if first != value { holds = false }
     }
 }

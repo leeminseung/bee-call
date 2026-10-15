@@ -8,9 +8,14 @@ final class LiveKitClient: NSObject {
     /// The voice server sets this attribute to "answered" when the AI picks up. Until then a call the user
     /// started hears ringing from the voice server while the AI reads the user's Bee data.
     nonisolated static let stateAttribute = "bee_call.state"
+    /// The voice server changes this attribute after its own room reconnects (contract section 3, rule 6).
+    nonisolated static let captionsAttribute = "bee_call.captions"
 
     private(set) var captionList = CaptionList()
     var captions: [Caption] { captionList.captions }
+    /// Whether the caption numbers still line up with the server's counts, so the thread may draw caption lines.
+    private(set) var numbering = CaptionNumbering()
+    @ObservationIgnored private var voiceServers: Set<String> = [] // the voice servers in the room, by identity
     /// The room's connection dropped, came back, or ended without the app asking.
     @ObservationIgnored var onLinkChange: ((CallLink) -> Void)?
     @ObservationIgnored var onAgentAnswered: (() -> Void)?
@@ -34,13 +39,15 @@ final class LiveKitClient: NSObject {
     /// starts; with `answering`, the room of the AI's call. Only the pass from the token server differs.
     func connect(answering roomName: String? = nil, continuing earlierCall: String? = nil) async throws -> String {
         captionList = CaptionList()
+        numbering = CaptionNumbering()
+        voiceServers = []
         voices.aiHasAnswered = roomName != nil // the AI's own call has no ringing: the first sound is its voice
         let access = try await fetchAccess(answering: roomName, continuing: earlierCall)
         try Task.checkCancellation() // the call ended while we fetched the token
         return try await connect(access: access)
     }
 
-    private func connect(access: Access) async throws -> String {
+    private func connect(access: CallPass) async throws -> String {
         let room = Room()
         room.add(delegate: self)
         self.room = room // set first, so disconnect() can stop this attempt at any point
@@ -62,6 +69,7 @@ final class LiveKitClient: NSObject {
         guard room === self.room else { throw CancellationError() }
         voices.microphoneOn = microphoneOn
         voices.start()
+        for participant in room.remoteParticipants.values { voiceServerJoined(participant) } // there before us
         if room.remoteParticipants.values.contains(where: { $0.attributes[Self.stateAttribute] == "answered" }) {
             agentAnswered() // the AI picked up before we finished joining (its own call, already answered)
         }
@@ -88,11 +96,19 @@ final class LiveKitClient: NSObject {
 
     func disconnect() async {
         microphoneOn = true // the next call starts unmuted
+        captionList = CaptionList() // the next call's screen starts without this call's words
         phoneRecorder.stop()
         voices.stop()
         guard let room else { return }
         self.room = nil
         await room.disconnect()
+    }
+
+    /// A voice server in the room, met once per identity: when the phone joins, or when it arrives later.
+    private func voiceServerJoined(_ participant: Participant) {
+        guard participant.kind == .agent, voiceServers.insert(participant.identity?.stringValue ?? "").inserted
+        else { return }
+        numbering.voiceServerJoined(captions: participant.attributes[Self.captionsAttribute])
     }
 
     private func show(_ text: String, segment: String, from sender: Participant.Identity, sentAt: Date, in room: Room) {
@@ -102,12 +118,6 @@ final class LiveKitClient: NSObject {
     }
 
     // MARK: - Token server
-
-    private struct Access: Decodable {
-        let url: String
-        let token: String
-        let room: String
-    }
 
     /// Where the pass comes from on the token server: GET /token, for a new call, an answer, or a continuation.
     static func passPath(answering roomName: String?, continuing earlierCall: String?) -> String {
@@ -129,16 +139,16 @@ final class LiveKitClient: NSObject {
 
     /// A pass for a new call: the voice server is dispatched into the new room when the app joins.
     /// With `answering`, a pass into the room of the AI's call instead; the voice server is already there.
-    /// With `continuing`, the new call picks up from that earlier call (its record id, like 2026-10-14/0055).
+    /// With `continuing`, the new call picks up from that earlier call, by its call id (contract section 7).
     private func fetchAccess(answering roomName: String?, continuing earlierCall: String? = nil) async throws
-        -> Access {
+        -> CallPass {
         guard let request = server.request(Self.passPath(answering: roomName, continuing: earlierCall)) else {
             throw TokenServerError(errorDescription: "This build has no server address.")
         }
         let (data, response) = try await http.data(for: request)
         switch server.read(response.httpStatus, data, to: request) {
         case .ok(200, let body):
-            return try JSONDecoder().decode(Access.self, from: body)
+            return try Contract.decode(CallPass.self, from: body)
         case .refused(410, _) where roomName != nil:
             throw CallAlreadyEnded()
         case .refused(429, let body): // today's budget is used up; the server says how much
@@ -155,7 +165,23 @@ extension LiveKitClient: RoomDelegate {
     nonisolated func room(_ room: Room, didStartReconnectWithMode reconnectMode: ReconnectMode) {
         Task { @MainActor in
             guard room === self.room else { return } // an earlier call's room
+            self.numbering.roomReconnecting() // lines sent meanwhile are lost to the phone
             self.onLinkChange?(.reconnecting)
+        }
+    }
+
+    nonisolated func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
+        Task { @MainActor in
+            guard room === self.room else { return }
+            self.voiceServerJoined(participant)
+        }
+    }
+
+    nonisolated func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
+        Task { @MainActor in
+            guard room === self.room, participant.kind == .agent,
+                  self.voiceServers.remove(participant.identity?.stringValue ?? "") != nil else { return }
+            self.numbering.voiceServerLeft()
         }
     }
 
@@ -177,10 +203,13 @@ extension LiveKitClient: RoomDelegate {
     }
 
     nonisolated func room(_ room: Room, participant: Participant, didUpdateAttributes attributes: [String: String]) {
-        guard participant is RemoteParticipant, participant.attributes[Self.stateAttribute] == "answered" else { return }
+        guard participant is RemoteParticipant else { return }
+        let answered = participant.attributes[Self.stateAttribute] == "answered"
+        let captions = participant.attributes[Self.captionsAttribute], isVoiceServer = participant.kind == .agent
         Task { @MainActor in
             guard room === self.room else { return } // a late update from an earlier call
-            self.agentAnswered()
+            if isVoiceServer { self.numbering.captionsMark(captions) }
+            if answered { self.agentAnswered() }
         }
     }
 }
@@ -194,6 +223,21 @@ extension LiveKitClient {
                          sentAt: .now)
         captionList.show("Yes, now is fine. Dana says her knee is better,", line: "me/demo", isMine: true, sentAt: .now)
         voices.playDemo(demo)
+    }
+
+    /// Debug builds only (DesignDemo.swift): one more line, as if just said.
+    func demoSay(_ text: String, mine: Bool) {
+        captionList.show(text, line: "\(mine ? "me" : "ai")/demo-\(UUID().uuidString)", isMine: mine, sentAt: .now)
+    }
+
+    /// Debug builds only (DesignDemo.swift): these caption lines and synthetic voice levels; no room is joined.
+    func playDemo(lines: [(mine: Bool, text: String)], voice: VoiceDemo) {
+        captionList = CaptionList()
+        for (index, line) in lines.enumerated() {
+            captionList.show(line.text, line: "\(line.mine ? "me" : "ai")/demo\(index)", isMine: line.mine,
+                             sentAt: .now)
+        }
+        voices.playDemo(voice)
     }
 }
 #endif

@@ -372,6 +372,22 @@ test("the LiveKit room's name shows only in the debug view, and a normal record 
   assert.match(debug.visibleText(debug.one("session-foot")), /Room call-matt-20261015-210002/);
 });
 
+test("a failed background job says so in plain words; its raw error only in the debug view", () => {
+  const raw = "no harness ARN: run scripts/deploy_worker.py first";
+  const events = [
+    { t: 1, type: "job_started", job_id: 1, task: "Compare Bukhansan and Gwanaksan" },
+    { t: 9, type: "job_failed", job_id: 1, error: raw },
+  ];
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(events);
+  const job = page.text(page.one("job"));
+  assert.match(job, /The job could not finish\./);
+  assert.doesNotMatch(page.visibleText(), /harness ARN/);
+  const debug = debugView("#/s/2026-10-15/2100");
+  debug.feed(events);
+  assert.match(debug.text(debug.one("job")), /no harness ARN: run scripts\/deploy_worker\.py first/);
+});
+
 test("an error reads in plain words, and the raw error is not one tap away outside the debug view", () => {
   const raw = "bee_conversation: HTTP 502 from https://api.bee.computer";
   const error = { t: 2, type: "error", source: "bee_context", error: raw };
@@ -469,6 +485,39 @@ test("between calls, earlier times it looked load below when the server says the
   assert.match(page.visibleText(page.byId("view")), /A new look\.[\s\S]*Newest look\.[\s\S]*An older look\./);
 });
 
+test("between calls, a refresh while earlier ones load does not load them twice (BC-054)", async () => {
+  const server = metaPages({
+    "": { entries: [looked("2026-10-15T21:05:00+09:00", "Newest look.")], more: true },
+    "2026-10-15T21:05:00+09:00": { entries: [looked("2026-10-14T08:00:00+09:00", "An older look.")], more: false },
+  });
+  const page = loadPage({ hash: "#/meta", fetch: server.fetch });
+  await page.settle();
+  page.one("meta-older").click();
+  page.tick(); // the 15-second refresh comes while the older page is on its way
+  page.one("meta-older").click();
+  await page.settle();
+  assert.equal(server.asked.filter((url) => url.includes("before=")).length, 1);
+  assert.equal(page.all("meta-entry").length, 2);
+});
+
+test("between calls, earlier ones stay joined to the newest when new looks push the newest page on (BC-054)", async () => {
+  const pages = {
+    "": { entries: [looked("2026-10-15T23:00:00+09:00", "Look A."), looked("2026-10-15T22:00:00+09:00", "Look B.")], more: true },
+    "2026-10-15T22:00:00+09:00": { entries: [looked("2026-10-15T21:00:00+09:00", "Look C.")], more: false },
+    "2026-10-15T23:00:00+09:00": { entries: [looked("2026-10-15T22:00:00+09:00", "Look B."), looked("2026-10-15T21:00:00+09:00", "Look C.")], more: false },
+  };
+  const page = loadPage({ hash: "#/meta", fetch: metaPages(pages).fetch });
+  await page.settle();
+  page.one("meta-older").click();
+  await page.settle();
+  // A new look arrives; the newest page (two looks here) no longer reaches Look B.
+  pages[""] = { entries: [looked("2026-10-15T23:30:00+09:00", "Look N."), looked("2026-10-15T23:00:00+09:00", "Look A.")], more: true };
+  page.tick();
+  await page.settle();
+  assert.match(page.visibleText(page.byId("view")), /Look N\.[\s\S]*Look A\.[\s\S]*Look B\.[\s\S]*Look C\./);
+  assert.equal(page.all("meta-entry").length, 4, "each look once");
+});
+
 test("between calls, a server that does not say there are more shows no button (BC-054)", async () => {
   const page = loadPage({ hash: "#/meta", fetch: answering({ entries: [looked("2026-10-15T21:05:00+09:00", "A look.")] }) });
   await page.settle();
@@ -534,6 +583,23 @@ test("a stream the server refuses while it restarts reopens, and the call is reb
   page.feed(lines.slice(0, 20)); // the new stream sends the whole backlog, and more
   assert.equal(userBubbles(page)[0], "Yes, now is fine. Dana says her knee is better, but she still wants an easy route.");
   assert.equal(page.all("speech").filter((s) => /Is now still good/.test(page.text(s))).length, 1, "nothing twice");
+});
+
+test("a stream refused again and again while the call is listed is tried again after a pause, not at once", async () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100", fetch: listed("2026-10-15/2100") });
+  page.feed(fixture(AI_CALL).slice(0, 12));
+  page.stream.refuse(); // the first refusal after lines came: reopened at once
+  await page.settle();
+  assert.equal(page.streams.length, 2);
+  page.stream.refuse(); // refused before it sent anything, such as a 500 before the stream starts
+  await page.settle();
+  assert.equal(page.streams.length, 2, "not at network speed");
+  page.tick();
+  await page.settle();
+  assert.equal(page.streams.length, 3, "after the pause");
+  page.stream.refuse();
+  await page.settle();
+  assert.equal(page.streams.length, 3);
 });
 
 test("a dropped connection is left to the browser, which resumes by itself", () => {

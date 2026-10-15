@@ -69,6 +69,54 @@ final class CaptionsTests: XCTestCase {
         XCTAssertEqual(list.captions.count, 2)
     }
 
+    // MARK: - Caption numbers (contract section 3)
+
+    /// Each speaker's lines are numbered 1, 2, 3... in the order they first arrive in the room; a better version
+    /// of a line keeps its number, so the person's growing words keep theirs.
+    @MainActor func testEachSpeakersLinesAreNumberedInTheOrderTheyArrive() {
+        var list = CaptionList()
+        list.show("Hi.", line: "agent/a1", isMine: false, sentAt: at(0))
+        list.show("Yes,", line: "matt/u1", isMine: true, sentAt: at(1))
+        list.show("now is fine.", line: "matt/u2", isMine: true, sentAt: at(2))
+        list.show("Yes, it is", line: "matt/u1", isMine: true, sentAt: at(3))
+        list.show("Great.", line: "agent/a2", isMine: false, sentAt: at(4))
+        XCTAssertEqual(list.lines, [
+            CaptionLine(speaker: .ai, number: 1, text: "Hi."),
+            CaptionLine(speaker: .person, number: 1, text: "Yes, it is"),
+            CaptionLine(speaker: .person, number: 2, text: "now is fine."),
+            CaptionLine(speaker: .ai, number: 2, text: "Great."),
+        ])
+    }
+
+    /// Rule 6: the numbers line up with the server's counts only while one connection lasts and one voice server
+    /// is in the room. A reconnect of the phone's room, the voice server leaving or a new one joining, and the
+    /// voice server's own reconnect (its bee_call.captions attribute changing) end that for the rest of the call.
+    @MainActor func testTheNumbersHoldUntilTheRoomOrTheVoiceServerBreaksThem() {
+        var numbers = CaptionNumbering()
+        numbers.voiceServerJoined(captions: "1")
+        numbers.captionsMark("1")
+        XCTAssertTrue(numbers.holds, "the voice server's first join and its first mark are the start")
+        for breaking in [{ (n: inout CaptionNumbering) in n.roomReconnecting() },
+                         { (n: inout CaptionNumbering) in n.voiceServerLeft() },
+                         { (n: inout CaptionNumbering) in n.voiceServerJoined(captions: "1") },
+                         { (n: inout CaptionNumbering) in n.captionsMark("2") }] {
+            var each = numbers
+            breaking(&each)
+            XCTAssertFalse(each.holds)
+            each.captionsMark("1")
+            XCTAssertFalse(each.holds, "for the rest of the call")
+        }
+        // The voice server joins before it picks up and sets its first mark with "answered" (fix-server 9a0cd79,
+        // voice/agent.py): the first mark is the start, not a reconnect (review of 2026-10-15, second round,
+        // finding 1: captions went off at every pick-up).
+        var unmarked = CaptionNumbering()
+        unmarked.voiceServerJoined(captions: nil)
+        unmarked.captionsMark("1")
+        XCTAssertTrue(unmarked.holds, "the first mark, set at pick-up")
+        unmarked.captionsMark("2")
+        XCTAssertFalse(unmarked.holds, "a later change is its reconnect")
+    }
+
     @MainActor func testOnlyTheNewestThirtyBubblesStay() {
         var list = CaptionList()
         for n in 0..<31 {

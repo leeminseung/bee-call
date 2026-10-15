@@ -1,42 +1,45 @@
 import XCTest
 @testable import BeeCall
 
-/// The ring a VoIP push carries (voice/dispatch.py place_call writes the same line to the ring stream).
+/// The ring a VoIP push carries (voice/dispatch.py place_call writes the same line to the ring stream). D reads
+/// `room`, `topic` and `expires_at` only (contract section 7): a time to the second with the person's offset.
 final class RingStreamTests: XCTestCase {
-    @MainActor func testAPushWithAnEpochRingsUntilThatMoment() throws {
+    @MainActor func testAPushRingsUntilItsExpiresAt() throws {
         let ring = try XCTUnwrap(RingStream.ring(fromPush: [
             "room": "call-matt-20261015-210000", "topic": "  Saturday hike  ",
-            "expires_at": "2026-10-15T21:01:00", "expires_epoch": 1_791_816_060,
+            "expires_at": "2026-10-15T21:01:00+09:00", "expires_epoch": 1, // the pre-D field, no longer read
         ]))
         XCTAssertEqual(ring.room, "call-matt-20261015-210000")
         XCTAssertEqual(ring.topic, "Saturday hike")
-        XCTAssertEqual(ring.expiresAt, Date(timeIntervalSince1970: 1_791_816_060))
+        XCTAssertEqual(ring.expiresAt, Date(timeIntervalSince1970: 1_792_065_660))
     }
 
     @MainActor func testAnEmptyTopicIsNoTopic() throws {
         let ring = try XCTUnwrap(RingStream.ring(fromPush: [
-            "room": "call-matt-20261015-210000", "topic": " ", "expires_at": "2026-10-15T21:01:00",
-            "expires_epoch": 1_791_816_060,
+            "room": "call-matt-20261015-210000", "topic": " ", "expires_at": "2026-10-15T21:01:00+09:00",
         ]))
         XCTAssertNil(ring.topic)
     }
 
-    /// Review finding 11: without an epoch, expires_at was read as "the Mac's" local time, with no zone. The server
-    /// writes it on the person's clock with its zone (voice/dispatch.py), and it is read with that zone.
-    @MainActor func testAPushWithoutAnEpochIsReadWithItsZone() throws {
-        let ring = try XCTUnwrap(RingStream.ring(fromPush: [
-            "room": "call-matt-20261015-210000", "expires_at": "2026-10-15T21:01:00+09:00",
-        ]))
-        XCTAssertEqual(ring.expiresAt, Date(timeIntervalSince1970: 1_792_065_660))
+    /// The contract's own ring example.
+    @MainActor func testTheContractsRingExampleRings() throws {
+        let line = String(decoding: try ContractTests.example("ring"), as: UTF8.self)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        let ring = try XCTUnwrap(RingStream.ring(fromPush: payload))
+        XCTAssertEqual(ring.room, "call-minseung-20261015-203002")
+        XCTAssertEqual(ring.topic, "오늘 회의에서 정한 데모 촬영 일정")
     }
 
-    /// A time with no zone says nothing certain about when the ring ends, so it does not ring.
-    @MainActor func testAPushWithoutAnEpochOrAZoneIsNotARing() {
+    /// A time with no offset says nothing certain about when the ring ends, and an epoch alone is the pre-D form:
+    /// neither rings.
+    @MainActor func testATimeWithoutItsOffsetOrAnEpochAloneIsNotARing() {
         XCTAssertNil(RingStream.ring(fromPush: ["room": "call-matt-20261015-210000", "expires_at": "2026-10-15T21:01:00"]))
+        XCTAssertNil(RingStream.ring(fromPush: ["room": "call-matt-20261015-210000", "expires_at": "2026-10-15T21:01:00",
+                                                "expires_epoch": 1_791_816_060]))
     }
 
     @MainActor func testAPushWithoutARoomIsNotARing() {
-        XCTAssertNil(RingStream.ring(fromPush: ["topic": "x", "expires_at": "2026-10-15T21:01:00"]))
+        XCTAssertNil(RingStream.ring(fromPush: ["topic": "x", "expires_at": "2026-10-15T21:01:00+09:00"]))
     }
 }
 
