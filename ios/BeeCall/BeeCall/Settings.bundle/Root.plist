@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>StringsTable</key>
+	<string>Root</string>
 	<key>PreferenceSpecifiers</key>
 	<array>
 		<dict>
@@ -54,7 +56,7 @@
 			<key>Title</key>
 			<string>Call audio</string>
 			<key>FooterText</key>
-			<string>The written record of each call is always kept on the server. These switches are only about the sound. On this iPhone, recordings appear in the Files app under On My iPhone, Bee Call.</string>
+			<string>The written record of each call is always kept on the server. These switches are only about the sound. Turning “Save on the server” off stops recording new calls there. Recordings made before stay. On this iPhone, recordings appear in the Files app under On My iPhone, Bee Call.</string>
 		</dict>
 		<dict>
 			<key>Type</key>
