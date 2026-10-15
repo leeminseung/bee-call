@@ -49,11 +49,15 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         let source: String
         let suggestedEpoch: Int?
         let callAtEpoch: Int?
+        /// The same moment as ISO 8601 on the person's own clock, such as 2026-10-15T19:00:00+09:00: its offset is
+        /// the person's time zone, which the server keeps (BookedCall.swift).
+        var callAt: String? = nil
 
         enum CodingKeys: String, CodingKey { // as voice/offers.py Offer.view() names them
             case id, state, topic, kind, source
             case suggestedEpoch = "suggested_epoch"
             case callAtEpoch = "call_epoch"
+            case callAt = "call_at"
         }
 
         var title: String {
@@ -224,15 +228,26 @@ private struct OfferRow: View {
     let offer: OfferCenter.Offer
     let isAnswering: Bool // the answer is on its way: the buttons wait for it
     let answer: (OfferCenter.Choice) -> Void
+    @AppStorage("language") private var language = "en" // the person's call language (Settings: Language)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(offer.title)
-                .font(.headline)
-                .lineLimit(2)
-            Text(offer.status)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            if offer.state == "booked" { // when, then about what (BookedCall.swift)
+                Text(offer.bookedLine(language: language))
+                    .font(.headline)
+                    .lineLimit(2)
+                Text(offer.about(language: language))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else {
+                Text(offer.title)
+                    .font(.headline)
+                    .lineLimit(2)
+                Text(offer.status)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
             HStack(spacing: 8) {
                 switch offer.state {
                 case "asked":
@@ -257,15 +272,13 @@ private struct OfferRow: View {
 }
 
 extension OfferCenter.Offer {
-    /// The line under the offer's title in the app's list.
+    /// The line under the offer's title in the app's list while Bee Call asks (asked), or calls (now, calling). A
+    /// booked call's row has its own lines (bookedLine and about, BookedCall.swift).
     var status: String {
         switch state {
         case "asked":
             return suggestedEpoch.map { "Bee Call asks: a quick call \(Self.day($0)) at \(Self.time($0))?" }
                 ?? "Bee Call asks for a quick call"
-        case "booked":
-            let who = source == "call" ? "You asked for a call back" : "You said yes"
-            return callAtEpoch.map { "\(who): \(Self.day($0)) at \(Self.time($0))" } ?? who
         default:
             return "Calling you now…"
         }
