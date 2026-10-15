@@ -50,10 +50,10 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         let suggestedEpoch: Int?
         let callAtEpoch: Int?
 
-        enum CodingKeys: String, CodingKey {
+        enum CodingKeys: String, CodingKey { // as voice/offers.py Offer.view() names them
             case id, state, topic, kind, source
             case suggestedEpoch = "suggested_epoch"
-            case callAtEpoch = "call_at_epoch"
+            case callAtEpoch = "call_epoch"
         }
 
         var title: String {
