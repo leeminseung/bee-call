@@ -394,6 +394,29 @@ def test_the_voice_server_waits_for_the_caller_as_long_as_the_app_rings():
     assert agent.CALLER_WAIT_S >= 30
 
 
+def test_console_mode_picks_up_at_once(tmp_path, monkeypatch, quick):
+    """Review of the user-noticed fixes, 6c: LiveKit's console mode (this Mac's microphone) has no caller in a room,
+    so the call waited the whole 30 s for one before it picked up."""
+    import time
+
+    me = signed_in(tmp_path)
+    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
+    monkeypatch.setattr(agent, "CALLER_WAIT_S", 5.0)  # long enough to tell a wait apart
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    call.console = True
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        started = time.monotonic()
+        await agent.run_call(call, me.people)  # nobody ever joins
+        took = time.monotonic() - started
+        await call.end()
+        return took
+
+    took = asyncio.run(main())
+    assert took < 2.0 and call.session.said == ["Hi Matt, what's on your mind?"]
+
+
 def test_a_room_that_closes_before_the_caller_is_seen_ends_the_call_quietly(tmp_path, monkeypatch, quick):
     """LiveKit's wait for a participant raises when the room goes away; that is a caller who never came."""
     me = signed_in(tmp_path)

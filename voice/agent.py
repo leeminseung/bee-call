@@ -562,15 +562,15 @@ async def run_call(ctx: JobContext, people: People) -> None:
         ctx.room.on("participant_connected", lambda participant: the_caller(participant) and left.clear())
         never_came = None  # why the caller is gone without having been seen, for the log
         try:
-            await asyncio.wait_for(ctx.wait_for_participant(), CALLER_WAIT_S)
+            if not ctx.is_fake_job():  # LiveKit's console mode has no caller in a room to wait for
+                await asyncio.wait_for(ctx.wait_for_participant(), CALLER_WAIT_S)
             seen = time.monotonic()  # the opening's 6 s and the ringing's 8 s count from here (BC-025)
         except asyncio.TimeoutError:
             seen = time.monotonic()
             # The app's join made this room, so a caller not in it by now left before the voice server came, and no
-            # disconnect will be seen. (LiveKit's console mode has no caller in a room.)
-            if not ctx.is_fake_job():
-                never_came = f"no caller came into the room within {CALLER_WAIT_S:g} s"
-                left.set()
+            # disconnect will be seen.
+            never_came = f"no caller came into the room within {CALLER_WAIT_S:g} s"
+            left.set()
         except Exception as exc:  # LiveKit's wait raises when the room goes away meanwhile
             seen = time.monotonic()
             never_came = f"the room closed before the caller came into it ({exc})"

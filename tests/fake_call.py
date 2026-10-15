@@ -117,9 +117,11 @@ class FakeCall:
         if self.recording is None:  # as LiveKit's: the first call decides
             self.recording = dict(options)
 
+    console = False  # LiveKit's console mode: this Mac's microphone, no caller in a room
+
     def is_fake_job(self) -> bool:
         """LiveKit's console mode (no room, this Mac's mic) is a fake job; a dispatched call is not."""
-        return False
+        return self.console
 
     def add_shutdown_callback(self, callback) -> None:
         self.shutdown_callbacks.append(callback)
