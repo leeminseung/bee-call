@@ -451,16 +451,30 @@ def not_placed_notification(offer: Offer, language: CallLanguage) -> dict[str, A
     return {"aps": {"alert": {"title": "Bee Call", "body": body}, "sound": "default", "thread-id": "offers"}}
 
 
+# What an offer, or an AI call, is about when it has no topic of its own: the line its notification uses, in the
+# person's language. The app shows the same line as the call's or the question's topic (contract sections 1 and 4).
+NO_TOPIC = {"ko": {"voice note": "새 음성 메모 이야기", None: "오늘 하루 이야기"},
+            "en": {"voice note": "Your new voice note", None: "Your day"}}
+
+
+def topic_line(topic: str | None, kind: str | None, language: str) -> str:
+    """The topic, or for none the notification's line for the kind ("voice note" or another), in `language`."""
+    if isinstance(topic, str) and topic.strip():
+        return topic.strip()
+    lines = NO_TOPIC["ko" if language == "ko" else "en"]
+    return lines["voice note"] if kind == "voice note" else lines[None]
+
+
 def notification(offer: Offer, now: datetime, language: CallLanguage) -> dict[str, Any]:
     """The APNs payload for an offer. The app defines the buttons (CALL_OFFER, CALL_OFFER_KO)."""
     when = when_label(offer.at("suggested_at") or now, now, language)
     topic = (offer.topic or "").strip()
+    line = topic_line(None, offer.kind, language.code)
     if language.code == "ko":
-        about = f"“{topic}” 이야기" if topic else ("새 음성 메모 이야기" if offer.kind == "voice note" else "오늘 하루 이야기")
+        about = f"“{topic}” 이야기" if topic else line
         body, category = f"{about}, {when}에 잠깐 통화 괜찮으세요?", "CALL_OFFER_KO"
     else:
-        about = f"About “{topic}”" if topic else ("About your new voice note" if offer.kind == "voice note"
-                                                 else "About your day")
+        about = f"About “{topic}”" if topic else f"About {line[0].lower()}{line[1:]}"
         body, category = f"{about}: free for a quick call at {when}?", "CALL_OFFER"
     return {"aps": {"alert": {"title": "Bee Call", "body": body}, "sound": "default", "category": category,
                     "thread-id": "offers"},
