@@ -57,8 +57,9 @@ UNITS = {"token": "bee-call-token", "session": "bee-call-session", "agent": "bee
 # which dns sets.
 MAC_ONLY = {**NOT_FOR_THE_SERVER, HOST_PARAMETER: "set by dns"}
 # Settings this Mac passes on the command line rather than in .env.local, as the server should run them:
-# Claude Haiku 5.5 on Anthropic's own API in the coordinator slot, with GLM 5 on Bedrock standing by (voice/agent.py;
-# the key is .env.local's ANTHROPIC_API_KEY), and the AgentCore worker (only when its ARN is known).
+# the model catalog's Claude models on Anthropic's own API (voice/model_catalog.py: the call AI, the prep, the meta
+# agent, the title), GLM 5 on Bedrock standing by (the key is .env.local's ANTHROPIC_API_KEY), and the AgentCore
+# worker (only when its ARN is known).
 SERVER_DEFAULTS = {"COORDINATOR_LLM": "anthropic", "WORKER": "harness"}
 
 STATUS_SCRIPT = r"""
@@ -121,8 +122,8 @@ def coordinator_note(chosen: Mapping[str, tuple[str, str]], existing: set[str]) 
         return None
     if "ANTHROPIC_API_KEY" in chosen or "ANTHROPIC_API_KEY" in existing:
         return None
-    return ("no ANTHROPIC_API_KEY in .env.local or on the server: every call runs on GLM 5 (the stand-by), and its "
-            "record says so, until the key is set")
+    return ("no ANTHROPIC_API_KEY in .env.local or on the server: every call, its prep and the meta agent run on "
+            "GLM 5 (the stand-by), each record says so, and calls get no title, until the key is set")
 
 
 def harness_on_this_mac(local: Mapping[str, str | None]) -> tuple[str, str] | None:

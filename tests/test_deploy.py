@@ -227,7 +227,8 @@ def test_without_the_workers_arn_the_server_keeps_the_fake_worker():
 
 def test_the_server_runs_claude_haiku_on_anthropic_s_api_with_the_key_from_this_mac():
     """The call AI on the server is Claude Haiku 5.5 on Anthropic's own API (2026-10-15); its key goes to SSM like
-    the other settings of .env.local. Without it on either side, secrets says every call will run on GLM 5."""
+    the other settings of .env.local. Without it on either side, secrets says every call, its prep and the meta agent
+    will run on GLM 5, and calls will have no title."""
     from scripts.deploy_server import coordinator_note
 
     chosen, skipped = server_settings({"ANTHROPIC_API_KEY": "sk-ant-test"})
@@ -236,7 +237,7 @@ def test_the_server_runs_claude_haiku_on_anthropic_s_api_with_the_key_from_this_
     assert coordinator_note(chosen, existing=set()) is None
     assert coordinator_note(server_settings({})[0], existing={"ANTHROPIC_API_KEY"}) is None  # already on the server
     note = coordinator_note(server_settings({})[0], existing=set())
-    assert "ANTHROPIC_API_KEY" in note and "GLM 5" in note
+    assert "ANTHROPIC_API_KEY" in note and "GLM 5" in note and "meta agent" in note and "title" in note
     assert coordinator_note(server_settings({"COORDINATOR_LLM": "bedrock"})[0], existing=set()) is None
 
 
