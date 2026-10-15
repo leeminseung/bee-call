@@ -6,10 +6,11 @@ call is recorded into its session folder by CallRecorder, the Bee context for
 the call is saved into inputs/, and delegated jobs run in the background.
 
 COORDINATOR_LLM picks the model in the coordinator slot:
-  anthropic Claude Haiku 5.5 on Anthropic's own API (the server's default from 2026-10-15), with the key in
-            ANTHROPIC_API_KEY and the model in COORDINATOR_MODEL (claude-haiku-5-5 when unset). GLM 5 on Bedrock
-            stands by: without a key, or when the first request of a call fails, GLM 5 takes the call, and the
-            record's coordinator_model event says which model answered and why (voice/fallback_llm.py).
+  anthropic Claude on Anthropic's own API (the server's default from 2026-10-15), with the key in
+            ANTHROPIC_API_KEY: the person's call_model setting picks Claude Haiku 5.5 (the default) or Claude
+            Sonnet 5.5 and their settings (voice/call_models.py). GLM 5 on Bedrock stands by: without a key, or
+            when the first request of a call fails, GLM 5 takes the call, and the record's coordinator_model event
+            says which model answered and why (voice/fallback_llm.py).
   claude    Claude on Bedrock through the same adapter: Claude Sonnet 5.5, or the model in COORDINATOR_MODEL
             (Claude is blocked on this AWS account for now)
   fake      the Claude adapter with scripted replies and no network (test stand-in
@@ -56,7 +57,8 @@ from beelink.calls import OurCalls
 from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
 from beelink.writer import BeeWrites, event_fields, summary_notification
 from voice.aws_session import aws_profile, aws_session
-from voice.claude_llm import ClaudeBedrockLLM
+from voice.call_models import CallModel, call_model_for
+from voice.claude_llm import ClaudeBedrockLLM, default_model
 from voice.continuation import earlier_call
 from voice.costs import SpendLog, day_budget
 from meta.session import add_event, meta_notes
@@ -86,7 +88,7 @@ COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
 # probes/coordinator_bench.py (2026-10-12) but calls tools without a word, and in the first real
 # call (2026-10-13) the caller heard silence for 23-28 s whenever they kept talking meanwhile.
 COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", GLM_5)
-HAIKU = "claude-haiku-5-5"  # COORDINATOR_LLM=anthropic when COORDINATOR_MODEL is unset; no prefix on Anthropic's API
+NOVA = "us.amazon.nova-2-lite-v1:0"
 # Anthropic's API, as the call AI uses it: the SDK does not retry (a failed first request goes to GLM 5 at once, and
 # LiveKit retries later ones); no route to it shows within 3 s.
 ANTHROPIC_TIMEOUT = anthropic.Timeout(20.0, connect=3.0)
@@ -128,13 +130,23 @@ def transcribe_credentials(session: boto3.Session | None) -> Credentials | None:
                        session_token=creds.token)
 
 
-def make_llm(rec: CallRecorder, language: CallLanguage) -> llm.LLM:
+def coordinator_model(call_model: CallModel) -> str:
+    """The model a call's AI starts with in this COORDINATOR_LLM mode, for the record (with anthropic, GLM 5 can
+    still take the call: voice/fallback_llm.py)."""
     if COORDINATOR_LLM == "anthropic":
-        return claude_with_glm_standing_by(rec, language)
+        return call_model.model
+    if COORDINATOR_LLM == "claude":
+        return os.environ.get("COORDINATOR_MODEL") or default_model(BEDROCK_REGION)
+    return {"bedrock": COORDINATOR_MODEL, "nova": NOVA}.get(COORDINATOR_LLM, COORDINATOR_LLM)
+
+
+def make_llm(rec: CallRecorder, language: CallLanguage, call_model: CallModel) -> llm.LLM:
+    if COORDINATOR_LLM == "anthropic":
+        return claude_with_glm_standing_by(rec, language, call_model)
     if COORDINATOR_LLM == "echo":
         return EchoLLM()
     if COORDINATOR_LLM == "nova":
-        return aws.LLM(model="us.amazon.nova-2-lite-v1:0", region="us-east-1")
+        return aws.LLM(model=NOVA, region="us-east-1")
     if COORDINATOR_LLM == "bedrock":
         return aws.LLM(model=COORDINATOR_MODEL, region=BEDROCK_REGION)
     if COORDINATOR_LLM == "claude":
@@ -151,17 +163,16 @@ def anthropic_client(**options) -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(**options)
 
 
-def claude_with_glm_standing_by(rec: CallRecorder, language: CallLanguage) -> llm.LLM:
-    """COORDINATOR_LLM=anthropic: Claude Haiku 5.5 on Anthropic's own API, GLM 5 on Bedrock standing by. The record's
-    coordinator_model event names the model that answered the call, and why it is not Claude when it is not."""
+def claude_with_glm_standing_by(rec: CallRecorder, language: CallLanguage, call_model: CallModel) -> llm.LLM:
+    """COORDINATOR_LLM=anthropic: the person's Claude model (voice/call_models.py) on Anthropic's own API, GLM 5 on
+    Bedrock standing by. The record's coordinator_model event names the model that answered the call, and why it
+    is not Claude when it is not."""
     def glm() -> llm.LLM:
         return aws.LLM(model=GLM_5, region=BEDROCK_REGION)
 
-    claude_model = os.environ.get("COORDINATOR_MODEL") or HAIKU
-
     def chosen(model: llm.LLM, reason: str | None) -> None:
         rec.event("coordinator_model", model=model.model, provider=model.provider,
-                  **({"instead_of": claude_model, "reason": reason} if reason else {}))
+                  **({"instead_of": call_model.model, "reason": reason} if reason else {}))
 
     key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not key:
@@ -169,11 +180,9 @@ def claude_with_glm_standing_by(rec: CallRecorder, language: CallLanguage) -> ll
         chosen(model, "ANTHROPIC_API_KEY is not set")
         return model
     client = anthropic_client(api_key=key, max_retries=0, timeout=ANTHROPIC_TIMEOUT)
-    # Thinking off for speed (Claude Haiku 5.5 takes "disabled" at effort high or below); one effort per call.
-    claude = ClaudeBedrockLLM(client=client, model=claude_model,
-                              thinking=os.environ.get("COORDINATOR_THINKING", "disabled"),
-                              effort=os.environ.get("COORDINATOR_EFFORT", "low"), auto_cache=True,
-                              refusal_line=language.refusal, on_event=rec.event)
+    claude = ClaudeBedrockLLM(client=client, model=call_model.model, thinking=call_model.thinking,
+                              effort=call_model.effort, auto_cache=True, refusal_line=language.refusal,
+                              on_event=rec.event)
     return FirstRequestFallback(claude, glm, on_choice=chosen)
 
 
@@ -428,13 +437,14 @@ def prewarm(proc: JobProcess) -> None:
 server = AgentServer(setup_fnc=prewarm, num_idle_processes=1)
 
 
-def make_session(ctx: JobContext, language: CallLanguage, tts_voice, rec: CallRecorder) -> AgentSession:
+def make_session(ctx: JobContext, language: CallLanguage, tts_voice, rec: CallRecorder,
+                 call_model: CallModel) -> AgentSession:
     """The call's speech recognition, model, voice and turn-taking (tests put a stand-in here)."""
     # Never keys frozen at prewarm: an instance role's keys expire after a few hours.
     ctx.proc.userdata["transcribe_credentials"] = transcribe_credentials(ctx.proc.userdata["aws"])
     return AgentSession(
         stt=aws.STT(region=REGION, language=language.transcribe, credentials=ctx.proc.userdata["transcribe_credentials"]),
-        llm=make_llm(rec, language),
+        llm=make_llm(rec, language, call_model),
         tts=make_tts(tts_voice, language, REGION),
         vad=ctx.proc.userdata["vad"],
         # Named rather than left to LiveKit's defaults, which follow the launch mode: `dev` (a Mac) picks LiveKit's
@@ -478,6 +488,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
     workspace = people.workspace(person)
     settings = people.settings(person)
     language = call_language(settings.language)
+    call_model = call_model_for(settings)  # the person's choice of the call AI's model, read with the language
     tts_voice = voice_choice(language, {**os.environ, **settings.voice_env()})
     # Only this person's Bee, in this call. Without Bee (Use Bee off) the call reads nothing from Bee, the AI has
     # no Bee tools, and nothing it is told mentions Bee (BC-057).
@@ -587,7 +598,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
     # The phone sends the person's settings as it answers (contract section 1): whether audio is kept is read now.
     settings = people.settings(person)
     rec = CallRecorder(workspace, ctx.job.room.name, keep_audio=settings.record_on_server, now=someone.now())
-    rec.event("coordinator", llm=COORDINATOR_LLM, language=language.code, voice=tts_voice.describe(), person=person,
+    rec.event("coordinator", llm=COORDINATOR_LLM, model=coordinator_model(call_model), call_model=call_model.name,
+              language=language.code, voice=tts_voice.describe(), person=person,
               audio_on_server=settings.record_on_server, audio_on_phone=settings.record_on_phone)
     rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"),
               continue_from=meta.get("continue_from") if meta.get("earlier_call") else None)
@@ -629,7 +641,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
             (rec.dir / "prep.md").write_text(f"# Call prep note\n\n{prep.note}\n\nOpening: {prep.opening}\n")
 
     prep_recorder = asyncio.create_task(record_prep())
-    session = make_session(ctx, language, tts_voice, rec)
+    session = make_session(ctx, language, tts_voice, rec, call_model)
 
     async def notify(news: JobNotification) -> None:
         if COORDINATOR_LLM == "echo":

@@ -476,6 +476,30 @@ def test_claude_s_history_is_kept_when_it_answers_with_glm_5_standing_by(tmp_pat
     assert json.loads((folder / "claude-history.json").read_text()) == {"system": None, "messages": []}
 
 
+def test_the_call_ai_is_the_person_s_call_model_and_the_record_names_it(tmp_path, monkeypatch, quick):
+    """Setting call_model, read as the call starts like the language: "sonnet" makes the call AI Claude Sonnet 5.5,
+    and the record's coordinator event names the model in use."""
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"call_model": "sonnet"})
+    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
+    monkeypatch.setattr(agent, "COORDINATOR_LLM", "anthropic")
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    assert (call.call_model.model, call.call_model.thinking) == ("claude-sonnet-5-5", "between_tools")
+    (folder,) = call_folders(me.workspace)
+    (coordinator,) = [e for e in events_of(folder) if e["type"] == "coordinator"]
+    assert coordinator["llm"] == "anthropic" and coordinator["model"] == "claude-sonnet-5-5"
+    assert coordinator["call_model"] == "sonnet"
+
+
 def test_a_caller_whose_phone_drops_and_comes_back_before_the_ai_speaks_keeps_the_call(tmp_path, monkeypatch, quick):
     """Second review of this round's fixes, finding 3: LiveKit keeps the session through a dropped network and the
     caller comes back to it; that call is not one hung up while it rang."""

@@ -175,5 +175,9 @@ def use_fakes(monkeypatch, call: FakeCall) -> None:
     """Points voice/agent.py at the fakes of this call."""
     from voice import agent
 
-    monkeypatch.setattr(agent, "make_session", lambda ctx, language, voice, rec: call.session)
+    def make_session(ctx, language, voice, rec, call_model):
+        call.call_model = call_model  # the person's choice, as the session was given it
+        return call.session
+
+    monkeypatch.setattr(agent, "make_session", make_session)
     monkeypatch.setattr(agent, "ring_back", call.ring_back)

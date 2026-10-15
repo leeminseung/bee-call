@@ -1,8 +1,9 @@
-"""Claude Haiku 5.5 on Anthropic's own API in the coordinator slot, the way a real call runs it.
+"""Claude on Anthropic's own API in the coordinator slot, the way a real call runs it.
 
 Runs the real call AI (BeeCoordinator: its instructions, the Korean rule, a call prep note, every tool) in a LiveKit
 text session, with the voice server's own model setup for COORDINATOR_LLM=anthropic (voice/agent.py
-claude_with_glm_standing_by: Claude Haiku 5.5, thinking off, effort low, caching on). The caller's turns are the
+claude_with_glm_standing_by): the person's call model (--call-model haiku or sonnet, voice/call_models.py) with
+its thinking and effort, caching on. The caller's turns are the
 caller's lines of a call's transcript.md (--transcript; lines less than a second apart are one turn, as LiveKit hears
 them), or a few built-in Korean ones. Bee answers from the test fake (tests/fakebee), background jobs do not run, and
 GLM 5 is not called: where it would take the call, a stand-in says so and the reason is printed. Nothing touches Bee,
@@ -14,9 +15,11 @@ Errors are printed with their status and type: a 400 means the request's shape i
 
 The key comes from ANTHROPIC_API_KEY or --env-file and is never printed (its length is).
 
-Run:  uv run python probes/haiku_probe.py [--transcript PATH] [--turns 6] [--rounds 2] [--env-file .env.local]
-      COORDINATOR_THINKING=adaptive (or COORDINATOR_EFFORT=medium) in front compares another setting.
-Cost: under 1 US cent a round (a few requests of 5-7K input tokens at 0.10 USD per million, most of them cached).
+Run:  uv run python probes/haiku_probe.py [--call-model haiku|sonnet] [--thinking T] [--effort E]
+                                         [--transcript PATH] [--turns 6] [--rounds 2] [--env-file .env.local]
+      --thinking and --effort try another setting than the call model's own.
+Cost: a round of six turns is about 0.1 US cent with Haiku and 2 cents with Sonnet (requests of 4-5K input tokens,
+most of them read from the cache).
 """
 
 import argparse
@@ -84,7 +87,7 @@ def stand_in_glm():
     return ScriptedLLM([["(GLM 5 would answer here)"]] * 20, model="glm-5-not-called")
 
 
-async def one_round(turns: list[str], workspace: Path, round_no: int) -> dict[str, Any]:
+async def one_round(turns: list[str], workspace: Path, round_no: int, call_model) -> dict[str, Any]:
     from livekit.agents import AgentSession
 
     from voice import agent as voice_agent
@@ -97,7 +100,7 @@ async def one_round(turns: list[str], workspace: Path, round_no: int) -> dict[st
     now = datetime.now(SEOUL)
     rec = CallRecorder(workspace, room=f"probe-{round_no}", now=now)
     language = call_language("ko")
-    model = voice_agent.make_llm(rec, language)
+    model = voice_agent.make_llm(rec, language, call_model)
     coordinator = BeeCoordinator(rec, StubJobs(), workspace, clock=lambda: datetime.now(SEOUL), prep_note=PREP_NOTE,
                                  language=language)
     metrics: list[Any] = []
@@ -151,6 +154,9 @@ def report(result: dict[str, Any], round_no: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--call-model", default="haiku", help="the person's setting: haiku or sonnet")
+    parser.add_argument("--thinking", help="another thinking type than the call model's (disabled, adaptive, ...)")
+    parser.add_argument("--effort", help="another effort than the call model's (low, medium, high)")
     parser.add_argument("--transcript", type=Path, help="a call's transcript.md: its caller lines are the turns")
     parser.add_argument("--turns", type=int, default=6)
     parser.add_argument("--rounds", type=int, default=1, help="calls one after another (the second reads the cache)")
@@ -164,7 +170,6 @@ def main() -> None:
             raise SystemExit(f"no ANTHROPIC_API_KEY in the environment or {args.env_file}")
         os.environ["ANTHROPIC_API_KEY"] = key.strip()
     print(f"ANTHROPIC_API_KEY: {len(os.environ['ANTHROPIC_API_KEY'])} characters")
-    os.environ.pop("COORDINATOR_MODEL", None)  # the voice server's default: claude-haiku-5-5
     # Bee answers from the test fake, never from a real account.
     out = args.out or Path(tempfile.mkdtemp(prefix="haiku-probe-"))
     os.environ["BEE_BIN"] = str(REPO / "tests" / "fakebee" / "bee")
@@ -172,10 +177,17 @@ def main() -> None:
     from beelink import cli
     cli.use_machine_bee()
 
+    import dataclasses
+
+    from voice.call_models import CALL_MODELS
+    call_model = CALL_MODELS[args.call_model]
+    call_model = dataclasses.replace(call_model, thinking=args.thinking or call_model.thinking,
+                                     effort=args.effort or call_model.effort)
+    print(f"call model: {call_model.model}, thinking {call_model.thinking}, effort {call_model.effort}")
     turns = caller_turns(args.transcript, args.turns) if args.transcript else TURNS[:args.turns]
     print(f"{len(turns)} caller turns" + (f" from {args.transcript}" if args.transcript else " (built in)"))
     for round_no in range(1, args.rounds + 1):
-        result = asyncio.run(one_round(turns, out / f"round-{round_no}", round_no))
+        result = asyncio.run(one_round(turns, out / f"round-{round_no}", round_no, call_model))
         (out / f"round-{round_no}.json").write_text(json.dumps(result, ensure_ascii=False, indent=1, default=str))
         report(result, round_no)
     print(f"records: {out}")

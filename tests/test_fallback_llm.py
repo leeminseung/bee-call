@@ -11,6 +11,7 @@ from livekit.agents import APIError, llm
 from livekit.agents.types import APIConnectOptions
 
 from tests.helpers import ScriptedLLM, seoul_now
+from voice.call_models import CALL_MODELS
 from voice.claude_llm import INSTRUCTIONS_ID, ClaudeBedrockLLM
 from voice.fake_claude import FakeAnthropic
 from voice.fallback_llm import FirstRequestFallback
@@ -181,7 +182,7 @@ def test_without_an_anthropic_key_the_call_runs_on_glm_5_and_the_record_says_why
     from voice.language import call_language
 
     rec, clients = anthropic_mode(monkeypatch, tmp_path, key=None)
-    model = agent.make_llm(rec, call_language("ko"))
+    model = agent.make_llm(rec, call_language("ko"), CALL_MODELS["haiku"])
     assert isinstance(model, FakeConverse) and model.model == "zai.glm-5" and clients == []
     (choice,) = recorded(rec, "coordinator_model")
     assert choice["model"] == "zai.glm-5" and choice["reason"] == "ANTHROPIC_API_KEY is not set"
@@ -196,7 +197,7 @@ def test_with_a_key_the_call_ai_is_claude_haiku_5_5_on_anthropic_s_api(tmp_path,
     korean = call_language("ko")
 
     async def main():
-        model = agent.make_llm(rec, korean)
+        model = agent.make_llm(rec, korean, CALL_MODELS["haiku"])
         ctx = new_ctx()
         await turn(model, "안녕하세요", ctx)  # Claude answers first: it stays the call's model
         return model, await turn(model, "그건 좀 이상한 질문인데요", ctx)
@@ -208,6 +209,35 @@ def test_with_a_key_the_call_ai_is_claude_haiku_5_5_on_anthropic_s_api(tmp_path,
     assert model.model == "claude-haiku-5-5" and second == korean.refusal  # a later decline: one line, in Korean
     assert client.calls[0]["thinking"] == {"type": "disabled"} and client.calls[0]["output_config"] == {"effort": "low"}
     assert recorded(rec, "coordinator_model")[0]["model"] == "claude-haiku-5-5"
+
+
+def test_a_person_who_picked_sonnet_talks_to_claude_sonnet_5_5_with_glm_5_standing_by(tmp_path, monkeypatch):
+    """call_model "sonnet": Claude Sonnet 5.5 on Anthropic's API, thinking between_tools (it refuses "disabled"),
+    effort low. Its first request failing sends the call to GLM 5 as with Haiku, and the record says so."""
+    from voice import agent
+    from voice.language import call_language
+
+    client = FakeAnthropic([say("안녕하세요!")])
+    rec, _ = anthropic_mode(monkeypatch, tmp_path, key="test-key", client=client)
+
+    async def main():
+        return await turn(agent.make_llm(rec, call_language("ko"), CALL_MODELS["sonnet"]), "안녕하세요", new_ctx())
+
+    assert asyncio.run(main()) == "안녕하세요!"
+    sent = client.calls[0]
+    assert sent["model"] == "claude-sonnet-5-5" and sent["thinking"] == {"type": "between_tools"}
+    assert sent["output_config"] == {"effort": "low"} and sent["cache_control"] == {"type": "ephemeral"}
+    assert recorded(rec, "coordinator_model")[0]["model"] == "claude-sonnet-5-5"
+
+    failing = FakeAnthropic([FIRST_REQUEST_FAILURES["no credit"]()])
+    rec, _ = anthropic_mode(monkeypatch, tmp_path / "again", key="test-key", client=failing)
+
+    async def again():
+        return await turn(agent.make_llm(rec, call_language("ko"), CALL_MODELS["sonnet"]), "안녕하세요", new_ctx())
+
+    assert asyncio.run(again()) == GLM_LINE
+    (choice,) = recorded(rec, "coordinator_model")
+    assert choice["model"] == "zai.glm-5" and choice["instead_of"] == "claude-sonnet-5-5" and "credit" in choice["reason"]
 
 
 def test_the_prep_and_the_meta_agent_stay_on_glm_5_with_anthropic(tmp_path, monkeypatch):

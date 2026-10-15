@@ -46,10 +46,11 @@ LLM_USD_PER_TOKEN = {  # (input, output)
     "zai.glm-5": (1.00 / 1_000_000, 3.20 / 1_000_000),
     # Anthropic's list price for prompts of 100K tokens or fewer (each request of a call is far below that).
     "claude-haiku-5-5": (0.10 / 1_000_000, 0.50 / 1_000_000),
+    "claude-sonnet-5-5": (2.00 / 1_000_000, 10.00 / 1_000_000),
 }
 # Prompt caching (Anthropic): a cache read costs this share of an input token, a 5-minute cache write this much.
 CACHE_READ_SHARE, CACHE_WRITE_SHARE = 0.1, 1.25
-# A model not in the table is priced like this: Claude Sonnet 5.5's list price, above every stand-in we use.
+# A model not in the table is priced like this: above every model we use (Claude Sonnet 5.5 is 2.00 / 10.00).
 UNKNOWN_LLM_USD_PER_TOKEN = (3.00 / 1_000_000, 15.00 / 1_000_000)
 WEB_SEARCH_USD = 0.03
 # A call without its usage.json yet (arbitrary until calls are measured: speech recognition alone is 0.01 a minute,

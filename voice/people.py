@@ -71,6 +71,7 @@ class Settings:
     tts: str | None = None  # the voice, for Matt to change by hand; None means the language's default
     voice: str | None = None
     time_zone: str = DEFAULT_TIME_ZONE  # an IANA name; the app sends the phone's (contract section 1)
+    call_model: str = "haiku"  # the call AI's model: haiku or sonnet (voice/call_models.py)
 
     def zone(self) -> ZoneInfo:
         return ZoneInfo(self.time_zone)
@@ -122,6 +123,10 @@ class Settings:
                 ZoneInfo(value)
             except (TypeError, ValueError, ZoneInfoNotFoundError):
                 raise ValueError("time_zone must be an IANA time zone name, like Asia/Seoul")
+        elif name == "call_model":
+            from voice.call_models import CALL_MODELS
+            if not isinstance(value, str) or value not in CALL_MODELS:
+                raise ValueError(f"call_model must be one of {', '.join(CALL_MODELS)}")
         else:
             raise ValueError(f"unknown setting {name!r}")
         setattr(self, name, value)
@@ -136,7 +141,7 @@ class Settings:
         return env
 
 
-APP_SETTINGS = ("language", "call_time", "record_on_server", "record_on_phone", "time_zone")  # what the app may change
+APP_SETTINGS = ("language", "call_time", "record_on_server", "record_on_phone", "time_zone", "call_model")  # the app's
 
 
 @dataclass(frozen=True)

@@ -936,6 +936,46 @@ def test_a_sign_out_also_takes_the_push_tokens_kept_before_the_registry(tmp_path
     assert voip_push.load_device_token(people.person("matt"), "voip") is None
 
 
+def test_the_person_picks_the_call_ai_s_model_haiku_by_default_or_sonnet(tmp_path):
+    """Setting call_model (2026-10-15): "haiku" (the default) or "sonnet". The app sends it with its settings, a
+    bad value is refused like any bad setting, and a broken stored value keeps the default."""
+    me = signed_in(tmp_path)
+    assert me.people.settings("matt").call_model == "haiku"
+    for bad in ("opus", "Sonnet", "", None, 5, ["sonnet"]):
+        with pytest.raises(ValueError):
+            me.people.change_settings("matt", {"call_model": bad})
+    assert me.people.settings("matt").call_model == "haiku"
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            good = await client.put("/settings", json={"language": "ko", "time_zone": "Asia/Seoul",
+                                                       "call_model": "sonnet"})
+            bad = await client.put("/settings", json={"call_model": "gpt"})
+            mine = await (await client.get("/me")).json()
+            return good.status, bad.status, mine
+
+    good, bad, mine = asyncio.run(main())
+    assert good == 200 and bad == 400 and mine["settings"]["call_model"] == "sonnet"
+    (me.people.folder("matt") / "settings.json").write_text('{"call_model": "opus", "language": "ko"}')
+    assert (me.people.settings("matt").call_model, me.people.settings("matt").language) == ("haiku", "ko")
+
+
+def test_each_call_model_has_its_claude_settings_and_a_price():
+    """One place maps the person's choice to Claude's model and settings, and the daily budget prices both."""
+    from voice.call_models import CALL_MODELS, call_model_for
+    from voice.costs import llm_cost
+
+    haiku, sonnet = CALL_MODELS["haiku"], CALL_MODELS["sonnet"]
+    assert (haiku.model, haiku.thinking, haiku.effort) == ("claude-haiku-5-5", "disabled", "low")
+    assert (sonnet.model, sonnet.thinking, sonnet.effort) == ("claude-sonnet-5-5", "between_tools", "low")
+    assert call_model_for(Settings(call_model="sonnet")) is sonnet and call_model_for(Settings()) is haiku
+    million = 1_000_000
+    assert llm_cost("claude-sonnet-5-5", million, million) == pytest.approx(12.00)  # 2.00 in + 10.00 out
+    assert llm_cost("claude-sonnet-5-5", million, 0, cached=million) == pytest.approx(0.20)  # cache reads
+    assert llm_cost("claude-sonnet-5-5", million, 0, cache_writes=million) == pytest.approx(2.50)  # 1.25x
+    assert llm_cost("claude-haiku-5-5", million, million) == pytest.approx(0.60)
+
+
 def test_a_setting_of_the_wrong_kind_is_refused_not_a_server_error(tmp_path):
     """A list or an object where a name is expected is a bad value (400), never an unhandled error (acceptance
     BC-089 found a 500)."""
