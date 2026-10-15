@@ -83,7 +83,9 @@ FIRST_WORDS_WAIT_S = 6.0  # ringing stops when the AI starts to speak, or after 
 # DEFAULT_CLOSE_ON_DISCONNECT_REASONS): the caller hung up. Others (a lost network) it waits out.
 HANG_UPS = (rtc.DisconnectReason.CLIENT_INITIATED, rtc.DisconnectReason.ROOM_DELETED,
             rtc.DisconnectReason.USER_REJECTED)
-CALLER_WAIT_S = 5.0  # how long a call the user started waits to see the caller in the room (arbitrary)
+# How long a call the user started waits to see the caller in the room: as long as the app keeps ringing once it
+# joined (ios CallManager.pickUpSeconds), so a phone slow to join is never given up while it still rings.
+CALLER_WAIT_S = 30.0
 DECLINE_CHECK_S = 1.0  # how often a ringing AI call looks whether the user declined it (arbitrary)
 # After a call, its failed Bee writes are tried again for at most this long: LiveKit gives a job's shutdown about
 # 10 s (shutdown_process_timeout), and the call's own record is closed first (arbitrary).
@@ -424,13 +426,18 @@ async def run_call(ctx: JobContext, people: People) -> None:
 
         ctx.room.on("participant_disconnected", caller_left)
         ctx.room.on("participant_connected", lambda participant: the_caller(participant) and left.clear())
+        never_came = None  # why the caller is gone without having been seen, for the log
         try:
             await asyncio.wait_for(ctx.wait_for_participant(), CALLER_WAIT_S)
         except asyncio.TimeoutError:
-            # The app's join made this room, so a caller not in it has hung up already, and no disconnect will
-            # come. (LiveKit's console mode has no caller in a room.)
+            # The app's join made this room, so a caller not in it by now left before the voice server came, and no
+            # disconnect will be seen. (LiveKit's console mode has no caller in a room.)
             if not ctx.is_fake_job():
+                never_came = f"no caller came into the room within {CALLER_WAIT_S:g} s"
                 left.set()
+        except Exception as exc:  # LiveKit's wait raises when the room goes away meanwhile
+            never_came = f"the room closed before the caller came into it ({exc})"
+            left.set()
 
         async def get_ready() -> CallInputs:
             nonlocal preparation
@@ -446,7 +453,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
             await asyncio.wait({ready, hung_up}, return_when=asyncio.FIRST_COMPLETED)
             hung_up.cancel()
         if left.is_set():  # also when the prep was ready at the same moment
-            log.info("the caller hung up while it rang, in room %s", ctx.room.name)
+            why = never_came or "the caller hung up while it rang"
+            log.info("%s, in room %s", why, ctx.room.name)
             for task in (ready, ringing, keep_warm):
                 if task:
                     task.cancel()
@@ -454,7 +462,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
                 preparation.cancel()
                 await asyncio.gather(preparation.done, return_exceptions=True)  # its cost is recorded by then
             await asyncio.gather(*[task for task in (ready, ringing) if task], return_exceptions=True)
-            ctx.shutdown(reason="the caller hung up while it rang")
+            ctx.shutdown(reason=why)
             return
         inputs = ready.result()
         prep = preparation.prep

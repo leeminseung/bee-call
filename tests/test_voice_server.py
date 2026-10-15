@@ -302,7 +302,35 @@ def test_a_caller_gone_before_the_voice_server_joined_leaves_nothing(tmp_path, m
 
     asyncio.run(main())
     assert call.session.started is None and call_folders(me.workspace) == []
-    assert MetaSession(me.workspace).take_events() == [] and call.shutdown_reason == "the caller hung up while it rang"
+    assert MetaSession(me.workspace).take_events() == []
+    assert call.shutdown_reason == "no caller came into the room within 0.1 s"  # told apart from a hang-up
+
+
+def test_the_voice_server_waits_for_the_caller_as_long_as_the_app_rings():
+    """Round 2 (pre-deploy review): a phone slow to join was given up after 5 s and then rang in silence until the
+    app's own limit (CallManager.pickUpSeconds, 30 s after it joined) said Bee Call did not pick up."""
+    assert agent.CALLER_WAIT_S >= 30
+
+
+def test_a_room_that_closes_before_the_caller_is_seen_ends_the_call_quietly(tmp_path, monkeypatch, quick):
+    """LiveKit's wait for a participant raises when the room goes away; that is a caller who never came."""
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def closed():
+        await asyncio.sleep(0.1)
+        raise RuntimeError("room disconnected while waiting for participant")
+
+    call.wait_for_participant = closed
+
+    async def main():
+        await asyncio.wait_for(agent.run_call(call, me.people), 2)
+        await call.end()
+
+    asyncio.run(main())
+    assert call.session.started is None and call_folders(me.workspace) == []
+    assert call.shutdown_reason.startswith("the room closed before the caller came into it")
 
 
 def test_a_call_hung_up_after_the_ringing_but_before_the_ai_spoke_leaves_nothing(tmp_path, monkeypatch, quick):
