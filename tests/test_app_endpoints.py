@@ -313,7 +313,10 @@ def test_voices_list_the_call_language_s_catalog_and_samples_need_no_sign_in(min
     assert (ko, en, [s for s, _, _ in bad]) == (200, 200, [400, 400])
     assert korean["voices"][0] == {"id": "ko-sian", "name": "Sian", "character": {"ko": "차분함", "en": "Calm"},
                                    "sample_url": korean["voices"][0]["sample_url"], "default": True}
+    assert english["voices"][0] == {"id": "en-zara", "name": "Zara", "character": english["voices"][0]["character"],
+                                    "sample_url": english["voices"][0]["sample_url"], "default": True}
     write_example("voices", korean)
+    write_example("voices-en", english)  # the app's Debug build reads it for the English list
     sample = korean["voices"][1]["sample_url"]
     found = run(minseung.people, {}, [("GET", sample, None, None), ("GET", "/voices/samples/ko-han-00000000.mp3", None,
                                                                      None), ("GET", "/voices?language=ko", None, None)])
