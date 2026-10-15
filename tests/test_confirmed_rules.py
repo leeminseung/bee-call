@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from aiohttp.test_utils import TestClient, TestServer
 
 from meta.session import add_event, quiet
-from tests.helpers import SEOUL, placing, signed_in
+from tests.helpers import SEOUL, another_conversation, placing, signed_in
 from tests.test_offers import asked
 from voice import outbound, voip_push
 from voice.offers import OfferStore
@@ -168,9 +168,9 @@ def test_the_fifth_offer_of_a_day_shows_only_in_the_app_list(tmp_path, monkeypat
     question, plan = asked(tmp_path, now=morning, workspace=me.workspace)
     for i in range(4):  # 40 minutes apart: a notification waits 30 minutes after the last one (2026-10-15)
         at = morning + timedelta(minutes=40 * i)
-        offer = question if i == 0 else store.ask(plan, at)
+        offer = question if i == 0 else store.ask(another_conversation(plan, i), at)
         assert asyncio.run(send_offer(offer, me.person, at)).startswith("notification sent")
-    fifth = store.ask(plan, morning + timedelta(hours=3))
+    fifth = store.ask(another_conversation(plan, 9), morning + timedelta(hours=3))
     assert asyncio.run(send_offer(fifth, me.person, morning + timedelta(hours=3))).startswith("held: 4 notifications")
     assert [o.id for o in store.open(morning + timedelta(hours=3, minutes=1))] == [fifth.id]  # what the app lists
     for moment in (morning + timedelta(hours=3), datetime(2026, 10, 16, 8, 0, tzinfo=SEOUL)):

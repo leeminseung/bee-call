@@ -30,7 +30,7 @@ from beelink.planner import Plan
 from meta import files
 from meta.session import DAILY_NOTIFICATIONS, MetaSession, quiet, quiet_ends
 from voice.aws_session import aws_session
-from voice.offers import CALL_TIME, Offer, OfferStore
+from voice.offers import CALL_TIME, AlreadyOffered, Offer, OfferStore
 from voice.prep import prep_model
 
 log = logging.getLogger("bee-call.meta")
@@ -251,7 +251,11 @@ class Thinker:
         ids = [int(i) for i in args.get("conversation_ids") or []] if self.bee else []
         plan = Plan(call=True, reason=why, inbox_dir=inbox_dir, conversation_ids=ids, topic=topic,
                     kind="conversation" if ids else None)
-        offer = store.ask(plan, now, at=self.call_time)
+        try:
+            offer = store.ask(plan, now, at=self.call_time)
+        except AlreadyOffered as exc:
+            return (f"Not asked: {exc}; one Bee conversation leads to at most one offer. Put it on the agenda for the "
+                    "next call instead.")
         sent = await self.send(offer, self.workspace, now) if self.send else "not sent (no sender)"
         actions.append({"tool": "offer_call", "offer": offer.id, "topic": topic, "result": sent})
         return f"Asked: offer {offer.id}, suggesting {offer.suggested_at}. {sent}"

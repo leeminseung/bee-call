@@ -5,7 +5,7 @@ No network: the model is a fake Converse client, and the notification sender is 
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -137,6 +137,24 @@ def test_doing_nothing_is_logged_too_and_a_failure_proposes_nothing(tmp_path):
     failed = asyncio.run(Thinker(ws, ("m", "r"), client=Broken(), bee=True).think([{"kind": "call_ended", "at": "x"}], NOW))
     assert "Bedrock throttled" in failed["error"] and OfferStore(ws).all() == []
     assert len(MetaSession(ws).entries()) == 2
+
+
+def test_a_bee_conversation_that_had_an_offer_gets_no_second_one(tmp_path):
+    """BC-014: one Bee conversation leads to at most one offer, also after the user declined it."""
+    ws = workspace_with_a_call(tmp_path)
+
+    def offering():
+        return ScriptedModel([
+            {"role": "assistant", "content": [tool_use(1, "offer_call", topic="Weighing two job offers", why="w",
+                                                       conversation_ids=[77])]},
+            {"role": "assistant", "content": [{"text": "Done."}]}])
+
+    asyncio.run(Thinker(ws, ("m", "r"), client=offering(), bee=True).think([], NOW))
+    (first,) = OfferStore(ws).all()
+    OfferStore(ws).answer(first.id, "decline", NOW)
+    entry = asyncio.run(Thinker(ws, ("m", "r"), client=offering(), bee=True).think([], NOW + timedelta(hours=2)))
+    assert [o.id for o in OfferStore(ws).all()] == [first.id]
+    assert entry["tools"][0]["result"].startswith("Not asked: Bee conversation 77 already had an offer")
 
 
 def test_one_question_at_a_time_and_a_short_plain_topic(tmp_path):

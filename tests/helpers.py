@@ -1,5 +1,6 @@
 """Shared test helpers."""
 
+import dataclasses
 import functools
 from datetime import datetime
 from pathlib import Path
@@ -37,3 +38,9 @@ def placing(requests: list):
     """The real place_call (voice/dispatch.py), with LiveKit faked: for call_due's `place`."""
     from voice.dispatch import place_call
     return functools.partial(place_call, lk=fake_livekit(requests))
+
+
+def another_conversation(plan, n: int = 1):
+    """The same plan about another Bee conversation: one conversation leads to at most one offer (BC-014), so a
+    test that asks again asks about another one."""
+    return dataclasses.replace(plan, conversation_ids=[1000 + n])
