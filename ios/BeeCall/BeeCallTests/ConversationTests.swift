@@ -46,6 +46,19 @@ final class ConversationTests: XCTestCase {
                        "Today 1:23\u{00A0}AM · You called · In a call")
     }
 
+    /// The call's sheet (frame 6): its line says how it ended, and its end is marked.
+    @MainActor func testTheCallsSheetSaysHowItEnded() {
+        var finished = call("2026-10-15T01:23:00+09:00", length: 460)
+        finished.ending = "정상 종료"
+        XCTAssertEqual(CallInfo.sheetLine(finished, korean: true, now: now, calendar: calendar),
+                       "오늘 오전 1:23 · 내가 건 전화 · 7분 40초 · 정상 종료")
+        XCTAssertEqual(CallInfo.endMark(finished, korean: true), "통화 끝 · 7분 40초")
+        XCTAssertEqual(CallInfo.endMark(finished, korean: false), "Call ended · 7 min 40 s")
+        finished.ending = nil
+        XCTAssertEqual(CallInfo.sheetLine(finished, korean: true, now: now, calendar: calendar),
+                       "오늘 오전 1:23 · 내가 건 전화 · 7분 40초")
+    }
+
     @MainActor func testLengthsReadAsSpoken() {
         XCTAssertEqual(CallInfo.length(16, korean: true), "16초")
         XCTAssertEqual(CallInfo.length(60, korean: true), "1분")

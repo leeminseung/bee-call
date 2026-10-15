@@ -12,6 +12,8 @@ enum DesignDemo: String {
     case live // frame 4: a pretend call, with the call screen and the conversation to go between
     case result // frame 5, left: a job finishes while the call screen is up
     case resultConversation // frame 5, right: a job finishes while the conversation is up
+    case record // frame 6, left: a call's sheet, at its top
+    case recordEnd // frame 6, right: the same sheet at its end
 
     static func requested(in store: UserDefaults = .standard) -> DesignDemo? {
         store.string(forKey: "designD").flatMap(DesignDemo.init(rawValue:))
@@ -59,10 +61,7 @@ final class DemoConversation: ConversationSource {
             sections = [.call(Self.rain(yesterday(12, 26))), .call(Self.memo(yesterday(18, 2))), .call(silent), .call(call)]
             return
         }
-        let macbook = ConversationCall(
-            id: "2026-10-15/0123", title: "맥북 에어와 프로, 코딩용으로 뭐가 나을까", startedAt: today(1, 23),
-            starter: .person, length: 460,
-            entries: macbookTurns + [.job(Self.priceJob(started: today(1, 25)))])
+        let macbook = Self.macbook(at: today(1, 23))
         let library = ConversationCall(
             id: "2026-10-15/1422", title: "도서관 가는 길, 오늘 할 일 정리", startedAt: today(14, 22), starter: .person,
             length: 372, entries: [
@@ -74,6 +73,29 @@ final class DemoConversation: ConversationSource {
         let ask = OfferCard(id: "20261015-144100-demo", askedAt: today(14, 41), topic: "오늘 회의에서 정한 데모 촬영 일정",
                             question: "오늘 저녁 8:30에 잠깐 통화할까요?", suggestedTime: "8:30")
         sections = [.call(rain), .call(memo), .call(silent), .call(macbook), .call(library), .offer(ask)]
+    }
+
+    /// The MacBook call, over: the design's call record (brief-common.md).
+    static func macbook(at start: Date) -> ConversationCall {
+        ConversationCall(
+            id: "2026-10-15/0123", title: "맥북 에어와 프로, 코딩용으로 뭐가 나을까", startedAt: start, starter: .person,
+            length: 460, entries: [
+                .turn(Turn(id: "r1", mine: false, text: "안녕하세요, 민승 님. 오늘 밤엔 무슨 이야기 할까요?")),
+                .beeWrite(BeeWriteCard(id: "r-bee", kind: "할 일", text: "토요일 촬영 장소 정하기", added: true)),
+                .turn(Turn(id: "r2", mine: true,
+                           text: "맥북 에어랑 프로 중에 코딩용으로 고민 중이에요. 한국 가격 비교해 주고, 저한테 뭐가 맞는지 알려 주세요.")),
+                .turn(Turn(id: "r3", mine: false, text: "좋아요. 한국 가격이랑 배터리 시간을 찾아볼게요. 주로 어떤 코딩을 하세요?")),
+                .turn(Turn(id: "r4", mine: true, text: "주로 파이썬이고 머신러닝도 조금 해요. 도서관이나 카페에서 일할 때가 많아요.")),
+                .job(priceJob(started: start.addingTimeInterval(120))),
+                .turn(Turn(id: "r5", mine: false,
+                           text: "그럼 들고 다니기 좋은 게 중요하겠네요. 에어는 159만 원부터, 프로는 239만 원부터예요. "
+                               + "노트북에서 모델을 직접 학습시키는 게 아니라면 에어가 더 잘 맞아요.")),
+            ],
+            ending: "정상 종료",
+            prep: CallPrep(summary: "오늘 아침 회의에서 노트북 이야기를 했고, 한국 가격을 궁금해했어요. 9월 28일부터 남은 일: "
+                               + "아이폰과 애플워치에 Bee 설정하기.",
+                           lookedUp: [.init(kind: .conversation, text: "성현 님과의 대화, 10월 13일 오후 6:40"),
+                                      .init(kind: .day, text: "오늘 요약")]))
     }
 
     static func rain(_ at: Date) -> ConversationCall {
@@ -143,6 +165,16 @@ struct DesignDemoView: View {
             HomeView(source: DemoConversation(live: true), calls: calls, offers: offers, status: "", jump: $jump,
                      showCallScreen: {}, openSettings: {}, openCall: { _ in }, startCall: {})
                 .task { calls.playDesignDemo(lines: DesignDemo.callLines, voice: .person, connectedAgo: 221) }
+        case .record, .recordEnd:
+            HomeView(source: DemoConversation(live: false), calls: calls, offers: offers,
+                     status: "준비됨 · 앱을 닫아도 전화가 와요", jump: $jump, showCallScreen: {}, openSettings: {},
+                     openCall: { _ in }, startCall: {})
+                .sheet(isPresented: .constant(true)) {
+                    CallSheet(call: DemoConversation.macbook(at: Calendar.current.date(bySettingHour: 1, minute: 23,
+                                                                                       second: 0, of: .now) ?? .now),
+                              continueCall: {}, startAtEnd: demo == .recordEnd)
+                }
+                .task { await offers.refresh() }
         case .live:
             ConversationRoot(calls: calls, source: liveDemo, offers: offers, status: "")
                 .task { calls.playDesignDemo(lines: DesignDemo.callLines, voice: .both, connectedAgo: 218) }

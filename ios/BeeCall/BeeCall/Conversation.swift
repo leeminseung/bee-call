@@ -12,6 +12,8 @@ struct ConversationCall: Identifiable, Equatable {
     var starter: Starter
     var length: TimeInterval? // nil while the call is on
     var entries: [ConversationEntry]
+    var ending: String? // how it ended, in words: "정상 종료"
+    var prep: CallPrep? // what Bee Call read in Bee before the call
 
     var isLive: Bool { length == nil }
 
@@ -91,8 +93,33 @@ struct BeeWriteCard: Identifiable, Equatable {
     var added: Bool
 }
 
+/// What Bee Call read in Bee before a call (the sheet's first card, frame 6): a summary, and what it looked up.
+struct CallPrep: Equatable {
+    struct Lookup: Equatable {
+        enum Kind: Equatable { case conversation, day }
+        let kind: Kind
+        let text: String // "성현 님과의 대화, 10월 13일 오후 6:40"
+    }
+
+    var summary: String
+    var lookedUp: [Lookup]
+}
+
 /// The line above a call in the conversation: "오늘 오전 1:23 · 내가 건 전화 · 7분 40초".
 enum CallInfo {
+    /// The line under the title of a call's sheet: the line above it, and how it ended.
+    static func sheetLine(_ call: ConversationCall, korean: Bool, now: Date, calendar: Calendar) -> String {
+        ([line(call, korean: korean, now: now, calendar: calendar)] + [call.ending].compactMap { $0 })
+            .joined(separator: " · ")
+    }
+
+    /// The mark at the end of a call's sheet: "통화 끝 · 7분 40초".
+    static func endMark(_ call: ConversationCall, korean: Bool) -> String {
+        let done = korean ? "통화 끝" : "Call ended"
+        guard let length = call.length else { return done }
+        return "\(done) · \(Self.length(length, korean: korean))"
+    }
+
     static func line(_ call: ConversationCall, korean: Bool, now: Date, calendar: Calendar) -> String {
         let when = "\(day(call.startedAt, korean: korean, now: now, calendar: calendar)) "
             + time(call.startedAt, korean: korean, calendar: calendar)

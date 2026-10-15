@@ -13,6 +13,8 @@ struct ConversationRoot: View {
     @State private var presentation: CallPresentation
     @State private var notice = ResultNotice()
     @State private var jump: String?
+    @State private var opened: ConversationCall? // a call that is over, open as a sheet
+    @State private var continuing: String? // the call to continue once its sheet is down
     @Namespace private var zoom
 
     init(calls: CallManager, source: any ConversationSource, offers: OfferCenter, status: String,
@@ -26,12 +28,18 @@ struct ConversationRoot: View {
 
     var body: some View {
         HomeView(source: source, calls: calls, offers: offers, status: status, glowing: notice.glowing, jump: $jump,
-                 showCallScreen: { presentation.show(.callScreen) }, openSettings: {}, openCall: { _ in },
+                 showCallScreen: { presentation.show(.callScreen) }, openSettings: {}, openCall: { opened = $0 },
                  startCall: { Task { await calls.startCall() } }, zoom: zoom)
             .fullScreenCover(isPresented: Binding(get: { presentation.showsCallScreen(inCall: calls.isInCall) },
                                                   set: { if !$0 { presentation.show(.conversation) } })) {
                 CallModeView(calls: calls, job: pill, showConversation: { presentation.show(.conversation) })
                     .zoomTransition("call", in: zoom)
+            }
+            .sheet(item: $opened, onDismiss: continueOpenedCall) { call in
+                CallSheet(call: call) {
+                    continuing = call.id
+                    opened = nil
+                }
             }
             .onChange(of: calls.isInCall, initial: true) { _, inCall in
                 presentation.callChanged(inCall: inCall)
@@ -49,6 +57,14 @@ struct ConversationRoot: View {
                 try? await Task.sleep(for: .seconds(2))
                 notice.glowEnded(id)
             }
+    }
+
+    /// "이 통화 이어서 하기": the call starts once the sheet is down, so the call screen is not shown while the
+    /// sheet is still going away (one presentation at a time).
+    private func continueOpenedCall() {
+        guard let id = continuing else { return }
+        continuing = nil
+        Task { await calls.startCall(continuing: id) }
     }
 
     private var liveCall: ConversationCall? {
