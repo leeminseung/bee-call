@@ -68,7 +68,7 @@ def test_a_call_the_user_starts_is_picked_up_with_the_prepared_opening(tmp_path,
 
     asyncio.run(main())
     assert call.session.said == ["Hi Matt, what's on your mind?"] and call.ringing == ["start", "stop"]
-    assert call.room.local_participant.attributes == {STATE_ATTRIBUTE: "answered"}
+    assert call.room.local_participant.attributes == {STATE_ATTRIBUTE: "answered", "bee_call.captions": "1"}
     (folder,) = call_folders(me.workspace)
     kinds = [e["type"] for e in events_of(folder)]
     assert kinds[0] == "call_started" and "picked_up" in kinds and kinds[-1] == "call_ended"
@@ -550,6 +550,34 @@ def test_after_the_call_its_title_is_asked_for_once_the_record_is_closed(tmp_pat
     asyncio.run(main())
     (folder,) = call_folders(me.workspace)
     assert asked == [(folder, "ko", me.workspace, "call_ended")]
+
+
+def test_the_voice_server_says_when_its_own_room_reconnected_so_the_app_stops_counting_captions(
+        tmp_path, monkeypatch, quick):
+    """App contract section 3, rule 6: captions are not sent while the voice server is away from the room, though
+    what it hears is still recorded, so the caption numbers may no longer match. It sets bee_call.captions as it
+    picks up and changes it after each reconnect of its own; the app then draws the view alone for that call."""
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        at_pick_up = dict(call.room.local_participant.attributes)
+        call.room.emit("reconnected")
+        await asyncio.sleep(0.05)
+        after_one = dict(call.room.local_participant.attributes)
+        call.room.emit("reconnected")
+        await asyncio.sleep(0.05)
+        after_two = call.room.local_participant.attributes["bee_call.captions"]
+        call.hang_up()
+        await call.end()
+        return at_pick_up, after_one, after_two
+
+    at_pick_up, after_one, after_two = asyncio.run(main())
+    assert at_pick_up == {STATE_ATTRIBUTE: "answered", "bee_call.captions": "1"}
+    assert (after_one["bee_call.captions"], after_two) == ("2", "3")
 
 
 def test_claude_s_history_is_kept_when_it_answers_with_glm_5_standing_by(tmp_path, monkeypatch, quick):

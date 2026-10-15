@@ -96,6 +96,49 @@ def test_the_call_ai_in_a_livekit_session_logs_each_request_and_never_speaks_an_
 
 
 
+def test_one_reply_is_one_caption_line_and_carries_no_markup(tmp_path):
+    """App contract section 3 numbers caption lines and counts them in the call view; that holds while each spoken
+    reply is one caption line. The coordinator never hands LiveKit a FlushSentinel (which would split a reply into
+    several lines), and its speech filter keeps asides and markup out of what is spoken, captioned and recorded."""
+    from types import SimpleNamespace
+
+    from livekit.agents import FlushSentinel
+
+    from tests.helpers import ScriptedLLM, seoul_now
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    yielded = []
+
+    class Watched(Coordinator):
+        async def llm_node(self, chat_ctx, tools, model_settings):
+            async for chunk in super().llm_node(chat_ctx, tools, model_settings):
+                yielded.append(chunk)
+                yield chunk
+
+    async def main():
+        rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+        coordinator = Watched(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
+        model = ScriptedLLM([["Sure. ", "(laughs) ", "<tool_call>x</tool_call>", "What should we look at?"],
+                             ["One more ", "thing, ", "and then ", "we are done."]])
+        async with AgentSession(llm=model) as session:
+            await session.start(coordinator)
+            turns = []
+            for words in ("Let's plan tomorrow", "Anything else?"):
+                before = len(session.history.items)
+                await session.run(user_input=words)
+                turns.append([i.text_content for i in session.history.items[before:]
+                              if getattr(i, "role", None) == "assistant"])
+        rec.close()
+        return turns
+
+    turns = asyncio.run(main())
+    assert not any(isinstance(chunk, FlushSentinel) for chunk in yielded)
+    assert [len(said) for said in turns] == [1, 1]  # each reply is one item, one caption line
+    assert "(laughs)" not in turns[0][0] and "tool_call" not in turns[0][0]
+    assert turns[0][0].startswith("Sure.") and turns[1][0] == "One more thing, and then we are done."
+
+
 def test_a_reply_that_is_only_a_stage_direction_leaves_no_blank_turn_for_bedrock(tmp_path):
     """GLM 5 on Bedrock (no Claude adapter, no tags): a reply of "(사용자가 잠시 멈춤)" and a line break leaves no
     assistant turn behind. A turn of "\n" would go into every later Bedrock request, which refuses a blank text

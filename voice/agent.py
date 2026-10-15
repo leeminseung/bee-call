@@ -37,6 +37,7 @@ Run: uv run python -m voice.agent dev       (joins rooms on LiveKit Cloud)
 """
 
 import asyncio
+import itertools
 import json
 import logging
 import os
@@ -110,6 +111,10 @@ DECLINE_CHECK_S = 1.0  # how often a ringing AI call looks whether the user decl
 # After a call, its failed Bee writes are tried again for at most this long: LiveKit gives a job's shutdown about
 # 10 s (shutdown_process_timeout), and the call's own record is closed first (arbitrary).
 BEE_RETRY_S = 5.0
+# Changed after each reconnect of the voice server's own room connection (it is "1" from the pick-up on): captions
+# are not sent while it is away, though what it hears is still recorded, so the app stops matching caption lines to
+# the call view's counts for that call (app contract section 3, rule 6).
+CAPTIONS_ATTRIBUTE = "bee_call.captions"
 # How long LiveKit waits after the caller stops before it ends their turn, learned during the call between these
 # bounds (LiveKit 1.8.6 EndpointingOptions). The user's choice (2026-10-15): 0.5-3.0 s left most turns waiting at
 # the cap, about 2.4 s; 0.3-2.5 s.
@@ -857,8 +862,28 @@ async def run_call(ctx: JobContext, people: People) -> None:
         ctx.shutdown(reason="the caller hung up while it rang")
         return
     # The app shows a call the user started as connected from here.
-    await ctx.room.local_participant.set_attributes({STATE_ATTRIBUTE: "answered"})
+    await ctx.room.local_participant.set_attributes({STATE_ATTRIBUTE: "answered", CAPTIONS_ATTRIBUTE: "1"})
+    report_reconnects(ctx.room, rec)
     rec.event("picked_up", after_s=round(time.monotonic() - started, 2))
+
+
+def report_reconnects(room, rec: CallRecorder) -> None:
+    """Each time the voice server's own room connection comes back, CAPTIONS_ATTRIBUTE changes (and the record
+    says so)."""
+    reconnects = itertools.count(2)
+
+    async def tell(value: str) -> None:
+        try:
+            await room.local_participant.set_attributes({CAPTIONS_ATTRIBUTE: value})
+        except Exception as exc:  # the room is going away: nothing to tell any more
+            log.warning("could not report the reconnect to the app: %s", exc)
+
+    def reconnected(*_) -> None:
+        value = str(next(reconnects))
+        rec.event("room_reconnected", captions=value)
+        asyncio.ensure_future(tell(value))
+
+    room.on("reconnected", reconnected)
 
 
 if __name__ == "__main__":
