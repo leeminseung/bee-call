@@ -18,6 +18,8 @@ enum DesignDemo: String {
     case firstRun // frame 7, left: the first run's language step
     case firstRunVoice // frame 7, right: the voice step, with a sample playing
     case settings // frame 8: the gear's settings sheet
+    case callModels // frame 8: the sheet's call model list
+    case workerModels // frame 8: the sheet's worker model list
 
     static func requested(in store: UserDefaults = .standard) -> DesignDemo? {
         store.string(forKey: "designD").flatMap(DesignDemo.init(rawValue:))
@@ -91,9 +93,10 @@ struct DesignDemoView: View {
                 CallSheet(callID: DesignDemo.liveCall, source: data, canContinue: true, continueCall: {},
                           startAtEnd: demo == .recordEnd)
             }
-        case .settings:
+        case .settings, .callModels, .workerModels:
             home.sheet(isPresented: .constant(true)) {
-                SettingsSheet(person: data.person, catalog: catalog, preview: preview)
+                SettingsSheet(person: data.person, catalog: catalog, preview: preview,
+                              startOn: demo == .callModels ? .call : demo == .workerModels ? .worker : nil)
             }
         case .firstRun, .firstRunVoice:
             FirstRunView(person: data.person, catalog: catalog, preview: preview,

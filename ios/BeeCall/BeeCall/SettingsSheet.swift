@@ -16,9 +16,17 @@ struct SettingsSheet: View {
     @State private var picked: CallLanguage?
     @State private var pickedVoice: String?
     @State private var pickedModels: [ModelRole: String] = [:] // tapped, before the server's answer
+    @State private var opened: ModelRole? // a model list open from the start, for Debug builds' design frames
     #if DEBUG
     @AppStorage(Server.typedAddressKey) private var typedAddress = "" // a Debug build's token server, typed
     #endif
+
+    init(person: PersonStore, catalog: VoiceCatalog, preview: VoicePreview, startOn: ModelRole? = nil) {
+        self.person = person
+        self.catalog = catalog
+        self.preview = preview
+        _opened = State(initialValue: startOn)
+    }
 
     private var language: CallLanguage {
         let held = person.settings?.language
@@ -90,6 +98,7 @@ struct SettingsSheet: View {
             }
             .navigationTitle(words.title)
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(item: $opened) { role in modelList(role) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { dismiss() } label: {
