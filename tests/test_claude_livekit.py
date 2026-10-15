@@ -59,3 +59,38 @@ def test_adapter_in_a_livekit_session():
         assert len(assistant_turns) == 4
 
     asyncio.run(main())
+
+
+def test_the_call_ai_in_a_livekit_session_logs_each_request_and_never_speaks_an_aside(tmp_path):
+    """The coordinator itself (not a stand-in agent) in a real LiveKit session: its llm_node keeps the model log,
+    the speech filter drops a reply that is only a stage direction, and the record gets a turn_timing per turn."""
+    import json
+    from types import SimpleNamespace
+    from tests.helpers import seoul_now
+    from voice.agent import wire_events
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    async def main():
+        rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+        coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
+        client = FakeAnthropic([[{"type": "text", "text": "(사용자가 잠시 멈춤)"}],
+                                [{"type": "text", "text": "Sure. [pause] What should we look at?"}]])
+        async with AgentSession(llm=ClaudeBedrockLLM(client=client)) as session:
+            wire_events(session, rec)
+            await session.start(coordinator)
+            await session.run(user_input="어")
+            await session.run(user_input="Let's plan tomorrow")
+            said = [i.text_content.strip() for i in session.history.items if getattr(i, "role", None) == "assistant"]
+        rec.close()
+        return rec, said
+
+    rec, said = asyncio.run(main())
+    assert [text for text in said if text] == ["Sure. What should we look at?"]  # the aside alone said nothing
+    log = [json.loads(line) for line in (rec.dir / "model-log.jsonl").read_text().splitlines()]
+    assert [entry["reply"]["text"].strip() for entry in log] == ["(사용자가 잠시 멈춤)",
+                                                                "Sure. [pause] What should we look at?"]
+    assert "Let's plan tomorrow" in json.dumps(log[1]["chat"], ensure_ascii=False)
+    events = [json.loads(line) for line in (rec.dir / "events.jsonl").read_text().splitlines()]
+    assert [e["type"] for e in events].count("turn_timing") == 2
+
