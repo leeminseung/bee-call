@@ -487,6 +487,39 @@ def test_a_hang_up_after_the_ai_spoke_keeps_the_call(tmp_path, monkeypatch, quic
     assert [e["kind"] for e in MetaSession(me.workspace).take_events()] == ["call_ended"]
 
 
+def test_a_quiet_call_s_record_shows_life_while_the_call_runs(tmp_path, monkeypatch, quick):
+    """Contract section 1: a call writes lines only when something happens, and a record without life for 120 s
+    reads as dropped. So while the call runs its record's file time is refreshed every REFRESH_S (30 s), and two
+    quiet minutes never read as dropped; it stops with the call."""
+    import os
+
+    from voice import recorder
+    from voice.call_folders import call_folders
+
+    monkeypatch.setattr(recorder, "REFRESH_S", 0.05)
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+    long_ago = 1_000_000_000
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        (folder,) = call_folders(me.workspace)
+        events = folder / "events.jsonl"
+        os.utime(events, (long_ago, long_ago))
+        await asyncio.sleep(0.25)
+        while_running = events.stat().st_mtime
+        call.hang_up()
+        await call.end()
+        os.utime(events, (long_ago, long_ago))
+        await asyncio.sleep(0.25)
+        return while_running, events.stat().st_mtime
+
+    while_running, after_the_end = asyncio.run(main())
+    assert while_running > long_ago + 1000 and after_the_end == long_ago
+
+
 def test_claude_s_history_is_kept_when_it_answers_with_glm_5_standing_by(tmp_path, monkeypatch, quick):
     """COORDINATOR_LLM=anthropic: the session's model is the stand-by wrapper, and Claude's history (exactly what
     Claude was sent) is still kept for checking the call afterwards."""

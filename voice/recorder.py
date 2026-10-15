@@ -12,10 +12,16 @@ workspace/<date>/<time>/
 Files are append-only and only the voice server writes them. The audio files are
 written only when the person keeps call audio on the server (voice/people.py
 record_on_server, on by default); the record and transcript are always written.
+
+A call writes lines only when something happens, and a record that shows no life for 120 s reads as dropped
+(voice/call_view.py, contract section 1). So while a call runs its record's file time is refreshed every REFRESH_S
+(keep_fresh), and a quiet stretch never reads as dropped.
 """
 
+import asyncio
 import json
 import logging
+import os
 import time
 import wave
 from datetime import datetime
@@ -56,6 +62,7 @@ class WavSink:
 
 
 MODEL_LOG = "model-log.jsonl"
+REFRESH_S = 30.0  # how often a running call's record shows life without a line (a quarter of call_view.LIVE_S)
 
 
 class CallRecorder:
@@ -77,6 +84,20 @@ class CallRecorder:
         self.user_audio = WavSink(self.dir / "audio" / "user.wav" if keep_audio else None)
         self.ai_audio = WavSink(self.dir / "audio" / "ai.wav" if keep_audio else None)
         self.event("call_started", room=room, started_at=now.isoformat(timespec="seconds"))
+
+    def refresh(self) -> None:
+        """The record shows life without a line: its file's time becomes now."""
+        try:
+            os.utime(self.dir / "events.jsonl")
+        except OSError as exc:  # the call goes on; the record may read as dropped a little early
+            log.warning("could not refresh the record of %s: %s", self.dir, exc)
+
+    async def keep_fresh(self) -> None:
+        """Refreshes the record every REFRESH_S until it is closed (or this is cancelled)."""
+        while not self._events.closed:
+            await asyncio.sleep(REFRESH_S)
+            if not self._events.closed:
+                self.refresh()
 
     def elapsed(self) -> float:
         return round(time.monotonic() - self._t0, 3)

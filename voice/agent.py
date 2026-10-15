@@ -671,6 +671,7 @@ class Call:
     rec: CallRecorder
     session: AgentSession
     keep_warm: asyncio.Task | None = None
+    fresh: asyncio.Task | None = None  # refreshes the record while the call runs (CallRecorder.keep_fresh)
     preparation: Preparation | None = None
     prep_recorder: asyncio.Task | None = None
     inputs_saver: asyncio.Task | None = None
@@ -699,8 +700,9 @@ async def end_call(call: Call) -> None:
     # LiveKit runs this in a task of its own, which does not carry the Bee login chosen for the call: choose it
     # again, so the writes retried after the call go to this person's Bee and no one else's.
     bee.use_bee(call.people.bee_dir(caller.id) if caller.uses_bee else None)
-    if call.keep_warm:
-        call.keep_warm.cancel()
+    for task in (call.keep_warm, call.fresh):
+        if task:
+            task.cancel()
     if call.preparation is not None:
         call.preparation.cancel()  # the prep records its own model use (voice/costs.py SpendLog)
     await asyncio.gather(call.prep_recorder, *([call.inputs_saver] if call.inputs_saver else []),
@@ -792,7 +794,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
     rec.event("prep_ready", after_s=round(time.monotonic() - started, 2), opening=prep.opening,
               opening_s=prep.opening_s, note_ready=bool(prep.note))
     session = make_session(ctx, caller.language, caller.tts_voice, rec, caller.call_model)
-    call = Call(ctx, people, caller, meta, rec, session, keep_warm=keep_warm, preparation=pickup.preparation,
+    call = Call(ctx, people, caller, meta, rec, session, keep_warm=keep_warm,
+                fresh=asyncio.create_task(rec.keep_fresh()), preparation=pickup.preparation,
                 prep_recorder=asyncio.create_task(record_prep(rec, prep, pickup.preparation)),
                 inputs_saver=inputs_saver, left=pickup.left)
 
