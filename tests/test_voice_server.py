@@ -178,6 +178,30 @@ def test_a_booked_call_is_told_to_the_ai_as_its_own_call_continuing_the_earlier_
     assert "dentist" in instructions  # the earlier call, as it was recorded
 
 
+def test_a_call_continued_by_the_earlier_call_s_id_records_that_call_s_folder(tmp_path, monkeypatch, quick):
+    """The D app continues a call by its call id (contract section 7); the record names the earlier call by its folder
+    (<date>/<time>), as the records page links to it and the call view reads it."""
+    me = signed_in(tmp_path)
+    earlier = me.workspace / "2026-10-15" / "2100"
+    earlier.mkdir(parents=True)
+    (earlier / "events.jsonl").write_text(json.dumps({"t": 0, "type": "call_started", "room": "call-matt-2100"}) + "\n")
+    (earlier / "transcript.md").write_text("- 00:05.0 **User:** Let's talk about the dentist.\n")
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt", "continue_from": "call-matt-2100"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        instructions = call.session.started["agent"].instructions
+        await call.end()
+        return instructions
+
+    assert "dentist" in asyncio.run(main())
+    (folder,) = [f for f in call_folders(me.workspace) if f != earlier]
+    (said,) = [json.loads(l) for l in (folder / "events.jsonl").read_text().splitlines() if '"type": "call"' in l]
+    assert said["continue_from"] == "2026-10-15/2100"
+
+
 def test_an_ai_call_unanswered_in_time_is_missed_and_not_called_again(tmp_path, monkeypatch, quick):
     """Confirmed rule (2026-10-15): an AI call unanswered for 60 s is recorded as missed and not called again;
     the meta agent hears of it."""

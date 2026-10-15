@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from voice.call_folders import CALL_ID, EVENTS, find_call, read_events
+from voice.call_folders import CALL_ID, EVENTS, find_call, read_events, session_id as folder_id
 
 SESSION_ID = re.compile(r"\d{4}-\d{2}-\d{2}/\d{4}(?:-\d+)?")  # workspace/<date>/<time>, see voice/recorder.py
 MAX_TALK_CHARS = 6000  # arbitrary: about ten minutes of talk; an older start is left out
@@ -29,6 +29,13 @@ def session_dir(workspace: Path, session_id: Any) -> Path | None:
         folder = workspace / session_id
         return folder if (folder / "events.jsonl").is_file() else None
     return find_call(workspace, session_id) if CALL_ID.fullmatch(session_id) else None
+
+
+def record_id(workspace: Path, session_id: Any) -> str | None:
+    """The earlier call's folder (<date>/<time>), as its record names it (the call event's continue_from, which the
+    records page links to), from either form of its id; None when it names no recorded call."""
+    folder = session_dir(workspace, session_id)
+    return None if folder is None else folder_id(folder)
 
 
 def _events(folder: Path) -> list[dict[str, Any]]:

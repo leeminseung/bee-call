@@ -63,7 +63,7 @@ from voice.aws_session import aws_profile, aws_session
 from voice import model_catalog, providers
 from voice.call_models import CallModel, call_model_for, coordinator_llm
 from voice.claude_llm import ClaudeBedrockLLM, default_model
-from voice.continuation import earlier_call
+from voice.continuation import earlier_call, record_id
 from voice.costs import SpendLog, day_budget
 from meta.session import add_event, meta_notes
 from voice import voip_push
@@ -769,6 +769,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
     bee.use_bee(people.bee_dir(caller.id) if caller.uses_bee else None)  # only this person's Bee, in this call
     if meta.get("continue_from"):  # the user tapped "Continue this call" in an earlier call's record
         meta["earlier_call"] = earlier_call(workspace, meta["continue_from"])
+        meta["continue_from"] = record_id(workspace, meta["continue_from"])  # recorded by its folder, either way
     meta["meta_notes"] = meta_notes(workspace)  # the meta agent's agenda and open threads, for the opening
     inbox = Path(meta["inbox"]) if meta.get("inbox") else None
     if inbox is not None and not inbox.resolve().is_relative_to(workspace.resolve()):
