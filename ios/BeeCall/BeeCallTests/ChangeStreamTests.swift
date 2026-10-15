@@ -4,18 +4,13 @@ import XCTest
 /// GET /changes (contract section 3): Server-Sent Events whose one event, `changed`, says a resource has a new
 /// version; the app then fetches it again if it holds it.
 final class ChangeStreamTests: XCTestCase {
-    @MainActor private func changes(in lines: [String]) async throws -> [Change] {
-        var found: [Change] = []
-        let stream = AsyncStream<String> { continuation in
-            lines.forEach { continuation.yield($0) }
-            continuation.finish()
-        }
-        try await ChangeStream.read(lines: stream) { found.append($0) }
-        return found
+    @MainActor private func changes(in lines: [String]) -> [Change] {
+        var parser = ChangeStream.Parser()
+        return lines.compactMap { parser.read($0) }
     }
 
-    @MainActor func testEachChangedEventIsReadAndTheRestIsLeftAlone() async throws {
-        let found = try await changes(in: [
+    @MainActor func testEachChangedEventIsReadAndTheRestIsLeftAlone() {
+        let found = changes(in: [
             ": keepalive",
             "event: changed",
             "data: {\"path\": \"/calls\", \"version\": \"f46f5990ebfadcab\"}",

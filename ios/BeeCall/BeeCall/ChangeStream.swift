@@ -29,24 +29,32 @@ enum ChangeStream {
             throw BadStatus(code: code)
         }
         onOpen()
-        try await read(lines: bytes.lines, onChange: onChange)
+        var parser = Parser()
+        for try await line in bytes.lines {
+            if let change = parser.read(line) { onChange(change) }
+        }
     }
 
     /// The `changed` events among a stream's lines. `lines` drops the blank line that ends an event, so an event
     /// is handled at its data line (the server sends one per event); lines starting with ":" are keepalives.
-    static func read<Lines: AsyncSequence>(lines: Lines, onChange: (Change) -> Void) async throws
-        where Lines.Element == String {
-        var event = ""
-        for try await line in lines {
+    struct Parser {
+        private var event = ""
+
+        /// The change a line completes, if it is the data line of a `changed` event that can be read.
+        mutating func read(_ line: String) -> Change? {
             if line.hasPrefix("event:") {
                 event = value(of: line, field: "event:")
             } else if line.hasPrefix("data:") {
-                if event == "changed",
-                   let change = try? Contract.decode(Change.self, from: Data(value(of: line, field: "data:").utf8)) {
-                    onChange(change)
-                }
-                event = ""
+                defer { event = "" }
+                guard event == "changed" else { return nil }
+                return try? Contract.decode(Change.self, from: Data(value(of: line, field: "data:").utf8))
             }
+            return nil
+        }
+
+        private func value(of line: String, field: String) -> String {
+            let rest = line.dropFirst(field.count)
+            return String(rest.hasPrefix(" ") ? rest.dropFirst() : rest)
         }
     }
 
@@ -60,10 +68,5 @@ enum ChangeStream {
             try? await Task.sleep(for: .seconds(delay))
             delay = min(delay * 2, 10)
         }
-    }
-
-    private static func value(of line: String, field: String) -> String {
-        let rest = line.dropFirst(field.count)
-        return String(rest.hasPrefix(" ") ? rest.dropFirst() : rest)
     }
 }
