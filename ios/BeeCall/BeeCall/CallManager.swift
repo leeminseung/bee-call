@@ -36,7 +36,8 @@ final class CallManager: NSObject {
     @ObservationIgnored private var ringTimeout: Task<Void, Never>?
     // VoIP pushes ring the AI's calls while the app is closed or the phone is locked.
     @ObservationIgnored private let pushRegistry = PKPushRegistry(queue: .main)
-    // A call the user starts rings until the AI picks up (it reads Bee first, at most about 8 s).
+    // Each call waits for the AI: a call the user starts rings until it picks up (it reads Bee first, at most
+    // about 8 s), and an answered call until it is there.
     @ObservationIgnored private var pickUpTimeout: Task<Void, Never>?
     @ObservationIgnored private var pickedUp = false
     @ObservationIgnored private let pickUpWait: Duration
@@ -314,20 +315,23 @@ final class CallManager: NSObject {
                     await beforeAnswering()
                     try Task.checkCancellation() // the call ended while the settings went out
                 }
-                let joined = try await room.connect(tokenServerURL: url, answering: roomName,
-                                                    continuing: roomName == nil ? earlierCall : nil)
+                _ = try await room.connect(tokenServerURL: url, answering: roomName,
+                                           continuing: roomName == nil ? earlierCall : nil)
                 try Task.checkCancellation() // the call ended while we were connecting
-                // CallKit counts an answered call as connected once the answer action is fulfilled. A call the
-                // user starts counts as connected when the AI picks up, which may already have happened.
-                if roomName == nil && !pickedUp {
-                    status = "Ringing…"
-                    pickUpTimeout = Task {
-                        try? await Task.sleep(for: pickUpWait)
-                        guard !Task.isCancelled, callID == id, !pickedUp else { return }
+                // Both ways, the call screen says "Connected" once the AI is there (agentPickedUp), which may
+                // already be so. Until then a call the person starts rings, and an answered call waits: a join
+                // that lands after the AI gave up opens an empty room, which would sit "Connected" in silence
+                // (review finding 14). If the AI never comes, the call is given up.
+                guard !pickedUp else { return }
+                if roomName == nil { status = "Ringing…" }
+                pickUpTimeout = Task {
+                    try? await Task.sleep(for: pickUpWait)
+                    guard !Task.isCancelled, callID == id, !pickedUp else { return }
+                    if roomName == nil {
                         hangUp(.failed, "Bee Call didn't pick up")
+                    } else {
+                        hangUp(.remoteEnded, "That call already ended")
                     }
-                } else {
-                    status = "Connected · \(joined)"
                 }
             } catch {
                 guard !Task.isCancelled else { return } // whoever ended the call cleans up
@@ -340,14 +344,14 @@ final class CallManager: NSObject {
         }
     }
 
-    /// The voice server marked the call answered: for a call the user started, it is now connected.
+    /// The voice server marked the call answered: the AI is there. A call the person started is now connected
+    /// for CallKit too; CallKit counted the AI's own call as connected when it was answered.
     private func agentPickedUp(_ id: UUID) {
         guard callID == id, !pickedUp, !isEnding else { return }
         pickedUp = true
         pickUpTimeout?.cancel()
         pickUpTimeout = nil
-        guard !rungRooms.values.contains(id) else { return } // the AI's own call: connected when answered
-        callKit.reportConnected(id)
+        if !rungRooms.values.contains(id) { callKit.reportConnected(id) }
         status = "Connected"
     }
 
