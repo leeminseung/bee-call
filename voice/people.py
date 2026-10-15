@@ -241,13 +241,16 @@ class People:
         tmp.replace(folder / "settings.json")
 
     def change_settings(self, person: str, changes: dict[str, Any], allowed: tuple[str, ...] = APP_SETTINGS) -> Settings:
-        """Checks every change first, so a bad one changes nothing. ValueError names the problem."""
-        settings = self.settings(person)
-        for name, value in changes.items():
-            if name not in allowed:
-                raise ValueError(f"{name!r} cannot be changed here")
-            settings.change(name, value)
-        self.save_settings(person, settings)
+        """Checks every change first, so a bad one changes nothing. ValueError names the problem. The read, the
+        change and the write happen under the people lock, so two changes at once (from two processes, say the
+        app's PUT /settings and Bee's connect) both stay (server review finding 10)."""
+        with self._lock():  # never called with the lock already held: flock does not nest
+            settings = self.settings(person)
+            for name, value in changes.items():
+                if name not in allowed:
+                    raise ValueError(f"{name!r} cannot be changed here")
+                settings.change(name, value)
+            self.save_settings(person, settings)
         return settings
 
     # ---------- accounts ----------

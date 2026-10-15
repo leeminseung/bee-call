@@ -71,6 +71,33 @@ def test_settings_are_checked_and_the_app_changes_only_its_own(tmp_path):
     assert people.settings("matt").record_on_server is True  # never set: the default, on (Matt, 2026-10-14)
 
 
+def test_two_settings_changes_at_once_both_stay(tmp_path, monkeypatch):
+    """Server review finding 10: each change read, changed and wrote the file on its own, so of two at once (the
+    app's PUT /settings and Bee's connect turning bee on) the later write undid the other's change."""
+    import threading
+
+    people = People(tmp_path)
+    people.add("matt")
+    real = Settings.from_file.__func__
+
+    def slow(cls, path):
+        read = real(cls, path)
+        time.sleep(0.2)  # the other change reads now
+        return read
+
+    monkeypatch.setattr(Settings, "from_file", classmethod(slow))
+    changes = [threading.Thread(target=people.change_settings, args=("matt", {"language": "ko"})),
+               threading.Thread(target=people.change_settings, args=("matt", {"bee": True}),
+                                kwargs={"allowed": ("bee",)})]
+    for change in changes:
+        change.start()
+    for change in changes:
+        change.join()
+    monkeypatch.undo()
+    settings = people.settings("matt")
+    assert (settings.language, settings.bee) == ("ko", True)
+
+
 def test_sign_ins_wait_for_approval_and_end_when_the_person_is_removed(tmp_path):
     people = People(tmp_path)
     now = datetime(2026, 10, 14, 21, 0, tzinfo=SEOUL)
