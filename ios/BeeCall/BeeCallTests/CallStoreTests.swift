@@ -246,4 +246,98 @@ final class CallStoreTests: XCTestCase {
         XCTAssertEqual(store.views[person]?.call.state, .ended)
         XCTAssertEqual(store.views[ai], view)
     }
+
+    /// A record the server deleted (a call hung up before its first words, BC-027) is not kept: after a 404 its
+    /// view is gone and the call reads as missing.
+    @MainActor func testAViewWhoseRecordIsGoneIsDropped() async throws {
+        let server = FakeServer(), id = try ids().person
+        server.replies["GET /calls/\(id)"] = .status(200, try Examples.text("call-view-live"))
+        let store = CallStore(server: server.client())
+        await store.refreshView(id)
+        server.replies["GET /calls/\(id)"] = .status(404)
+        await store.show(id)
+        XCTAssertNil(store.views[id])
+        XCTAssertTrue(store.missing.contains(id))
+    }
+
+    /// The first page with a call of its own added, the newest, live: one the server lists for a moment before it
+    /// deletes the record.
+    @MainActor private func pageWithAPassingCall() throws -> (page: [String: Any], id: String) {
+        var page = try Examples.object("calls")
+        var calls = try XCTUnwrap(page["calls"] as? [[String: Any]])
+        var passing = calls[0]
+        passing["call_id"] = "call-test-20991231-180000"
+        passing["started_at"] = "2099-12-31T18:00:00+09:00"
+        passing["state"] = "live"
+        passing["duration_s"] = NSNull()
+        passing["results"] = [Any]()
+        calls.insert(passing, at: 0)
+        page["calls"] = calls
+        page["version"] = Examples.otherVersion(than: page["version"] as? String ?? "")
+        return (page, "call-test-20991231-180000")
+    }
+
+    /// Finding 2: a call /changes announced in the moment before its record was deleted leaves the thread once the
+    /// first page no longer has it. Calls older than the page, from older pages, stay.
+    @MainActor func testACallTheFirstPageNoLongerHasLeaves() async throws {
+        let server = FakeServer(), list = try Examples.decode(CallList.self, "calls"), made = try pageWithAPassingCall()
+        var first = made.page
+        let passing = made.id
+        first["more"] = true // an older page to ask for, whatever the example says
+        if first["before"] is NSNull { first["before"] = "older" }
+        server.replies["GET /calls"] = .json(200, first)
+        let store = CallStore(server: server.client())
+        await store.refreshList()
+        XCTAssertTrue(store.calls.contains { $0.id == passing })
+        var older = try XCTUnwrap((first["calls"] as? [[String: Any]])?.last)
+        older["call_id"] = "call-test-19990101-090000"
+        older["started_at"] = "1999-01-01T09:00:00+09:00"
+        server.replies["GET /calls"] = .json(200, ["calls": [older], "more": false, "before": NSNull(),
+                                                   "version": "0000000000000001"])
+        await store.loadOlder()
+        XCTAssertTrue(store.calls.contains { $0.id == "call-test-19990101-090000" })
+        server.replies["GET /calls"] = .status(200, try Examples.changed("calls") { body in
+            body["more"] = true // older calls exist, as before
+            if body["before"] is NSNull { body["before"] = "older" }
+        })
+        await store.refreshList()
+        XCTAssertFalse(store.calls.contains { $0.id == passing }, "not on the first page any more: gone")
+        XCTAssertEqual(Array(store.calls.prefix(list.calls.count)).map(\.id), list.calls.map(\.id))
+        XCTAssertTrue(store.calls.contains { $0.id == "call-test-19990101-090000" }, "an older page's call stays")
+    }
+
+    /// Finding 2: a first page that is the whole list (no older calls) leaves nothing else.
+    @MainActor func testAWholeListLeavesNothingElse() async throws {
+        let server = FakeServer()
+        let (first, passing) = try pageWithAPassingCall()
+        server.replies["GET /calls"] = .json(200, first)
+        let store = CallStore(server: server.client())
+        await store.refreshList()
+        XCTAssertTrue(store.calls.contains { $0.id == passing })
+        server.replies["GET /calls"] = .json(200, ["calls": [], "more": false, "before": NSNull(),
+                                                   "version": "0000000000000002"])
+        await store.refreshList()
+        XCTAssertTrue(store.calls.isEmpty, "no calls at all")
+        XCTAssertFalse(store.calls.contains { $0.id == passing })
+    }
+
+    /// Finding 2: one fetch of the list at a time. A change announced during it waits for it and fetches again,
+    /// so the newer list is the one kept, never an older answer that lands last.
+    @MainActor func testTheListIsFetchedOnceAtATimeAndAgainAfterAChange() async throws {
+        let server = FakeServer(), list = try Examples.decode(CallList.self, "calls")
+        let olderVersion = Examples.otherVersion(than: list.version)
+        server.replies["GET /calls"] = .slow(.milliseconds(200), try Examples.changed("calls") { body in
+            body["version"] = olderVersion
+        })
+        let store = CallStore(server: server.client())
+        let first = Task { await store.refreshList() }
+        try await Task.sleep(for: .milliseconds(50))
+        server.replies["GET /calls"] = .status(200, try Examples.text("calls"))
+        await store.refreshList() // while the first is out
+        XCTAssertEqual(store.list?.version, list.version, "the newer list, once this returns")
+        await first.value
+        XCTAssertEqual(store.list?.version, list.version, "not the older answer, landing last")
+        XCTAssertEqual(server.requests.count, 2)
+        XCTAssertEqual(ifNoneMatch(server), "\"\(olderVersion)\"", "asked again with what the first brought")
+    }
 }

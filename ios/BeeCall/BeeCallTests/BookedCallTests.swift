@@ -44,6 +44,29 @@ final class BookedCallTests: XCTestCase {
         XCTAssertEqual(server.requests.count, asked + 1)
     }
 
+    /// Fresh-context review of round1 7c1361a, finding 2: one fetch of the offers at a time. A change announced
+    /// during it waits for it and fetches again, so an older answer landing last cannot bring back closed offers.
+    @MainActor func testTheOffersAreFetchedOnceAtATime() async throws {
+        let server = FakeServer(), listing = try Examples.decode(OpenOffers.self, "offers")
+        let olderVersion = Examples.otherVersion(than: listing.version)
+        server.replies["GET /offers"] = .slow(.milliseconds(200), try Examples.changed("offers") { body in
+            body["version"] = olderVersion
+        })
+        let offers = OfferCenter(server: server.client())
+        let first = Task { await offers.refresh() }
+        try await Task.sleep(for: .milliseconds(50))
+        server.replies["GET /offers"] = .status(200, try Examples.changed("offers") { body in
+            body["offers"] = [Any]() // the offers closed meanwhile
+        })
+        await offers.refresh() // while the first is out
+        XCTAssertEqual(offers.open, [], "the newer listing, once this returns")
+        await first.value
+        XCTAssertEqual(offers.open, [], "not the older answer, landing last")
+        let asked = server.requests.filter { $0.url?.path == "/offers" }
+        XCTAssertEqual(asked.count, 2)
+        XCTAssertEqual(asked.last?.value(forHTTPHeaderField: "If-None-Match"), "\"\(olderVersion)\"")
+    }
+
     // MARK: - What a booked call's row says
 
     @MainActor func testTheRowSaysWhatIsBookedAndWhen() throws {

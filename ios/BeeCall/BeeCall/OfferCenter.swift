@@ -48,6 +48,7 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     private(set) var notice: String? // one line under the list when an answer did not go through
     private(set) var answering: Set<String> = [] // offers whose answer is on its way; their buttons are off
     @ObservationIgnored private var version: String? // of the last GET /offers body, asked again with If-None-Match
+    @ObservationIgnored private let fetches = OneFetchAtATime<String>()
     @ObservationIgnored private let server: ServerClient
 
     init(server: ServerClient = ContractServer.client) {
@@ -81,7 +82,14 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// Fetches the open offers. One fetch at a time: one asked for while another is on its way waits for it and
+    /// then asks again, so an older answer never lands after a newer one and brings back an offer that closed
+    /// (fresh-context review of round1 7c1361a, finding 2).
     func refresh() async {
+        await fetches.run("/offers") { await self.fetch() }
+    }
+
+    private func fetch() async {
         await PushTokens.shared.deliverIfNeeded(.alert) // the server may have been unreachable at launch
         guard var request = server.request("/offers") else { return }
         request.cachePolicy = .reloadIgnoringLocalCacheData

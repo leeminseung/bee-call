@@ -18,8 +18,7 @@ final class CallStore {
     private var olderLoaded = false // an older page has come
     private var olderCursor: String? // the next older page after the last one loaded
     @ObservationIgnored private var loadingOlder = false // a second tap waits for the page on its way
-    @ObservationIgnored private var fetching: Set<String> = [] // views on their way: one fetch per view at a time
-    @ObservationIgnored private var fetchAgain: Set<String> = [] // asked for while on their way
+    @ObservationIgnored private let fetches = OneFetchAtATime<String>() // by path: the list, and each view
     @ObservationIgnored private let server: ServerClient
 
     init(server: ServerClient = ContractServer.client) {
@@ -38,9 +37,25 @@ final class CallStore {
 
     // MARK: - Fetching
 
+    /// Fetches the first page. One fetch at a time: one asked for while another is on its way waits for it and
+    /// then asks again, so an older answer never lands after a newer one.
     func refreshList() async {
+        await fetches.run("/calls") { await self.fetchList() }
+    }
+
+    /// The first page replaces what is held in its span: a held call newer than the page's oldest that the page
+    /// does not list is gone, such as a call listed for a moment before the server deleted its record (hung up
+    /// before the first words, BC-027). Calls older than the page stay, on their older pages, unless the page is
+    /// the whole list.
+    private func fetchList() async {
         guard let body: CallList = await fetch("/calls", holding: list?.version) else { return }
         list = body
+        let listed = Set(body.calls.map(\.id)), oldest = body.calls.map(\.call.startedAt.date).min()
+        known = known.filter { id, entry in
+            if listed.contains(id) { return true }
+            guard body.more, let oldest else { return false } // the page is the whole list
+            return entry.call.startedAt.date <= oldest // on an older page
+        }
         for entry in body.calls { known[entry.id] = entry }
     }
 
@@ -72,13 +87,7 @@ final class CallStore {
     /// Fetches a call's view. One fetch per view at a time: one asked for while another is on its way waits for
     /// it and then asks again, so an older answer never lands after a newer one.
     func refreshView(_ callID: String) async {
-        guard fetching.insert(callID).inserted else {
-            fetchAgain.insert(callID)
-            return
-        }
-        await fetchView(callID)
-        fetching.remove(callID)
-        if fetchAgain.remove(callID) != nil { await refreshView(callID) }
+        await fetches.run(Self.viewPath(callID)) { await self.fetchView(callID) }
     }
 
     private func fetchView(_ callID: String) async {
@@ -89,6 +98,7 @@ final class CallStore {
             views[callID] = view
             missing.remove(callID)
         case .notFound:
+            views[callID] = nil // a record the server deleted (BC-027) is not kept
             missing.insert(callID)
         case .unchanged, .failed:
             break
