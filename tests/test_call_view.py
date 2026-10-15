@@ -574,6 +574,41 @@ def test_continues_names_the_earlier_call_by_its_id(tmp_path):
     assert found == {"call-matt-3": "call-matt-2", "call-matt-2": "call-matt-1", "call-matt-1": None}
 
 
+def test_a_record_is_listed_once_its_first_line_is_whole(tmp_path):
+    """The recorder makes a call's folder and file before it writes the call_started line: until that line is whole
+    the record is not listed, so it never shows under a name it is about to lose. A whole first line without a
+    usable room still names the record by its folder."""
+    path = tmp_path / "2026-10-15" / "2000"
+    path.mkdir(parents=True)
+    first = {"t": 0.0, "type": "call_started", "room": "call-matt-1", "started_at": STARTED}
+    for begun in ("", json.dumps(first)[:30]):
+        (path / "events.jsonl").write_text(begun)
+        os.utime(path / "events.jsonl", (WALL - 5, WALL - 5))
+        assert listed(tmp_path)["calls"] == [] and call_view.call_view(
+            tmp_path, "rec-2026-10-15-2000", zone=SEOUL, language="en", now=EVENING, wall=WALL) is None
+    (path / "events.jsonl").write_text(json.dumps(first) + "\n")
+    os.utime(path / "events.jsonl", (WALL - 5, WALL - 5))
+    assert [c["call_id"] for c in listed(tmp_path)["calls"]] == ["call-matt-1"]
+    roomless = tmp_path / "2026-10-14" / "2000"
+    roomless.mkdir(parents=True)
+    (roomless / "events.jsonl").write_text(json.dumps({"t": 0.0, "type": "call_started"}) + "\n")
+    assert [c["call_id"] for c in listed(tmp_path)["calls"]] == ["call-matt-1", "rec-2026-10-14-2000"]
+
+
+def test_the_changes_stamp_sees_a_new_record_begin_in_a_day_that_has_calls(tmp_path):
+    """/changes rebuilds when files_stamp changes: a call that begins in a day folder that already has calls shows
+    as its file appears and as its first line lands, not only at the next timed rebuild."""
+    record(tmp_path, [INBOUND, CLOSED, ENDED])
+    path = tmp_path / "2026-10-15" / "2100"
+    path.mkdir()
+    made = call_view.files_stamp(tmp_path, [])
+    (path / "events.jsonl").write_text("")
+    opened = call_view.files_stamp(tmp_path, [])
+    (path / "events.jsonl").write_text(json.dumps({"t": 0.0, "type": "call_started", "room": "call-matt-2"}) + "\n")
+    begun = call_view.files_stamp(tmp_path, [])
+    assert made != opened != begun
+
+
 def test_a_line_still_being_written_is_left_out(tmp_path):
     path = record(tmp_path, [INBOUND, say(2, "Hi.")], age_s=5)
     with (path / "events.jsonl").open("a") as f:

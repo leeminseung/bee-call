@@ -46,18 +46,28 @@ def read_events(path: Path) -> list[dict[str, Any]]:
     return events
 
 
-def first_event(path: Path) -> dict[str, Any] | None:
-    """The first line of a file of one JSON object per line (a record's call_started), without reading the rest."""
+def first_line(path: Path) -> bytes | None:
+    """The first line of a file of one JSON object per line, whole (ending in its newline), without reading the
+    rest; None while it is still being written (a record just begun) or when the file cannot be read."""
     try:
         with path.open("rb") as f:
             line = f.readline()
     except OSError:
         return None
+    return line if line.endswith(b"\n") else None
+
+
+def _event(line: bytes | None) -> dict[str, Any] | None:
     try:
-        event = json.loads(line)
+        event = json.loads(line) if line else None
     except ValueError:
         return None
     return event if isinstance(event, dict) else None
+
+
+def first_event(path: Path) -> dict[str, Any] | None:
+    """The first line of a file of one JSON object per line (a record's call_started), when it is whole."""
+    return _event(first_line(path))
 
 
 def session_id(folder: Path) -> str:
@@ -68,11 +78,15 @@ def session_id(folder: Path) -> str:
 def call_ids(workspace: Path) -> list[tuple[str, Path]]:
     """Each call record with its id, oldest first (contract section 1): the LiveKit room of its call_started line,
     and for a later record in the same room (a voice server restarted during the call) <room>.2, then .3. A record
-    without a usable room is named by its folder (rec-<date>-<time>)."""
+    without a usable room is named by its folder (rec-<date>-<time>). A record just begun, its call_started line not
+    yet whole, is left out until it is, so it never shows under a name it is about to lose."""
     named: list[tuple[str, Path]] = []
     seen: dict[str, int] = {}
     for folder in call_folders(workspace):
-        room = (first_event(folder / EVENTS) or {}).get("room")
+        line = first_line(folder / EVENTS)
+        if line is None:
+            continue
+        room = (_event(line) or {}).get("room")
         if not isinstance(room, str) or not CALL_ID.fullmatch(room) or len(room) > 120:
             room = f"rec-{folder.parent.name}-{folder.name}"
         seen[room] = seen.get(room, 0) + 1

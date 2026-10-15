@@ -31,6 +31,7 @@ from worker.chart import svg_title
 
 LIVE_S = 120  # no new line or file refresh for this long, and no end: the call no longer reads as live
 RECENT_S = 600  # an ended call is still announced by /changes on connect for this long (contract section 3)
+NEWEST_DAYS = 2  # the day folders whose records /changes looks at between rebuilds: today's, and yesterday's after 0:00
 # The retry of failed Bee writes after a call ends within 5 s (voice/agent.py BEE_RETRY_S): a retry still applying
 # after this long was cut off by a stopped process.
 RETRY_SETTLES_S = 30
@@ -876,11 +877,19 @@ def watched_calls(workspace: Path, *, zone: tzinfo, now: datetime, wall: float |
 
 
 def files_stamp(workspace: Path, folders: list[Path]) -> tuple:
-    """What /changes looks at between its rebuilds: new call folders, the ring log and its verdicts, the offers, and
+    """What /changes looks at between its rebuilds: new call folders, the records of the newest days (a new call's
+    record appears and gets its first line after its folder is made), the ring log and its verdicts, the offers, and
     the files of the calls it watches. Equal stamps: nothing a body shows changed but by the clock."""
     try:
-        days = tuple(sorted((p.name, _stat(p)) for p in workspace.iterdir() if DAY.fullmatch(p.name)))
+        days = sorted(p for p in workspace.iterdir() if DAY.fullmatch(p.name))
     except OSError:
-        days = ()
-    return (days, _stat(workspace / OUTBOUND_LOG), _stat(workspace / "meta" / "events.jsonl"),
-            _stat(workspace / OFFERS_DIR), tuple(_stamp(folder) for folder in folders))
+        days = []
+    newest = []
+    for day in days[-NEWEST_DAYS:]:
+        try:
+            newest += [(day.name, p.name, _stat(p / EVENTS)) for p in sorted(day.iterdir())]
+        except OSError:
+            continue
+    return (tuple((p.name, _stat(p)) for p in days), tuple(newest), _stat(workspace / OUTBOUND_LOG),
+            _stat(workspace / "meta" / "events.jsonl"), _stat(workspace / OFFERS_DIR),
+            tuple(_stamp(folder) for folder in folders))
