@@ -43,6 +43,11 @@ final class PersonStore {
         await change(["voice": voice])
     }
 
+    /// Sends the model picked for a role, by its catalog id (GET /models).
+    func choose(model id: String, for role: ModelRole) async -> Bool {
+        await change([role == .worker ? "worker_model" : "call_model": id])
+    }
+
     private func change(_ fields: [String: Any]) async -> Bool {
         switch await server.send("/settings", method: "PUT", json: fields) {
         case .ok(200, let data):

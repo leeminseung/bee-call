@@ -22,7 +22,7 @@ final class SettingsSyncTests: XCTestCase {
         XCTAssertEqual(body["call_time"] as? String, "21:00")
         XCTAssertEqual(body["record_on_server"] as? Bool, true)
         XCTAssertEqual(body["record_on_phone"] as? Bool, false)
-        XCTAssertEqual(body["call_model"] as? String, "haiku") // the faster model until the person picks one
+        XCTAssertNil(body["call_model"], "the models belong to the app's settings sheet (contract section 6)")
         XCTAssertNil(body["use_bee"], "Bee is connected with /bee/connect, not with a setting")
     }
 
@@ -31,13 +31,11 @@ final class SettingsSyncTests: XCTestCase {
         store.set("07:30", forKey: "call_time")
         store.set(false, forKey: "record_on_server")
         store.set(true, forKey: "record_on_phone")
-        store.set("sonnet", forKey: "call_model")
         await sync(store, server).send().value
         let body = try server.body(of: "PUT /settings")
         XCTAssertEqual(body["call_time"] as? String, "07:30")
         XCTAssertEqual(body["record_on_server"] as? Bool, false)
         XCTAssertEqual(body["record_on_phone"] as? Bool, true)
-        XCTAssertEqual(body["call_model"] as? String, "sonnet")
     }
 
     @MainActor func testATimeTheServerWouldRefuseIsLeftOut() async throws {
@@ -123,19 +121,6 @@ final class SettingsSyncTests: XCTestCase {
         _ = sync
     }
 
-    /// The call model chosen in the Settings app goes out at once, with the other switches and the time zone.
-    @MainActor func testAChangedCallModelIsSentAtOnce() async throws {
-        let store = freshDefaults(self), server = FakeServer()
-        let sync = sync(store, server)
-        await sync.send().value // at launch
-        store.set("sonnet", forKey: "call_model")
-        await waitUntil("the change is sent") { server.sent.count == 2 }
-        let body = try server.body(of: "PUT /settings")
-        XCTAssertEqual(body["call_model"] as? String, "sonnet")
-        XCTAssertNotNil(body["time_zone"])
-        _ = sync
-    }
-
     /// Contract section 6: the app keeps the call language in the defaults for its own words (PersonStore); that
     /// is not a Settings-app switch, and sending it would overwrite the person's pick on the server.
     @MainActor func testTheAppsLanguageIsNotASwitchToSend() async throws {
@@ -177,12 +162,12 @@ final class SettingsSyncTests: XCTestCase {
         let sync = sync(store, server)
         let first = sync.send()
         await waitUntil("the first send is out") { server.sent.count == 1 }
-        store.set("sonnet", forKey: "call_model")
+        store.set("07:30", forKey: "call_time")
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(server.sent.count, 1, "the second send waits for the first")
         await first.value
         await waitUntil("the second send is out") { server.sent.count == 2 }
-        XCTAssertEqual(try server.body(of: "PUT /settings")["call_model"] as? String, "sonnet")
+        XCTAssertEqual(try server.body(of: "PUT /settings")["call_time"] as? String, "07:30")
     }
 
     // MARK: - Before an answered call joins

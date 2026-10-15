@@ -461,15 +461,45 @@ struct VoiceList: Decodable, Hashable {
     let voices: [Voice]
 }
 
-enum CallModel: String, ContractValue {
-    case haiku, sonnet, unrecognized
+// MARK: - Models (section 5b)
+
+enum ModelRole: String, ContractValue {
+    case call, worker, unrecognized
+}
+
+/// One short line on a model for its role, in both languages.
+struct ModelDescription: Decodable, Hashable {
+    let ko: String
+    let en: String
+}
+
+/// A model of the server's catalog, as the settings sheet lists it. `id` is the catalog's (haiku, sonnet, glm),
+/// never a provider's own model id.
+struct CatalogModel: Decodable, Hashable, Identifiable {
+    let id: String
+    let name: String
+    let maker: String
+    let description: ModelDescription
+    let isDefault: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, maker, description
+        case isDefault = "default"
+    }
+}
+
+/// GET /models?role=: one role's choices, 1 to 12, the default first.
+struct ModelList: Decodable, Hashable {
+    let role: ModelRole
+    let models: [CatalogModel]
 }
 
 /// The person's settings as the server holds them.
 struct PersonSettings: Decodable, Hashable {
     let language: CallLanguage
     let voice: String? // null: the language's default voice
-    let callModel: CallModel
+    let callModel: String // a catalog id of GET /models?role=call
+    let workerModel: String // a catalog id of GET /models?role=worker
     let callTime: String
     let recordOnServer: Bool
     let recordOnPhone: Bool
@@ -480,6 +510,7 @@ struct PersonSettings: Decodable, Hashable {
     enum CodingKeys: String, CodingKey {
         case language, voice
         case callModel = "call_model"
+        case workerModel = "worker_model"
         case callTime = "call_time"
         case recordOnServer = "record_on_server"
         case recordOnPhone = "record_on_phone"

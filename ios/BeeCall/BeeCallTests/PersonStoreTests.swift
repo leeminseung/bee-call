@@ -48,6 +48,22 @@ final class PersonStoreTests: XCTestCase {
         XCTAssertEqual(person.me?.settings.voice, "ko-daon")
     }
 
+    /// The call and worker models, picked in the settings sheet from GET /models (section 6).
+    @MainActor func testPickingAModelSendsItsId() async throws {
+        let server = FakeServer()
+        server.replies["GET /me"] = .status(200, try text("me"))
+        server.replies["PUT /settings"] = .status(200, try text("settings")
+            .replacingOccurrences(of: "\"call_model\": \"haiku\"", with: "\"call_model\": \"sonnet\""))
+        let person = PersonStore(server: server.client(), store: freshDefaults(self))
+        await person.refresh()
+        let saved = await person.choose(model: "sonnet", for: .call)
+        XCTAssertTrue(saved)
+        XCTAssertEqual(try server.body(of: "PUT /settings") as NSDictionary, ["call_model": "sonnet"] as NSDictionary)
+        XCTAssertEqual(person.me?.settings.callModel, "sonnet")
+        _ = await person.choose(model: "glm", for: .worker)
+        XCTAssertEqual(try server.body(of: "PUT /settings") as NSDictionary, ["worker_model": "glm"] as NSDictionary)
+    }
+
     /// A pick the server refuses keeps what was there, on the screen too, and says why.
     @MainActor func testARefusedPickKeepsWhatWasThereAndSaysSo() async throws {
         let server = FakeServer(), store = freshDefaults(self)

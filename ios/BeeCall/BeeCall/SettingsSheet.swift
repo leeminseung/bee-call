@@ -1,19 +1,21 @@
 import SwiftUI
 import UIKit
 
-/// Design D, frame 8: the home's gear opens this sheet. "목소리" and "언어" open the first run's own lists, and each
-/// pick goes to the server at once (PUT /settings); the last row opens the Bee Call page of the iOS Settings app,
-/// which keeps the other switches (evening call time, saving call audio, Bee, the call model). The language and the
-/// voice belong to the app: the Settings app has no language row (contract section 6).
+/// Design D, frame 8: the home's gear opens this sheet. "목소리" and "언어" open the first run's own lists, "통화
+/// 모델" and "일꾼 모델" the server's model lists (GET /models), and each pick goes to the server at once (PUT
+/// /settings); the last row opens the Bee Call page of the iOS Settings app, which keeps the other switches (evening
+/// call time, saving call audio, Bee). The language, the voice and the models belong to the app (contract section 6).
 struct SettingsSheet: View {
     let person: PersonStore
     let catalog: VoiceCatalog
     let preview: VoicePreview
+    @State private var models = ModelCatalog() // GET /models, through ContractServer
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @AppStorage("language") private var appLanguage = "en"
     @State private var picked: CallLanguage?
     @State private var pickedVoice: String?
+    @State private var pickedModels: [ModelRole: String] = [:] // tapped, before the server's answer
     #if DEBUG
     @AppStorage(Server.typedAddressKey) private var typedAddress = "" // a Debug build's token server, typed
     #endif
@@ -42,6 +44,13 @@ struct SettingsSheet: View {
                         languageList
                     } label: {
                         LabeledContent(words.language, value: language.name)
+                    }
+                    ForEach([ModelRole.call, .worker], id: \.self) { role in
+                        NavigationLink {
+                            modelList(role)
+                        } label: {
+                            LabeledContent(words.model(role), value: chosen(role)?.name ?? "")
+                        }
                     }
                 } header: {
                     Text(words.calls)
@@ -94,6 +103,68 @@ struct SettingsSheet: View {
         .tint(BeeStyle.ink)
         .presentationDragIndicator(.visible)
         .task(id: language) { await catalog.load(language) }
+        .task {
+            await models.load(.call)
+            await models.load(.worker)
+        }
+    }
+
+    /// The model shown as chosen for a role: the pick, the server's, or the role's default.
+    private func chosen(_ role: ModelRole) -> CatalogModel? {
+        let stored = pickedModels[role] ?? (role == .worker ? person.me?.settings.workerModel : person.me?.settings.callModel)
+        return ModelChoice.effective(stored: stored, in: models.models[role] ?? [])
+    }
+
+    private func modelList(_ role: ModelRole) -> some View {
+        List {
+            Section {
+                if let list = models.models[role] {
+                    ForEach(list) { model in
+                        let isChosen = model.id == chosen(role)?.id
+                        Button {
+                            pickedModels[role] = model.id
+                            Task {
+                                if await !person.choose(model: model.id, for: role) { pickedModels[role] = nil }
+                            }
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(model.name)
+                                        .font(.body)
+                                        .foregroundStyle(BeeStyle.ink)
+                                    Text("\(model.maker) · \(korean ? model.description.ko : model.description.en)")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if isChosen {
+                                    Image(systemName: "checkmark")
+                                        .font(.body.weight(.semibold))
+                                        .foregroundStyle(BeeStyle.ink)
+                                }
+                            }
+                            .contentShape(.rect)
+                        }
+                        .accessibilityAddTraits(isChosen ? .isSelected : [])
+                    }
+                } else if models.failed.contains(role) {
+                    HStack {
+                        Text(words.modelsFailed)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button(listWords.tryAgain) { Task { await models.load(role) } }
+                            .buttonStyle(.borderless)
+                    }
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                }
+            } footer: {
+                ProblemLine(problem: person.problem, words: listWords)
+            }
+        }
+        .navigationTitle(words.model(role))
+        .task { await models.load(role) }
     }
 
     private var voiceList: some View {
@@ -146,6 +217,10 @@ struct SettingsWords {
     var calls: String { korean ? "통화" : "Calls" }
     var voice: String { korean ? "목소리" : "Voice" }
     var language: String { korean ? "언어" : "Language" }
+    var callModel: String { korean ? "통화 모델" : "Call model" }
+    var workerModel: String { korean ? "일꾼 모델" : "Worker model" }
+    func model(_ role: ModelRole) -> String { role == .worker ? workerModel : callModel }
+    var modelsFailed: String { korean ? "모델 목록을 불러오지 못했어요." : "The models could not be loaded." }
     var openSettings: String { korean ? "iOS 설정 열기" : "Open iOS Settings" }
     var close: String { korean ? "닫기" : "Close" }
     var footer: String {

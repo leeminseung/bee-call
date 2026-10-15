@@ -25,6 +25,7 @@ final class ContractTests: XCTestCase {
             "offer-answer": { try Contract.decode(OfferAnswerBody.self, from: $0) },
             "settings": { try Contract.decode(SettingsAnswer.self, from: $0) },
             "voices": { try Contract.decode(VoiceList.self, from: $0) },
+            "models": { try Contract.decode(ModelList.self, from: $0) },
             "ring": { try Contract.decode(RingEvent.self, from: $0) },
             "token": { try Contract.decode(CallPass.self, from: $0) },
             "auth-apple": { try Contract.decode(AppleSignInAnswer.self, from: $0) },
@@ -34,7 +35,7 @@ final class ContractTests: XCTestCase {
         ]
         let files = try FileManager.default.contentsOfDirectory(at: Self.examples, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }
-        XCTAssertGreaterThanOrEqual(files.count, 16) // one per schema, and three call views
+        XCTAssertGreaterThanOrEqual(files.count, 18) // one per schema, three call views and two model lists
         for file in files {
             let name = file.deletingPathExtension().lastPathComponent
             let schema = types.keys.filter { name == $0 || name.hasPrefix($0 + "-") }.max { $0.count < $1.count }
@@ -139,12 +140,28 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(voices.voices.first?.isDefault, true)
         XCTAssertEqual(voices.voices.first?.character, VoiceCharacter(ko: "친근함", en: "Friendly"))
         let me = try Contract.decode(Me.self, from: Self.example("me"))
+        XCTAssertEqual(me.settings.callModel, "haiku")
+        XCTAssertEqual(me.settings.workerModel, "sonnet")
         XCTAssertEqual(me.settings.language, .ko)
         XCTAssertEqual(me.settings.voice, "ko-harin")
         XCTAssertTrue(me.settings.bee)
         XCTAssertFalse(me.beeConnecting)
         let ring = try Contract.decode(RingEvent.self, from: Self.example("ring"))
         XCTAssertEqual(ring.expiresAt, ZonedTime("2026-10-15T20:31:02+09:00"))
+    }
+
+    /// GET /models (section 5b): each role's choices, the default first, named and described by the server.
+    @MainActor func testTheModelListsRead() throws {
+        let call = try Contract.decode(ModelList.self, from: Self.example("models-call"))
+        XCTAssertEqual(call.role, .call)
+        XCTAssertEqual(call.models.map(\.id), ["haiku", "sonnet"])
+        XCTAssertEqual(call.models.first?.isDefault, true)
+        XCTAssertEqual(call.models.first?.name, "Claude Haiku 5.5")
+        XCTAssertEqual(call.models.first?.maker, "Anthropic")
+        XCTAssertEqual(call.models.first?.description, ModelDescription(ko: "가장 빠르게 대답해요", en: "Answers fastest"))
+        let worker = try Contract.decode(ModelList.self, from: Self.example("models-worker"))
+        XCTAssertEqual(worker.role, .worker)
+        XCTAssertEqual(worker.models.map(\.id), ["sonnet", "glm"])
     }
 
     // MARK: - A later server

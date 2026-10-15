@@ -1,10 +1,7 @@
 /* The Bee Call page in the iOS Settings app, in Korean. Each key is the English text in Root.plist. */
 
 "Calls" = "통화";
-"The evening time Bee Call suggests when it asks to call (24-hour, like 21:00). Haiku answers faster. Sonnet thinks more and answers a little slower. The call language and the voice are in Bee Call's own settings." = "Bee Call이 통화를 물을 때 제안하는 저녁 시간입니다(24시간제, 예: 21:00). Haiku는 더 빨리 답하고, Sonnet은 더 깊이 생각하는 만큼 조금 늦게 답합니다. 통화 언어와 목소리는 Bee Call 앱 안의 설정에 있습니다.";
-"Call model" = "통화 모델";
-"Haiku 5.5 (faster)" = "Haiku 5.5 (빠름)";
-"Sonnet 5.5 (smarter)" = "Sonnet 5.5 (더 똑똑함)";
+"The evening time Bee Call suggests when it asks to call (24-hour, like 21:00). The call language, the voice and the models are in Bee Call's own settings." = "Bee Call이 통화를 물을 때 제안하는 저녁 시간입니다(24시간제, 예: 21:00). 통화 언어와 목소리, 모델은 Bee Call 앱 안의 설정에 있습니다.";
 "Evening call time" = "저녁 통화 시간";
 "Call audio" = "통화 소리";
 "The written record of each call is always kept on the server. These switches are only about the sound. Turning “Save on the server” off stops recording new calls there. Recordings made before stay. On this iPhone, recordings appear in the Files app under On My iPhone, Bee Call." = "통화마다 글 기록은 언제나 서버에 남습니다. 위 두 스위치는 소리에만 해당합니다. ‘서버에 저장’을 끄면 그 뒤 통화의 소리는 서버에 녹음하지 않습니다. 그전에 남은 녹음은 그대로 있습니다. 이 iPhone에 저장한 녹음은 파일 앱의 ‘나의 iPhone > Bee Call’에 있습니다.";

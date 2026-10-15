@@ -61,6 +61,10 @@ final class ContractExamples: HTTPTransport {
             let voices = example("voices")
             let language = query.first { $0.name == "language" }?.value
             reply = object(voices)?["language"] as? String == language ? (200, voices) : (404, Data())
+        case ("GET", "/models"):
+            let role = query.first { $0.name == "role" }?.value ?? ""
+            let models = example("models-\(role)")
+            reply = models.isEmpty ? (404, Data()) : (200, models)
         case ("GET", "/me"):
             reply = (200, (try? JSONSerialization.data(withJSONObject: person())) ?? Data())
         case ("PUT", "/settings"):
@@ -197,7 +201,7 @@ final class ContractExamples: HTTPTransport {
                 settings["voice"] = NSNull()
             }
         }
-        if let voice = changes["voice"] { settings["voice"] = voice }
+        for key in ["voice", "call_model", "worker_model"] where changes[key] != nil { settings[key] = changes[key] }
         person["settings"] = settings
         me = person
         let answer = (try? JSONSerialization.data(withJSONObject: ["settings": settings])) ?? Data()
