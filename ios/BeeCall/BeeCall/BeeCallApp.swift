@@ -17,11 +17,15 @@ struct BeeCallApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if showsCallScreen {
-                    CallScreen(calls: calls)
+                #if DEBUG
+                if let design = DesignDemo.requested() {
+                    DesignDemoView(demo: design, calls: calls)
                 } else {
-                    SignInView(server: server)
+                    root
                 }
+                #else
+                root
+                #endif
             }
             // The switches live in the Settings app. SettingsSync sends them at launch and on every change; coming
             // back to the app sends them again too, and brings Bee in line with "Use Bee".
@@ -41,6 +45,14 @@ struct BeeCallApp: App {
                 if let demo = VoiceDemo.requested() { calls.playVoiceDemo(demo) }
             }
             #endif
+        }
+    }
+
+    @ViewBuilder private var root: some View {
+        if showsCallScreen {
+            CallScreen(calls: calls)
+        } else {
+            SignInView(server: server)
         }
     }
 

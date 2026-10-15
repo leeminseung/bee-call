@@ -204,7 +204,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         #if DEBUG
         // A pretend call or offer: no notifications, no server.
-        guard VoiceDemo.requested() == nil, !OfferDemo.requested() else { return true }
+        guard VoiceDemo.requested() == nil, !OfferDemo.requested(), DesignDemo.requested() == nil else { return true }
         #endif
         OfferCenter.shared.setUp() // before launch ends, so a button tapped while the app was closed is delivered
         // Every kind of launch, also one for a VoIP push or a notification button, which never reach the

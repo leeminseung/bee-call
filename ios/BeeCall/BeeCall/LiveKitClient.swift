@@ -195,5 +195,15 @@ extension LiveKitClient {
         captionList.show("Yes, now is fine. Dana says her knee is better,", line: "me/demo", isMine: true, sentAt: .now)
         voices.playDemo(demo)
     }
+
+    /// Debug builds only (DesignDemo.swift): these caption lines and synthetic voice levels; no room is joined.
+    func playDemo(lines: [(mine: Bool, text: String)], voice: VoiceDemo) {
+        captionList = CaptionList()
+        for (index, line) in lines.enumerated() {
+            captionList.show(line.text, line: "\(line.mine ? "me" : "ai")/demo\(index)", isMine: line.mine,
+                             sentAt: .now)
+        }
+        voices.playDemo(voice)
+    }
 }
 #endif

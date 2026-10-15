@@ -552,5 +552,14 @@ extension CallManager {
         status = "Connected"
         liveKit.playVoiceDemo(demo)
     }
+
+    /// Debug builds only (DesignDemo.swift): a pretend call with these lines, connected `connectedAgo` seconds
+    /// ago, for design D's call screen. Nothing goes to CallKit, no room is joined, nothing is recorded.
+    func playDesignDemo(lines: [(mine: Bool, text: String)], voice: VoiceDemo, connectedAgo: TimeInterval) {
+        isInCall = true
+        status = "Connected"
+        connectedAt = Date.now.addingTimeInterval(-connectedAgo)
+        liveKit.playDemo(lines: lines, voice: voice)
+    }
 }
 #endif
