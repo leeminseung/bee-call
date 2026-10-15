@@ -7,6 +7,9 @@ protocol CallRoom: AnyObject {
     /// room's name.
     func connect(tokenServerURL: String, answering roomName: String?, continuing earlierCall: String?) async throws
         -> String
+    /// Starts this call's recording on this iPhone if the person wants one ("Save on this iPhone"); what went
+    /// wrong comes back in words, nil when nothing did. Leaving the room stops it.
+    func recordOnPhoneIfWanted() -> String?
     func setMicrophone(enabled: Bool) async throws
     func disconnect() async
 }

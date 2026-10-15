@@ -317,6 +317,7 @@ final class CallManager: NSObject {
                 }
                 _ = try await room.connect(tokenServerURL: url, answering: roomName,
                                            continuing: roomName == nil ? earlierCall : nil)
+                _ = room.recordOnPhoneIfWanted()
                 try Task.checkCancellation() // the call ended while we were connecting
                 // Both ways, the call screen says "Connected" once the AI is there (agentPickedUp), which may
                 // already be so. Until then a call the person starts rings, and an answered call waits: a join

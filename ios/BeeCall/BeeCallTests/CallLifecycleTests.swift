@@ -30,6 +30,7 @@ final class CallLifecycleTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(500)) // past the pick-up wait: the call goes on
         XCTAssertTrue(callKit.ended.isEmpty)
         XCTAssertTrue(calls.isInCall)
+        XCTAssertEqual(room.recordingStarts, 1) // "Save on this iPhone", once the call has joined
     }
 
     @MainActor func testACallTheAINeverPicksUpFails() async throws {

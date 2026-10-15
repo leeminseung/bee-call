@@ -9,6 +9,13 @@ import LiveKit
 final class PhoneRecorder {
     private var recorder: AudioMixRecorder?
     private var sources: [(source: AudioMixRecorderSource, local: Bool)] = []
+    private let store: UserDefaults // where the Settings app keeps the switch
+    private let folder: URL? // where the recordings go; nil: Documents/Calls
+
+    init(store: UserDefaults = .standard, folder: URL? = nil) {
+        self.store = store
+        self.folder = folder
+    }
 
     // Speech at 16 kHz in AAC: about 1 to 2 MB for ten minutes.
     private static let settings: [String: Any] = [
@@ -17,14 +24,14 @@ final class PhoneRecorder {
         AVNumberOfChannelsKey: 1,
     ]
 
-    var isRecording: Bool { recorder != nil }
-
-    /// Starts recording if the switch is on. A failure leaves the call alone.
-    func startIfWanted(room: String) {
-        guard UserDefaults.standard.bool(forKey: "record_on_phone"), recorder == nil else { return }
+    /// Starts recording if the switch is on. A failure leaves the call alone; it comes back in words, nil when
+    /// there was none.
+    func startIfWanted() -> String? {
+        guard store.bool(forKey: "record_on_phone"), recorder == nil else { return nil }
         do {
-            let folder = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil,
-                                                     create: true).appendingPathComponent("Calls", isDirectory: true)
+            let folder = try folder ?? FileManager.default.url(for: .documentDirectory, in: .userDomainMask,
+                                                               appropriateFor: nil, create: true)
+                .appendingPathComponent("Calls", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let name = Self.fileName.string(from: Date())
             let recorder = try AudioMixRecorder(filePath: folder.appendingPathComponent("\(name).m4a"),
@@ -35,8 +42,10 @@ final class PhoneRecorder {
             AudioManager.shared.add(remoteAudioRenderer: theirs) // the AI's voice, as heard
             sources = [(mine, true), (theirs, false)]
             self.recorder = recorder
+            return nil
         } catch {
             print("phone recording did not start: \(error)")
+            return "Recording on this iPhone did not start: \(error.localizedDescription)"
         }
     }
 

@@ -11,6 +11,8 @@ final class FakeRoom: CallRoom {
     var joinError: Error?
     private(set) var joins: [String?] = [] // the room asked for: nil for a call the person starts
     private(set) var leaves = 0
+    private(set) var recordingStarts = 0 // asked to record on this iPhone
+    var recordingProblem: String? // what the recording on this iPhone answers
 
     func connect(tokenServerURL: String, answering roomName: String?, continuing earlierCall: String?) async throws
         -> String {
@@ -18,6 +20,11 @@ final class FakeRoom: CallRoom {
         if let joinError { throw joinError }
         if aiAnsweredBeforeJoin { onAgentAnswered?() }
         return roomName ?? "call-matt-20261015-183000"
+    }
+
+    func recordOnPhoneIfWanted() -> String? {
+        recordingStarts += 1
+        return recordingProblem
     }
 
     func setMicrophone(enabled: Bool) async throws {}

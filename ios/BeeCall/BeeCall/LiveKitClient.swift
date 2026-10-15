@@ -58,7 +58,6 @@ final class LiveKitClient: NSObject {
         try Task.checkCancellation() // the call ended while we got the room ready
         try await room.connect(url: access.url, token: access.token)
         try await room.localParticipant.setMicrophone(enabled: microphoneOn)
-        phoneRecorder.startIfWanted(room: access.room)
         voices.microphoneOn = microphoneOn
         voices.start()
         if room.remoteParticipants.values.contains(where: { $0.attributes[Self.stateAttribute] == "answered" }) {
@@ -72,6 +71,11 @@ final class LiveKitClient: NSObject {
     private func agentAnswered() {
         voices.aiHasAnswered = true
         onAgentAnswered?()
+    }
+
+    /// The recording on this iPhone, once the call has joined; it stops when the call leaves its room.
+    func recordOnPhoneIfWanted() -> String? {
+        phoneRecorder.startIfWanted()
     }
 
     func setMicrophone(enabled: Bool) async throws {
