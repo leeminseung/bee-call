@@ -55,6 +55,7 @@ struct Turn: Identifiable, Equatable {
 struct JobCard: Identifiable, Equatable {
     let id: String
     var title: String
+    var short: String? // a few words for the call screen's pill, such as "가격 비교"
     var startedAt: Date
     var finishedAt: Date?
     var step: String?

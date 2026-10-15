@@ -9,6 +9,7 @@ enum DesignDemo: String {
     case home // frame 1
     case call // frame 2: the call screen
     case conversation // frame 3: the conversation during the call
+    case live // frame 4: a pretend call, with the call screen and the conversation to go between
 
     static func requested(in store: UserDefaults = .standard) -> DesignDemo? {
         store.string(forKey: "designD").flatMap(DesignDemo.init(rawValue:))
@@ -50,7 +51,7 @@ final class DemoConversation: ConversationSource {
         if live {
             var call = ConversationCall(id: "2026-10-15/0123", title: "맥북 에어와 프로, 코딩용으로 뭐가 나을까",
                                         startedAt: today(1, 23), starter: .person, length: nil, entries: macbookTurns)
-            call.entries.append(.job(JobCard(id: "job-1", title: "맥북 에어와 프로 한국 가격 비교",
+            call.entries.append(.job(JobCard(id: "job-1", title: "맥북 에어와 프로 한국 가격 비교", short: "가격 비교",
                                              startedAt: now.addingTimeInterval(-70), finishedAt: nil,
                                              step: "애플 한국 가격표 읽는 중", result: nil, files: [])))
             sections = [.call(Self.rain(yesterday(12, 26))), .call(Self.memo(yesterday(18, 2))), .call(silent), .call(call)]
@@ -125,6 +126,9 @@ struct DesignDemoView: View {
             HomeView(source: DemoConversation(live: true), calls: calls, offers: offers, status: "", jump: $jump,
                      showCallScreen: {}, openSettings: {}, openCall: { _ in }, startCall: {})
                 .task { calls.playDesignDemo(lines: DesignDemo.callLines, voice: .person, connectedAgo: 221) }
+        case .live:
+            ConversationRoot(calls: calls, source: DemoConversation(live: true), offers: offers, status: "")
+                .task { calls.playDesignDemo(lines: DesignDemo.callLines, voice: .both, connectedAgo: 218) }
         }
     }
 }

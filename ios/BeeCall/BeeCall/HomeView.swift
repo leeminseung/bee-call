@@ -145,6 +145,7 @@ struct HomeView: View {
     let openSettings: () -> Void
     let openCall: (ConversationCall) -> Void
     let startCall: () -> Void
+    var zoom: Namespace.ID? // the call screen grows out of the call bar or the call button (ConversationRoot)
     @AppStorage("language") private var language = "en"
 
     private var words: ConversationWords { ConversationWords(korean: language == "ko") }
@@ -162,6 +163,7 @@ struct HomeView: View {
                 VStack(spacing: 8) {
                     if calls.isInCall {
                         CallBar(calls: calls, words: words, open: showCallScreen)
+                            .zoomSource("call", in: zoom)
                     } else {
                         topBar
                         ForEach(booked) { offer in
@@ -169,7 +171,7 @@ struct HomeView: View {
                         }
                     }
                 }
-                .padding(.bottom, 14)
+                .padding(.bottom, 28)
                 .background(alignment: .bottom) { // the conversation fades out under the top
                     LinearGradient(colors: [BeeStyle.background, BeeStyle.background, BeeStyle.background.opacity(0)],
                                    startPoint: .top, endPoint: .bottom)
@@ -239,6 +241,7 @@ struct HomeView: View {
                     .background(Circle().fill(BeeStyle.yellow.opacity(0.22)).frame(width: 98, height: 98))
             }
             .buttonStyle(.plain)
+            .zoomSource("call", in: zoom)
             .accessibilityLabel(words.call)
             Text(words.call)
                 .font(.subheadline.weight(.medium))
