@@ -471,6 +471,7 @@
       this.beeSlot = el("div", "bee-slot");
       this.continueSlot = el("div", "continue-slot"); // "Continue this call", in the iPhone app once the call is over
       const foot = el("footer", "session-foot");
+      foot.hidden = !DEBUG_ALLOWED; // it holds only the room's name and the debug toggle
       this.footNote = el("span", "foot-note");
       this.debugButton = el("button", "link-button");
       this.debugButton.type = "button";
@@ -609,7 +610,7 @@
           const start = parseDate(ev.started_at);
           setHeader(titleFor(this.id, start), true);
           this.addSystem("Call started", start ? hhmm(start) : "");
-          this.footNote.textContent = ev.room ? `Room ${ev.room}` : "";
+          this.footNote.textContent = this.debug && ev.room ? `Room ${ev.room}` : "";
           break;
         }
         case "why_calling":
@@ -689,11 +690,8 @@
       const row = el("li", "row error");
       const source = ev.source && ev.source !== "NoneType" ? `${humanize(ev.source)}: ` : "";
       const raw = `${source}${ev.error || "something went wrong"}`;
-      const text = el("span", "row-text", this.debug ? raw : plain);
-      if (!this.debug) {
-        text.title = "Tap to show what went wrong";
-        text.addEventListener("click", () => { text.textContent = text.textContent === plain ? raw : plain; });
-      } else {
+      const text = el("span", "row-text", this.debug ? raw : plain); // the raw error only in the debug view
+      if (this.debug) {
         text.title = "Tap to show the whole error";
         text.addEventListener("click", () => text.classList.toggle("open")); // long errors start clamped
       }

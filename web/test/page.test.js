@@ -361,3 +361,27 @@ test("without a prep note, the debug view does not claim the call started with B
   assert.match(card, /No prep note/);
   assert.doesNotMatch(card, /Bee context/);
 });
+
+test("the LiveKit room's name shows only in the debug view, and a normal record has no footer", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(fixture(AI_CALL));
+  assert.doesNotMatch(page.visibleText(), /call-matt-20261015-210002/);
+  assert.equal(page.one("session-foot").hidden, true);
+  const debug = debugView("#/s/2026-10-15/2100");
+  debug.feed(fixture(AI_CALL));
+  assert.match(debug.visibleText(debug.one("session-foot")), /Room call-matt-20261015-210002/);
+});
+
+test("an error reads in plain words, and the raw error is not one tap away outside the debug view", () => {
+  const raw = "bee_conversation: HTTP 502 from https://api.bee.computer";
+  const error = { t: 2, type: "error", source: "bee_context", error: raw };
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed([error]);
+  const row = page.one("error");
+  assert.equal(page.text(row.children[1]), "Some of your Bee data could not be read before the call.");
+  row.children[1].click();
+  assert.doesNotMatch(page.visibleText(), /502/);
+  const debug = debugView("#/s/2026-10-15/2100");
+  debug.feed([error]);
+  assert.match(debug.visibleText(debug.one("error")), /HTTP 502/);
+});
