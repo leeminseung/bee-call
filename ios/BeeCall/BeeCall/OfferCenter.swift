@@ -74,7 +74,6 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     enum Choice: String { case now, later, decline }
 
     private(set) var open: [Offer] = []
-    private(set) var notificationsOn = false
     private(set) var notice: String? // one line under the list when an answer did not go through
     private(set) var answering: Set<String> = [] // offers whose answer is on its way; their buttons are off
     @ObservationIgnored private let server: ServerClient
@@ -106,7 +105,6 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         center.setNotificationCategories(Self.categories)
         Task {
             let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
-            notificationsOn = granted
             if granted { UIApplication.shared.registerForRemoteNotifications() }
         }
     }

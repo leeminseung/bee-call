@@ -167,11 +167,6 @@ final class Server {
         }
     }
 
-    func signOut() async {
-        _ = await ServerClient().send("/auth/signout", method: "POST")
-        forget()
-    }
-
     private func forget() {
         keychain.delete()
         store.removeObject(forKey: "person")
