@@ -59,7 +59,7 @@ enum RingStream {
         let room: String
         let topic: String?
         let expiresAt: String
-        let expiresEpoch: Double? // seconds since 1970; the Mac's local time above has no time zone
+        let expiresEpoch: Double? // the same moment as seconds since 1970
     }
 
     private static func parse(_ json: String) -> Ring? {
@@ -67,17 +67,8 @@ enum RingStream {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         guard let line = try? decoder.decode(Line.self, from: Data(json.utf8)),
               let expiresAt = line.expiresEpoch.map(Date.init(timeIntervalSince1970:))
-                ?? macClock.date(from: line.expiresAt) else { return nil }
+                ?? ISO8601DateFormatter().date(from: line.expiresAt) else { return nil }
         let topic = line.topic?.trimmingCharacters(in: .whitespacesAndNewlines)
         return Ring(room: line.room, topic: topic?.isEmpty == false ? topic : nil, expiresAt: expiresAt)
     }
-
-    /// The Mac writes its local time with no zone. The phone is in the same zone, so read it as local time.
-    private static let macClock: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-        return formatter
-    }()
 }
