@@ -561,6 +561,17 @@ def test_a_second_bee_connect_stops_the_first_before_it_starts(tmp_path, fake_be
 
 # ---------- the daily budget ----------
 
+def test_claude_haiku_5_5_is_priced_with_its_cache(tmp_path):
+    """The coordinator on Anthropic's API (2026-10-15): Claude Haiku 5.5 at 0.10 / 0.50 USD per million input /
+    output tokens (prompts of 100K tokens or fewer); a cache read costs a tenth of an input token, a cache write a
+    quarter more. LiveKit counts cached tokens inside the input tokens."""
+    usage = {"models": [{"type": "llm_usage", "provider": "anthropic", "model": "claude-haiku-5-5",
+                         "input_tokens": 1_000_000, "input_cached_tokens": 800_000,
+                         "input_cache_creation_tokens": 100_000, "output_tokens": 100_000}]}
+    expected = (100_000 * 0.10 + 800_000 * 0.10 * 0.1 + 100_000 * 0.10 * 1.25 + 100_000 * 0.50) / 1_000_000
+    assert costs.call_cost(usage) == pytest.approx(expected)
+
+
 def test_spend_counts_calls_prep_jobs_searches_and_meta_thinks_of_today(tmp_path):
     from livekit.agents.metrics.usage import LLMModelUsage, STTModelUsage, TTSModelUsage
 
