@@ -575,6 +575,7 @@
 
     connect() {
       this.source = new EventSource(`${API}/${this.id}/events`);
+      this.sent = false; // this stream has not sent anything yet
       this.source.onmessage = (e) => this.onLine(e.data);
       this.source.addEventListener("ready", (e) => this.onReady(e.data));
       this.source.onerror = () => this.onError();
@@ -585,6 +586,8 @@
       try { ev = JSON.parse(data); } catch { return; }
       if (!ev || typeof ev !== "object" || Array.isArray(ev)) return;
       this.events.push(ev);
+      this.sent = true;
+      this.pause = 0;
       this.reconnecting = false;
       this.lastAt = performance.now();
       if (!this.ready) {
@@ -604,6 +607,8 @@
       try { info = JSON.parse(data) || {}; } catch { /* keep defaults */ }
       const idle = Number(info.idle_s) || 0;
       this.lastAt = performance.now() - idle * 1000;
+      this.sent = true; // the stream is open, also with nothing in its backlog
+      this.pause = 0;
       this.reconnecting = false;
       if (!this.ready) {
         this.ready = true;
@@ -640,8 +645,18 @@
           break;
         }
         if (!answer.problem) {
-          if (answer.data.some((s) => s.id === this.id)) this.reopen();
-          else this.stopWith("This call could not be loaded.");
+          if (!answer.data.some((s) => s.id === this.id)) {
+            this.stopWith("This call could not be loaded.");
+            break;
+          }
+          // A stream refused before it sent anything (a 500 before it starts) would otherwise be reopened at
+          // network speed while the list still answers: then it waits, 2 s, then up to 30 s.
+          if (!this.sent) {
+            this.pause = Math.min((this.pause || 1000) * 2, 30000);
+            await new Promise((resolve) => { this.retry = setTimeout(resolve, this.pause); });
+            if (this.closed) break;
+          }
+          this.reopen();
           break;
         }
         await new Promise((resolve) => { this.retry = setTimeout(resolve, wait); });

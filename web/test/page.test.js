@@ -552,6 +552,23 @@ test("a stream the server refuses while it restarts reopens, and the call is reb
   assert.equal(page.all("speech").filter((s) => /Is now still good/.test(page.text(s))).length, 1, "nothing twice");
 });
 
+test("a stream refused again and again while the call is listed is tried again after a pause, not at once", async () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100", fetch: listed("2026-10-15/2100") });
+  page.feed(fixture(AI_CALL).slice(0, 12));
+  page.stream.refuse(); // the first refusal after lines came: reopened at once
+  await page.settle();
+  assert.equal(page.streams.length, 2);
+  page.stream.refuse(); // refused before it sent anything, such as a 500 before the stream starts
+  await page.settle();
+  assert.equal(page.streams.length, 2, "not at network speed");
+  page.tick();
+  await page.settle();
+  assert.equal(page.streams.length, 3, "after the pause");
+  page.stream.refuse();
+  await page.settle();
+  assert.equal(page.streams.length, 3);
+});
+
 test("a dropped connection is left to the browser, which resumes by itself", () => {
   const page = loadPage({ hash: "#/s/2026-10-15/2100" });
   page.feed(fixture(AI_CALL).slice(0, 12));
