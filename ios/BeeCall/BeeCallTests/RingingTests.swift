@@ -72,7 +72,11 @@ final class RingingTests: XCTestCase {
         await waitUntil("the call is over") { !calls.isInCall }
         var completions = 0
         calls.reportPushedCall(ring()) { completions += 1 }
-        await waitUntil("the late push's call is ended") { callKit.ended.count == 1 }
+        // Waits for the late call itself: when CallKit's answer to the first report comes after the decline, the
+        // app also reports that first call ended, so "one call ended" can be the wrong one.
+        await waitUntil("the late push's call is ended") {
+            callKit.incoming.count == 2 && callKit.ended[callKit.incoming[1].call] != nil
+        }
         XCTAssertEqual(callKit.incoming.count, 2)
         XCTAssertEqual(callKit.ended[callKit.incoming[1].call], .unanswered)
         XCTAssertEqual(completions, 1)
