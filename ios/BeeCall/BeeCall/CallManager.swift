@@ -17,6 +17,8 @@ final class CallManager: NSObject {
     private(set) var isInCall = false
     private(set) var isRinging = false // the AI's call, until it is answered or ends
     private(set) var isEnding = false
+    /// "Save on this iPhone" is on but the call's recording did not start: shown until the next call joins.
+    private(set) var phoneRecordingProblem: String?
     let liveKit: LiveKitClient // the call screen shows its captions and voice levels
 
     /// The call's room: `liveKit` in the app, a stand-in in tests.
@@ -306,6 +308,7 @@ final class CallManager: NSObject {
     private func join(_ id: UUID, answering roomName: String?) {
         let url = tokenServerURL
         pickedUp = false
+        phoneRecordingProblem = nil
         room.onAgentAnswered = { [weak self] in self?.agentPickedUp(id) }
         connecting = Task {
             do {
@@ -319,7 +322,7 @@ final class CallManager: NSObject {
                                            continuing: roomName == nil ? earlierCall : nil)
                 try Task.checkCancellation() // the call ended while we were connecting
                 // Only now: a recording started after a hang-up ran on into the next call's file (review finding 15).
-                _ = room.recordOnPhoneIfWanted()
+                phoneRecordingProblem = room.recordOnPhoneIfWanted()
                 // Both ways, the call screen says "Connected" once the AI is there (agentPickedUp), which may
                 // already be so. Until then a call the person starts rings, and an answered call waits: a join
                 // that lands after the AI gave up opens an empty room, which would sit "Connected" in silence

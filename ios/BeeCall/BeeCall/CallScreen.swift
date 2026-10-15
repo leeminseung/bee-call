@@ -28,6 +28,12 @@ struct CallScreen: View {
                         .foregroundStyle(.red)
                         .multilineTextAlignment(.center)
                 }
+                if let problem = calls.phoneRecordingProblem { // "Save on this iPhone" is on, but nothing is saved
+                    Text(problem)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                }
                 if !calls.isInCall && !calls.ringStatus.isEmpty {
                     Text(PushTokens.shared.voipRegistered ? "\(calls.ringStatus), also while the app is closed"
                                                          : calls.ringStatus)

@@ -58,6 +58,25 @@ final class CallLifecycleTests: XCTestCase {
         XCTAssertEqual(calls.status, "Call ended")
     }
 
+    /// Review finding 15: with "Save on this iPhone" on, a recording that could not start left no file and no
+    /// word. The call screen now says so, until the next call.
+    @MainActor func testARecordingThatCannotStartIsShownUntilTheNextCall() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room)
+        room.recordingProblem = "Recording on this iPhone did not start: there isn't enough space."
+        let id = try await start(calls, callKit)
+        await waitUntil("the room is joined") { calls.status == "Ringing…" }
+        XCTAssertEqual(calls.phoneRecordingProblem, "Recording on this iPhone did not start: there isn't enough space.")
+        room.aiAnswers()
+        calls.perform(CXEndCallAction(call: id))
+        await waitUntil("the call has ended") { !calls.isInCall }
+        XCTAssertNotNil(calls.phoneRecordingProblem) // still there after the call: the file is missing
+
+        room.recordingProblem = nil
+        _ = try await start(calls, callKit)
+        await waitUntil("the next room is joined") { room.joins.count == 2 && calls.status == "Ringing…" }
+        XCTAssertNil(calls.phoneRecordingProblem)
+    }
+
     // MARK: - The AI's call, answered
 
     /// The AI's call rings, and the person answers it on CallKit's screen.

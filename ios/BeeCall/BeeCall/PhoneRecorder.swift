@@ -44,7 +44,6 @@ final class PhoneRecorder {
             self.recorder = recorder
             return nil
         } catch {
-            print("phone recording did not start: \(error)")
             return "Recording on this iPhone did not start: \(error.localizedDescription)"
         }
     }
