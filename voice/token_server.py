@@ -39,9 +39,12 @@ POST /voip  {"token": hex, "environment": "development"|"production"}
 POST /push  {"token": hex, "environment": ...}
                                          the app's token for plain notifications (the offers that ask first),
                                          kept the same way
+GET  /calls?limit=20&before=CURSOR       the call list, newest first (voice/call_view.py; contract section 1)
+GET  /calls/<call_id>                    one call as its thread (contract section 2); 404 for a call with no record
+GET  /calls/<call_id>/files/<path>       one of its files, by the records server's rule (voice/call_folders.py)
 GET  /offers                             offers still waiting for an answer or a call
-     /offers carries its body's version as ETag; with If-None-Match the same version answers 304 and no body
-     (contract section 0)
+     /calls, /calls/<call_id> and /offers carry their body's version as ETag; with If-None-Match the same
+     version answers 304 and no body (contract section 0)
 POST /offers/<id>  {"choice": "now"|"later"|"decline"}
                                          the user's answer; voice/outbound.py places the call. "decline" also
                                          calls off a booked call until its room is being made. 404 unknown
@@ -75,6 +78,7 @@ from beelink.clock import parse_time
 from beelink.planner import OUTBOUND_LOG
 from meta.session import add_event
 from voice import apple_signin, call_view, voip_push
+from voice.call_folders import CALL_ID, NotServed, find_call, resolve_inside, served_headers
 from voice.web_headers import plain_server_name
 from voice.continuation import session_dir
 from voice.costs import day_budget
@@ -102,6 +106,7 @@ NONCES = web.AppKey("nonces", apple_signin.Nonces)
 VERIFY = web.AppKey("verify", object)  # apple_signin.verify, or a stand-in in tests
 BEE_LOGINS = web.AppKey("bee_logins", dict)  # person -> the task waiting for their Bee approval
 BEE_TURNS = web.AppKey("bee_turns", dict)  # person -> the lock their Bee connect and disconnect take turns on
+CALLS = web.AppKey("calls", dict)  # person -> call_view.Calls: what their call records say, kept by file stamps
 
 
 def env(name: str) -> str:
@@ -400,6 +405,59 @@ async def answer_offer(request: web.Request) -> web.Response:
                              dumps=lambda data: json.dumps(data, ensure_ascii=False))
 
 
+# ---------- the call list and the call view (contract sections 1 and 2) ----------
+
+def call_records(request: web.Request) -> call_view.Calls:
+    """What this person's call records say, kept between requests until a file changes."""
+    found = request.app[CALLS]
+    if person(request) not in found:
+        found[person(request)] = call_view.Calls(workspace(request))
+    return found[person(request)]
+
+
+async def list_calls(request: web.Request) -> web.Response:
+    """GET /calls?limit=20&before=<cursor>: every call, newest first, a page at a time."""
+    settings = request.app[PEOPLE].settings(person(request))
+    try:
+        limit = int(request.query.get("limit", call_view.DEFAULT_LIMIT))
+    except ValueError:
+        raise web.HTTPBadRequest(text=f"limit must be a whole number from 1 to {call_view.MAX_LIMIT}\n") from None
+    try:
+        body = call_view.call_list(workspace(request), zone=settings.zone(), language=settings.language,
+                                   now=someone(request).now(), limit=limit, before=request.query.get("before"),
+                                   cache=call_records(request))
+    except call_view.BadRequest as exc:
+        raise web.HTTPBadRequest(text=f"{exc}\n") from None
+    return versioned(request, body)
+
+
+async def show_call(request: web.Request) -> web.Response:
+    """GET /calls/<call_id>: one call as its thread; 404 for any call this person has no record of."""
+    call_id = request.match_info["call_id"]
+    settings = request.app[PEOPLE].settings(person(request))
+    body = call_view.call_view(workspace(request), call_id, zone=settings.zone(), language=settings.language,
+                               now=someone(request).now(), cache=call_records(request)) \
+        if CALL_ID.fullmatch(call_id) else None
+    if body is None:
+        raise web.HTTPNotFound(text="no such call\n")
+    return versioned(request, body)
+
+
+async def call_file(request: web.Request) -> web.FileResponse:
+    """GET /calls/<call_id>/files/<path>: a call's file, never a private part (403) or a path out of its folder."""
+    call_id = request.match_info["call_id"]
+    folder = find_call(workspace(request), call_id) if CALL_ID.fullmatch(call_id) else None
+    if folder is None:
+        raise web.HTTPNotFound(text="no such call\n")
+    try:
+        target = resolve_inside(folder, request.match_info["path"])
+    except NotServed as exc:
+        raise web.HTTPForbidden(text=f"{exc}\n") from None
+    except FileNotFoundError:
+        raise web.HTTPNotFound() from None
+    return web.FileResponse(target, headers=served_headers(target))
+
+
 # ---------- Bee ----------
 
 def wait_for_bee_approval(app: web.Application, who: str, seconds: float) -> None:
@@ -511,7 +569,7 @@ def make_app(url: str, key: str, secret: str, people: People, room_exists=liveki
     app.on_response_prepare.append(plain_server_name)
     app[URL], app[KEY], app[SECRET], app[ROOM_EXISTS] = url, key, secret, room_exists
     app[PEOPLE], app[NONCES], app[VERIFY], app[BEE_LOGINS] = people, apple_signin.Nonces(), verify, {}
-    app[BEE_TURNS] = {}
+    app[BEE_TURNS], app[CALLS] = {}, {}
     app.on_startup.append(resume_bee_logins)
     app.on_shutdown.append(stop_bee_logins)
     app.router.add_get("/auth/nonce", new_nonce)
@@ -522,6 +580,9 @@ def make_app(url: str, key: str, secret: str, people: People, room_exists=liveki
     app.router.add_get("/token", token)
     app.router.add_get("/ring", ring)
     app.router.add_post("/calls/decline", decline_call)
+    app.router.add_get("/calls", list_calls)
+    app.router.add_get("/calls/{call_id}", show_call)
+    app.router.add_get("/calls/{call_id}/files/{path:.+}", call_file)
     app.router.add_post("/voip", voip_token)
     app.router.add_post("/push", alert_token)
     app.router.add_get("/offers", list_offers)

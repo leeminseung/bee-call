@@ -16,6 +16,7 @@ from voice import token_server
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sessions"
 EXAMPLES = Path(__file__).parent.parent / "contract" / "examples"
+MAIN = "call-minseung-20261015-012301"
 
 
 @pytest.fixture
@@ -50,6 +51,68 @@ def get(me, *paths, headers=None):
 
 def write_example(name: str, body: dict) -> None:
     (EXAMPLES / f"{name}.json").write_text(json.dumps(body, ensure_ascii=False, indent=2) + "\n")
+
+
+# ---------- calls ----------
+
+def test_the_call_list_and_a_call_carry_their_version_as_etag_and_answer_304_when_unchanged(minseung):
+    (listed, headers, body), (view, view_headers, view_body) = get(minseung, "/calls?limit=6", f"/calls/{MAIN}")
+    assert (listed, view) == (200, 200)
+    calls, call = json.loads(body), json.loads(view_body)
+    check_body("calls", calls)
+    check_body("call-view", call)
+    assert headers["ETag"] == f'"{calls["version"]}"' and view_headers["ETag"] == f'"{call["version"]}"'
+    assert headers["Cache-Control"] == "no-store"
+    assert [c["call_id"] for c in calls["calls"]][:2] == ["call-minseung-20261015-142209", MAIN]
+    (again, again_headers, again_body), (weak, _, _), (other, _, _) = run(minseung.people, minseung.headers, [
+        ("GET", "/calls?limit=6", {"If-None-Match": f'"{calls["version"]}"'}, None),
+        ("GET", f"/calls/{MAIN}", {"If-None-Match": f'"0000000000000000", W/"{call["version"]}"'}, None),
+        ("GET", f"/calls/{MAIN}", {"If-None-Match": '"0000000000000000"'}, None)])
+    assert (again, again_body, again_headers["ETag"]) == (304, b"", f'"{calls["version"]}"')
+    assert (weak, other) == (304, 200)
+
+
+def test_the_list_pages_and_refuses_a_bad_limit_or_cursor(minseung):
+    (_, _, first), = get(minseung, "/calls?limit=6")
+    before = json.loads(first)["before"]
+    (status, _, body), *bad = get(minseung, f"/calls?limit=6&before={before}", "/calls?limit=0", "/calls?limit=51",
+                                  "/calls?limit=ten", "/calls?before=nonsense")
+    page = json.loads(body)
+    check_body("calls", page)
+    assert status == 200 and [c["call_id"] for c in page["calls"]] == ["call-20261011-193004", "fake-20261010-210512"]
+    assert page["more"] is False and [s for s, _, _ in bad] == [400] * 4
+
+
+def test_a_call_that_is_not_this_person_s_has_no_record_or_is_malformed_is_404(minseung):
+    other = signed_in(minseung.workspace.parent.parent.parent, "jiwoo")
+    paths = [f"/calls/{MAIN}", "/calls/call-minseung-20261014-083100", "/calls/nothing-here", "/calls/..%2Fx",
+             f"/calls/{MAIN}/files/jobs/01/report.md"]
+    assert [s for s, _, _ in run(other.people, other.headers, [("GET", p, None, None) for p in paths])] == [404] * 5
+    (listed, _, body), = run(other.people, other.headers, [("GET", "/calls", None, None)])
+    assert (listed, json.loads(body)["calls"]) == (200, [])
+    assert [s for s, _, _ in get(minseung, "/calls/call-minseung-20261014-083100", "/calls/decline")] == [404, 404]
+
+
+def test_a_call_s_files_are_served_by_the_record_server_s_rule(minseung):
+    """Contract 2.6: text as plain text, charts as PNG and SVG (sandboxed), never a private part or a path out of the
+    call's folder (403), 404 for anything else not there."""
+    folder = minseung.workspace / "2026-10-15" / "0123"
+    for private in ("audio", "inputs"):
+        (folder / private).mkdir()
+        (folder / private / "secret.json").write_text("{}")
+    (folder / "model-log.jsonl").write_text("{}\n")
+    base = f"/calls/{MAIN}/files"
+    found = get(minseung, f"{base}/jobs/01/report.md", f"{base}/jobs/01/comparison.csv", f"{base}/jobs/01/price-chart.png",
+                f"{base}/jobs/01/price-chart.svg", f"{base}/audio/secret.json", f"{base}/INPUTS/secret.json",
+                f"{base}/model-log.jsonl", f"{base}/jobs/../audio/secret.json", f"{base}/jobs/01/nothing.md")
+    statuses = [s for s, _, _ in found]
+    assert statuses == [200, 200, 200, 200, 403, 403, 403, 403, 404]
+    types = [h.get("Content-Type", "") for _, h, _ in found[:4]]
+    assert types[0].startswith("text/plain") and "charset=utf-8" in types[0] and types[1].startswith("text/plain")
+    assert types[2] == "image/png" and types[3].startswith("image/svg+xml")
+    assert all(h["Content-Security-Policy"] == "sandbox" and h["X-Content-Type-Options"] == "nosniff"
+               for _, h, _ in found[:4])
+    assert found[0][2].startswith("# 코딩용".encode())
 
 
 # ---------- offers ----------

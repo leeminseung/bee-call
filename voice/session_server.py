@@ -56,12 +56,8 @@ POLL_SECONDS = 0.2
 KEEPALIVE_SECONDS = 15.0
 LIVE_SECONDS = 120.0  # no new event for this long: the list stops calling the session live
 PREVIEW_CHARS = 160
-PLAIN_TEXT = {".md", ".txt", ".log", ".csv", ".jsonl"}  # shown as text instead of downloaded
 # frame-ancestors: no other site may show the records page in a frame (black-box probe 4, 2026-10-15).
 PAGE_CSP = "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
-# Job files are made from outside content; a sandboxed response cannot run script on this origin.
-FILE_HEADERS = {"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff",
-                "Content-Security-Policy": "sandbox"}
 # Host names a request may use. Anything else is refused, so a web page cannot point its own
 # domain at this Mac (DNS rebinding) and read calls from a browser on the same network.
 LOCAL_SUFFIXES = (".local", ".localhost", ".lan", ".home.arpa", ".internal")
@@ -269,10 +265,7 @@ def resolve_inside(folder: Path, rel: str) -> Path:
 
 async def session_file(request: web.Request) -> web.FileResponse:
     target = resolve_inside(session_folder(request), request.match_info["path"])
-    headers = dict(FILE_HEADERS)
-    if target.suffix.lower() in PLAIN_TEXT:
-        headers["Content-Type"] = "text/plain; charset=utf-8"
-    return web.FileResponse(target, headers=headers)
+    return web.FileResponse(target, headers={"Cache-Control": "no-cache", **call_folders.served_headers(target)})
 
 
 # ---------- app ----------

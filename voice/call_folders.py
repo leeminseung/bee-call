@@ -85,6 +85,20 @@ def find_call(workspace: Path, call_id: str) -> Path | None:
     return next((folder for found, folder in call_ids(workspace) if found == call_id), None)
 
 
+# A served call file shows as text when it is text, and nothing served can run script on the server's origin: job files
+# are made from outside content (a sandboxed response, no type sniffing).
+PLAIN_TEXT = (".md", ".txt", ".log", ".csv", ".tsv", ".jsonl")
+SERVED_HEADERS = {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"}
+
+
+def served_headers(target: Path) -> dict[str, str]:
+    """The headers a call file is served with, by both web servers."""
+    headers = dict(SERVED_HEADERS)
+    if target.suffix.lower() in PLAIN_TEXT:
+        headers["Content-Type"] = "text/plain; charset=utf-8"
+    return headers
+
+
 class NotServed(Exception):
     """A path no web server serves: a call's private part, or one that leaves its folder (403)."""
 
