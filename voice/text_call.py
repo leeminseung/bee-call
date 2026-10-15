@@ -154,8 +154,12 @@ async def text_call(people: People, person: str, lines: list[str], *, answer: st
         job.session = session
         return session
 
-    agent.make_session, agent.ring_back = make_session, no_ringing
-    await agent.run_call(job, people)
+    voice_server = agent.make_session, agent.ring_back
+    agent.make_session, agent.ring_back = make_session, no_ringing  # for this call only
+    try:
+        await agent.run_call(job, people)
+    finally:
+        agent.make_session, agent.ring_back = voice_server
     session = job.session
     if session is not None and not closed.is_set():
         try:  # the person speaks after the AI's first words, as they would after hearing them

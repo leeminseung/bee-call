@@ -77,3 +77,14 @@ def test_an_ai_call_placed_in_a_room_is_answered_in_text(tmp_path, monkeypatch):
         assert "no AI call" in str(exc)
     else:
         raise AssertionError("a room no AI call was placed in is not answered")
+
+
+def test_a_call_in_text_leaves_the_voice_server_as_it_found_it(tmp_path, monkeypatch):
+    """The text call puts its own session and ringing in place for its call only: a voice server in the same process
+    afterwards runs its own."""
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(agent, "COORDINATOR_LLM", "echo")
+    monkeypatch.setattr(agent, "WORKER", "fake")
+    before = (agent.make_session, agent.ring_back)
+    asyncio.run(text_call.text_call(me.people, "matt", ["Hello"], say=lambda line: None))
+    assert (agent.make_session, agent.ring_back) == before
