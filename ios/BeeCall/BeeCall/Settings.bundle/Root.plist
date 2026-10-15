@@ -12,7 +12,7 @@
 			<key>Title</key>
 			<string>Calls</string>
 			<key>FooterText</key>
-			<string>The language you and the AI speak, and the evening time Bee Call suggests when it asks to call (24-hour, like 21:00).</string>
+			<string>The language you and the AI speak, and the evening time Bee Call suggests when it asks to call (24-hour, like 21:00). Haiku answers faster. Sonnet thinks more and answers a little slower.</string>
 		</dict>
 		<dict>
 			<key>Type</key>
@@ -32,6 +32,26 @@
 			<array>
 				<string>en</string>
 				<string>ko</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>Call model</string>
+			<key>Key</key>
+			<string>call_model</string>
+			<key>DefaultValue</key>
+			<string>haiku</string>
+			<key>Titles</key>
+			<array>
+				<string>Haiku 5.5 (faster)</string>
+				<string>Sonnet 5.5 (smarter)</string>
+			</array>
+			<key>Values</key>
+			<array>
+				<string>haiku</string>
+				<string>sonnet</string>
 			</array>
 		</dict>
 		<dict>

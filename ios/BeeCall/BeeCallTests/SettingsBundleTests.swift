@@ -32,6 +32,29 @@ final class SettingsBundleTests: XCTestCase {
         XCTAssertEqual(page as NSDictionary, AppSettings.defaults as NSDictionary)
     }
 
+    /// The call model, next to the language: Haiku (the default, faster) or Sonnet (smarter, a little slower).
+    @MainActor func testThePageOffersTheCallModelNextToTheLanguage() throws {
+        let items = try specifiers()
+        let keys = items.compactMap { $0["Key"] as? String }
+        XCTAssertEqual(keys.firstIndex(of: "call_model"), keys.firstIndex(of: "language").map { $0 + 1 })
+        let model = try XCTUnwrap(items.first { $0["Key"] as? String == "call_model" })
+        XCTAssertEqual(model["Type"] as? String, "PSMultiValueSpecifier")
+        XCTAssertEqual(model["Title"] as? String, "Call model")
+        XCTAssertEqual(model["Titles"] as? [String], ["Haiku 5.5 (faster)", "Sonnet 5.5 (smarter)"])
+        XCTAssertEqual(model["Values"] as? [String], ["haiku", "sonnet"])
+        XCTAssertEqual(model["DefaultValue"] as? String, "haiku")
+        let footer = try XCTUnwrap(items.first { $0["Title"] as? String == "Calls" }?["FooterText"] as? String)
+        XCTAssertTrue(footer.contains("Haiku answers faster. Sonnet thinks more and answers a little slower."), footer)
+    }
+
+    @MainActor func testTheCallModelReadsInKorean() throws {
+        let korean = try XCTUnwrap(NSDictionary(contentsOf: try bundle().appendingPathComponent("ko.lproj/Root.strings"))
+                                   as? [String: String])
+        XCTAssertEqual(korean["Call model"], "통화 모델")
+        XCTAssertEqual(korean["Haiku 5.5 (faster)"], "Haiku 5.5 (빠름)")
+        XCTAssertEqual(korean["Sonnet 5.5 (smarter)"], "Sonnet 5.5 (더 똑똑함)")
+    }
+
     /// The user's decision of 2026-10-15: turning "Save on the server" off keeps the recordings made before.
     @MainActor func testTheAudioFooterSaysRecordingsMadeBeforeStay() throws {
         let footer = try XCTUnwrap(specifiers().first { $0["Title"] as? String == "Call audio" }?["FooterText"] as? String)
