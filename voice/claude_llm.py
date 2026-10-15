@@ -38,9 +38,10 @@ History rules (one adapter instance per call):
   reply off, or never heard it, a note says so; the reply is never changed.
   A reply cut off while Claude was still streaming was never recorded, so the
   words the caller heard go in as a plain assistant turn, with a note. What the
-  caller heard is checked against a reply's words without its audio tags
-  (voice/audio_tags.py), which LiveKit's item never holds: a reply of only a
-  tag, such as "[laughs]", has no item and is not one the caller missed.
+  caller heard is checked against a reply as it is heard (voice/speech_filter.py
+  heard: without stage directions and audio tags, which LiveKit's item never
+  holds): a reply of only "[laughs]" or "(웃음)" has no item and is not one the
+  caller missed.
 - Every tool_use gets a tool_result in the next user message. A tool that was
   cancelled or is still running gets a stand-in result; its real result, if it
   comes, arrives later as a note.
@@ -72,7 +73,7 @@ from anthropic import AsyncAnthropicBedrock
 from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 
-from voice.audio_tags import strip_tags
+from voice.speech_filter import heard
 
 try:  # private in LiveKit Agents (pinned to 1.8.6): the speech a reply is generated for
     from livekit.agents.voice.agent_activity import _SpeechHandleContextVar
@@ -188,8 +189,9 @@ class Reply:
 
     @property
     def said(self) -> str:
-        """The reply's words as the caller hears them and LiveKit's item for it holds them: without audio tags."""
-        return strip_tags(self.text)
+        """The reply's words as the caller hears them and LiveKit's item for it holds them: through the call AI's
+        speech filter, without stage directions and audio tags."""
+        return heard(self.text)
 
 
 class ClaudeBedrockLLM(llm.LLM):

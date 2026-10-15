@@ -191,3 +191,41 @@ def test_a_reply_heard_in_full_but_its_tag_is_not_reported_cut_off():
     assert not any("cut you off" in json.dumps(m) for m in second)
     assert 'heard only this part of your reply: \\"That one was long.\\"' in json.dumps(fourth[-1])
     assert client.problems == []
+
+
+def test_a_reply_heard_as_the_speech_filter_leaves_it_gets_no_false_note():
+    """Review of the final fixes, finding 4: the captions and LiveKit's item hold a reply after the speech filter
+    too, which drops stage directions such as "[chuckles]" or "(웃음)", so a reply of only one got the "did not hear"
+    note, and one heard in full but marked interrupted the "cut off" one. A reply is now compared as it is heard."""
+    from tests.test_claude_llm import FakeSpeech, new_ctx, run_turn, say, spoken
+    from voice.claude_llm import ClaudeBedrockLLM
+    from voice.fake_claude import FakeAnthropic
+
+    async def unheard(reply: str) -> list:
+        client = FakeAnthropic([say(reply), say("So, what's next?")])
+        model = ClaudeBedrockLLM(client=client)
+        ctx = new_ctx()
+        ctx.add_message(role="user", content="And then the cat sent the email.")
+        speech = FakeSpeech()
+        await run_turn(model, ctx, speech=speech)
+        speech._done = True  # played to the end; nothing was left to caption
+        ctx.add_message(role="user", content="Anyway.")
+        await run_turn(model, ctx)
+        return client.calls[1]["messages"]
+
+    async def cut_off(reply: str, heard: str) -> list:
+        client = FakeAnthropic([say(reply), say("Here it is.")])
+        model = ClaudeBedrockLLM(client=client)
+        ctx = new_ctx()
+        ctx.add_message(role="user", content="Can you check the train times?")
+        chunks = await run_turn(model, ctx)
+        spoken(ctx, chunks, heard=heard, interrupted=True)
+        ctx.add_message(role="user", content="Thanks.")
+        await run_turn(model, ctx)
+        return client.calls[1]["messages"]
+
+    for reply in ("[chuckles]", "(웃음)"):
+        assert not any("did not hear" in json.dumps(m) for m in asyncio.run(unheard(reply))), reply
+    for reply in ("[chuckles] Okay, I'll look it up.", "(웃음) 네, 찾아볼게요."):
+        heard = reply.split(" ", 1)[1]
+        assert not any("cut you off" in json.dumps(m) for m in asyncio.run(cut_off(reply, heard))), reply
