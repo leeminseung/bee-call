@@ -647,3 +647,55 @@ def test_the_record_server_never_serves_the_model_log_or_the_claude_history(tmp_
     statuses = asyncio.run(main())
     assert statuses.pop("transcript.md") == 200 and set(statuses.values()) == {403}, statuses
 
+
+# ---------- where the time of each turn went (the user's request, 2026-10-15) ----------
+
+def test_each_user_turn_records_where_its_time_went(tmp_path):
+    """One turn_timing event per user turn, from LiveKit's per-message metrics: when the user's speech ended, the
+    transcription and end-of-turn delays, the model's first token, the voice's first audio, and the total."""
+    from types import SimpleNamespace
+    from livekit.agents import llm
+    from tests.helpers import seoul_now
+    from voice.recorder import CallRecorder
+
+    rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+    session = FakeSession()
+    agent.wire_events(session, rec)
+
+    def said(role, text, metrics):
+        session.emit("conversation_item_added", SimpleNamespace(item=llm.ChatMessage(role=role, content=[text],
+                                                                                    metrics=metrics)))
+
+    said("user", "어", {"started_speaking_at": 99.0, "stopped_speaking_at": 100.0, "transcription_delay": 0.2,
+                       "end_of_turn_delay": 0.8, "on_user_turn_completed_delay": 0.01})
+    said("user", "그러니까 내일 회의 말이야", {"stopped_speaking_at": 104.0, "transcription_delay": 0.3,
+                                      "end_of_turn_delay": 0.5})
+    said("assistant", "내일 회의요?", {"started_speaking_at": 105.6, "llm_node_ttft": 0.6, "llm_node_ttfs": 0.7,
+                                    "tts_node_ttfb": 0.25, "e2e_latency": 1.6})
+    said("user", "응", {})  # a turn LiveKit gave no metrics for
+    session.emit("close", SimpleNamespace(reason="user hung up"))
+    rec.close()
+    timings = [e for e in events_of(rec.dir) if e["type"] == "turn_timing"]
+    assert [t["user_stopped_at"] for t in timings] == [100.0, 104.0, None]
+    first, second, third = timings
+    assert first["reply"] is None and first["end_of_turn_delay"] == 0.8  # the next turn came before any reply
+    assert (second["transcription_delay"], second["end_of_turn_delay"], second["llm_ttft"], second["tts_ttfb"],
+            second["ai_started_at"], second["speech_end_to_first_audio"]) == (0.3, 0.5, 0.6, 0.25, 105.6, 1.6)
+    assert third["reply"] is None
+
+
+def test_turn_timing_never_breaks_a_call(tmp_path):
+    from types import SimpleNamespace
+    from tests.helpers import seoul_now
+    from voice.recorder import CallRecorder
+
+    rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+    session = FakeSession()
+    agent.wire_events(session, rec)
+    session.emit("conversation_item_added", SimpleNamespace(item=SimpleNamespace(
+        role="user", text_content="hi", interrupted=False, metrics={"stopped_speaking_at": "not a time"})))
+    session.emit("conversation_item_added", SimpleNamespace(item=SimpleNamespace(
+        role="assistant", text_content="Hi!", interrupted=False, metrics=object())))
+    rec.close()
+    assert [e["type"] for e in events_of(rec.dir)].count("turn_timing") == 1
+

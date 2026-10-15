@@ -142,9 +142,64 @@ def as_dict(obj):
     return str(obj)
 
 
+class TurnTiming:
+    """Where the time of each user turn went, as one turn_timing event in the call record: when the user's speech
+    ended, how long the transcript and the end-of-turn decision took, the model's first token, the voice's first
+    audio and the total from the end of speech to it. From LiveKit's metrics on each message (MetricsReport): a user
+    turn's own, and those of the reply that follows it; a turn the next user turn came before any reply to has
+    reply None. Never raises into the call."""
+
+    USER = {"user_started_at": "started_speaking_at", "user_stopped_at": "stopped_speaking_at",
+            "transcription_delay": "transcription_delay", "end_of_turn_delay": "end_of_turn_delay",
+            "on_user_turn_completed_delay": "on_user_turn_completed_delay"}
+    REPLY = {"llm_ttft": "llm_node_ttft", "llm_ttfs": "llm_node_ttfs", "tts_ttfb": "tts_node_ttfb",
+             "ai_started_at": "started_speaking_at", "speech_end_to_first_audio": "e2e_latency"}
+
+    def __init__(self, rec: CallRecorder) -> None:
+        self.rec = rec
+        self.waiting: list[dict] = []  # user turns not answered yet
+
+    def user(self, metrics) -> None:
+        self.waiting.append(metrics if isinstance(metrics, dict) else {})
+
+    def reply(self, metrics) -> None:
+        if not self.waiting:
+            return
+        *unanswered, answered = self.waiting
+        self.waiting = []
+        for user in unanswered:
+            self._write(user, None)
+        self._write(answered, metrics if isinstance(metrics, dict) else {})
+
+    def flush(self) -> None:
+        for user in self.waiting:
+            self._write(user, None)
+        self.waiting = []
+
+    def _write(self, user: dict, reply: dict | None) -> None:
+        try:
+            fields = {name: number_or_none(user.get(key)) for name, key in self.USER.items()}
+            if reply is None:
+                fields["reply"] = None
+            else:
+                fields |= {name: number_or_none(reply.get(key)) for name, key in self.REPLY.items()}
+                if fields["speech_end_to_first_audio"] is None and None not in (fields["ai_started_at"],
+                                                                                 fields["user_stopped_at"]):
+                    fields["speech_end_to_first_audio"] = round(fields["ai_started_at"] - fields["user_stopped_at"], 3)
+            self.rec.event("turn_timing", **fields)
+        except Exception:
+            log.exception("could not record a turn's timing")
+
+
+def number_or_none(value) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def wire_events(session: AgentSession, rec: CallRecorder) -> None:
     # LiveKit calls these handlers inside its reply pipeline; an exception here would
     # cut the pipeline (a missing reply), so every handler is wrapped.
+    timing = TurnTiming(rec)
+
     def on(event_name: str):
         def register(handler):
             def safe(ev) -> None:
@@ -179,6 +234,7 @@ def wire_events(session: AgentSession, rec: CallRecorder) -> None:
         metrics = as_dict(item.metrics) if getattr(item, "metrics", None) else None
         rec.event("message", role=role, text=text, interrupted=interrupted, metrics=metrics)
         rec.line("User" if role == "user" else "AI", text, interrupted)
+        (timing.user if role == "user" else timing.reply)(metrics)
 
     @on("function_tools_executed")
     def _(ev) -> None:
@@ -204,6 +260,7 @@ def wire_events(session: AgentSession, rec: CallRecorder) -> None:
 
     @on("close")
     def _(ev) -> None:
+        timing.flush()
         rec.event("session_closed", reason=str(getattr(ev, "reason", "")))
 
 
