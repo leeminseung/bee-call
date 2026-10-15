@@ -12,12 +12,12 @@ into the job folder under a free, safe name at once, and deletes it from Anthrop
 end of its call cuts the job off (then within FORGET_ON_CANCEL_S).
 
 Background jobs need not be quick (the user, 2026-10-15): every request may write up to the role's max_tokens with
-thinking at effort high, a job may make MAX_REQUESTS requests and JOB_WEB_SEARCHES web searches, and at either limit,
-whatever the turn's stop, Claude is asked for its answer in one more request without tools (a paused turn is cut
-where its server tools finished first; a turn that left a server tool waiting beside our tools is continued once,
-as only tool results may follow it, and then cut too). So a job makes at most MAX_REQUESTS + LATE_LIMIT_REQUESTS + 1
-requests. A request that fails midway (a dropped connection, an overloaded
-or failing server) is tried again twice. What each request used goes into usage.json at once (tokens, cache reads and
+thinking at effort high, and a job may make MAX_REQUESTS requests, JOB_WEB_SEARCHES web searches and JOB_WEB_FETCHES
+page reads and spend JOB_USD (a PDF read whole is capped only this way). At any of these limits, whatever the turn's
+stop, Claude is asked for its answer in one more request without tools (a paused turn is cut where its server tools
+finished first; a turn that left a server tool waiting beside our tools is continued once, as only tool results may
+follow it, and then cut too). So a job makes at most MAX_REQUESTS + LATE_LIMIT_REQUESTS + 1 requests. A request
+that fails midway (a dropped connection, an overloaded or failing server, a deadline passed) is tried again twice. What each request used goes into usage.json at once (tokens, cache reads and
 writes, server tool uses), so the day's budget counts a job that fails, or is cancelled when the call ends (then
 the request still running counts as an estimate), as well as one that finishes (voice/costs.py job_cost).
 """
@@ -39,7 +39,13 @@ log = logging.getLogger("bee-call.worker")
 MAX_REQUESTS = 80  # a job's requests before its answer, paused turns continued among them (the harness: 80 rounds)
 JOB_WEB_SEARCHES = 60  # a job's web searches before it is asked for its answer (0.60 USD)
 WEB_SEARCHES_PER_REQUEST = 20  # so one request can pass the job's limit by at most this many
-FETCHED_TOKENS = 30_000  # at most this much of one fetched page or PDF reaches the conversation (about 120 KB)
+JOB_WEB_FETCHES = 60  # a job's page reads, the same way
+WEB_FETCHES_PER_REQUEST = 20
+# A job's spending, as the day's budget counts it (voice/costs.py job_cost), before it is asked for its answer: the
+# cap that also holds a PDF read whole (max_content_tokens caps a page's text, not a PDF; Anthropic's web fetch docs).
+# The real-API probes of 2026-10-15 spent 0.34 to 0.52 USD a research job.
+JOB_USD = 1.50
+FETCHED_TOKENS = 30_000  # at most this much of one fetched page's text reaches the conversation (about 120 KB)
 # One request, its server tools included. A real one stayed open for about 50 minutes on a live connection
 # (2026-10-15), so each has a deadline, and a connection silent for REQUEST_IDLE_S is taken for dropped; either way
 # the request is tried again. The longest seen to finish took about 100 s.
@@ -55,8 +61,8 @@ SERVER_TOOLS: list[dict[str, Any]] = [
     # and so out of what goes back with the next request ("excluded"); one Claude read directly comes back whole.
     {"type": "web_search_20260318", "name": "web_search", "max_uses": WEB_SEARCHES_PER_REQUEST,
      "response_inclusion": "excluded"},
-    {"type": "web_fetch_20260318", "name": "web_fetch", "max_content_tokens": FETCHED_TOKENS,
-     "response_inclusion": "excluded"},
+    {"type": "web_fetch_20260318", "name": "web_fetch", "max_uses": WEB_FETCHES_PER_REQUEST,
+     "max_content_tokens": FETCHED_TOKENS, "response_inclusion": "excluded"},
     # The web tools above need code execution 20260120 or later beside them.
     {"type": "code_execution_20260521", "name": "code_execution"},
 ]
@@ -70,8 +76,8 @@ The coordinator hands you one job at a time and keeps talking with the user whil
 
 How to work:
 1. Call progress with a short line (under ten words) whenever you start a new step.
-2. Use web_search for anything current or factual, and web_fetch to read a page or a PDF in full. For facts that \
-change the answer, check at least two sources, and say so when they disagree.
+2. Use web_search for anything current or factual, and web_fetch to read a page in full; read a PDF only when \
+what you need is in it. For facts that change the answer, check at least two sources, and say so when they disagree.
 3. Use code execution for calculations and tables. To give the user a file you made there (a CSV table, for \
 example), copy it into $OUTPUT_DIR: it is saved into the job folder under its name.
 4. When you have the answer, call relay_to_user with one or two short sentences the coordinator can say \
@@ -168,8 +174,7 @@ class ClaudeWorker:
                     raise JobDeclined("Claude declined this job")
                 if last or final.stop_reason not in ("pause_turn", "tool_use"):
                     raise RuntimeError(f"the worker stopped before finishing ({final.stop_reason or 'no stop reason'})")
-                limit = "web searches" if usage["server_tools"].get("web_search", 0) >= JOB_WEB_SEARCHES else \
-                    "requests" if made >= MAX_REQUESTS else None
+                limit = limit_reached(usage, made)
                 if final.stop_reason == "pause_turn":  # a long server tool turn: sent back as it came
                     if limit:  # cut where its server tools finished, and the answer is asked for
                         usage["limit"] = limit
@@ -297,6 +302,20 @@ class ClaudeWorker:
                 await self.client().files.delete(file_id)
             except Exception:
                 log.warning("job %s: could not delete %s from the Files API", job.job_id, file_id, exc_info=True)
+
+
+def limit_reached(usage: dict[str, Any], made: int) -> str | None:
+    """Which of a job's limits it reached, in the words of the note that asks for its answer; None for none."""
+    from voice.costs import job_cost
+
+    tools = usage["server_tools"]
+    if tools.get("web_search", 0) >= JOB_WEB_SEARCHES:
+        return "web searches"
+    if tools.get("web_fetch", 0) >= JOB_WEB_FETCHES:
+        return "page reads"
+    if job_cost(usage) >= JOB_USD:
+        return "budget"
+    return "requests" if made >= MAX_REQUESTS else None
 
 
 def waiting(content: list[dict[str, Any]]) -> set[str]:

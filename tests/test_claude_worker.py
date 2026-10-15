@@ -207,6 +207,7 @@ def test_a_job_runs_on_claude_with_anthropic_s_server_tools_and_the_job_s_own_to
         "web_search_20260318", "web_fetch_20260318", "code_execution_20260521"]
     assert tools["web_search"]["max_uses"] == claude.WEB_SEARCHES_PER_REQUEST
     assert tools["web_fetch"]["max_content_tokens"] == claude.FETCHED_TOKENS
+    assert tools["web_fetch"]["max_uses"] == claude.WEB_FETCHES_PER_REQUEST
     assert list(tools)[3:] == ["progress", "relay_to_user", "save_file", "save_chart"]
     asked = opening["messages"][0]["content"][0]["text"]
     assert asked.startswith("Job 01 (it is now ") and "맥북 에어와 프로 가격 비교" in asked and "Korean" in asked
@@ -307,6 +308,22 @@ def test_at_its_search_limit_a_job_is_asked_for_its_answer_without_tools(tmp_pat
     assert final["tool_choice"] == {"type": "none"} and "tool_choice" not in client.messages.sent[0]
     note = final["messages"][-1]["content"]
     assert note[0]["type"] == "tool_result" and "web searches" in note[-1]["text"]
+
+
+@pytest.mark.parametrize("limit, value, used, what", [
+    ("JOB_WEB_FETCHES", 2, {"fetches": 2}, "page reads"),
+    ("JOB_USD", 0.5, {"tokens": (300_000, 0, 0, 0)}, "budget"),  # a large PDF read whole costs this way
+])
+def test_a_job_s_page_reads_and_spending_are_limits_too(tmp_path, monkeypatch, limit, value, used, what):
+    """Coordinator's review of 2026-10-15 (queued): web fetch had no cap, and max_content_tokens does not cap a PDF.
+    Page reads are capped per request and a job's page reads and spending are limits like its searches."""
+    monkeypatch.setattr(claude, limit, value)
+    client = api([reply([tool("toolu_1", "progress", text="Reading")], **used),
+                  reply([text("What I have.")], "end_turn")])
+    summary, _, _ = run(job_in(tmp_path, None), client)
+    final = client.messages.sent[-1]
+    assert summary == "What I have." and final["tool_choice"] == {"type": "none"}
+    assert what in final["messages"][-1]["content"][-1]["text"] and usage_of(job_in(tmp_path, None))["limit"] == what
 
 
 def test_at_a_limit_beside_a_server_tool_still_waiting_only_the_tool_results_go_back(tmp_path, monkeypatch):
