@@ -112,7 +112,8 @@ case("offers: a declined offer in the open list", "offers", "offers",
 case("offers: an asked offer with call_at", "offers", "offers",
      lambda b: b["offers"][1].__setitem__("call_at", "2026-10-15T20:30:00+09:00"))
 case("voices: two defaults", "voices", "voices", lambda b: b["voices"][1].__setitem__("default", True))
-case("voices: four voices", "voices", "voices", lambda b: b["voices"].pop())
+case("voices: none", "voices", "voices", lambda b: b["voices"].clear())
+case("voices: thirteen voices", "voices", "voices", lambda b: b["voices"].extend([dict(b["voices"][1], id=f"ko-x{i}") for i in range(8)]))
 case("voices: character in one language only", "voices", "voices", lambda b: b["voices"][0]["character"].pop("en"))
 case("me: unknown language", "me", "me", lambda b: b["settings"].__setitem__("language", "ja"))
 case("me: a provider voice id instead of a catalog id", "me", "me",

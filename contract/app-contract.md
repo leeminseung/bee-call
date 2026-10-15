@@ -309,8 +309,8 @@ choice, 409 closed or already answered, 401.
 
 The first run's second step and the settings sheet's voice list.
 
-Response 200, `schemas/voices.json`, example `examples/voices.json`: `language` and `voices`, five entries in the
-order to list them.
+Response 200, `schemas/voices.json`, example `examples/voices.json`: `language` and `voices`, 1 to 12 entries in
+the order to list them, the default first. The number differs by language.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -450,12 +450,18 @@ server held (DECISIONS 2026-10-15: the friend's calls stayed in English until th
 7. Accepted with limits: the title request runs beside the Bee retry, never delays closing the record, and has a hard
    5 s limit; on any failure the title falls back as in section 1.
 8. Accepted: an answered or expired question leaves the thread.
-9. Accepted: provider-independent catalog ids. Until the user's final picks (round 2 of the voice samples), the
-   catalog holds the first five of the user's round-1 picks per language, in this order. Korean: Anna Kim
-   (uyVNoMrnUku1dZyVEXwD), Jiyoung (AW5wrnG1jVizOYY7R1Oo), Han (8jHHF8rMqMlg8if2mOUe), Sian (5n5gqmaQi9Ewevrz7bOS,
-   the default), Yooni (n2fbxG88jqAoaVPUy3IG). English: Zara (jqcCZkN6Knx8BJ5TBdYR), Amelia
-   (ZF6FPAbjXT4488VcRRnw), Hope (uYXf8XasLslADfZ2MB4u), Jessica (cgSgspJ2msm6clMCkdW9, the default), Adam
-   (s3TPKV1kjDlVtZbl4Ksh). The final five replace them without any change to the contract.
+9. Accepted: provider-independent catalog ids. The user's final picks (2026-10-15, by ear over two rounds of
+   samples), in listing order, default first. Korean: `ko-sian` Sian (5n5gqmaQi9Ewevrz7bOS, default, 차분함 / Calm),
+   `ko-han` Han (8jHHF8rMqMlg8if2mOUe, 친근함 / Friendly), `ko-anna` Anna Kim (uyVNoMrnUku1dZyVEXwD, 다정함 / Tender),
+   `ko-yooni` Yooni (n2fbxG88jqAoaVPUy3IG, 또렷함 / Clear), `ko-seulki` Seulki (ksaI0TCD9BstzEzlxj4q, 안정감 / Steady),
+   `ko-kyle` Kyle (RU7aSi6lT4uQBXMLgDxK, 묵직함 / Deep), `ko-mrk` Mr. K (LKOcTG4J4tYTPR9DnLeM, 자연스러움 / Natural),
+   `ko-jason` Jason (YBRudLRm83BV5Mazcr42, 잔잔함 / Soothing). English: `en-zara` Zara (jqcCZkN6Knx8BJ5TBdYR, default,
+   따뜻함 / Warm), `en-amelia` Amelia (ZF6FPAbjXT4488VcRRnw, 생기 / Lively), `en-hope` Hope (uYXf8XasLslADfZ2MB4u,
+   발랄함 / Bubbly), and two ElevenLabs default male voices as placeholders until the user picks men by ear: `en-will`
+   Will (young, relaxed) and `en-chris` Chris (natural, down to earth). Display names are the voices' own names.
+   Each catalog entry may also hold server-only speech tuning for that voice (voice settings such as speed and
+   stability, and how it laughs: a tag or written laughter), empty for now and tuned by ear later; the app never
+   sees it.
 
 **Changing this contract.** The repository's `contract/` folder is the one copy. The server's tests regenerate
 `examples/` from real code. Any change to a field name, type or meaning is logged in the server's progress notes and
@@ -483,7 +489,7 @@ told to the coordinator, who passes it to the app side before either side relies
   topic with the same function its notification uses, which also gives an AI call without a topic its line. The
   epochs, `kind` and `source` stay for pre-D builds.
 - `voice/people.py`: `APP_SETTINGS` gains `voice`, with the language rule of section 6; `tts` retires.
-- `voice/voices.py` and a voice catalog beside it with the sample files: five voices per language, catalog ids, one
+- `voice/voices.py` and a voice catalog beside it with the sample files: the voices of decision 9, catalog ids, one
   default per language; `voice_choice` reads the person's catalog id.
 - `voice/titles.py`, new: the after-call title (open question 7). `voice/agent.py` runs it in its shutdown, and
   changes its participant attribute `bee_call.captions` after its own room reconnects (section 3, rule 6).
