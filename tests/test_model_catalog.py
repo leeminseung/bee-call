@@ -54,6 +54,19 @@ def test_the_call_ai_s_models_come_from_the_catalog():
     assert call_model_for(Settings()).model == "claude-haiku-5-5"
 
 
+def test_a_claude_worker_job_is_priced_with_its_cache_and_its_web_searches():
+    """A Claude worker job's usage.json (worker/claude.py): tokens at Claude Sonnet 5.5's prices, a cache read at a
+    tenth of an input token and a cache write at 1.25, and each web search at Anthropic's 10 USD per 1,000; web fetch
+    and code execution cost nothing beyond their tokens. The harness's own web_search (Nova) still counts by call."""
+    usage = {"provider": "anthropic", "model": "claude-sonnet-5-5", "input_tokens": 1_000_000, "cache_read": 800_000,
+             "cache_write": 100_000, "output_tokens": 100_000, "server_tools": {"web_search": 30, "web_fetch": 12},
+             "steps": [{"calls": [{"name": "save_file", "s": 0.0}]}]}
+    tokens = (2.00 * (100_000 + 0.1 * 800_000 + 1.25 * 100_000) + 10.00 * 100_000) / 1_000_000
+    assert costs.job_cost(usage) == pytest.approx(tokens + 30 * 0.01)
+    nova = {"input_tokens": 0, "output_tokens": 0, "steps": [{"calls": [{"name": "web_search", "s": 3.0}]}]}
+    assert costs.job_cost(nova) == pytest.approx(costs.WEB_SEARCH_USD)
+
+
 def test_the_budget_prices_models_as_the_catalog_does():
     million = 1_000_000
     assert costs.llm_cost("claude-haiku-5-5", million, million) == pytest.approx(0.60)

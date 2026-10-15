@@ -8,8 +8,9 @@ budget counts as over (Matt, 2026-10-15). It is checked only before a call start
 It is an estimate from what the processes write down, not AWS's bill:
   <date>/<time>/usage.json         a call: minutes, and the models LiveKit saw it use (voice/agent.py, at the end)
   <date>/<time>/jobs/*/usage.json  a background job's model tokens and its web searches, after every round
-                                   (worker/harness.py); a round still running when the call ends counts at once
-                                   as a guess ("estimated") and as what it used once it ends
+                                   (worker/harness.py, worker/claude.py); a round still running when the call ends
+                                   counts at once as a guess ("estimated"), and for the harness as what it used
+                                   once it ends
   meta/session.jsonl               each meta agent think's model tokens (meta/agent.py)
   state/spend.jsonl                use recorded where it happens, outside a call's own record (SpendLog): every
                                    call prep (voice/prep.py, in voice/outbound.py before the AI's call rings and in
@@ -24,7 +25,7 @@ Prices in USD, checked 2026-10-14: the models' prices are in the model catalog (
   Amazon Transcribe streaming: 0.0001667 a second (AWS price file, published 2026-09-11)
   Amazon Polly, Sydney: neural 16 and standard 4 per million characters (AWS price file); generative 30
   (us-east-1's published price; Sydney's file does not list it)
-  Nova Web Grounding: 0.03 a search (AWS, checked 2026-10-12)
+  Nova Web Grounding: 0.03 a search (AWS, checked 2026-10-12); Anthropic's web search: in the model catalog
 ElevenLabs is paid with prepaid credits, so it adds nothing here.
 """
 
@@ -37,7 +38,7 @@ from typing import Any
 
 from beelink.clock import parse_time
 from voice.call_folders import EVENTS, read_events
-from voice.model_catalog import price
+from voice.model_catalog import SERVER_TOOL_USD, price
 from voice.people import Person
 
 STT_USD_PER_SECOND = 0.0001667
@@ -95,11 +96,19 @@ def _call_minutes(folder: Path) -> float:
 
 
 def job_cost(usage: dict[str, Any]) -> float:
-    # The worker's usage.json does not name its model; it is WORKER_MODEL.
+    """A background job's usage.json: its model's tokens (cache reads and writes too), the server tools its provider
+    charges for (the Claude worker's web searches, worker/claude.py), and the web_search calls this Mac ran for it
+    (Nova Web Grounding, for the harness and the search stand-in)."""
+    # An AgentCore harness job's usage.json from before it named its model: it is WORKER_MODEL.
     model = usage.get("model") or os.environ.get("WORKER_MODEL", "zai.glm-5")
+    tokens = llm_cost(model, usage.get("input_tokens"), usage.get("output_tokens"), usage.get("cache_read"),
+                      usage.get("cache_write"))
+    server = usage.get("server_tools") if isinstance(usage.get("server_tools"), dict) else {}
+    charged = sum(SERVER_TOOL_USD.get((usage.get("provider"), name), 0.0) * _number(count)
+                  for name, count in server.items())
     searches = sum(1 for step in usage.get("steps") or [] if isinstance(step, dict)
                    for call in step.get("calls") or [] if isinstance(call, dict) and call.get("name") == "web_search")
-    return llm_cost(model, usage.get("input_tokens"), usage.get("output_tokens")) + WEB_SEARCH_USD * searches
+    return tokens + charged + WEB_SEARCH_USD * searches
 
 
 def on_day(at: Any, day: datetime) -> bool:
