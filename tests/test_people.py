@@ -1144,7 +1144,7 @@ def test_an_approved_person_starts_with_these_settings(tmp_path):
     assert asdict(people.settings("jiwoo")) == {
         "language": "en", "call_time": "21:00", "record_on_server": True, "record_on_phone": False,
         "daily_budget_usd": 3.0, "bee": False, "voice": None, "time_zone": "Asia/Seoul",
-        "call_model": "haiku", "worker_model": "sonnet"}
+        "call_model": "haiku", "worker_model": "glm"}
 
 
 def test_a_model_id_the_catalog_no_longer_has_reads_as_the_role_s_default(tmp_path):
@@ -1152,7 +1152,7 @@ def test_a_model_id_the_catalog_no_longer_has_reads_as_the_role_s_default(tmp_pa
     people = People(tmp_path)
     people.add("matt")
     (people.folder("matt") / "settings.json").write_text(json.dumps({"call_model": "opus-9", "worker_model": "gpt"}))
-    assert (people.settings("matt").call_model, people.settings("matt").worker_model) == ("haiku", "sonnet")
+    assert (people.settings("matt").call_model, people.settings("matt").worker_model) == ("haiku", "glm")
     assert people.change_settings("matt", {"worker_model": "glm"}).worker_model == "glm"
 
 

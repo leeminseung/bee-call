@@ -87,14 +87,12 @@ ROLES: dict[str, Role] = {role.name: role for role in (
                {"ko": "더 깊이 생각하고, 조금 느려요", "en": "Thinks more, a little slower"},
                CLAUDE_SONNET, thinking="between_tools", effort="low"),
     )),
+    # Only choices that run are listed (the coordinator, 2026-10-15): Claude Sonnet 5.5 joins as the default with the
+    # Claude worker runner (the user's choice: thinking adaptive, effort high); until then GLM 5 is the one worker.
     Role("worker", person=True, choices=(
-        # The user's choice (2026-10-15): thinking on and effort high; background work need not be quick.
-        Choice("sonnet", "Claude Sonnet 5.5", "Anthropic",
-               {"ko": "조사와 보고서가 가장 꼼꼼해요", "en": "Most thorough research and reports"},
-               CLAUDE_SONNET, default=True, thinking="adaptive", effort="high", max_tokens=32000),
         # GLM 5 reasons only when asked to (probed 2026-10-15); 32K holds any report in one call and leaves about
         # 170K of its 202,752-token context for the job's conversation (worker/harness.py).
-        Choice("glm", "GLM 5", "AWS", {"ko": "AWS에서 돌아가요", "en": "Runs on AWS"}, GLM_5_WORKER,
+        Choice("glm", "GLM 5", "AWS", {"ko": "AWS에서 돌아가요", "en": "Runs on AWS"}, GLM_5_WORKER, default=True,
                max_tokens=32768, extra={"reasoning_effort": "high"}),
     )),
     Role("meta", standby=Choice("glm", "GLM 5", "AWS", {"ko": "대기 모델", "en": "Standing by"}, GLM_5,

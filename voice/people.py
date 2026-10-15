@@ -34,7 +34,7 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -112,8 +112,10 @@ class Settings:
     bee: bool = False  # Bee is connected (POST /bee/connect)
     voice: str | None = None  # a catalog id of the call language's voices (voice/catalog.py); None: its default
     time_zone: str = DEFAULT_TIME_ZONE  # an IANA name; the app sends the phone's (contract section 1)
-    call_model: str = "haiku"  # the call AI's model: a catalog id of the call role (voice/model_catalog.py)
-    worker_model: str = "sonnet"  # the background worker's model: a catalog id of the worker role
+    # The call AI's and the background worker's models: catalog ids of the call and worker roles, by default each
+    # role's default (voice/model_catalog.py).
+    call_model: str = field(default_factory=lambda: model_catalog.choice("call").id)
+    worker_model: str = field(default_factory=lambda: model_catalog.choice("worker").id)
 
     def zone(self) -> ZoneInfo:
         return ZoneInfo(self.time_zone)
