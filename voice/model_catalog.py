@@ -43,7 +43,9 @@ class Choice:
     thinking: str | None = None  # the provider's thinking setting (Claude: adaptive, between_tools, disabled)
     effort: str | None = None
     max_tokens: int = 1024
-    extra: dict[str, Any] = field(default_factory=dict)  # provider-specific run settings (temperature, reasoning)
+    # Provider-specific run settings: temperature, read_timeout and retries (Bedrock), fields (Bedrock's
+    # additionalModelRequestFields), reasoning_effort (the AgentCore worker), anthropic (more Messages API fields).
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -95,12 +97,13 @@ ROLES: dict[str, Role] = {role.name: role for role in (
         Choice("glm", "GLM 5", "AWS", {"ko": "AWS에서 돌아가요", "en": "Runs on AWS"}, GLM_5_WORKER,
                max_tokens=32768, extra={"reasoning_effort": "high"}),
     )),
-    Role("meta", standby=GLM_STANDBY, choices=(
+    Role("meta", standby=Choice("glm", "GLM 5", "AWS", {"ko": "대기 모델", "en": "Standing by"}, GLM_5,
+                                max_tokens=2000, extra={"read_timeout": 90, "retries": 3}), choices=(
         Choice("sonnet", "Claude Sonnet 5.5", "Anthropic", {"ko": "통화 사이의 판단", "en": "Decides between calls"},
                CLAUDE_SONNET, default=True, thinking="adaptive", effort="medium", max_tokens=8000),
     )),
     Role("prep", standby=Choice("glm", "GLM 5", "AWS", {"ko": "대기 모델", "en": "Standing by"}, GLM_5,
-                                max_tokens=500, extra={"temperature": 0.3}), choices=(
+                                max_tokens=500, extra={"temperature": 0.3, "read_timeout": 20}), choices=(
         # The opening has to be written within seconds of the phone coming into the room: no thinking.
         Choice("haiku", "Claude Haiku 5.5", "Anthropic", {"ko": "통화 준비", "en": "Prepares the call"},
                CLAUDE_HAIKU, default=True, thinking="disabled", effort="low", max_tokens=700),
