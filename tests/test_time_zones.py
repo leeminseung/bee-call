@@ -114,7 +114,10 @@ def test_a_call_back_at_a_clock_time_is_the_person_s_clock_time(tmp_path):
     rec = CallRecorder(me.workspace, room="r", now=me.person.now())
     agent = Coordinator(rec, SimpleNamespace(), me.workspace, clock=me.person.now)
     tomorrow = (me.person.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-    said = asyncio.run(agent.book_call(None, topic="the dentist", at=f"{tomorrow}T08:00"))
+    from tests.test_offers import user_said
+
+    user_said(agent, "Call me tomorrow at 8 about the dentist.")
+    said = asyncio.run(agent.book_call(None, topic="the dentist", asked="Call me tomorrow at 8", at=f"{tomorrow}T08:00"))
     (offer,) = OfferStore(me.workspace).all()
     call_at = datetime.fromisoformat(offer.call_at)
     assert call_at == datetime.fromisoformat(f"{tomorrow}T08:00").replace(tzinfo=ZoneInfo("America/New_York"))

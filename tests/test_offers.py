@@ -282,6 +282,37 @@ def test_the_alert_push_goes_to_the_app_with_its_own_token(tmp_path):
     assert request.headers["apns-collapse-id"] == "x" and json.loads(request.content) == payload
 
 
+def user_said(agent, *lines: str) -> None:
+    """The user's turns in the call's conversation, as LiveKit keeps them."""
+    chat = agent.chat_ctx.copy()
+    for line in lines:
+        chat.add_message(role="user", content=line)
+    asyncio.run(agent.update_chat_ctx(chat))
+
+
+def test_a_call_back_is_booked_only_with_the_user_s_own_words_asking_for_it(tmp_path):
+    """Coordinator's review of 2026-10-15 (queued): nothing in code checked that the person asked for a call back, so
+    a model could book one on its own. book_call now takes the user's own words asking for it or agreeing to it,
+    which must be among what they said in this call (punctuation, spacing and case aside)."""
+    from types import SimpleNamespace
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    workspace = tmp_path / "workspace"
+    agent = Coordinator(CallRecorder(workspace, room="r", now=seoul_now()), SimpleNamespace(), workspace,
+                        clock=seoul_now)
+    user_said(agent, "음, 내일 아침 여덟 시에 다시 전화해 줄래요?")
+    at = (datetime.now(SEOUL) + timedelta(days=1)).replace(hour=8, minute=0).isoformat(timespec="minutes")
+    for invented in ("Please call me tomorrow morning.", "", "   "):
+        refused = asyncio.run(agent.book_call(None, topic="the interview", asked=invented, at=at))
+        assert refused.startswith("Not booked") and OfferStore(workspace).all() == [], invented
+    said = asyncio.run(agent.book_call(None, topic="the interview", asked="내일 아침 여덟시에 다시 전화해 줄래요", at=at))
+    assert said.startswith("Booked")
+    user_said(agent, "Can you call me back at nine instead?", "Yes, nine works.")
+    nine = at.replace("T08:00", "T09:00")
+    assert asyncio.run(agent.book_call(None, topic="the interview", asked="yes nine works", at=nine)).startswith("Moved")
+
+
 def test_a_call_back_the_user_asks_for_is_booked_and_continues_this_call(tmp_path):
     from types import SimpleNamespace
     from voice.coordinator import Coordinator
@@ -291,7 +322,9 @@ def test_a_call_back_the_user_asks_for_is_booked_and_continues_this_call(tmp_pat
     rec = CallRecorder(workspace, room="r", now=seoul_now())
     agent = Coordinator(rec, SimpleNamespace(), workspace, clock=seoul_now)
     tomorrow = (datetime.now(SEOUL) + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
-    said = asyncio.run(agent.book_call(None, topic="how the interview went", at=tomorrow.isoformat(timespec="minutes")))
+    user_said(agent, "Call me tomorrow at eight about how the interview went.")
+    said = asyncio.run(agent.book_call(None, topic="how the interview went", asked="Call me tomorrow at eight",
+                                       at=tomorrow.isoformat(timespec="minutes")))
     assert said.startswith("Booked: you will call at")
     (offer,) = OfferStore(workspace).all()
     assert (offer.state, offer.source, offer.topic) == ("booked", "call", "how the interview went")
@@ -299,8 +332,10 @@ def test_a_call_back_the_user_asks_for_is_booked_and_continues_this_call(tmp_pat
     assert offer.continue_from == f"{rec.dir.parent.name}/{rec.dir.name}"
     assert offer.reason.startswith("In our call at ") and offer.reason.endswith(", you asked me to call you back at "
                                                                                  "this time.")
-    assert "Ask the user for a later time" in asyncio.run(agent.book_call(None, topic="x", at="2020-01-01T08:00"))
-    assert "ISO 8601" in asyncio.run(agent.book_call(None, topic="x", at="tomorrow at 8"))
+    asked = "Call me tomorrow at eight"
+    assert "Ask the user for a later time" in asyncio.run(agent.book_call(None, topic="x", asked=asked,
+                                                                          at="2020-01-01T08:00"))
+    assert "ISO 8601" in asyncio.run(agent.book_call(None, topic="x", asked=asked, at="tomorrow at 8"))
     assert len(OfferStore(workspace).all()) == 1
 
 
@@ -375,8 +410,11 @@ def test_moving_or_calling_off_a_call_back_in_the_same_call(tmp_path):
     agent = Coordinator(CallRecorder(workspace, room="r", now=seoul_now()), SimpleNamespace(), workspace,
                         clock=seoul_now)
     day = (datetime.now(SEOUL) + timedelta(days=1)).replace(second=0, microsecond=0)
-    asyncio.run(agent.book_call(None, topic="the interview", at=day.replace(hour=8, minute=0).isoformat()))
-    said = asyncio.run(agent.book_call(None, topic="the interview", at=day.replace(hour=9, minute=0).isoformat()))
+    user_said(agent, "Call me at eight tomorrow.", "Make it nine.")
+    asyncio.run(agent.book_call(None, topic="the interview", asked="Call me at eight tomorrow",
+                                at=day.replace(hour=8, minute=0).isoformat()))
+    said = asyncio.run(agent.book_call(None, topic="the interview", asked="Make it nine.",
+                                       at=day.replace(hour=9, minute=0).isoformat()))
     assert said.startswith("Moved the call back")
     states = sorted(o.state for o in OfferStore(workspace).all())
     assert states == ["booked", "declined"]
@@ -634,13 +672,15 @@ def test_call_me_back_in_ten_minutes_late_in_a_call_books_ten_minutes_from_now(t
     workspace = tmp_path / "workspace"
     started = datetime.now(SEOUL) - timedelta(minutes=15)  # the call began a quarter of an hour ago
     agent = Coordinator(CallRecorder(workspace, room="r", now=started), SimpleNamespace(), workspace, clock=seoul_now)
-    said = asyncio.run(agent.book_call(None, topic="the dentist", in_minutes=10))
+    user_said(agent, "Call me back in ten minutes.")
+    said = asyncio.run(agent.book_call(None, topic="the dentist", asked="call me back in ten minutes", in_minutes=10))
     (offer,) = OfferStore(workspace).all()
     booked = datetime.fromisoformat(offer.call_at)
     assert abs((booked - (datetime.now(SEOUL) + timedelta(minutes=10))).total_seconds()) < 5
     assert f"{booked:%-I:%M %p}" in said and "read" in said.lower()
     for bad in (0, -5, 7 * 24 * 60 + 1):
-        assert not asyncio.run(agent.book_call(None, topic="x", in_minutes=bad)).startswith(("Booked", "Moved"))
+        assert not asyncio.run(agent.book_call(None, topic="x", asked="Call me back in ten minutes",
+                                               in_minutes=bad)).startswith(("Booked", "Moved"))
     assert len(OfferStore(workspace).all()) == 1
 
 

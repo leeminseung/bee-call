@@ -185,6 +185,14 @@ def keep_reply(reply: dict[str, Any], chunk: Any) -> None:
             reply["usage"] = chunk.usage.model_dump(mode="json")
 
 
+USER_TURNS_CHECKED = 12  # book_call's `asked` must be in one of the user's last this many turns
+
+
+def _letters(text: str) -> str:
+    """Text as it is compared for book_call: letters and digits only, in lower case."""
+    return "".join(c for c in text.casefold() if c.isalnum())
+
+
 def job_notification(news: JobNotification) -> str:
     """The note for news about a background job, modeled on how Claude Code tells its model about a background
     task: a label, then a tagged block. What to do with it is in INSTRUCTIONS, not in each note. What the worker
@@ -410,7 +418,7 @@ class Coordinator(Agent):
         return "\n".join(hits) or "Nothing found in earlier calls."
 
     @function_tool
-    async def book_call(self, context: RunContext, topic: str, at: str | None = None,
+    async def book_call(self, context: RunContext, topic: str, asked: str, at: str | None = None,
                         in_minutes: int | None = None) -> str:
         """Book a call back at a time the user asked for or agreed to out loud, such as "call me tomorrow at 8" or
         "call me back in ten minutes". At that time you call them, picking up from this call. Never book a call
@@ -419,9 +427,14 @@ class Coordinator(Agent):
 
         Args:
             topic: What the call is for, in a few words.
+            asked: The user's own words asking for the call or agreeing to it, exactly as they said them.
             at: For a clock time: the local date and time to call, in ISO 8601, like 2026-10-15T08:00.
             in_minutes: For a time from now, like "in ten minutes" (10) or "in an hour" (60): minutes from now.
         """
+        if not self._user_said(asked):  # checked in code, not only asked of the model (coordinator's review)
+            self._recorder.event("call_booking_refused", asked=str(asked or "")[:200], topic=topic)
+            return ("Not booked: asked must be the user's own words asking for the call or agreeing to it, exactly "
+                    "as they said them in this call. Book a call only when they asked for it or agreed to it.")
         now = self._clock()  # the person's clock now, not the time this call started
         if (at is None) == (in_minutes is None):
             return "Give the time one way: in_minutes for a time from now, or at for a clock time."
@@ -449,6 +462,15 @@ class Coordinator(Agent):
             else f"on {when:%A}"
         return (f"{verb}: you will call at {when:%-I:%M %p} {day} ({when:%A, %B %-d}); it is {now:%-I:%M %p} now. "
                 "Read this time back to the user in a few words.")
+
+    def _user_said(self, words: Any) -> bool:
+        """Whether `words` are among what the user said in this call (punctuation, spacing and case aside)."""
+        wanted = _letters(words) if isinstance(words, str) else ""
+        if not wanted:
+            return False
+        said = [_letters(item.text_content or "") for item in self.chat_ctx.items
+                if getattr(item, "type", None) == "message" and item.role == "user"]
+        return any(wanted in turn for turn in said[-USER_TURNS_CHECKED:])
 
     @function_tool
     async def cancel_call(self, context: RunContext) -> str:
