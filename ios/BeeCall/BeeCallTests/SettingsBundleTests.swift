@@ -32,11 +32,14 @@ final class SettingsBundleTests: XCTestCase {
         XCTAssertEqual(page as NSDictionary, AppSettings.defaults as NSDictionary)
     }
 
-    /// The call model, next to the language: Haiku (the default, faster) or Sonnet (smarter, a little slower).
-    @MainActor func testThePageOffersTheCallModelNextToTheLanguage() throws {
+    /// The call model leads the Calls group: Haiku (the default, faster) or Sonnet (smarter, a little slower). The
+    /// language is not on the page: it belongs to the app after D (contract section 6), set in its first run and
+    /// settings sheet, and every launch used to send the page's value over the person's pick.
+    @MainActor func testThePageOffersTheCallModelAndNoLanguage() throws {
         let items = try specifiers()
         let keys = items.compactMap { $0["Key"] as? String }
-        XCTAssertEqual(keys.firstIndex(of: "call_model"), keys.firstIndex(of: "language").map { $0 + 1 })
+        XCTAssertEqual(keys.first, "call_model")
+        XCTAssertFalse(keys.contains("language"))
         let model = try XCTUnwrap(items.first { $0["Key"] as? String == "call_model" })
         XCTAssertEqual(model["Type"] as? String, "PSMultiValueSpecifier")
         XCTAssertEqual(model["Title"] as? String, "Call model")

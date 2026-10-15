@@ -2,10 +2,7 @@
    table a phone not set to Korean would get ko.lproj, the only other one. */
 
 "Calls" = "Calls";
-"The language you and the AI speak, and the evening time Bee Call suggests when it asks to call (24-hour, like 21:00). Haiku answers faster. Sonnet thinks more and answers a little slower." = "The language you and the AI speak, and the evening time Bee Call suggests when it asks to call (24-hour, like 21:00). Haiku answers faster. Sonnet thinks more and answers a little slower.";
-"Language" = "Language";
-"English" = "English";
-"한국어" = "한국어";
+"The evening time Bee Call suggests when it asks to call (24-hour, like 21:00). Haiku answers faster. Sonnet thinks more and answers a little slower. The call language and the voice are in Bee Call's own settings." = "The evening time Bee Call suggests when it asks to call (24-hour, like 21:00). Haiku answers faster. Sonnet thinks more and answers a little slower. The call language and the voice are in Bee Call's own settings.";
 "Call model" = "Call model";
 "Haiku 5.5 (faster)" = "Haiku 5.5 (faster)";
 "Sonnet 5.5 (smarter)" = "Sonnet 5.5 (smarter)";
