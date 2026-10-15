@@ -139,7 +139,11 @@ final class Server {
     func complete(_ outcome: AppleSignIn.Outcome) async {
         switch outcome {
         case .signedIn(let token, let person):
-            _ = keychain.save(token)
+            let saved = keychain.save(token)
+            guard saved == errSecSuccess else { // signed in on the server, but every request would go without it
+                problem = "This iPhone could not keep your sign-in (Keychain error \(saved)). Try again."
+                return
+            }
             store.set(person, forKey: "person")
             state = .signedIn(person: person)
             problem = nil

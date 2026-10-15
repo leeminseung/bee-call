@@ -23,4 +23,15 @@ final class ServerSignInTests: XCTestCase {
         await server.complete(.failed("The server did not accept the sign-in."))
         XCTAssertEqual(server.problem, "The server did not accept the sign-in.")
     }
+
+    /// Review finding 17: the result of saving the token was ignored, so a sign-in this iPhone could not keep
+    /// showed the person signed in, until the next request signed them out with "Your sign-in ended".
+    @MainActor func testASignInThisIPhoneCannotKeepIsNotShownAsSignedIn() async {
+        let store = freshDefaults(self)
+        let server = Server(keychain: keychain(.none, save: errSecInteractionNotAllowed), store: store)
+        await server.complete(.signedIn(token: "t", person: "matt"))
+        XCTAssertEqual(server.state, .signedOut)
+        XCTAssertEqual(server.problem, "This iPhone could not keep your sign-in (Keychain error -25308). Try again.")
+        XCTAssertNil(store.string(forKey: "person"))
+    }
 }
