@@ -76,7 +76,6 @@ import shutil
 import sys
 import time
 from collections.abc import Mapping
-from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -97,7 +96,7 @@ from voice.costs import day_budget
 from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata, call_room_of, decline_ring, declined_rooms, \
     room_name
 from voice.offers import OfferClosed, OfferStore, UnknownChoice
-from voice.people import People, Person, dev_fallback, dev_person, waiting_code
+from voice.people import People, Person, dev_fallback, dev_person, settings_body, waiting_code
 from voice.session_server import host_allowed
 
 load_dotenv(".env.local")
@@ -211,7 +210,7 @@ async def sign_out(request: web.Request) -> web.Response:
 
 async def me(request: web.Request) -> web.Response:
     settings = request.app[PEOPLE].settings(person(request))
-    return web.json_response({"person": person(request), "settings": asdict(settings),
+    return web.json_response({"person": person(request), "settings": settings_body(settings),
                               "spent_today_usd": round(day_budget(someone(request), someone(request).now()).spent, 2),
                               "bee_connecting": person(request) in request.app[BEE_LOGINS]})
 
@@ -222,7 +221,7 @@ async def change_settings(request: web.Request) -> web.Response:
         settings = request.app[PEOPLE].change_settings(person(request), changes)
     except ValueError as exc:  # our own words: which setting, and what it takes
         raise web.HTTPBadRequest(text=f"{exc}\n")
-    return web.json_response({"settings": asdict(settings)})
+    return web.json_response({"settings": settings_body(settings)})
 
 
 async def json_object(request: web.Request) -> dict:

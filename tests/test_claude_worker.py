@@ -324,6 +324,7 @@ def test_the_person_s_worker_model_picks_what_runs_their_jobs(both_workers):
     assert isinstance(picked, ClaudeWorker) and picked.choice.offering.model == "claude-sonnet-5-5"
     assert isinstance(job_worker("glm", "harness"), both_workers.HarnessWorker)
     assert isinstance(job_worker("gpt-9", "harness"), ClaudeWorker)  # an id the catalog no longer has: the default
+    assert isinstance(job_worker(None, "harness"), ClaudeWorker)  # never picked: the role's default
     assert isinstance(job_worker("sonnet", "fake"), FakeWorker) and isinstance(job_worker("glm", "search"), SearchWorker)
 
 
