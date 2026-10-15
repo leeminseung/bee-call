@@ -80,9 +80,21 @@ def provider_token(config: ApnsConfig, now: float | None = None, cache: Path | N
                        headers={"kid": config.key_id})
     if cache:
         cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.touch(mode=0o600)
-        cache.write_text(json.dumps({"kid": config.key_id, "iss": config.team_id, "iat": int(now), "token": token}))
+        # Replaced whole, readable by its owner only, whatever mode an older file had: it is a credential.
+        tmp = cache.with_name(f".{cache.name}.{os.getpid()}.tmp")
+        tmp.unlink(missing_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps({"kid": config.key_id, "iss": config.team_id, "iat": int(now), "token": token}))
+        tmp.replace(cache)
     return token
+
+
+def token_cache(person: Person) -> Path:
+    """Where the provider token is shared: APNS_TOKEN_CACHE on a server (tmpfs under /run, deploy/config.py), so the
+    credential never reaches the disk (BC-154); on a Mac, one file for every person under their data root."""
+    configured = os.environ.get("APNS_TOKEN_CACHE", "").strip()
+    return Path(configured) if configured else person.people.root / PROVIDER_TOKEN_FILE.name
 
 
 def save_device_token(person: Person, token: str, environment: str, kind: str = "voip",
@@ -125,15 +137,36 @@ async def alert(payload: dict[str, Any], person: Person, *, expires_epoch: int |
                        collapse_id=collapse_id)
 
 
+PUSHES = Path("state") / "pushes.jsonl"  # in the person's folder: every push sent, or that would have been
+
+
+def record_push(person: Person, kind: str, payload: dict[str, Any], *, sent: bool, status: int | None = None,
+                apns_id: str | None = None, reason: str | None = None) -> None:
+    """One line of the person's push record (README: Testing from outside): the push's type and payload, whether it
+    went out, and APNs' answer. Never a device token or a credential. A record that cannot be written never stops
+    a push."""
+    line = {"at": person.now().isoformat(timespec="seconds"), "type": kind, "payload": payload, "sent": sent,
+            "status": status, "apns_id": apns_id, "reason": reason}
+    try:
+        path = person.workspace / PUSHES
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError:
+        log.warning("could not record a %s push", kind, exc_info=True)
+
+
 async def _send(kind: str, payload: dict[str, Any], person: Person, config: ApnsConfig | None,
                 transport: httpx.AsyncBaseTransport | None, *, expires_epoch: int | None = None,
                 collapse_id: str | None = None) -> str | None:
     config = config or ApnsConfig.from_env()
     device = load_device_token(person, kind)
     if config is None or device is None:
+        why = "APNs is not configured" if config is None else f"the app has not sent its {kind} token"
+        record_push(person, kind, payload, sent=False, reason=why)
         return None
-    # One cache for every person, under their data root: APNs counts token renewals per signing key, not per person.
-    token = provider_token(config, cache=person.people.root / PROVIDER_TOKEN_FILE.name)
+    # One cache for every person: APNs counts token renewals per signing key, not per person.
+    token = provider_token(config, cache=token_cache(person))
     topic = f"{config.bundle_id}.voip" if kind == "voip" else config.bundle_id
     headers = {"authorization": f"bearer {token}", "apns-topic": topic, "apns-push-type": kind,
                "apns-priority": "10"}
@@ -141,15 +174,21 @@ async def _send(kind: str, payload: dict[str, Any], person: Person, config: Apns
         headers["apns-expiration"] = str(expires_epoch)
     if collapse_id:
         headers["apns-collapse-id"] = collapse_id[:64]  # a newer push with the same id replaces the older one
-    url = f"{APNS_HOSTS[device['environment']]}/3/device/{device['token']}"
-    async with httpx.AsyncClient(http2=transport is None, transport=transport, timeout=10) as client:
+    # APNS_URL: a test receiver instead of Apple (README: Testing from outside; never on a server).
+    base = os.environ.get("APNS_URL", "").strip().rstrip("/") or APNS_HOSTS[device["environment"]]
+    url = f"{base}/3/device/{device['token']}"
+    async with httpx.AsyncClient(http2=transport is None and base.startswith("https://"), transport=transport,
+                                 timeout=10) as client:
         response = await client.post(url, headers=headers, json=payload)
     if response.status_code == 200:
-        return response.headers.get("apns-id")
+        apns_id = response.headers.get("apns-id")
+        record_push(person, kind, payload, sent=True, status=200, apns_id=apns_id)
+        return apns_id
     try:
         reason = response.json().get("reason", "")
     except ValueError:
         reason = response.text[:200]
+    record_push(person, kind, payload, sent=False, status=response.status_code, reason=reason or None)
     if reason in GONE:  # the app was deleted, or this token belongs to another build; wait for a new one
         person.people.forget_device(kind, device["token"])
     raise PushError(f"APNs answered {response.status_code} {reason}".strip())

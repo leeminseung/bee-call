@@ -11,6 +11,7 @@ from livekit.agents import APIError, llm
 from livekit.agents.types import APIConnectOptions
 
 from tests.helpers import ScriptedLLM, seoul_now
+from voice.call_models import CALL_MODELS
 from voice.claude_llm import INSTRUCTIONS_ID, ClaudeBedrockLLM
 from voice.fake_claude import FakeAnthropic
 from voice.fallback_llm import FirstRequestFallback
@@ -112,14 +113,18 @@ def test_a_first_request_that_fails_is_answered_by_glm_and_so_is_the_rest_of_the
     assert [m.metadata.model_name for m in metrics] == ["zai.glm-5"] * 2
 
 
-def test_a_first_request_claude_declines_before_a_word_is_answered_by_glm():
+def test_a_first_request_claude_declines_is_said_as_the_line_and_the_call_stays_with_claude():
+    """A decline is a safety decision, not an outage: it is never handed to another model to answer (Claude Haiku
+    5.5 has no fallback model for its declines). The caller hears the one short line, as with any decline."""
     async def main():
-        client = FakeAnthropic([[{"type": "refusal"}]])
+        client = FakeAnthropic([[{"type": "refusal"}], say("Sure, what else?")])
         model, choices, built = standing_by(client)
-        return await turn(model, "안녕하세요", new_ctx()), choices
+        ctx = new_ctx()
+        return [await turn(model, "something it declines", ctx), await turn(model, "Never mind.", ctx)], choices, built
 
-    said, choices = asyncio.run(main())
-    assert said == GLM_LINE and choices[0][0] == "zai.glm-5" and "declined" in choices[0][1]
+    said, choices, built = asyncio.run(main())
+    assert said == ["Sorry, I can't help with that one.", "Sure, what else?"]
+    assert choices == [("claude-haiku-5-5", None)] and built == []  # GLM 5 was never asked
 
 
 def test_after_the_first_answer_a_failure_is_a_failed_turn_never_a_switch():
@@ -166,7 +171,9 @@ def anthropic_mode(monkeypatch, tmp_path, key: str | None, client=None):
         clients.append(kwargs)
         return client
 
-    monkeypatch.setattr(agent, "anthropic_client", fake_client)
+    from voice.providers import anthropic as anthropic_provider
+
+    monkeypatch.setattr(anthropic_provider, "async_client", fake_client)
     return CallRecorder(tmp_path / "workspace", room="r", now=seoul_now()), clients
 
 
@@ -181,7 +188,7 @@ def test_without_an_anthropic_key_the_call_runs_on_glm_5_and_the_record_says_why
     from voice.language import call_language
 
     rec, clients = anthropic_mode(monkeypatch, tmp_path, key=None)
-    model = agent.make_llm(rec, call_language("ko"))
+    model = agent.make_llm(rec, call_language("ko"), CALL_MODELS["haiku"])
     assert isinstance(model, FakeConverse) and model.model == "zai.glm-5" and clients == []
     (choice,) = recorded(rec, "coordinator_model")
     assert choice["model"] == "zai.glm-5" and choice["reason"] == "ANTHROPIC_API_KEY is not set"
@@ -196,7 +203,7 @@ def test_with_a_key_the_call_ai_is_claude_haiku_5_5_on_anthropic_s_api(tmp_path,
     korean = call_language("ko")
 
     async def main():
-        model = agent.make_llm(rec, korean)
+        model = agent.make_llm(rec, korean, CALL_MODELS["haiku"])
         ctx = new_ctx()
         await turn(model, "안녕하세요", ctx)  # Claude answers first: it stays the call's model
         return model, await turn(model, "그건 좀 이상한 질문인데요", ctx)
@@ -206,22 +213,106 @@ def test_with_a_key_the_call_ai_is_claude_haiku_5_5_on_anthropic_s_api(tmp_path,
     (kwargs,) = clients
     assert kwargs["api_key"] == "test-key" and kwargs["max_retries"] == 0  # a failed first request falls back at once
     assert model.model == "claude-haiku-5-5" and second == korean.refusal  # a later decline: one line, in Korean
-    assert client.calls[0]["thinking"] == {"type": "disabled"} and client.calls[0]["output_config"] == {"effort": "low"}
+    assert client.calls[0]["thinking"] == {"type": "adaptive"} and client.calls[0]["output_config"] == {"effort": "low"}
     assert recorded(rec, "coordinator_model")[0]["model"] == "claude-haiku-5-5"
 
 
-def test_the_prep_and_the_meta_agent_stay_on_glm_5_with_anthropic(tmp_path, monkeypatch):
+def test_a_person_who_picked_sonnet_talks_to_claude_sonnet_5_5_with_glm_5_standing_by(tmp_path, monkeypatch):
+    """call_model "sonnet": Claude Sonnet 5.5 on Anthropic's API, thinking between_tools (it refuses "disabled"),
+    effort low. Its first request failing sends the call to GLM 5 as with Haiku, and the record says so."""
+    from voice import agent
+    from voice.language import call_language
+
+    client = FakeAnthropic([say("안녕하세요!")])
+    rec, _ = anthropic_mode(monkeypatch, tmp_path, key="test-key", client=client)
+
+    async def main():
+        return await turn(agent.make_llm(rec, call_language("ko"), CALL_MODELS["sonnet"]), "안녕하세요", new_ctx())
+
+    assert asyncio.run(main()) == "안녕하세요!"
+    sent = client.calls[0]
+    assert sent["model"] == "claude-sonnet-5-5" and sent["thinking"] == {"type": "between_tools"}
+    assert sent["output_config"] == {"effort": "low"} and sent["cache_control"] == {"type": "ephemeral"}
+    assert recorded(rec, "coordinator_model")[0]["model"] == "claude-sonnet-5-5"
+
+    failing = FakeAnthropic([FIRST_REQUEST_FAILURES["no credit"]()])
+    rec, _ = anthropic_mode(monkeypatch, tmp_path / "again", key="test-key", client=failing)
+
+    async def again():
+        return await turn(agent.make_llm(rec, call_language("ko"), CALL_MODELS["sonnet"]), "안녕하세요", new_ctx())
+
+    assert asyncio.run(again()) == GLM_LINE
+    (choice,) = recorded(rec, "coordinator_model")
+    assert choice["model"] == "zai.glm-5" and choice["instead_of"] == "claude-sonnet-5-5" and "credit" in choice["reason"]
+
+
+def test_coordinator_settings_in_the_environment_never_change_the_call_model(tmp_path, monkeypatch):
+    """voice/call_models.py is the one place for the call model's settings with COORDINATOR_LLM=anthropic. The
+    variables the other modes read are not used here: a call says so in its log and its record, never silently."""
+    from voice import agent
+    from voice.language import call_language
+
+    client = FakeAnthropic([say("안녕하세요!")])
+    rec, _ = anthropic_mode(monkeypatch, tmp_path, key="test-key", client=client)
+    for name, value in (("COORDINATOR_THINKING", "disabled"), ("COORDINATOR_EFFORT", "high"),
+                        ("COORDINATOR_MODEL", "claude-opus-5-5")):
+        monkeypatch.setenv(name, value)
+
+    async def main():
+        return await turn(agent.make_llm(rec, call_language("ko"), CALL_MODELS["haiku"]), "안녕하세요", new_ctx())
+
+    asyncio.run(main())
+    sent = client.calls[0]
+    assert (sent["model"], sent["thinking"], sent["output_config"]) == (
+        "claude-haiku-5-5", {"type": "adaptive"}, {"effort": "low"})
+    assert agent.ignored_settings() == ["COORDINATOR_EFFORT", "COORDINATOR_MODEL", "COORDINATOR_THINKING"]
+
+
+def test_with_anthropic_the_prep_runs_on_haiku_and_the_meta_agent_on_sonnet_with_glm_5_standing_by(tmp_path,
+                                                                                                   monkeypatch):
+    """Decision 10 of the app contract, as the server's mode (anthropic) runs it; COORDINATOR_MODEL names the
+    development modes' model and changes nothing here."""
     from meta.agent import Thinker
-    from voice.prep import prep_model
+    from voice.prep import prep_role
 
     monkeypatch.setenv("COORDINATOR_LLM", "anthropic")
-    monkeypatch.setenv("COORDINATOR_MODEL", "claude-haiku-5-5")  # names the call AI's model, not the prep's
-    monkeypatch.setenv("BEDROCK_REGION", "ap-southeast-2")
-    assert prep_model("anthropic") == ("zai.glm-5", "ap-southeast-2")
-    assert Thinker(tmp_path, bee=True).model == ("zai.glm-5", "ap-southeast-2")
+    monkeypatch.setenv("COORDINATOR_MODEL", "claude-opus-5-5")
+    prep, meta = prep_role("anthropic"), Thinker(tmp_path, bee=True).role
+    assert [(c.offering.provider, c.offering.model) for c in (prep.choices[0], meta.choices[0])] == [
+        ("anthropic", "claude-haiku-5-5"), ("anthropic", "claude-sonnet-5-5")]
+    assert {(r.standby.offering.provider, r.standby.offering.model) for r in (prep, meta)} == {("bedrock", "zai.glm-5")}
 
 
 def test_every_call_language_has_a_line_for_a_declined_turn():
     from voice.language import LANGUAGES
 
     assert all(language.refusal for language in LANGUAGES.values())
+
+
+def test_every_process_reads_the_same_coordinator_mode_with_the_same_default(tmp_path, monkeypatch):
+    """Server review 19: unset, COORDINATOR_LLM meant "echo" to the voice server but "bedrock" to the prep in
+    voice/outbound.py and to the meta agent, so a Mac's AI calls were prepared by another model than the one that
+    answered them. One function reads it now, with one default."""
+    from datetime import datetime
+
+    from meta.agent import Thinker
+    from tests.helpers import SEOUL
+    from voice import prep as prep_module
+    from voice.call_models import coordinator_llm
+    from voice.costs import SpendLog
+    from beelink.planner import Plan
+
+    monkeypatch.delenv("COORDINATOR_LLM", raising=False)
+    monkeypatch.setenv("BEDROCK_REGION", "ap-southeast-2")
+    assert coordinator_llm() == "echo"
+    from meta import agent as meta_agent
+
+    modes = []
+    monkeypatch.setattr(prep_module, "prep_role", lambda mode: modes.append(mode))
+    monkeypatch.setattr(meta_agent.model_catalog, "mode_role", lambda name, mode: modes.append(mode))
+    asyncio.run(prep_module.prepare_outbound(Plan(call=True, reason="r", inbox_dir=None), spend=SpendLog(tmp_path),
+                                             bee=False, now=datetime.now(SEOUL)))
+    Thinker(tmp_path, bee=False)
+    assert modes == ["echo", "echo"]
+    monkeypatch.setenv("COORDINATOR_LLM", "anthropic")
+    assert coordinator_llm() == "anthropic"

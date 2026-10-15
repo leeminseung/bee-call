@@ -20,7 +20,8 @@ this process places the call when they tap "Call me now" or when the time they a
 comes, and also for calls the user booked out loud in a call.
 Before the phone rings, a model reads Bee and writes the call prep note (voice/prep.py), picked
 from COORDINATOR_LLM as the voice server's prep picks it, so set COORDINATOR_LLM and
-COORDINATOR_MODEL the same way for both (GLM 5 with anthropic and bedrock; prep_model).
+COORDINATOR_MODEL the same way for both (with anthropic, the model catalog's prep role: Claude
+Haiku 5.5 with GLM 5 standing by; voice/prep.py prep_role).
 """
 
 import argparse
@@ -45,8 +46,8 @@ from voice.dispatch import DECLINES, RING_SECONDS, place_call
 from voice.costs import SpendLog, day_budget
 from voice.language import CallLanguage, call_language
 from voice.people import People, Person, Settings, dev_person
-from voice.offers import (OPEN, AlreadyOffered, Offer, OfferStore, agreed, not_placed_notification, notification,
-                          plan_of)
+from voice.offers import (OPEN, AlreadyOffered, Offer, OfferStore, QuestionWaiting, agreed, not_placed_notification,
+                          notification, plan_of)
 from voice.prep import NOTE_SECONDS, OPENING_BY_S, prepare_outbound
 from meta.agent import Thinker
 from meta.session import DAILY_NOTIFICATIONS, MetaSession, add_event, meta_notes, quiet, quiet_ends
@@ -78,6 +79,9 @@ async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, person: 
     now = planner.now()
     try:
         offer = OfferStore(planner.workspace).ask(plan, now)
+    except QuestionWaiting as exc:
+        print(f"not asked: {exc} (one question at a time)", flush=True)
+        return None
     except AlreadyOffered as exc:
         print(f"not asked: {exc} (one Bee conversation, at most one offer)", flush=True)
         return None
@@ -295,7 +299,7 @@ async def serve_meta(person: Person, thinker: Thinker, until_offer_closes: bool 
     once they may go out. With until_offer_closes (for --once), stops when no offer is open any more. Past the
     person's daily budget it does not think; the events wait for the next day."""
     workspace = person.workspace
-    session, store, announced, tries = MetaSession(workspace), OfferStore(workspace), set(), 0
+    session, store, tries = MetaSession(workspace), OfferStore(workspace), 0
     think_after = 0.0  # time.monotonic() after which the meta agent may think again (later after a failed think)
     while True:
         now = person.now()
@@ -303,8 +307,7 @@ async def serve_meta(person: Person, thinker: Thinker, until_offer_closes: bool 
             for offer in store.open(now):
                 call_at = offer.at("call_at")
                 if offer.state == "booked" and call_at and timedelta(0) < call_at - now <= BOOKED_NOTICE \
-                        and offer.id not in announced:
-                    announced.add(offer.id)
+                        and not offer.soon_told_at and store.tell_soon(offer.id, now):
                     add_event(workspace, "booked_soon", now=now, offer=offer.id, call_at=offer.call_at,
                               topic=offer.topic)
             if not day_budget(person, now).used_up and time.monotonic() >= think_after:
@@ -338,7 +341,8 @@ async def serve_person(people: People, person_id: str, settings: Settings) -> No
     async def on_trigger(trigger: Trigger) -> None:
         add_event(workspace, "bee_change", now=person.now(), **bee_event(trigger, workspace))
 
-    thinker = Thinker(workspace, send=send, call_time=settings.call_time, bee=settings.bee)
+    thinker = Thinker(workspace, send=send, call_time=settings.call_time, bee=settings.bee,
+                      language=settings.language)
     # A TaskGroup: if one loop fails, the others stop too, so serve_people() never starts a second set beside
     # survivors of the first.
     async with asyncio.TaskGroup() as group:
@@ -412,7 +416,8 @@ async def main() -> None:
     async def send(offer: Offer, ws: Path, now: datetime) -> str:
         return await send_offer(offer, person, now, language)
 
-    thinker = Thinker(workspace, send=send, call_time=settings.call_time, bee=settings.bee)
+    thinker = Thinker(workspace, send=send, call_time=settings.call_time, bee=settings.bee,
+                      language=settings.language)
     if args.once:
         if args.rules:
             made = await handle(saved_trigger(args.once), planner, args.dry_run, person)

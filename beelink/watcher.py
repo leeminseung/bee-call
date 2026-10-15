@@ -82,7 +82,10 @@ class BeeWatcher:
         if not cursor:
             return
         self._cursor_file.parent.mkdir(parents=True, exist_ok=True)
-        self._cursor_file.write_text(json.dumps({"cursor": cursor, "saved_at": datetime.now().isoformat()}))
+        # A new file put in place, as meta/session.py saves its cursor: a save cut off halfway leaves the last one.
+        tmp = self._cursor_file.with_name(f".{self._cursor_file.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"cursor": cursor, "saved_at": datetime.now().isoformat()}))
+        tmp.replace(self._cursor_file)
 
     # ---------- catching up ----------
 
@@ -115,6 +118,12 @@ class BeeWatcher:
         await self.on_trigger(trigger)  # if this raises, the cursor stays and the batch comes back next time
         self._save_cursor(next_cursor)
         return trigger
+
+    def on_event(self, name: str) -> None:
+        """One event from `bee stream`: a settled change starts the quiet period before a catch-up, and a later one
+        starts it over; a catch-up already running (placing a call) is never cancelled."""
+        if name in SETTLED_EVENTS:
+            self._schedule(name)
 
     def _schedule(self, reason: str) -> None:
         self._reason = reason
@@ -159,8 +168,7 @@ class BeeWatcher:
                         continue
                     name, _ = parsed
                     backoff = 2.0
-                    if name in SETTLED_EVENTS:
-                        self._schedule(name)
+                    self.on_event(name)
             except Exception as exc:  # keep watching through transient failures
                 log.warning("bee stream error: %s", exc)
             finally:

@@ -10,7 +10,12 @@
       "state": "ended",
       "duration_s": 372,
       "continues": null,
-      "marks": {"report": false, "table": false, "chart": false, "bee_writes": 1},
+      "marks": {
+        "report": false,
+        "table": false,
+        "chart": false,
+        "bee_writes": 1
+      },
       "results": [
         {
           "type": "bee_write",
@@ -34,7 +39,12 @@
       "state": "ended",
       "duration_s": 460,
       "continues": null,
-      "marks": {"report": true, "table": true, "chart": true, "bee_writes": 1},
+      "marks": {
+        "report": true,
+        "table": true,
+        "chart": true,
+        "bee_writes": 1
+      },
       "results": [
         {
           "type": "bee_write",
@@ -93,7 +103,12 @@
       "state": "ended",
       "duration_s": 16,
       "continues": null,
-      "marks": {"report": false, "table": false, "chart": false, "bee_writes": 0},
+      "marks": {
+        "report": false,
+        "table": false,
+        "chart": false,
+        "bee_writes": 0
+      },
       "results": []
     },
     {
@@ -106,7 +121,12 @@
       "state": "ended",
       "duration_s": 124,
       "continues": null,
-      "marks": {"report": false, "table": false, "chart": false, "bee_writes": 0},
+      "marks": {
+        "report": false,
+        "table": false,
+        "chart": false,
+        "bee_writes": 0
+      },
       "results": []
     },
     {
@@ -119,7 +139,12 @@
       "state": "ended",
       "duration_s": 60,
       "continues": null,
-      "marks": {"report": false, "table": false, "chart": true, "bee_writes": 0},
+      "marks": {
+        "report": false,
+        "table": false,
+        "chart": true,
+        "bee_writes": 0
+      },
       "results": [
         {
           "type": "job",
@@ -154,11 +179,16 @@
       "state": "missed",
       "duration_s": null,
       "continues": null,
-      "marks": {"report": false, "table": false, "chart": false, "bee_writes": 0},
+      "marks": {
+        "report": false,
+        "table": false,
+        "chart": false,
+        "bee_writes": 0
+      },
       "results": []
     }
   ],
   "more": true,
   "before": "MjAyNi0xMC0xNFQwODozMTowMCswOTowMHxjYWxsLW1pbnNldW5nLTIwMjYxMDE0LTA4MzEwMA",
-  "version": "f46f5990ebfadcab"
+  "version": "d498cb3c94a470f6"
 }

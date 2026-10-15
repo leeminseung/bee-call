@@ -39,8 +39,10 @@ from typing import Any
 
 from aiohttp import web
 
+from voice import call_folders
 from voice.call_folders import read_events
-from voice.people import People, dev_person
+from voice.people import People, dev_fallback
+from voice.web_headers import plain_server_name
 
 REPO = Path(__file__).resolve().parent.parent
 WEB_DIR = REPO / "web"
@@ -54,17 +56,11 @@ POLL_SECONDS = 0.2
 KEEPALIVE_SECONDS = 15.0
 LIVE_SECONDS = 120.0  # no new event for this long: the list stops calling the session live
 PREVIEW_CHARS = 160
-PLAIN_TEXT = {".md", ".txt", ".log", ".csv", ".jsonl"}  # shown as text instead of downloaded
-PAGE_CSP = "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'"
-# Job files are made from outside content; a sandboxed response cannot run script on this origin.
-FILE_HEADERS = {"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff",
-                "Content-Security-Policy": "sandbox"}
+# frame-ancestors: no other site may show the records page in a frame (black-box probe 4, 2026-10-15).
+PAGE_CSP = "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
 # Host names a request may use. Anything else is refused, so a web page cannot point its own
 # domain at this Mac (DNS rebinding) and read calls from a browser on the same network.
 LOCAL_SUFFIXES = (".local", ".localhost", ".lan", ".home.arpa", ".internal")
-# Never served: raw call audio, raw Bee data, and everything the call AI's model was given (which holds Bee data):
-# the model log of every call and the Claude adapter's history (BC-095).
-PRIVATE = ("audio", "inputs", "model-log.jsonl", "claude-history.json")
 
 
 def parse_event(raw: bytes) -> dict[str, Any] | None:
@@ -257,36 +253,19 @@ def session_folder(request: web.Request) -> Path:
 
 
 def resolve_inside(folder: Path, rel: str) -> Path:
-    """The real path of `rel` inside the session folder, or an HTTP error."""
-    parts = rel.split("/")
-    if (rel.startswith("/") or "\\" in rel or "\x00" in rel
-            or any(part in ("", ".", "..") for part in parts)):
-        raise web.HTTPForbidden(text="path not allowed\n")
-    if parts[0].casefold() in PRIVATE:
-        raise web.HTTPForbidden(text=f"{parts[0]} is never served\n")
-    base = folder.resolve()
+    """The real path of `rel` inside the session folder, or an HTTP error: the one rule both servers serve call files
+    by (voice/call_folders.py)."""
     try:
-        target = (base / rel).resolve(strict=True)
-    except (OSError, RuntimeError):
+        return call_folders.resolve_inside(folder, rel)
+    except call_folders.NotServed as exc:
+        raise web.HTTPForbidden(text=f"{exc}\n") from None
+    except FileNotFoundError:
         raise web.HTTPNotFound() from None
-    if target == base or not target.is_relative_to(base):
-        raise web.HTTPForbidden(text="path leaves the session folder\n")
-    first = base / target.relative_to(base).parts[0]  # catches a symlink into audio/ and AUDIO/ on macOS
-    for name in PRIVATE:
-        private = base / name
-        if first.name.casefold() == name or (private.exists() and os.path.samefile(first, private)):
-            raise web.HTTPForbidden(text=f"{name} is never served\n")
-    if not target.is_file():
-        raise web.HTTPNotFound()
-    return target
 
 
 async def session_file(request: web.Request) -> web.FileResponse:
     target = resolve_inside(session_folder(request), request.match_info["path"])
-    headers = dict(FILE_HEADERS)
-    if target.suffix.lower() in PLAIN_TEXT:
-        headers["Content-Type"] = "text/plain; charset=utf-8"
-    return web.FileResponse(target, headers=headers)
+    return web.FileResponse(target, headers={"Cache-Control": "no-cache", **call_folders.served_headers(target)})
 
 
 # ---------- app ----------
@@ -332,19 +311,27 @@ def local_host(name: str | None) -> bool:
     return name == "localhost" or name.endswith(LOCAL_SUFFIXES) or name == socket.gethostname().lower()
 
 
+LOOPBACK = ("localhost", "127.0.0.1", "::1")
+
+
+def host_allowed(request: web.Request) -> bool:
+    """The host names both web servers answer to, against DNS rebinding. On a server (BEE_CALL_PUBLIC_HOST set):
+    its own name, and this machine's loopback; never a bare IP address (BC-083). On a Mac: an IP address, a
+    .local-style name or the machine's own name, for the app and the session screen on the same Wi-Fi."""
+    public = os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip().lower()  # the server's own name, behind https
+    host = (request.url.host or "").lower().rstrip(".").strip("[]")
+    if public:
+        return host == public or host in LOOPBACK
+    return local_host(request.url.host)
+
+
 @web.middleware
 async def local_hosts_only(request: web.Request, handler):
-    public = os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip().lower()  # the server's own name, behind https
-    host = (request.url.host or "").lower().rstrip(".")
-    if not local_host(request.url.host) and not (public and host == public):
-        hint = "" if public else "; use this computer's IP address or .local name"  # on a server, just refuse
+    if not host_allowed(request):
+        on_a_server = os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip()
+        hint = "" if on_a_server else "; use this computer's IP address or .local name"  # on a server, just refuse
         raise web.HTTPMisdirectedRequest(text=f"unknown host name{hint}\n")
     return await handler(request)
-
-
-def from_this_machine(request: web.Request) -> bool:
-    """Made on this machine itself, not passed on by a proxy in front (which adds X-Forwarded-For)."""
-    return request.remote in ("127.0.0.1", "::1") and "X-Forwarded-For" not in request.headers
 
 
 @web.middleware
@@ -355,8 +342,8 @@ async def signed_in(request: web.Request, handler):
     header = request.headers.get("Authorization", "")
     token = header[7:].strip() if header.startswith("Bearer ") else request.cookies.get(SESSION_COOKIE)
     person = request.app[PEOPLE].who(token)
-    if person is None and not token and from_this_machine(request) and not os.environ.get("BEE_CALL_PUBLIC_HOST"):
-        person = dev_person()  # reading only: a page elsewhere can make the browser ask, but not read the answer
+    if person is None and not token:  # reading only: voice/people.py dev_fallback
+        person = dev_fallback(request.app[PEOPLE], request.remote, "X-Forwarded-For" in request.headers, asked=True)
     if person is None:
         raise web.HTTPUnauthorized(text="sign in first\n")
     request[PERSON] = person
@@ -406,6 +393,7 @@ def make_app(people: People) -> web.Application:
     app[STOPPING] = asyncio.Event()
     app.on_shutdown.append(stop_streams)
     app.on_response_prepare.append(no_cache_static)
+    app.on_response_prepare.append(plain_server_name)
     app.router.add_get("/", index)
     app.router.add_get("/api/sessions", list_sessions)
     app.router.add_get("/api/sessions/{date}/{time}/events", stream_events, allow_head=False)

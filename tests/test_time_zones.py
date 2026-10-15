@@ -13,7 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from meta.session import quiet
 from tests.helpers import signed_in
-from tests.test_meta import ScriptedModel, tool_use
+from tests.test_meta import on_glm, ScriptedModel, tool_use
 from tests.test_offers import asked
 from voice import outbound, voip_push
 from voice.offers import OfferStore
@@ -53,7 +53,7 @@ def test_the_meta_agent_and_its_offer_read_the_person_s_clock(tmp_path, monkeypa
     model = ScriptedModel([
         {"role": "assistant", "content": [tool_use(1, "offer_call", topic="The flat prices", why="A result is in.")]},
         {"role": "assistant", "content": [{"text": "Asked."}]}])
-    thinker = outbound.Thinker(me.workspace, ("m", "r"), client=model, bee=False)
+    thinker = outbound.Thinker(me.workspace, on_glm(model), bee=False)
     monkeypatch.setattr(outbound, "META_CHECK_S", 0.01)
     from meta.session import add_event
     add_event(me.workspace, "call_ended", now=me.person.now(), call="x")
@@ -150,3 +150,27 @@ def test_the_call_ai_the_prep_and_a_job_read_the_person_s_clock(tmp_path):
         return job
 
     assert str(asyncio.run(main()).now.tzinfo) == "Europe/London"
+
+
+
+def test_a_test_clock_file_sets_the_person_s_time_and_it_runs_on(tmp_path, monkeypatch):
+    """Outside test seam 7: Person.now() read the real clock only, so a rule that needs a time of day (the suggested
+    call time, quiet hours, the day's budget) could not be checked from outside. BEE_CALL_CLOCK_FILE names a file
+    holding one time with its zone: from the moment the file was written it is that time, and the clock runs on.
+    Never on a server (deploy/config.py NOT_FOR_THE_SERVER)."""
+    from deploy.config import NOT_FOR_THE_SERVER
+    from tests.helpers import signed_in
+    from voice.offers import call_time
+
+    me = signed_in(tmp_path)
+    clock = tmp_path / "clock.txt"
+    clock.write_text("2026-10-15T20:55:00+09:00\n")
+    monkeypatch.setenv("BEE_CALL_CLOCK_FILE", str(clock))
+    now = me.person.now()
+    assert abs((now - datetime(2026, 10, 15, 20, 55, tzinfo=ZoneInfo("Asia/Seoul"))).total_seconds()) < 5
+    assert call_time(now).day == 16  # five minutes before 21:00: tomorrow's
+    clock.write_text("2026-10-15T03:00:00+00:00")  # set again, in another zone
+    assert me.person.now().hour == 12 and call_time(me.person.now()).day == 15
+    clock.write_text("not a time")
+    assert abs((me.person.now() - datetime.now(ZoneInfo("Asia/Seoul"))).total_seconds()) < 5  # the real clock
+    assert "BEE_CALL_CLOCK_FILE" in NOT_FOR_THE_SERVER

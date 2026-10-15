@@ -1,0 +1,2 @@
+{"key": "w1", "status": "applying", "item": {"kind": "todo_create", "text": "데모 영상 대본 다듬기"}, "question": "Bee 할 일에 '데모 영상 대본 다듬기'를 넣을까요?", "answer": "네.", "before": null, "at": "2026-10-15T14:25:40+09:00"}
+{"key": "w1", "status": "ok", "response": {"todo": {"id": 77002, "text": "데모 영상 대본 다듬기", "created_at": 1792041940000, "completed": false}}, "at": "2026-10-15T14:25:41+09:00"}

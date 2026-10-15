@@ -20,6 +20,7 @@ from voice.language import call_language
 from voice.prep import Prep, call_brief
 from voice.outbound import saved_trigger
 from voice.token_server import make_token, recent_calls
+from tests.contract import check_body
 from tests.helpers import SEOUL, fake_livekit, seoul_now, signed_in
 
 FIXTURE = Path(__file__).parent / "fixtures" / "inbox" / "changed.json"
@@ -112,6 +113,7 @@ def test_place_call_opens_a_room_with_the_voice_server_and_records_the_ring(tmp_
     assert meta["direction"] == "outbound" and meta["topic"] == plan.topic and meta["conversation_ids"] == [5121]
     assert meta["kind"] == "conversation" and Prep.from_meta(meta["prep"]) == prep
     ring = json.loads((workspace / OUTBOUND_LOG).read_text().splitlines()[-1])
+    check_body("ring", ring)  # the /ring event's data and the VoIP push (app contract section 7)
     assert ring["room"] == room and ring["topic"] == plan.topic
     assert (datetime.fromisoformat(ring["expires_at"]) - datetime.fromisoformat(ring["at"])).total_seconds() == 60
     assert ring["expires_epoch"] == int(datetime.fromisoformat(ring["expires_at"]).timestamp())

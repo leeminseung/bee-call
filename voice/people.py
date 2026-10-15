@@ -31,16 +31,21 @@ import re
 import secrets
 import shutil
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from voice import model_catalog
+from voice.catalog import catalog, catalog_id
+
 PERSON_ID = re.compile(r"[a-z][a-z0-9-]{0,31}")
 CALL_TIME = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+DEFAULT_CALL_TIME = "21:00"  # the evening time an offer suggests until the person sets theirs (the one default)
 SESSION_DAYS = 180  # a sign-in lasts this long; then the app signs in with Apple again (arbitrary)
 DEFAULT_BUDGET_USD = 3.0  # estimated spend a day before calls stop (arbitrary until per-minute costs are measured)
 DEFAULT_TIME_ZONE = "Asia/Seoul"  # until the person's phone sends its own (Matt, 2026-10-15: the friend is in Korea too)
@@ -53,24 +58,64 @@ def data_root() -> Path:
     return Path(os.environ.get("BEE_CALL_DATA") or "data")
 
 
+def clock_now(zone: ZoneInfo) -> datetime:
+    """Now, in `zone`. For tests from outside (never on a server: deploy/config.py NOT_FOR_THE_SERVER),
+    BEE_CALL_CLOCK_FILE names a file holding one ISO 8601 time with its zone, such as 2026-10-15T20:55:00+09:00:
+    from the moment the file was written it is that time, and the clock runs on from there. A file that is missing
+    or holds anything else leaves the real clock."""
+    path = os.environ.get("BEE_CALL_CLOCK_FILE", "").strip()
+    if path:
+        try:
+            clock = Path(path)
+            given = datetime.fromisoformat(clock.read_text().strip())
+            if given.tzinfo is not None:
+                return (given + timedelta(seconds=time.time() - clock.stat().st_mtime)).astimezone(zone)
+        except (OSError, ValueError):
+            pass
+    return datetime.now(zone)
+
+
+def on_a_server() -> bool:
+    """A server has its public name (deploy/config.py); a Mac has none."""
+    return bool(os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip())
+
+
 def dev_person() -> str | None:
     """For this Mac only: the person a request from this machine without a sign-in token is, and whose folder
-    a call without a person in its metadata uses (voice/agent.py console, probes). Never set it on a server."""
+    a call without a person in its metadata uses (voice/agent.py console, probes). None on a server, whatever the
+    environment says."""
+    if on_a_server():
+        return None
     person = (os.environ.get("BEE_CALL_DEV_PERSON") or "").strip()
     return person if PERSON_ID.fullmatch(person) else None
+
+
+def dev_fallback(people: "People", remote: str | None, proxied: bool, asked: bool) -> str | None:
+    """The person a web request without a sign-in acts as, one rule for both web servers (server review 7): only on a
+    Mac, only a request made on this machine itself (loopback, not passed on by a proxy), only when it asked to,
+    and only an approved person. The token server asks for its X-Bee-Call-Dev header, which no web page can send
+    to another site; the record server only reads, and a page elsewhere can make the browser ask but not read the
+    answer, so it lets its own page in without one (`asked` True)."""
+    person = dev_person()
+    if person is None or remote not in ("127.0.0.1", "::1") or proxied or not asked:
+        return None
+    return person if people.known(person) else None
 
 
 @dataclass
 class Settings:
     language: str = "en"  # the call language, en or ko (voice/language.py)
-    call_time: str = "21:00"  # the evening time an offer suggests (voice/offers.py)
+    call_time: str = DEFAULT_CALL_TIME  # the evening time an offer suggests (voice/offers.py)
     record_on_server: bool = True  # keep each call's raw audio in its folder (Matt, 2026-10-14)
     record_on_phone: bool = False  # the app records the call on the iPhone itself; the server only notes it
     daily_budget_usd: float = DEFAULT_BUDGET_USD
     bee: bool = False  # Bee is connected (POST /bee/connect)
-    tts: str | None = None  # the voice, for Matt to change by hand; None means the language's default
-    voice: str | None = None
+    voice: str | None = None  # a catalog id of the call language's voices (voice/catalog.py); None: its default
     time_zone: str = DEFAULT_TIME_ZONE  # an IANA name; the app sends the phone's (contract section 1)
+    # The call AI's and the background worker's models: catalog ids of the call and worker roles, by default each
+    # role's default (voice/model_catalog.py).
+    call_model: str = field(default_factory=lambda: model_catalog.choice("call").id)
+    worker_model: str = field(default_factory=lambda: model_catalog.choice("worker").id)
 
     def zone(self) -> ZoneInfo:
         return ZoneInfo(self.time_zone)
@@ -92,10 +137,13 @@ class Settings:
             return cls(record_on_server=False)
         settings = cls(record_on_server=False)  # until the file itself says to keep audio
         for name, value in data.items() if isinstance(data, dict) else ():
+            if name == "voice":  # a provider's voice id set by hand before the catalog: its catalog id
+                value = catalog_id(value)
             try:
                 settings.change(name, value)
             except ValueError:
-                pass  # an unknown or broken value keeps the default
+                pass  # an unknown or broken value keeps the default (tts, the retired provider switch, too)
+        settings.settle_voice(named=False)
         return settings
 
     def change(self, name: str, value: Any) -> None:
@@ -114,29 +162,37 @@ class Settings:
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 100:
                 raise ValueError("daily_budget_usd must be a number from 0 to 100")
             value = float(value)
-        elif name in ("tts", "voice"):
-            if value is not None and (not isinstance(value, str) or not re.fullmatch(r"[\w.-]{1,64}", value)):
-                raise ValueError(f"{name} must be a short name or null")
+        elif name == "voice":
+            if value is not None and (not isinstance(value, str) or catalog_id(value) != value):
+                raise ValueError("voice must be the id of a voice GET /voices lists, or null for the default")
         elif name == "time_zone":
             try:
                 ZoneInfo(value)
             except (TypeError, ValueError, ZoneInfoNotFoundError):
                 raise ValueError("time_zone must be an IANA time zone name, like Asia/Seoul")
+        elif name in ("call_model", "worker_model"):
+            choices = model_catalog.ids(name.removesuffix("_model"))
+            if not isinstance(value, str) or value not in choices:
+                raise ValueError(f"{name} must be one of {', '.join(choices)} (GET /models?role="
+                                 f"{name.removesuffix('_model')})")
         else:
             raise ValueError(f"unknown setting {name!r}")
         setattr(self, name, value)
 
-    def voice_env(self) -> dict[str, str]:
-        """The voice settings in the form voice/voices.py reads (TTS, ELEVENLABS_VOICE or POLLY_VOICE)."""
-        env = {}
-        if self.tts:
-            env["TTS"] = self.tts
-        if self.voice:
-            env["ELEVENLABS_VOICE" if (self.tts or os.environ.get("TTS")) == "elevenlabs" else "POLLY_VOICE"] = self.voice
-        return env
+    def settle_voice(self, named: bool) -> None:
+        """Keeps the voice one of the call language's (contract section 6). A voice the change `named` must be one;
+        otherwise (a change of language alone, or a stored value) a voice of another language becomes None, the
+        new language's default."""
+        if self.voice is None or any(v.id == self.voice for v in catalog(self.language)):
+            return
+        if named:
+            raise ValueError(f"voice {self.voice} is not one of the {self.language} voices (GET /voices?language="
+                             f"{self.language})")
+        self.voice = None
 
 
-APP_SETTINGS = ("language", "call_time", "record_on_server", "record_on_phone", "time_zone")  # what the app may change
+APP_SETTINGS = ("language", "voice", "call_time", "record_on_server", "record_on_phone", "time_zone",
+                "call_model", "worker_model")  # the app's
 
 
 @dataclass(frozen=True)
@@ -157,7 +213,7 @@ class Person:
         """The one clock for the person's time: now, in their time zone (aware). Every "the user's time" comes from
         here: the suggested call time, quiet hours, the day's notifications and budget, the 30 minutes after a
         call, call folder dates, booked times, and the "It is now" lines the models read."""
-        return datetime.now(self.settings().zone())
+        return clock_now(self.settings().zone())
 
     def device(self, kind: str) -> dict[str, Any] | None:
         """This person's phone for one kind of push: {"token", "environment"}, or None."""
@@ -250,6 +306,7 @@ class People:
                 if name not in allowed:
                     raise ValueError(f"{name!r} cannot be changed here")
                 settings.change(name, value)
+            settings.settle_voice(named="voice" in changes)
             self.save_settings(person, settings)
         return settings
 
@@ -458,6 +515,8 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="approved people and their settings")
     sub.add_parser("waiting", help="sign-ins waiting for approval")
+    test_sign_in = sub.add_parser("test-sign-in", help="for tests: a waiting sign-in for a made-up Apple id")
+    test_sign_in.add_argument("--email")
     approve = sub.add_parser("approve", help="approve a waiting sign-in by the code the app shows")
     approve.add_argument("code")
     approve.add_argument("--as", dest="person", required=True, help="a short id for the person, like jiwoo")
@@ -482,6 +541,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "list":
         for person in people.ids():
             print(f"{person}: {json.dumps(asdict(people.settings(person)), ensure_ascii=False)}")
+    elif args.command == "test-sign-in":
+        # What a first Sign in with Apple leaves, without Apple: it waits for approval like any other.
+        made_up = f"test:{secrets.token_hex(8)}"
+        people.sign_in(made_up, args.email, datetime.now())
+        print(json.dumps({"code": waiting_code(made_up), "sub": made_up}))
     elif args.command == "waiting":
         for entry in people.waiting():
             print(f"{entry['code']}  since {entry.get('at')}  {entry.get('email') or '(email hidden)'}")
@@ -498,12 +562,17 @@ def main(argv: list[str] | None = None) -> None:
         people.remove(args.person)
         print(f"removed {args.person}; their folder is still at {people.folder(args.person)}")
     elif args.command == "set":
+        if not people.known(args.person):  # a typo in the id would make a folder for nobody
+            sys.exit(f"{args.person} is not approved")
         try:
             value = json.loads(args.value)
         except ValueError:
             value = args.value
-        settings = people.change_settings(args.person, {args.name: value},
-                                          allowed=tuple(f.name for f in fields(Settings)))
+        try:
+            settings = people.change_settings(args.person, {args.name: value},
+                                              allowed=tuple(f.name for f in fields(Settings)))
+        except ValueError as exc:
+            sys.exit(str(exc))
         print(json.dumps(asdict(settings), ensure_ascii=False))
     elif args.command == "session":
         if not people.known(args.person):

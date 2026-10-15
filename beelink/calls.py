@@ -21,24 +21,46 @@ MARGIN_SECONDS = 60.0
 DERIVED_AFTER_SECONDS = 600.0
 
 
+# Each call record's window, by its path, with the record's size and change time when it was read: a call's record
+# is read again only when it changed, so a Bee read during a call does not read every call the person ever had
+# (review of the user-noticed fixes, 4).
+_WINDOWS: dict[Path, tuple[tuple[int, int], tuple[float, float] | None]] = {}
+
+
 def our_call_windows(workspace: Path) -> list[tuple[float, float]]:
     windows = []
     for folder in call_folders(workspace):
-        events = read_events(folder / EVENTS)  # the call in progress may have a line still being written
-        if not events:
-            continue
-        first = events[0]
-        if first.get("type") != "call_started" or "started_at" not in first:
-            continue
+        path = folder / EVENTS
         try:
-            start = parse_time(str(first["started_at"])).timestamp()
-        except ValueError:
+            stat = path.stat()
+        except OSError:
             continue
-        # The call ends at call_ended; lines after it (Bee write results) come later and are not the call.
-        ended = [e.get("t", 0.0) for e in events if e.get("type") == "call_ended"]
-        end_t = ended[0] if ended else events[-1].get("t", 0.0)
-        windows.append((start, start + float(end_t or 0.0)))
+        seen = (stat.st_size, stat.st_mtime_ns)
+        cached = _WINDOWS.get(path)
+        if cached is None or cached[0] != seen:
+            cached = (seen, call_window(path))
+            _WINDOWS[path] = cached
+        if cached[1] is not None:
+            windows.append(cached[1])
     return windows
+
+
+def call_window(path: Path) -> tuple[float, float] | None:
+    """One call's time window, from its events.jsonl; None for a record without a start."""
+    events = read_events(path)  # the call in progress may have a line still being written
+    if not events:
+        return None
+    first = events[0]
+    if first.get("type") != "call_started" or "started_at" not in first:
+        return None
+    try:
+        start = parse_time(str(first["started_at"])).timestamp()
+    except ValueError:
+        return None
+    # The call ends at call_ended; lines after it (Bee write results) come later and are not the call.
+    ended = [e.get("t", 0.0) for e in events if e.get("type") == "call_ended"]
+    end_t = ended[0] if ended else events[-1].get("t", 0.0)
+    return start, start + float(end_t or 0.0)
 
 
 def overlaps_our_call(start_ms: int | None, end_ms: int | None, windows: list[tuple[float, float]]) -> bool:

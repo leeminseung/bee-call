@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" font-family="sans-serif" font-size="12">
+<title>한국 가격(원), 에어와 프로, 세 가지 구성</title>
+<rect width="640" height="360" fill="#ffffff"/>
+<text x="56" y="22" font-size="15" font-weight="bold" fill="#222">한국 가격(원), 에어와 프로, 세 가지 구성</text>
+<line x1="56" y1="304.0" x2="484" y2="304.0" stroke="#e5e5e5"/>
+<text x="50" y="308.0" text-anchor="end" fill="#555">0</text>
+<line x1="56" y1="251.2" x2="484" y2="251.2" stroke="#e5e5e5"/>
+<text x="50" y="255.2" text-anchor="end" fill="#555">718000</text>
+<line x1="56" y1="198.4" x2="484" y2="198.4" stroke="#e5e5e5"/>
+<text x="50" y="202.4" text-anchor="end" fill="#555">1436000</text>
+<line x1="56" y1="145.6" x2="484" y2="145.6" stroke="#e5e5e5"/>
+<text x="50" y="149.6" text-anchor="end" fill="#555">2154000</text>
+<line x1="56" y1="92.8" x2="484" y2="92.8" stroke="#e5e5e5"/>
+<text x="50" y="96.8" text-anchor="end" fill="#555">2872000</text>
+<line x1="56" y1="40.0" x2="484" y2="40.0" stroke="#e5e5e5"/>
+<text x="50" y="44.0" text-anchor="end" fill="#555">3590000</text>
+<text x="127.3" y="322" text-anchor="middle" fill="#555">8GB/256GB</text>
+<text x="270.0" y="322" text-anchor="middle" fill="#555">16GB/512GB</text>
+<text x="412.7" y="322" text-anchor="middle" fill="#555">24GB/1TB</text>
+<text x="270.0" y="348" text-anchor="middle" fill="#333">구성</text>
+<text x="14" y="172.0" text-anchor="middle" fill="#333" transform="rotate(-90 14 172.0)">원</text>
+<rect x="70.3" y="187.1" width="57.1" height="116.9" fill="#2f6fdf"/>
+<rect x="212.9" y="143.0" width="57.1" height="161.0" fill="#2f6fdf"/>
+<rect x="355.6" y="98.8" width="57.1" height="205.2" fill="#2f6fdf"/>
+<rect x="127.3" y="128.2" width="57.1" height="175.8" fill="#e0702a"/>
+<rect x="270.0" y="84.1" width="57.1" height="219.9" fill="#e0702a"/>
+<rect x="412.7" y="40.0" width="57.1" height="264.0" fill="#e0702a"/>
+<rect x="498" y="44" width="10" height="10" fill="#2f6fdf"/>
+<text x="512" y="53" fill="#333">MacBook Air</text>
+<rect x="498" y="60" width="10" height="10" fill="#e0702a"/>
+<text x="512" y="69" fill="#333">MacBook Pro</text>
+</svg>

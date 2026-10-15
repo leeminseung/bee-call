@@ -4,13 +4,14 @@
 
 import asyncio
 import json
+from pathlib import Path
 from datetime import datetime
 
 import pytest
 
 from meta.session import MetaSession
 from tests.fake_call import FakeCall, FakeSession, use_fakes
-from tests.helpers import SEOUL, signed_in
+from tests.helpers import SEOUL, as_sent, signed_in
 from tests.test_prep import Converse, text
 from voice import agent, prep as prep_module
 from voice.ringback import STATE_ATTRIBUTE
@@ -36,10 +37,24 @@ def quick(monkeypatch):
 
 
 def with_prep_model(monkeypatch, client) -> None:
-    """The coordinator's model writes the opening and the note (scripted)."""
+    """The prep's model writes the opening and the note (scripted), as the bedrock mode runs it."""
+    from tests.helpers import converse
+
     monkeypatch.setattr(agent, "COORDINATOR_LLM", "bedrock")
-    monkeypatch.setattr(agent, "prep_model", lambda mode: ("zai.glm-5", "ap-southeast-2"))
-    monkeypatch.setattr(prep_module, "bedrock_client", lambda region: client)
+    monkeypatch.delenv("COORDINATOR_MODEL", raising=False)
+    converse(monkeypatch, client)
+
+
+def test_whose_call_it_is_and_what_it_runs_on_is_decided_without_livekit(tmp_path):
+    """Server review 17: run_call's first step on its own: a call for nobody approved is not answered, and a call
+    for an approved person runs on their settings as they are when it starts."""
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"language": "ko", "call_model": "sonnet"})
+    assert agent.caller_for({"person": "ghost"}, me.people) is None
+    caller = agent.caller_for({"person": "matt"}, me.people)
+    assert (caller.id, caller.language.code, caller.call_model.model, caller.uses_bee) == (
+        "matt", "ko", "claude-sonnet-5-5", False)
+    assert caller.workspace == me.workspace and caller.tts_voice.describe()["provider"] == "polly"
 
 
 def test_a_call_the_user_starts_is_picked_up_with_the_prepared_opening(tmp_path, monkeypatch, quick):
@@ -55,7 +70,7 @@ def test_a_call_the_user_starts_is_picked_up_with_the_prepared_opening(tmp_path,
 
     asyncio.run(main())
     assert call.session.said == ["Hi Matt, what's on your mind?"] and call.ringing == ["start", "stop"]
-    assert call.room.local_participant.attributes == {STATE_ATTRIBUTE: "answered"}
+    assert call.room.local_participant.attributes == {STATE_ATTRIBUTE: "answered", "bee_call.captions": "1"}
     (folder,) = call_folders(me.workspace)
     kinds = [e["type"] for e in events_of(folder)]
     assert kinds[0] == "call_started" and "picked_up" in kinds and kinds[-1] == "call_ended"
@@ -105,7 +120,8 @@ def test_an_ai_call_s_opening_never_waits_for_the_bee_read_kept_for_the_record(t
 
     me = signed_in(tmp_path)
     me.people.change_settings("matt", {"bee": True}, allowed=("bee",))
-    call = FakeCall(me.people, {"direction": "outbound", "person": "matt", "topic": "the interview"})
+    call = FakeCall(me.people, {"direction": "outbound", "person": "matt", "topic": "the interview",
+                                "kind": "voice note"})
     use_fakes(monkeypatch, call)
 
     async def slow_read(*a, **kw):
@@ -133,6 +149,8 @@ def test_an_ai_call_s_opening_never_waits_for_the_bee_read_kept_for_the_record(t
     assert "Bonus is 15%" in instructions  # the plain Bee context still reached the AI, once read
     (folder,) = call_folders(me.workspace)
     assert (folder / "inputs" / "unconfirmed_facts.json").exists()  # and the record keeps the read
+    (said,) = [json.loads(l) for l in (folder / "events.jsonl").read_text().splitlines() if '"type": "call"' in l]
+    assert (said["topic"], said["kind"]) == ("the interview", "voice note")  # an AI call without a topic falls back by it
 
 
 def test_a_booked_call_is_told_to_the_ai_as_its_own_call_continuing_the_earlier_one(tmp_path, monkeypatch, quick):
@@ -158,6 +176,30 @@ def test_a_booked_call_is_told_to_the_ai_as_its_own_call_continuing_the_earlier_
     assert "The user started this call" not in instructions
     assert "You placed this call, as the user booked it in an earlier call with you" in instructions
     assert "dentist" in instructions  # the earlier call, as it was recorded
+
+
+def test_a_call_continued_by_the_earlier_call_s_id_records_that_call_s_folder(tmp_path, monkeypatch, quick):
+    """The D app continues a call by its call id (contract section 7); the record names the earlier call by its folder
+    (<date>/<time>), as the records page links to it and the call view reads it."""
+    me = signed_in(tmp_path)
+    earlier = me.workspace / "2026-10-15" / "2100"
+    earlier.mkdir(parents=True)
+    (earlier / "events.jsonl").write_text(json.dumps({"t": 0, "type": "call_started", "room": "call-matt-2100"}) + "\n")
+    (earlier / "transcript.md").write_text("- 00:05.0 **User:** Let's talk about the dentist.\n")
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt", "continue_from": "call-matt-2100"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        instructions = call.session.started["agent"].instructions
+        await call.end()
+        return instructions
+
+    assert "dentist" in asyncio.run(main())
+    (folder,) = [f for f in call_folders(me.workspace) if f != earlier]
+    (said,) = [json.loads(l) for l in (folder / "events.jsonl").read_text().splitlines() if '"type": "call"' in l]
+    assert said["continue_from"] == "2026-10-15/2100"
 
 
 def test_an_ai_call_unanswered_in_time_is_missed_and_not_called_again(tmp_path, monkeypatch, quick):
@@ -394,6 +436,29 @@ def test_the_voice_server_waits_for_the_caller_as_long_as_the_app_rings():
     assert agent.CALLER_WAIT_S >= 30
 
 
+def test_console_mode_picks_up_at_once(tmp_path, monkeypatch, quick):
+    """Review of the user-noticed fixes, 6c: LiveKit's console mode (this Mac's microphone) has no caller in a room,
+    so the call waited the whole 30 s for one before it picked up."""
+    import time
+
+    me = signed_in(tmp_path)
+    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
+    monkeypatch.setattr(agent, "CALLER_WAIT_S", 5.0)  # long enough to tell a wait apart
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    call.console = True
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        started = time.monotonic()
+        await agent.run_call(call, me.people)  # nobody ever joins
+        took = time.monotonic() - started
+        await call.end()
+        return took
+
+    took = asyncio.run(main())
+    assert took < 2.0 and call.session.said == ["Hi Matt, what's on your mind?"]
+
+
 def test_a_room_that_closes_before_the_caller_is_seen_ends_the_call_quietly(tmp_path, monkeypatch, quick):
     """LiveKit's wait for a participant raises when the room goes away; that is a caller who never came."""
     me = signed_in(tmp_path)
@@ -451,6 +516,96 @@ def test_a_hang_up_after_the_ai_spoke_keeps_the_call(tmp_path, monkeypatch, quic
     assert [e["kind"] for e in MetaSession(me.workspace).take_events()] == ["call_ended"]
 
 
+def test_a_quiet_call_s_record_shows_life_while_the_call_runs(tmp_path, monkeypatch, quick):
+    """Contract section 1: a call writes lines only when something happens, and a record without life for 120 s
+    reads as dropped. So while the call runs its record's file time is refreshed every REFRESH_S (30 s), and two
+    quiet minutes never read as dropped; it stops with the call."""
+    import os
+
+    from voice import recorder
+    from voice.call_folders import call_folders
+
+    monkeypatch.setattr(recorder, "REFRESH_S", 0.05)
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+    long_ago = 1_000_000_000
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        (folder,) = call_folders(me.workspace)
+        events = folder / "events.jsonl"
+        os.utime(events, (long_ago, long_ago))
+        await asyncio.sleep(0.25)
+        while_running = events.stat().st_mtime
+        call.hang_up()
+        await call.end()
+        os.utime(events, (long_ago, long_ago))
+        await asyncio.sleep(0.25)
+        return while_running, events.stat().st_mtime
+
+    while_running, after_the_end = asyncio.run(main())
+    assert while_running > long_ago + 1000 and after_the_end == long_ago
+
+
+def test_after_the_call_its_title_is_asked_for_once_the_record_is_closed(tmp_path, monkeypatch, quick):
+    """Decision 7 of the contract: the title is written after the call, beside the Bee retry, and never keeps the
+    record open (voice/titles.py)."""
+    from voice.call_folders import call_folders
+
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"language": "ko"})
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+    asked = []
+
+    async def title_call(folder, language, *, workspace):
+        asked.append((folder, language.code, workspace, json.loads(
+            (folder / "events.jsonl").read_text().splitlines()[-1])["type"]))
+        return "제목"
+
+    monkeypatch.setattr(agent, "title_call", title_call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    (folder,) = call_folders(me.workspace)
+    assert asked == [(folder, "ko", me.workspace, "call_ended")]
+
+
+def test_the_voice_server_says_when_its_own_room_reconnected_so_the_app_stops_counting_captions(
+        tmp_path, monkeypatch, quick):
+    """App contract section 3, rule 6: captions are not sent while the voice server is away from the room, though
+    what it hears is still recorded, so the caption numbers may no longer match. It sets bee_call.captions as it
+    picks up and changes it after each reconnect of its own; the app then draws the view alone for that call."""
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        at_pick_up = dict(call.room.local_participant.attributes)
+        call.room.emit("reconnected")
+        await asyncio.sleep(0.05)
+        after_one = dict(call.room.local_participant.attributes)
+        call.room.emit("reconnected")
+        await asyncio.sleep(0.05)
+        after_two = call.room.local_participant.attributes["bee_call.captions"]
+        call.hang_up()
+        await call.end()
+        return at_pick_up, after_one, after_two
+
+    at_pick_up, after_one, after_two = asyncio.run(main())
+    assert at_pick_up == {STATE_ATTRIBUTE: "answered", "bee_call.captions": "1"}
+    assert (after_one["bee_call.captions"], after_two) == ("2", "3")
+
+
 def test_claude_s_history_is_kept_when_it_answers_with_glm_5_standing_by(tmp_path, monkeypatch, quick):
     """COORDINATOR_LLM=anthropic: the session's model is the stand-by wrapper, and Claude's history (exactly what
     Claude was sent) is still kept for checking the call afterwards."""
@@ -474,6 +629,31 @@ def test_claude_s_history_is_kept_when_it_answers_with_glm_5_standing_by(tmp_pat
     asyncio.run(main())
     (folder,) = call_folders(me.workspace)
     assert json.loads((folder / "claude-history.json").read_text()) == {"system": None, "messages": []}
+
+
+def test_the_call_ai_is_the_person_s_call_model_and_the_record_names_it(tmp_path, monkeypatch, quick):
+    """Setting call_model, read as the call starts like the language: "sonnet" makes the call AI Claude Sonnet 5.5,
+    and the record's coordinator event names the model in use."""
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"call_model": "sonnet"})
+    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
+    monkeypatch.setattr(agent, "COORDINATOR_LLM", "anthropic")
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        call.hang_up()
+        await call.end()
+
+    monkeypatch.setenv("COORDINATOR_THINKING", "disabled")  # left over from before call_model: not used, and said
+    asyncio.run(main())
+    assert call.call_model.model == "claude-sonnet-5-5"
+    (folder,) = call_folders(me.workspace)
+    (coordinator,) = [e for e in events_of(folder) if e["type"] == "coordinator"]
+    assert coordinator["llm"] == "anthropic" and coordinator["model"] == "claude-sonnet-5-5"
+    assert coordinator["call_model"] == "sonnet" and coordinator["settings_not_used"] == ["COORDINATOR_THINKING"]
 
 
 def test_a_caller_whose_phone_drops_and_comes_back_before_the_ai_speaks_keeps_the_call(tmp_path, monkeypatch, quick):
@@ -696,6 +876,126 @@ def test_the_record_server_never_serves_the_model_log_or_the_claude_history(tmp_
 
     statuses = asyncio.run(main())
     assert statuses.pop("transcript.md") == 200 and set(statuses.values()) == {403}, statuses
+
+
+def test_the_record_server_never_serves_a_call_s_audio_or_its_raw_bee_inputs(tmp_path):
+    """Server review 16: the record server's refusal of audio/ and inputs/ had no test, and the fixture call that has
+    both folders was never used. Served by name or by any spelling of it, they are refused; the call's transcript
+    and its job files are served."""
+    import shutil
+
+    from aiohttp.test_utils import TestClient, TestServer
+    from voice import session_server
+
+    me = signed_in(tmp_path)
+    fixture = Path(__file__).parent / "fixtures" / "sessions" / "2026-10-11" / "1930"
+    shutil.copytree(fixture, me.workspace / "2026-10-11" / "1930")
+    names = ("audio/user.wav", "AUDIO/USER.WAV", "audio/ai.wav", "inputs/conversation-5121.json",
+             "Inputs/unconfirmed_facts.json", "jobs/../audio/user.wav", "jobs/%2E%2E/audio/user.wav",
+             "%2E%2E/1930/audio/user.wav", "transcript.md")
+
+    async def main():
+        async with TestClient(TestServer(session_server.make_app(me.people)), headers=me.headers) as client:
+            found = {name: await client.session.get(as_sent(client, f"/api/sessions/2026-10-11/1930/files/{name}"))
+                     for name in names}  # sent as written: the test client would resolve the dot segments first
+            return {name: (r.status, await r.read()) for name, r in found.items()}
+
+    answers = asyncio.run(main())
+    status, body = answers.pop("transcript.md")
+    assert status == 200 and body
+    for name, (status, body) in answers.items():
+        assert status in (403, 404) and b"RIFF" not in body and b"utterances" not in body, (name, status)
+
+
+def test_a_call_starts_on_an_empty_bee_day_and_keeps_its_prep_note(tmp_path, monkeypatch, quick, bee_log):
+    """BC-028: a person with Use Bee on and nothing in Bee today still gets their call. BC-031: the prep note is
+    kept as prep.md in the call's folder."""
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"bee": True}, allowed=("bee",))
+    monkeypatch.setenv("FAKE_BEE_EMPTY", "1")
+    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    assert call.session.said == ["Hi Matt, what's on your mind?"]
+    (folder,) = call_folders(me.workspace)
+    assert "Matt is weighing a job offer." in (folder / "prep.md").read_text()
+    assert any("today" in line for line in bee_log.read_text().splitlines())  # Bee was read, and was empty
+
+
+def test_a_call_keeps_the_language_it_started_in(tmp_path, monkeypatch, quick):
+    """BC-108: the phone sends its settings as it answers, and the voice server reads them again then (for the audio
+    switch), but a language changed meanwhile applies from the next call."""
+    me = signed_in(tmp_path)
+
+    class ChangesLanguageMidway(Converse):
+        def converse_stream(self, **request):
+            me.people.change_settings("matt", {"language": "ko"})  # the app syncs while the call is being prepared
+            return super().converse_stream(**request)
+
+    with_prep_model(monkeypatch, ChangesLanguageMidway(text(OPENING + NOTE)))
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        await call.end()
+
+    asyncio.run(main())
+    assert me.people.settings("matt").language == "ko"  # changed during the call
+    (folder,) = call_folders(me.workspace)
+    (coordinator,) = [e for e in events_of(folder) if e["type"] == "coordinator"]
+    assert coordinator["language"] == "en" and call.session.said == ["Hi Matt, what's on your mind?"]
+
+
+def test_a_call_keeps_both_voices_and_its_transcript_as_they_were_recorded(tmp_path):
+    """BC-092: with "save on the server" on, the user's and the AI's audio are kept as audio/user.wav and ai.wav.
+    BC-097: the transcript and the events only grow; nothing earlier is rewritten."""
+    import wave
+
+    from livekit import rtc
+    from tests.helpers import seoul_now
+    from voice.recorder import CallRecorder
+
+    rec = CallRecorder(tmp_path, room="r", now=seoul_now())
+    frame = rtc.AudioFrame(data=bytes(320), sample_rate=16000, num_channels=1, samples_per_channel=160)
+    for _ in range(3):
+        rec.user_audio.write(frame)
+    rec.ai_audio.write(frame)
+    rec.line("User", "Hi there.")
+    before = (rec.dir / "transcript.md").read_text(), (rec.dir / "events.jsonl").read_text()
+    rec.line("Assistant", "Hello!")
+    rec.event("note", text="later")
+    rec.close()
+    with wave.open(str(rec.dir / "audio" / "user.wav")) as user, wave.open(str(rec.dir / "audio" / "ai.wav")) as ai:
+        assert (user.getnframes(), ai.getnframes()) == (480, 160)
+    after = (rec.dir / "transcript.md").read_text(), (rec.dir / "events.jsonl").read_text()
+    assert after[0].startswith(before[0]) and after[1].startswith(before[1]) and "Hello!" in after[0]
+
+
+def test_a_started_job_cannot_be_changed(tmp_path):
+    """BC-127: the call AI is told a started job cannot be changed, and it has no tool that would change one."""
+    from types import SimpleNamespace
+
+    from livekit.agents.llm.tool_context import get_fnc_tool_names
+    from tests.helpers import seoul_now
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    agent_ = Coordinator(CallRecorder(tmp_path, room="r", now=seoul_now()), SimpleNamespace(), tmp_path,
+                         clock=seoul_now)
+    names = set(get_fnc_tool_names(agent_.tools))
+    assert {"delegate", "job_status"} <= names and not any("job" in n and n != "job_status" for n in names)
+    (delegate,) = [t for t in agent_.tools if getattr(getattr(t, "info", None), "name", None) == "delegate"]
+    assert "A started job cannot be changed" in delegate.info.description
 
 
 # ---------- where the time of each turn went (the user's request, 2026-10-15) ----------

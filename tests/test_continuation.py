@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import jwt
 
 from beelink.context import CallInputs
+from tests.contract import check_body
 from voice.continuation import earlier_call, session_dir
 from voice.coordinator import Coordinator
 from voice.language import call_language
@@ -66,6 +67,21 @@ def test_only_ids_of_earlier_calls_name_a_folder(tmp_path):
         assert earlier_call(tmp_path, bad) is None
 
 
+def test_an_earlier_call_is_found_by_its_call_id_as_well(tmp_path):
+    """Contract section 7: the D app continues a call by its call id (its LiveKit room); the pre-D form
+    <date>/<time> is still taken. A later record in the same room is <room>.2."""
+    earlier_session(tmp_path)
+    again = tmp_path / "2026-10-13" / "2359"
+    again.mkdir()
+    (again / "events.jsonl").write_text(json.dumps({"t": 0.0, "type": "call_started", "room": "call-1",
+                                                    "started_at": "2026-10-13T23:59:00"}) + "\n")
+    assert session_dir(tmp_path, "call-1") == tmp_path / EARLIER
+    assert session_dir(tmp_path, "call-1.2") == again
+    assert earlier_call(tmp_path, "call-1") == earlier_call(tmp_path, EARLIER)
+    for bad in ("call-9", "call-1.3", "../call-1", ".", ""):
+        assert session_dir(tmp_path, bad) is None
+
+
 def test_the_app_asks_for_a_continued_call_with_the_record_id(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
     from tests.helpers import signed_in
@@ -78,17 +94,23 @@ def test_the_app_asks_for_a_continued_call_with_the_record_id(tmp_path):
         app = make_app("wss://example", "APIkey", "s" * 32, me.people, room_exists=None)
         async with TestClient(TestServer(app), headers=me.headers) as client:
             good = await client.get("/token", params={"identity": "user", "continue": EARLIER})
+            by_id = await client.get("/token", params={"continue": "call-1"})
             plain = await client.get("/token", params={"identity": "user"})
             missing = await client.get("/token", params={"identity": "user", "continue": "2026-10-13/0001"})
             sneaky = await client.get("/token", params={"identity": "user", "continue": "../../etc"})
-            return await good.json(), await plain.json(), missing.status, sneaky.status
+            unknown = await client.get("/token", params={"continue": "call-9"})
+            return (await good.json(), await by_id.json(), await plain.json(), missing.status, sneaky.status,
+                    unknown.status)
 
-    good, plain, missing, sneaky = asyncio.run(main())
+    good, by_id, plain, missing, sneaky, unknown = asyncio.run(main())
+    for body in (good, by_id, plain):
+        check_body("token", body)
     meta = lambda body: json.loads(  # noqa: E731
         jwt.decode(body["token"], options={"verify_signature": False})["roomConfig"]["agents"][0]["metadata"])
     assert meta(good) == {"direction": "inbound", "continue_from": EARLIER, "person": "matt"}
+    assert meta(by_id) == {"direction": "inbound", "continue_from": "call-1", "person": "matt"}
     assert meta(plain) == {"direction": "inbound", "person": "matt"}
-    assert (missing, sneaky) == (400, 400)
+    assert (missing, sneaky, unknown) == (400, 400, 400)
 
 
 def test_the_opening_picks_up_the_earlier_call(tmp_path):

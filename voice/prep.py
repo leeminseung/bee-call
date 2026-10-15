@@ -1,8 +1,10 @@
 """The seconds before the AI picks up: it reads the user's Bee data and writes itself a call prep note.
 
-The model is the coordinator's own, called through the Bedrock Converse API with streaming. It starts from a
-seed: what started the call and the Bee data read for it (beelink/context.py). It first writes the opening,
-the first thing it says, then may take one round of up to three more Bee reads, then writes the note.
+The model is the model catalog's prep role (voice/model_catalog.py: Claude Haiku 5.5 with no thinking, GLM 5 on
+Bedrock standing by), as the COORDINATOR_LLM mode runs it, streamed through its provider's adapter
+(voice/providers/). It starts from a seed: what started the call and the Bee data read for it (beelink/context.py).
+It first writes the opening, the first thing it says, then may take one round of up to three more Bee reads, then
+writes the note.
 
 For a call the user starts, the voice server runs this while the caller hears ringing (voice/ringback.py) and
 picks up as soon as the opening is written, at most PREP_SECONDS after the call came in. GLM 5 needed 4.5-7.7 s
@@ -16,32 +18,29 @@ SpendLog), also when it is stopped: a call nobody answers and a call hung up whi
 """
 
 import asyncio
-import functools
-import json
 import logging
-import os
 import re
-import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Callable
-
-from botocore.config import Config
+from typing import Any
 
 from beelink import reads
 from beelink.calls import OurCalls
 from beelink.clock import now_text
 from beelink.context import CallInputs, fetch_call_inputs
 from beelink.planner import Plan
-from voice.aws_session import aws_session
+from voice import model_catalog, providers
+from voice.call_models import coordinator_llm
 from voice.costs import SpendLog
 from voice.language import CallLanguage, call_language
+from voice.model_catalog import Role
+from voice.providers import ToolCall, ToolResult, ToolSpec, Turn, Usage
 from voice.speech_filter import speech_only
 
 log = logging.getLogger("bee-call.prep")
 
-GLM_5 = "zai.glm-5"  # on Bedrock: the prep's and the meta agent's model, and the call AI's stand-by
+GLM_5 = model_catalog.GLM_5.model  # on Bedrock: the standby of the call AI, the prep and the meta agent
 PREP_SECONDS = 8.0  # the most a caller hears ringing before the AI picks up (agreed with Matt, 2026-10-13)
 # Starting the voice and its first syllable took about 2 s after the opening was ready (2026-10-13), and the
 # caller keeps hearing ringing meanwhile, so the opening must be ready this long into the call.
@@ -83,9 +82,8 @@ the user about their day.
 """
 
 
-def _tool(name: str, description: str, properties: dict[str, Any]) -> dict[str, Any]:
-    schema = {"type": "object", "properties": properties, "required": list(properties)}
-    return {"toolSpec": {"name": name, "description": description, "inputSchema": {"json": schema}}}
+def _tool(name: str, description: str, properties: dict[str, Any]) -> ToolSpec:
+    return ToolSpec(name, description, {"type": "object", "properties": properties, "required": list(properties)})
 
 
 TOOLS = [
@@ -104,7 +102,12 @@ OPENING = re.compile(r"<opening>(.*?)</opening>", re.S | re.I)
 class Prep:
     note: str | None = None  # for the coordinator's instructions
     opening: str | None = None  # the first thing the AI says
-    reads: list[str] = field(default_factory=list)  # the extra Bee reads the model asked for
+    # What it read of Bee, as data, in the order read (contract 2.3): the conversation behind the call ({"type":
+    # "conversation", "id", "summary", "at"}), the day's summary ({"type": "day", "date"}), then each read the model
+    # chose (a conversation, a day, {"type": "search", "query"}). Records before 2026-10-15 kept "tool {json}" text.
+    reads: list[dict[str, Any]] = field(default_factory=list)
+    bee: bool = False  # it read the person's Bee (Use Bee on); else the note comes from earlier calls only
+    standby_reason: str | None = None  # why the prep role's standby answered instead of its model, if it did
     seconds: float = 0.0
     opening_s: float | None = None  # when the opening was ready, from the start of the prep
     model: str | None = None
@@ -120,32 +123,15 @@ class Prep:
     def from_meta(cls, data: Any) -> "Prep | None":
         if not isinstance(data, dict):
             return None
-        names = ("note", "opening", "reads", "seconds", "opening_s", "model", "error", "input_tokens", "output_tokens",
-                 "usage_estimated")
+        names = ("note", "opening", "reads", "bee", "standby_reason", "seconds", "opening_s", "model", "error",
+                 "input_tokens", "output_tokens", "usage_estimated")
         return cls(**{k: data[k] for k in names if k in data})
 
 
-def prep_model(mode: str) -> tuple[str, str] | None:
-    """The prep's model (and the meta agent's, meta/agent.py) for this COORDINATOR_LLM mode, and its Bedrock region;
-    None for the stand-ins without a model (echo, fake). With anthropic it is GLM 5: the prep and the meta agent call
-    Bedrock's Converse API, and COORDINATOR_MODEL names the call AI's Claude model there."""
-    region = os.environ.get("BEDROCK_REGION", os.environ.get("AWS_REGION", "ap-southeast-2"))
-    if mode == "anthropic":
-        return GLM_5, region
-    if mode == "bedrock":
-        return os.environ.get("COORDINATOR_MODEL", GLM_5), region
-    if mode == "nova":
-        return "us.amazon.nova-2-lite-v1:0", "us-east-1"
-    if mode == "claude":
-        from voice.claude_llm import default_model
-        return default_model(region), region
-    return None
-
-
-@functools.lru_cache(maxsize=4)
-def bedrock_client(region: str):
-    return aws_session().client("bedrock-runtime", region_name=region,
-                                config=Config(connect_timeout=3, read_timeout=20, retries={"max_attempts": 1}))
+def prep_role(mode: str) -> Role | None:
+    """The prep's role as this COORDINATOR_LLM mode runs it (model_catalog.mode_role); None for the stand-ins
+    without a model (echo, fake)."""
+    return model_catalog.mode_role("prep", mode)
 
 
 def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: bool) -> str:
@@ -227,113 +213,63 @@ def parse_note(text: str) -> str | None:
     return (found.group(1).strip() or None) if found else None
 
 
-async def _read(use: dict[str, Any], prep: Prep, zone, ours: OurCalls | None = None) -> dict[str, Any]:
-    """One of the prep's extra Bee reads; `ours`: the person's own calls, left out of what is read (BC-060)."""
-    name, args = use.get("name"), use.get("input") or {}
-    prep.reads.append(f"{name} {json.dumps(args, ensure_ascii=False)}")
+def conversation_read(conversation_id: Any, conversation: dict[str, Any] | None, zone) -> dict[str, Any]:
+    """A conversation read, as the prep records it: its id, Bee's short summary and when it began."""
+    began = (conversation or {}).get("start_time")
+    return {"type": "conversation", "id": conversation_id, "summary": (conversation or {}).get("short_summary"),
+            "at": datetime.fromtimestamp(began / 1000, zone).isoformat(timespec="seconds")
+            if isinstance(began, (int, float)) else None}
+
+
+async def _read(call: ToolCall, prep: Prep, zone, ours: OurCalls | None = None) -> ToolResult:
+    """One of the prep's extra Bee reads, recorded as data; `ours`: the person's own calls, left out of what is read
+    (BC-060)."""
+    name, args = call.name, call.input
     if name == "search_bee":
+        prep.reads.append({"type": "search", "query": str(args.get("query", ""))})
         text = await reads.search(str(args.get("query", "")), ours=ours)
     elif name == "bee_conversation":
         try:
-            text = await reads.conversation(int(args.get("conversation_id")), zone, ours=ours)
+            conversation_id = int(args.get("conversation_id"))
         except (TypeError, ValueError):
+            conversation_id = None
+        if conversation_id is None:
             text = "conversation_id must be a number."
+        else:
+            text, found = await reads.conversation_read(conversation_id, zone, ours=ours)
+            prep.reads.append(conversation_read(conversation_id, found, zone))
     elif name == "bee_day":
+        prep.reads.append({"type": "day", "date": str(args.get("date", ""))})
         text = await reads.day(str(args.get("date", "")))
     else:
         text = f"There is no tool named {name}."
-    return {"toolResult": {"toolUseId": use["toolUseId"], "content": [{"text": text}]}}
+    return ToolResult(call.id, text)
 
 
-async def _not_read(use: dict[str, Any]) -> dict[str, Any]:
-    return {"toolResult": {"toolUseId": use["toolUseId"], "status": "error",
-                           "content": [{"text": f"Not read: at most {MAX_READS} reads."}]}}
-
-
-def estimated_tokens(*parts: Any) -> int:
-    """About how many tokens these are, for a request cut short before Bedrock counted it: four bytes of UTF-8 a
-    token (English runs about four characters a token, Korean about one character)."""
-    return sum(len(json.dumps(part, ensure_ascii=False).encode()) for part in parts) // 4
-
-
-async def _stream(client, model_id: str, system: str, messages: list[dict[str, Any]],
-                  on_text: Callable[[str], None], prep: "Prep | None" = None,
-                  tools: list[dict[str, Any]] = TOOLS) -> dict[str, Any]:
-    """One streamed Converse request: on_text gets the text so far as it grows. Returns the assistant message.
-    The request's token use is added to `prep`; when it is cut short after the model started answering, an
-    estimate of it."""
-    loop = asyncio.get_running_loop()
-    events: asyncio.Queue = asyncio.Queue()
-    stop = threading.Event()
-
-    def pump() -> None:  # boto3 streams are blocking, so they are read in a thread
-        try:
-            response = client.converse_stream(
-                modelId=model_id, system=[{"text": system}], messages=messages,
-                **({"toolConfig": {"tools": tools}} if tools else {}),
-                inferenceConfig={"maxTokens": 500, "temperature": 0.3})
-            for event in response["stream"]:
-                if stop.is_set():
-                    break
-                loop.call_soon_threadsafe(events.put_nowait, event)
-            loop.call_soon_threadsafe(events.put_nowait, None)
-        except Exception as exc:
-            if not stop.is_set():
-                loop.call_soon_threadsafe(events.put_nowait, exc)
-
-    threading.Thread(target=pump, daemon=True, name="prep-stream").start()
-    text, uses, tool = "", [], None
-    answering = counted = False  # the model began its answer (the request was read); Bedrock sent its count
-    try:
-        while (event := await events.get()) is not None:
-            if isinstance(event, Exception):
-                raise event
-            answering = True
-            if "contentBlockStart" in event and "toolUse" in event["contentBlockStart"].get("start", {}):
-                tool = {**event["contentBlockStart"]["start"]["toolUse"], "input": ""}
-            elif "contentBlockDelta" in event:
-                delta = event["contentBlockDelta"]["delta"]
-                if "text" in delta:
-                    text += delta["text"]
-                    on_text(text)
-                elif "toolUse" in delta and tool is not None:
-                    tool["input"] += delta["toolUse"].get("input", "")
-            elif "metadata" in event and prep is not None:
-                used = event["metadata"].get("usage") or {}
-                prep.input_tokens += int(used.get("inputTokens") or 0)
-                prep.output_tokens += int(used.get("outputTokens") or 0)
-                counted = True
-            elif "contentBlockStop" in event and tool is not None:
-                try:
-                    tool["input"] = json.loads(tool["input"] or "{}")
-                except ValueError:
-                    tool["input"] = {}
-                uses.append(tool)
-                tool = None
-    finally:
-        stop.set()  # a request given up on (the deadline) stops being read
-        if answering and not counted and prep is not None:
-            prep.input_tokens += estimated_tokens(system, messages)
-            prep.output_tokens += estimated_tokens(text)
-            prep.usage_estimated = True
-    content = ([{"text": text}] if text.strip() else []) + [{"toolUse": use} for use in uses]
-    return {"role": "assistant", "content": content}
+async def _not_read(call: ToolCall) -> ToolResult:
+    return ToolResult(call.id, f"Not read: at most {MAX_READS} reads.", error=True)
 
 
 class Preparation:
     """The prep, running in the background: `opening()` returns as soon as the opening is written, `done` resolves
     with the note (or None) when the prep ends."""
 
-    def __init__(self, inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *, spend: SpendLog,
-                 bee: bool, now: datetime, client=None, language: CallLanguage | None = None,
+    def __init__(self, inputs: CallInputs, meta: dict[str, Any], role: Role | None, *, spend: SpendLog,
+                 bee: bool, now: datetime, language: CallLanguage | None = None,
                  ours: OurCalls | None = None) -> None:
-        self.prep = Prep(model=model[0] if model else None)
+        """`role`: the prep's role as the mode runs it (prep_role); None, no model: no note and no opening."""
+        self.prep = Prep(model=role.choices[0].offering.model if role else None, bee=bee)
+        if bee:  # what was read before the prep: the conversations behind the call, and the day's summary
+            self.prep.reads += [conversation_read(conv_id, conv, now.tzinfo) for conv_id, conv, _ in inputs.conversations]
+            if inputs.today is not None:
+                self.prep.reads.append({"type": "day", "date": str(inputs.today.get("date") or now.date().isoformat())})
         self._ours = ours  # the person's own calls, left out of the prep's extra Bee reads (BC-060)
         self._spend = spend  # the person's spend log: the prep's model use goes there when it ends
         self._bee = bee  # the person uses Bee: Bee data, Bee tools and Bee's words; otherwise none of them
         instructions = PREP_INSTRUCTIONS if bee else PREP_INSTRUCTIONS_WITHOUT_BEE
         self._system = instructions.replace("{opening}", (language or call_language()).opening)
-        self._inputs, self._meta, self._model, self._client = inputs, meta, model, client
+        self._inputs, self._meta, self._role = inputs, meta, role
+        self._usage = Usage()  # what the prep's requests used, as their providers count it
         self._now = now  # the person's time (Person.now()), for the seed's "It is now" and Bee's times
         self._opening = asyncio.Event()
         self.done: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
@@ -364,9 +300,9 @@ class Preparation:
 
     async def _run_until(self, deadline_s: float) -> None:
         try:
-            if self._model is None:
+            if self._role is None:
                 raise LookupError("no model to prepare with in this mode")
-            await asyncio.wait_for(self._run(*self._model), deadline_s)
+            await asyncio.wait_for(self._run(), deadline_s)
         except asyncio.TimeoutError:
             self.prep.error = f"no note within {deadline_s:.1f} s"
         except asyncio.CancelledError:
@@ -380,6 +316,8 @@ class Preparation:
             if self.prep.error:
                 self.prep.note = None
             self.prep.seconds = round(time.monotonic() - self._started, 2)
+            self.prep.input_tokens, self.prep.output_tokens = self._usage.input_tokens, self._usage.output_tokens
+            self.prep.usage_estimated = self._usage.estimated
             self._opening.set()  # no opening is coming any more
             if not self.done.done():
                 self.done.set_result(self.prep.note)
@@ -391,33 +329,33 @@ class Preparation:
                 except OSError:  # a call never waits on its own bookkeeping
                     log.exception("could not record the prep's model use")
 
-    async def _run(self, model_id: str, region: str) -> None:
-        client = self._client or bedrock_client(region)
-        messages = [{"role": "user", "content": [{"text": seed_text(self._inputs, self._meta, self._now,
-                                                                     bee=self._bee)}]}]
+    async def _run(self) -> None:
+        turns = [Turn("user", text=seed_text(self._inputs, self._meta, self._now, bee=self._bee))]
         tools = TOOLS if self._bee else []
-        reply = await _stream(client, model_id, self._system, messages, self._on_text, self.prep, tools)
-        written = "".join(block.get("text", "") for block in reply["content"])
-        uses = [block["toolUse"] for block in reply["content"] if "toolUse" in block]
-        if uses:
-            results = await asyncio.gather(*(_read(u, self.prep, self._now.tzinfo, self._ours) if n < MAX_READS
-                                             else _not_read(u) for n, u in enumerate(uses)))
+        first = await providers.answer_with(self._role, self._system, turns, tools, on_text=self._on_text,
+                                            usage=self._usage)
+        self.prep.model, self.prep.standby_reason = first.model, first.reason
+        written = first.turn.text
+        if first.turn.calls:
+            results = await asyncio.gather(*(_read(c, self.prep, self._now.tzinfo, self._ours) if n < MAX_READS
+                                             else _not_read(c) for n, c in enumerate(first.turn.calls)))
             ask = "Now write the note." if self.prep.opening else "Now write the opening and the note."
-            messages += [reply, {"role": "user", "content": [*results, {"text": ask}]}]
-            reply = await _stream(client, model_id, self._system, messages, lambda text: self._on_text(written + text),
-                                  self.prep, tools)
-            written += "".join(block.get("text", "") for block in reply["content"])
+            turns += [first.turn, Turn("user", text=ask, results=list(results))]
+            # The same model that answered writes the rest (the standby, if it took over).
+            second = await providers.reply(first.choice, self._system, turns, tools,
+                                           on_text=lambda text: self._on_text(written + text), usage=self._usage)
+            written += second.turn.text
         self.prep.note = parse_note(written)
         if not self.prep.note:
             raise ValueError("the answer had no <note>")
 
 
-async def prepare_call(inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *, spend: SpendLog,
-                       bee: bool, now: datetime, deadline_s: float = NOTE_SECONDS, client=None,
+async def prepare_call(inputs: CallInputs, meta: dict[str, Any], role: Role | None, *, spend: SpendLog,
+                       bee: bool, now: datetime, deadline_s: float = NOTE_SECONDS,
                        language: CallLanguage | None = None, ours: OurCalls | None = None) -> Prep:
     """Runs the prep to the end. Never raises: a Prep without a note says why in `error`."""
-    preparation = Preparation(inputs, meta, model, spend=spend, bee=bee, client=client, now=now,
-                              language=language, ours=ours).start(deadline_s)
+    preparation = Preparation(inputs, meta, role, spend=spend, bee=bee, now=now, language=language,
+                              ours=ours).start(deadline_s)
     await preparation.done
     return preparation.prep
 
@@ -435,7 +373,7 @@ async def prepare_outbound(plan: Plan, *, spend: SpendLog, bee: bool, now: datet
     started = time.monotonic()
     inputs = await fetch_call_inputs(plan.inbox_dir, plan.conversation_ids, ours=ours)
     prep = await prepare_call(inputs, {**plan_meta(plan), **(extra or {})},
-                              prep_model(mode or os.environ.get("COORDINATOR_LLM", "bedrock")), spend=spend, bee=bee,
+                              prep_role(mode or coordinator_llm()), spend=spend, bee=bee,
                               now=now, deadline_s=deadline_s, language=language, ours=ours)
     prep.seconds = round(time.monotonic() - started, 2)
     return prep

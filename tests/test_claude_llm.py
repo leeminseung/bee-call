@@ -575,3 +575,57 @@ def test_a_refusal_after_some_words_files_none_of_them_as_claude_s():
     assert " ".join(text_of(first).split()) == "Well, the way to Sorry, I can't help with that one."
     sent = str(client.calls[1]["messages"])
     assert "Well, the way to" not in sent and "something it declines halfway" not in sent and client.problems == []
+
+
+def test_a_tool_result_that_was_declined_is_never_sent_again():
+    """Review of the Haiku changes, finding 2: only the caller's words were left out after a decline, so a Bee
+    result or a job's news that set it off went out again with every later request, and the caller heard the
+    refusal line turn after turn. Everything that came in with the declined request is left out now; the tool's
+    result is replaced by a stand-in that says why."""
+    async def main():
+        tool_use = {"type": "tool_use", "id": "toolu_1", "name": "delegate", "input": {"task": "look it up"}}
+        client = FakeAnthropic([[tool_use], [{"type": "refusal"}], say("Okay, something else then.")])
+        model = ClaudeBedrockLLM(client=client, model="claude-haiku-5-5", thinking="disabled")
+        ctx = new_ctx()
+        ctx.add_message(role="user", content="Look it up.")
+        await run_turn(model, ctx, [delegate])
+        ctx.items.append(llm.FunctionCall(call_id="toolu_1", name="delegate", arguments='{"task": "look it up"}'))
+        ctx.items.append(llm.FunctionCallOutput(call_id="toolu_1", name="delegate", output="TRIGGERING TEXT",
+                                                is_error=False))
+        said_aloud(ctx, await run_turn(model, ctx, [delegate]))
+        ctx.add_message(role="system", content="Note from the app: ANOTHER TRIGGER")
+        ctx.add_message(role="user", content="What else?")
+        third = await run_turn(model, ctx, [delegate])
+        return client, third
+
+    client, third = asyncio.run(main())
+    sent = str(client.calls[2]["messages"])
+    assert "TRIGGERING TEXT" not in sent and "What else?" in sent and client.problems == []
+    results = [b for m in client.calls[2]["messages"] if m["role"] == "user" for b in m["content"]
+               if isinstance(b, dict) and b.get("type") == "tool_result"]
+    assert [r["tool_use_id"] for r in results] == ["toolu_1"] and "safety check" in results[0]["content"]
+    assert text_of(third) == "Okay, something else then."
+
+
+def test_a_decline_of_a_reply_livekit_throws_away_leaves_nothing_out():
+    """Finding 3: a preemptive reply that is declined and then thrown away (the caller kept talking) took the
+    caller's words with it, with no note, and the caller never heard the line. A decline now takes effect, like a
+    reply, only once LiveKit plays it."""
+    async def main():
+        events = []
+        client = FakeAnthropic([[{"type": "refusal"}], say("Congrats on the offer!")])
+        model = ClaudeBedrockLLM(client=client, model="claude-haiku-5-5", thinking="disabled",
+                                 on_event=lambda kind, **data: events.append(kind))
+        base = new_ctx()
+        early = base.copy()
+        early.add_message(role="user", content="I got a")
+        dropped = FakeSpeech(scheduled=False)
+        await run_turn(model, early, speech=dropped)
+        dropped._done = True
+        base.add_message(role="user", content="I got a job offer today.")
+        await run_turn(model, base, speech=FakeSpeech())
+        return client, events
+
+    client, events = asyncio.run(main())
+    assert client.calls[1]["messages"] == [{"role": "user", "content": say("I got a job offer today.")}]
+    assert "claude_decline_dropped" in events and "claude_reply_declined" not in events

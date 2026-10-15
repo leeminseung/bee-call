@@ -31,6 +31,14 @@ def signed_in(root: Path, person: str = "matt") -> SimpleNamespace:
                            workspace=people.workspace(person), headers={"Authorization": f"Bearer {token}"})
 
 
+def as_sent(client, path: str):
+    """`path` exactly as the server is to see it, for client.session: the test client resolves dot segments and
+    decodes %2E before it sends a request, so a path that tries to leave a folder would never reach the server."""
+    from yarl import URL
+
+    return URL(str(client.make_url("")).rstrip("/") + path, encoded=True)
+
+
 def fake_livekit(requests: list) -> SimpleNamespace:
     """LiveKit's room API, keeping each CreateRoomRequest it gets."""
     async def create_room(request):
@@ -49,6 +57,14 @@ def another_conversation(plan, n: int = 1):
     """The same plan about another Bee conversation: one conversation leads to at most one offer (BC-014), so a
     test that asks again asks about another one."""
     return dataclasses.replace(plan, conversation_ids=[1000 + n])
+
+
+def next_question(store, plan, n: int, now):
+    """Another question later the same day, about another conversation. One question at a time: the user has
+    said no to the one still waiting."""
+    for waiting in [o for o in store.open(now) if o.state == "asked"]:
+        store.answer(waiting.id, "decline", now)
+    return store.ask(another_conversation(plan, n), now)
 
 
 class ScriptedLLM(llm.LLM):
@@ -86,3 +102,12 @@ class _ScriptedStream(llm.LLMStream):
                                                                                          content=piece)))
         self._event_ch.send_nowait(llm.ChatChunk(id=chunk_id, usage=llm.CompletionUsage(
             completion_tokens=5, prompt_tokens=50, total_tokens=55)))
+
+
+def converse(monkeypatch, client) -> None:
+    """Bedrock's Converse API answers from `client` (a stand-in such as tests/test_prep.py Converse), for whatever
+    runs on Bedrock: the bedrock development mode's prep, and GLM 5 standing by."""
+    from voice import providers
+    from voice.providers.bedrock import Bedrock
+
+    monkeypatch.setitem(providers._ADAPTERS, "bedrock", Bedrock(client=client))

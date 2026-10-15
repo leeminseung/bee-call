@@ -5,8 +5,8 @@ Run: uv run python scripts/deploy_worker.py              # role + harness, then 
      uv run python scripts/deploy_worker.py --model global.anthropic.claude-opus-5-5
 
 The AWS user needs the permissions in the project notes (AgentCore harness actions, and
-creating and passing the one role named ROLE_NAME). The harness ARN is saved to
-workspace/state/harness.json, where worker/harness.py reads it.
+creating and passing the one role named ROLE_NAME). The harness ARN is saved to harness.json in the data root
+(BEE_CALL_DATA, data/ when unset; voice/people.py data_root), where worker/harness.py reads it.
 """
 
 import argparse
@@ -24,8 +24,8 @@ from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from worker.harness import (DEFAULT_MODEL, HARNESS_NAME, REGION, STATE_FILE, HarnessWorker,  # noqa: E402
-                            harness_definition, update_request)
+from worker.harness import (DEFAULT_MODEL, HARNESS_NAME, REGION, HarnessWorker, harness_definition,  # noqa: E402
+                            state_file, update_request)
 from worker.runner import Job  # noqa: E402
 from voice.people import DEFAULT_TIME_ZONE  # noqa: E402
 
@@ -125,6 +125,10 @@ async def smoke(arn: str) -> None:
         print("\n".join(steps))
         print(f"{time.perf_counter() - started:5.1f}s done: {summary[:200]}")
         print("report.md:", (job.dir / "report.md").read_text()[:300])
+        usage_file = job.dir / "usage.json"
+        usage = json.loads(usage_file.read_text()) if usage_file.exists() else {}
+        # reasoning_chars above 0: the model reasoned (worker/harness.py REASONING reached it through the harness).
+        print("usage:", {k: usage.get(k) for k in ("input_tokens", "output_tokens", "reasoning_chars", "stop_reason")})
 
 
 def main() -> None:
@@ -136,8 +140,9 @@ def main() -> None:
     account = session.client("sts").get_caller_identity()["Account"]
     role_arn = ensure_role(session.client("iam"), account)
     harness = ensure_harness(session.client("bedrock-agentcore-control", region_name=REGION), role_arn, args.model)
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps({"harnessArn": harness["arn"], "harnessId": harness["harnessId"],
+    state = state_file()
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps({"harnessArn": harness["arn"], "harnessId": harness["harnessId"],
                                       "model": args.model, "version": harness.get("harnessVersion")}, indent=1))
     print(f"harness {harness['harnessName']} READY: {harness['arn']} (model {args.model})")
     if args.smoke:

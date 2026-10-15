@@ -201,3 +201,41 @@ def test_a_cut_off_reply_keeps_only_the_heard_words_and_nothing_is_added(tmp_pat
     assert [m.role for m in messages] == ["user", "assistant"]
     heard = messages[1].text_content
     assert messages[1].interrupted and 4 <= len(heard.split()) < len(REPLY.split()) and REPLY.startswith(heard.strip())
+
+
+def test_a_job_carries_its_title_and_the_call_s_language(tmp_path):
+    """Contract 2.4 and decision 5: delegate gives a job a few words in the call's language for the user's screen,
+    and the job request carries the call's language for the worker's progress lines, relay, summary and charts."""
+    import json
+    from types import SimpleNamespace
+
+    from voice.language import call_language
+
+    events = []
+
+    class Jobs:
+        def start(self, task, title=None, language=None):
+            events.append((task, title, language))
+            return SimpleNamespace(job_id="01")
+
+    agent = Coordinator(CallRecorder(tmp_path, room="r", now=seoul_now()), Jobs(), tmp_path, clock=seoul_now,
+                        language=call_language("ko"))
+    said = asyncio.run(agent.delegate(None, task=TASK, title="서울 토요일 날씨"))
+    assert said.startswith("Job 01 is running") and events == [(TASK, "서울 토요일 날씨", "ko")]
+
+    started = []
+
+    async def main():
+        runner = JobRunner(tmp_path / "call", lambda name, **f: started.append((name, f)), Worker(),
+                           lambda news: asyncio.sleep(0), clock=seoul_now)
+        (tmp_path / "call").mkdir()
+        job = runner.start(TASK, title="서울 토요일 날씨", language="ko")
+        await asyncio.gather(*runner.tasks.values())
+        return job
+
+    job = asyncio.run(main())
+    assert started[0] == ("job_started", {"job_id": "01", "task": TASK, "title": "서울 토요일 날씨", "language": "ko"})
+    assert (job.title, job.language) == ("서울 토요일 날씨", "ko")
+    first = json.loads((job.dir / "events.jsonl").read_text().splitlines()[0])
+    assert (first["type"], first["title"], first["language"]) == ("started", "서울 토요일 날씨", "ko")
+    assert (job.dir / "request.md").read_text() == f"# Job 01: 서울 토요일 날씨\n\n{TASK}\n\nLanguage: Korean\n"

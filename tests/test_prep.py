@@ -7,6 +7,7 @@ import asyncio
 import json
 import tempfile
 import time
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,14 +20,25 @@ from beelink.context import CallInputs, fetch_call_inputs
 from voice.coordinator import BeeCoordinator, Coordinator
 from voice.echo_llm import EchoLLM
 from voice.costs import SpendLog
+from voice import model_catalog, providers
+from voice.model_catalog import Role
 from voice.prep import MAX_READS, Prep, Preparation, prepare_call, seed_text
+from voice.providers.bedrock import Bedrock
 from voice.recorder import CallRecorder
 from tests.test_beelink import fake_bee  # noqa: F401  (pytest fixture)
 
 NOW = datetime(2026, 10, 13, 16, 40, tzinfo=ZoneInfo("Asia/Seoul"))
 OPENING = "<opening>Hi Matt, it's Bee Call. What's on your mind?</opening>"
 NOTE = "<note>\nMatt is weighing a job offer with a 15% bonus; fact 7 is unconfirmed.\n</note>"
-MODEL = ("zai.glm-5", "ap-southeast-2")
+
+
+def glm(client) -> Role:
+    """The prep on GLM 5 through Bedrock's Converse API, answered by `client` (a stand-in): the prep role's standby
+    as the bedrock mode runs it, its adapter given the stand-in."""
+    providers.register("converse-stand-in", Bedrock(client=client))
+    standby = model_catalog.role("prep").standby
+    return Role("prep", choices=(replace(standby, default=True, offering=replace(standby.offering,
+                                                                                    provider="converse-stand-in")),))
 SPEND = SpendLog(Path(tempfile.mkdtemp(prefix="prep-spend-")))  # where these preps record their model use
 
 
@@ -90,8 +102,13 @@ def test_the_seed_says_who_calls_why_and_what_bee_has(fake_bee):
 
 def test_opening_then_note_in_one_answer(fake_bee):
     client = Converse(text(OPENING + "\n" + NOTE))
-    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, spend=SPEND, bee=True, client=client, now=NOW))
-    assert prep.error is None and prep.reads == [] and prep.model == "zai.glm-5"
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, glm(client), spend=SPEND, bee=True, now=NOW))
+    # What it read, as data (contract 2.3): the conversation behind the call and the day, then no more.
+    (behind, day) = prep.reads
+    assert (behind["type"], behind["id"], behind["summary"], day) == (
+        "conversation", 5, "Talked through a job offer", {"type": "day", "date": "2026-10-13"})
+    assert datetime.fromisoformat(behind["at"]).utcoffset().total_seconds() == 9 * 3600
+    assert prep.error is None and prep.bee is True and prep.model == "zai.glm-5"
     assert prep.opening == "Hi Matt, it's Bee Call. What's on your mind?"
     assert prep.note == "Matt is weighing a job offer with a 15% bonus; fact 7 is unconfirmed."
     (request,) = client.requests
@@ -102,7 +119,7 @@ def test_opening_then_note_in_one_answer(fake_bee):
 def test_the_opening_is_ready_before_the_note_is_written():
     async def main():
         client = Converse(text(OPENING + " " + NOTE * 4), gap=0.02)  # the note streams for about a second
-        preparation = Preparation(CallInputs(), {}, MODEL, spend=SPEND, bee=True, client=client, now=NOW).start()
+        preparation = Preparation(CallInputs(), {}, glm(client), spend=SPEND, bee=True, now=NOW).start()
         started = time.monotonic()
         opening = await preparation.opening(timeout=5)
         ready = time.monotonic() - started
@@ -118,8 +135,12 @@ def test_opening_then_one_round_of_reads_then_the_note(fake_bee):
         [{"text": OPENING}, tool(0, "search_bee", {"query": "hike with Dana"}), tool(1, "bee_day", {"date": "2026-10-12"}),
          tool(2, "bee_conversation", {"conversation_id": 4}), tool(3, "bee_conversation", {"conversation_id": 5})],
         text(NOTE))
-    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, spend=SPEND, bee=True, client=client, now=NOW))
-    assert prep.note and prep.opening.startswith("Hi Matt") and len(prep.reads) == MAX_READS
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, glm(client), spend=SPEND, bee=True, now=NOW))
+    assert prep.note and prep.opening.startswith("Hi Matt")
+    extra = prep.reads[2:]  # after the conversation behind the call and the day, each read the prep chose, as data
+    assert len(extra) == MAX_READS and extra[:2] == [{"type": "search", "query": "hike with Dana"},
+                                                     {"type": "day", "date": "2026-10-12"}]
+    assert (extra[2]["type"], extra[2]["id"], extra[2]["summary"]) == ("conversation", 4, "Talked through a job offer")
     second = client.requests[1]["messages"]
     assert second[1]["content"][0] == {"text": OPENING}  # the first answer goes back as it was
     results = [b["toolResult"] for b in second[-1]["content"] if "toolResult" in b]
@@ -130,16 +151,53 @@ def test_opening_then_one_round_of_reads_then_the_note(fake_bee):
     assert second[-1]["content"][-1] == {"text": "Now write the note."}
 
 
+def test_a_person_without_bee_has_a_prep_that_read_nothing_of_bee(fake_bee):
+    client = Converse(text(OPENING + NOTE))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, glm(client), spend=SPEND, bee=False,
+                                    now=NOW))
+    assert (prep.reads, prep.bee) == ([], False)
+
+
+def test_with_the_server_s_mode_the_prep_runs_on_claude_haiku_and_glm_5_stands_by(fake_bee, monkeypatch):
+    """Decision 10 of the app contract: the prep on Claude Haiku 5.5 (no thinking: the opening is due within
+    seconds), GLM 5 answering when its first request fails."""
+    from tests.test_providers import Messages
+    from voice.prep import prep_role
+    from voice.providers.anthropic import Anthropic
+
+    said = {"content": [{"type": "text", "text": OPENING + NOTE}], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 2000, "output_tokens": 120}}
+    messages = Messages((said, [OPENING, NOTE]))
+    monkeypatch.setitem(providers._ADAPTERS, "anthropic", Anthropic(client=SimpleNamespace(messages=messages)))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, prep_role("anthropic"), spend=SPEND,
+                                    bee=True, now=NOW))
+    (sent,) = messages.sent
+    assert (sent["model"], sent["thinking"], sent["max_tokens"]) == ("claude-haiku-5-5", {"type": "disabled"}, 700)
+    assert prep.note and (prep.model, prep.input_tokens, prep.standby_reason) == ("claude-haiku-5-5", 2000, None)
+
+    class Down:
+        async def reply(self, *args, **kwargs):
+            raise RuntimeError("Anthropic is overloaded")
+
+    monkeypatch.setitem(providers._ADAPTERS, "anthropic", Down())
+    converse = Converse(text(OPENING + NOTE))
+    monkeypatch.setitem(providers._ADAPTERS, "bedrock", Bedrock(client=converse))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, prep_role("anthropic"), spend=SPEND,
+                                    bee=True, now=NOW))
+    assert prep.note and prep.model == "zai.glm-5" and "overloaded" in prep.standby_reason
+    assert converse.requests[0]["modelId"] == "zai.glm-5"
+
+
 def test_reads_before_the_opening_still_give_an_opening(fake_bee):
     client = Converse([tool(0, "bee_conversation", {"conversation_id": 5})], text(OPENING + NOTE))
-    prep = asyncio.run(prepare_call(inputs(fake_bee), {}, MODEL, spend=SPEND, bee=True, client=client, now=NOW))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {}, glm(client), spend=SPEND, bee=True, now=NOW))
     assert prep.opening and prep.note
     assert client.requests[1]["messages"][-1]["content"][-1] == {"text": "Now write the opening and the note."}
 
 
 @pytest.mark.parametrize("reply,opening", [(text("Sure, I'm ready."), None), (text(OPENING), "Hi Matt")])
 def test_an_answer_without_a_note_gives_no_note(reply, opening):
-    prep = asyncio.run(prepare_call(CallInputs(), {}, MODEL, spend=SPEND, bee=True, client=Converse(reply), now=NOW))
+    prep = asyncio.run(prepare_call(CallInputs(), {}, glm(Converse(reply)), spend=SPEND, bee=True, now=NOW))
     assert prep.note is None and prep.error == "ValueError: the answer had no <note>"
     assert (prep.opening or "").startswith(opening or "")
 
@@ -147,8 +205,8 @@ def test_an_answer_without_a_note_gives_no_note(reply, opening):
 def test_a_slow_model_is_given_up_at_the_deadline():
     async def main():
         started = time.monotonic()
-        prep = await prepare_call(CallInputs(), {}, MODEL, spend=SPEND, bee=True, client=Converse(text(OPENING + NOTE * 20), gap=0.05),
-                                  deadline_s=1.0, now=NOW)
+        prep = await prepare_call(CallInputs(), {}, glm(Converse(text(OPENING + NOTE * 20), gap=0.05)), spend=SPEND,
+                                  bee=True, deadline_s=1.0, now=NOW)
         return prep, time.monotonic() - started
 
     prep, waited = asyncio.run(main())
@@ -162,14 +220,14 @@ def test_no_model_in_this_mode_means_no_note_and_no_opening():
 
 
 def test_the_opening_is_spoken_text_only():
-    prep = asyncio.run(prepare_call(CallInputs(), {}, MODEL, spend=SPEND, bee=True, client=Converse(
-        text("<opening>Hi <b>Matt</b>,\nwhat's up?</opening><note>n</note>")), now=NOW))
+    prep = asyncio.run(prepare_call(CallInputs(), {}, glm(Converse(
+        text("<opening>Hi <b>Matt</b>,\nwhat's up?</opening><note>n</note>"))), spend=SPEND, bee=True, now=NOW))
     assert prep.opening == "Hi Matt , what's up?"
 
 
 def test_prep_travels_in_the_dispatch_and_lands_in_the_instructions(tmp_path):
-    prep = Prep(note="Matt planned a hike with Dana.", opening="Hi Matt!", reads=["search_bee {}"], seconds=4.2,
-                opening_s=1.1, model="zai.glm-5")
+    prep = Prep(note="Matt planned a hike with Dana.", opening="Hi Matt!", reads=[{"type": "search", "query": "hike"}],
+                seconds=4.2, opening_s=1.1, model="zai.glm-5", bee=True)
     assert Prep.from_meta(json.loads(json.dumps(prep.to_meta()))) == prep
     assert Prep.from_meta(None) is None
     agent = BeeCoordinator(CallRecorder(tmp_path, room="r", now=NOW), SimpleNamespace(), tmp_path, clock=lambda: NOW,
@@ -185,12 +243,17 @@ def late_note_turn(tmp_path, arrives_after: float):
     async def main():
         loop = asyncio.get_running_loop()
         note: asyncio.Future = loop.create_future()
-        loop.call_later(arrives_after, note.set_result, "Matt is weighing a job offer.")
+        if not arrives_after:  # it landed before the first turn
+            note.set_result("Matt is weighing a job offer.")
         agent = Coordinator(CallRecorder(tmp_path, room="r", now=NOW), SimpleNamespace(), tmp_path, clock=lambda: NOW,
                             prep_note="The user called you from the app.", pending_note=note)
         async with AgentSession(llm=EchoLLM()) as session:
             await session.start(agent)
             turn_ctx = agent.chat_ctx.copy()
+            # The note's clock starts with the turn, as `waited` does: a session start slowed by a loaded machine
+            # (three suites and an Xcode build at once) cannot eat into the time the turn waits.
+            if arrives_after:
+                loop.call_later(arrives_after, note.set_result, "Matt is weighing a job offer.")
             started = time.monotonic()
             await agent.on_user_turn_completed(turn_ctx, turn_ctx.add_message(role="user", content="Hey."))
             waited = time.monotonic() - started

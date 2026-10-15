@@ -103,7 +103,9 @@ def test_the_env_file_gives_the_services_exactly_the_values_in_ssm():
     text, skipped = env_file(params, Path("/run/bee-call/apns-key.p8"))
     assert systemd_env(text) == {"CALL_TIME": "  21:00 # evening", "ELEVENLABS_API_KEY": 'sk_a"b\\c$HOME`id`',
                                  "LIVEKIT_URL": "wss://bee-call.livekit.cloud", "NOTE": "it's é",
-                                 "APNS_KEY_PATH": "/run/bee-call/apns-key.p8"}
+                                 "APNS_KEY_PATH": "/run/bee-call/apns-key.p8",
+                                 # BC-154: the signed APNs token lives in memory (tmpfs), never on the disk
+                                 "APNS_TOKEN_CACHE": "/run/bee-call/apns/provider-token.json"}
     assert "PRIVATE KEY" not in text and skipped == {}  # the keys are files, never environment variables
     assert quoted("$x") == '"\\$x"'
 
@@ -120,12 +122,52 @@ def test_the_server_never_takes_a_profile_static_keys_the_dev_person_or_what_its
 
 # ---------- Caddy ----------
 
+def caddy_sites(text: str) -> dict[str, str]:
+    """Each site block of a Caddyfile by its address, with its body."""
+    return {m.group(1): m.group(2) for m in re.finditer(r"^(\S+) \{\n(.*?)^\}", text, re.MULTILINE | re.DOTALL)}
+
+
 def test_caddy_serves_the_token_server_on_443_and_the_session_screen_on_8443():
     text = caddyfile(" Bee.Example.com. ", TEMPLATE.read_text())
     assert "__HOSTNAME__" not in text
-    sites = re.findall(r"^(\S+) \{\n\treverse_proxy (\S+) \{\n\t\tflush_interval -1 ", text, re.MULTILINE)
-    assert sites == [("bee.example.com", "127.0.0.1:8787"), ("bee.example.com:8443", "127.0.0.1:8788")]
+    sites = caddy_sites(text)
+    for address, upstream in (("bee.example.com", "127.0.0.1:8787"), ("bee.example.com:8443", "127.0.0.1:8788")):
+        assert re.search(rf"\treverse_proxy {re.escape(upstream)} \{{\n\t\tflush_interval -1 ", sites[address])
     assert "protocols h1 h2" in text  # HTTP/3 needs UDP, which the security group does not open
+
+
+def test_caddy_answers_only_for_its_own_name_and_keeps_browsers_on_https():
+    """Black-box probe 1, 2 and 7 (2026-10-15): port 80 redirected to whatever Host the request named; a Host that
+    is not the server's own got Caddy's empty 200 over HTTPS; neither site sent HSTS."""
+    text = caddyfile("bee.example.com", TEMPLATE.read_text())
+    sites = caddy_sites(text)
+    assert "auto_https disable_redirects" in text  # Caddy's own redirect copies the request's Host
+    assert sites["http://"].strip() == "redir https://bee.example.com{uri} permanent"  # every name to this one
+    assert "strict_sni_host on" in text  # a Host other than the TLS name gets 421 Misdirected Request
+    for address in ("bee.example.com", "bee.example.com:8443"):
+        assert 'header Strict-Transport-Security "max-age=31536000"' in sites[address], address
+
+
+def test_a_caddyfile_that_caddy_refuses_never_replaces_the_working_one(tmp_path, monkeypatch, capsys):
+    """The new config is checked with Caddy itself before it takes the old one's place, so a mistake in it stops
+    the deploy with Caddy's words and leaves the server on the config that works."""
+    from deploy import config
+
+    working = tmp_path / "Caddyfile"
+    working.write_text("the config that works\n")
+    caddy = tmp_path / "caddy"
+    monkeypatch.setattr(config, "CADDYFILE", working)
+    monkeypatch.setattr(config, "CADDY_BIN", caddy)
+    monkeypatch.setattr(config, "public_host", lambda: "bee.example.com")
+    monkeypatch.setattr(config, "write", lambda path, text, mode, group=None: path.write_text(text))
+    caddy.write_text("#!/bin/sh\necho 'Error: adapting config using caddyfile: unrecognized directive' >&2\nexit 1\n")
+    caddy.chmod(0o755)
+    with pytest.raises(RuntimeError, match="unrecognized directive"):
+        config.write_caddyfile()
+    assert working.read_text() == "the config that works\n" and list(tmp_path.glob("Caddyfile.*")) == []
+    caddy.write_text('#!/bin/sh\n[ "$1" = validate ] && [ "$5" = caddyfile ] && grep -q bee.example.com "$3"\n')
+    config.write_caddyfile()
+    assert "redir https://bee.example.com{uri}" in working.read_text()
 
 
 @pytest.mark.parametrize("name", ["", "localhost", "1.2.3.4", "bee.example.com:443", "*.example.com",
@@ -152,6 +194,32 @@ def test_secrets_copy_this_macs_settings_except_its_own():
                             "ELEVENLABS_VOICE"}
 
 
+def test_the_people_command_runs_with_the_services_own_environment():
+    """Server review 19: `deploy_server.py people` repeated the units' environment by hand (data root, Bee CLI, clock
+    zone). It now takes it from the token server's unit, so a change there reaches the operator command too."""
+    from scripts.deploy_server import people_script
+
+    script = people_script(["set", "jiwoo", "language", '"ko"'])
+    unit = {k: v for k, v in (line.split("=", 2)[1:] for line in (UNITS / "bee-call-token.service").read_text().splitlines()
+                              if line.startswith("Environment="))}
+    assert unit["BEE_CALL_DATA"] == "/var/lib/bee-call"
+    for name, value in {**unit, "HOME": unit["BEE_CALL_DATA"]}.items():
+        assert f" {name}={value} " in script, name
+    assert script.startswith("cd /opt/bee-call/app && exec runuser -u bee-call -- env ")
+    assert script.endswith(".venv/bin/python -m voice.people set jiwoo language \'\"ko\"\'")
+
+
+def test_one_list_says_what_never_goes_to_the_server():
+    """Server review 19: the Mac's list of settings kept back (MAC_ONLY) and the server's list of settings it never
+    takes from SSM (REFUSED) were two lists that disagreed: TZ went to SSM and the server then left it out."""
+    from deploy.config import HOST_PARAMETER, REFUSED
+    from scripts.deploy_server import MAC_ONLY
+
+    assert set(MAC_ONLY) == REFUSED | {HOST_PARAMETER} and all(MAC_ONLY.values())
+    chosen, skipped = server_settings({"TZ": "UTC", "APNS_TOKEN_CACHE": "/tmp/x", "TTS": "polly"})
+    assert set(chosen) == {"TTS", "COORDINATOR_LLM"} and {"TZ", "APNS_TOKEN_CACHE"} <= set(skipped)
+
+
 def test_without_the_workers_arn_the_server_keeps_the_fake_worker():
     chosen, _ = server_settings({})
     assert {name: value for name, (value, _) in chosen.items()} == {"COORDINATOR_LLM": "anthropic"}
@@ -159,7 +227,8 @@ def test_without_the_workers_arn_the_server_keeps_the_fake_worker():
 
 def test_the_server_runs_claude_haiku_on_anthropic_s_api_with_the_key_from_this_mac():
     """The call AI on the server is Claude Haiku 5.5 on Anthropic's own API (2026-10-15); its key goes to SSM like
-    the other settings of .env.local. Without it on either side, secrets says every call will run on GLM 5."""
+    the other settings of .env.local. Without it on either side, secrets says every call, its prep and the meta agent
+    will run on GLM 5, and calls will have no title."""
     from scripts.deploy_server import coordinator_note
 
     chosen, skipped = server_settings({"ANTHROPIC_API_KEY": "sk-ant-test"})
@@ -168,7 +237,7 @@ def test_the_server_runs_claude_haiku_on_anthropic_s_api_with_the_key_from_this_
     assert coordinator_note(chosen, existing=set()) is None
     assert coordinator_note(server_settings({})[0], existing={"ANTHROPIC_API_KEY"}) is None  # already on the server
     note = coordinator_note(server_settings({})[0], existing=set())
-    assert "ANTHROPIC_API_KEY" in note and "GLM 5" in note
+    assert "ANTHROPIC_API_KEY" in note and "GLM 5" in note and "meta agent" in note and "title" in note
     assert coordinator_note(server_settings({"COORDINATOR_LLM": "bedrock"})[0], existing=set()) is None
 
 
@@ -256,9 +325,12 @@ def unit(name: str) -> list[str]:
 def test_every_service_runs_unprivileged_in_seoul_time_with_the_settings_from_ssm(name):
     lines = unit(name)
     for expected in ["User=bee-call", "Restart=always", "EnvironmentFile=/run/bee-call/env",
-                     "After=bee-call-env.service network-online.target", "Environment=TZ=Asia/Seoul",
-                     "Environment=BEE_CALL_DATA=/var/lib/bee-call", "WorkingDirectory=/opt/bee-call/app"]:
+                     "Environment=TZ=Asia/Seoul", "Environment=BEE_CALL_DATA=/var/lib/bee-call",
+                     "WorkingDirectory=/opt/bee-call/app"]:
         assert expected in lines, f"{name}: {expected}"
+    # Started after the settings and the network, in whatever order the line names them (server review 16).
+    after = {unit_name for line in lines if line.startswith("After=") for unit_name in line[len("After="):].split()}
+    assert {"bee-call-env.service", "network-online.target"} <= after, name
     assert next(line for line in lines if line.startswith("ExecStart=")).startswith(
         "ExecStart=/opt/bee-call/app/.venv/bin/python -m ")
     # Wants, not Requires: a failed settings read must not keep a service down, since Restart= never retries a
@@ -271,3 +343,39 @@ def test_the_voice_server_finishes_calls_before_it_stops_and_registers_as_bee_ca
     lines = unit("bee-call-agent")
     assert "ExecStart=/opt/bee-call/app/.venv/bin/python -m voice.agent start" in lines
     assert {"KillMode=mixed", "TimeoutStopSec=10min", "Environment=LIVEKIT_AGENT_NAME=bee-call"} <= set(lines)
+
+
+
+# ---------- requirement rows found built but untested (requirements review 2026-10-15) ----------
+
+INSTALL = Path(__file__).parent.parent / "deploy" / "install.sh"
+
+
+def test_from_the_internet_only_the_web_ports_answer():
+    """BC-151: the security group opens 80, 443 and 8443 and nothing else (no SSH, no 8787, no 8081)."""
+    assert deploy_server.PORTS == (80, 443, 8443)
+
+
+def test_an_update_restarts_the_voice_server_last_and_stops_if_the_settings_cannot_be_read():
+    """BC-157: the settings first (a oneshot unit, so a failed read fails the restart and `set -e` stops the update
+    with the old services still running), then the web servers and the outbound loops, the voice server last."""
+    lines = [line.strip() for line in INSTALL.read_text().splitlines()]
+    assert lines[next(i for i, line in enumerate(lines) if line and not line.startswith("#"))] == "set -euo pipefail"
+    restarts = [line for line in lines if line.startswith("systemctl restart bee-call")]
+    assert restarts == ["systemctl restart bee-call-env",
+                        "systemctl restart bee-call-token bee-call-session bee-call-outbound",
+                        "systemctl restart bee-call-agent"]
+    assert "Type=oneshot" in unit("bee-call-env")
+
+
+def test_every_tool_the_server_downloads_is_pinned_and_checked_before_use():
+    """BC-159: uv, Caddy and the Bee CLI are pinned to a version and checked against their sha256 before use."""
+    text = INSTALL.read_text()
+    for name in ("UV", "CADDY", "BEE"):
+        version = re.search(rf"^{name}_VERSION=(\S+)", text, re.MULTILINE)
+        assert version and re.fullmatch(r"[0-9.]+", version.group(1)), name
+    downloads = re.findall(r'^\s*download "[^"]+"\s*\\?\s*"\$(\w+)"', text, re.MULTILINE)
+    assert sorted(downloads) == ["BEE_TARBALL_SHA256", "CADDY_TARBALL_SHA256", "UV_INSTALLER_SHA256"]
+    for digest in ("BEE_SHA256", "CADDY_SHA256", "BEE_TARBALL_SHA256", "CADDY_TARBALL_SHA256", "UV_INSTALLER_SHA256"):
+        assert re.search(rf"^{digest}=[0-9a-f]{{64}}", text, re.MULTILINE), digest
+    assert 'check "$CADDY_SHA256"' in text and 'check "$BEE_SHA256"' in text

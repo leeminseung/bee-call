@@ -2,16 +2,16 @@
   "person": "minseung",
   "settings": {
     "language": "ko",
-    "voice": "ko-harin",
-    "call_model": "haiku",
-    "worker_model": "sonnet",
     "call_time": "20:30",
     "record_on_server": true,
     "record_on_phone": false,
-    "time_zone": "Asia/Seoul",
+    "daily_budget_usd": 10.0,
     "bee": true,
-    "daily_budget_usd": 10.0
+    "voice": "ko-yooni",
+    "time_zone": "Asia/Seoul",
+    "call_model": "haiku",
+    "worker_model": "glm"
   },
-  "spent_today_usd": 1.84,
+  "spent_today_usd": 1.45,
   "bee_connecting": false
 }

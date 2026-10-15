@@ -9,33 +9,152 @@
     "state": "live",
     "duration_s": null,
     "continues": null,
-    "marks": {"report": false, "table": false, "chart": false, "bee_writes": 1}
+    "marks": {
+      "report": false,
+      "table": false,
+      "chart": false,
+      "bee_writes": 1
+    }
   },
   "why_calling": null,
   "prep": {
     "note": "오늘 아침 회의에서 노트북 이야기를 했고, 한국 가격을 궁금해했어요. 9월 28일부터 남은 일: 아이폰과 애플워치에 Bee 설정하기.",
     "looked_up": [
-      {"type": "conversation", "summary": "성현 님과의 대화", "at": "2026-10-13T18:40:00+09:00"},
-      {"type": "day", "date": "2026-10-15"}
+      {
+        "type": "conversation",
+        "summary": "성현 님과의 대화",
+        "at": "2026-10-13T18:40:00+09:00"
+      },
+      {
+        "type": "day",
+        "date": "2026-10-15"
+      }
     ],
     "from_bee": true
   },
   "items": [
-    {"type": "speech", "id": "speech-9", "at": "2026-10-15T01:23:08+09:00", "speaker": "ai", "text": "안녕하세요, 민승 님. 오늘 밤엔 무슨 이야기 할까요?", "interrupted": false},
-    {"type": "speech", "id": "speech-14", "at": "2026-10-15T01:23:14+09:00", "speaker": "person", "text": "토요일 촬영 장소를 아직 못 정했어요. 그거 할 일로 넣어 줄래요?", "interrupted": false},
-    {"type": "speech", "id": "speech-19", "at": "2026-10-15T01:23:21+09:00", "speaker": "ai", "text": "Bee 할 일에 '토요일 촬영 장소 정하기'를 넣을까요?", "interrupted": false},
-    {"type": "speech", "id": "speech-24", "at": "2026-10-15T01:23:27+09:00", "speaker": "person", "text": "네, 넣어 주세요.", "interrupted": false},
-    {"type": "bee_write", "id": "write-w1", "at": "2026-10-15T01:23:30+09:00", "kind": "todo_create", "text": "토요일 촬영 장소 정하기", "state": "written", "will_retry": false, "undoable": true},
-    {"type": "speech", "id": "speech-29", "at": "2026-10-15T01:23:32+09:00", "speaker": "ai", "text": "넣었어요. 오늘 아침 회의에서 노트북 이야기를 하셨던데, 정하셨어요?", "interrupted": false},
-    {"type": "speech", "id": "speech-35", "at": "2026-10-15T01:23:42+09:00", "speaker": "person", "text": "아직이요. 지금 노트북이 너무 느려서 바꾸긴 해야 하는데, 뭘 살지 모르겠어요.", "interrupted": false},
-    {"type": "speech", "id": "speech-41", "at": "2026-10-15T01:24:03+09:00", "speaker": "ai", "text": "요즘 어떤 게 제일 불편하세요?", "interrupted": false},
-    {"type": "speech", "id": "speech-46", "at": "2026-10-15T01:24:11+09:00", "speaker": "person", "text": "배터리가 금방 닳고 무거워서 들고 다니기가 힘들어요. 도서관에 매일 가지고 가거든요.", "interrupted": false},
-    {"type": "speech", "id": "speech-53", "at": "2026-10-15T01:24:46+09:00", "speaker": "ai", "text": "매일 들고 다니시면 무게랑 배터리가 중요하겠네요. 생각해 두신 모델이 있어요?", "interrupted": false},
-    {"type": "speech", "id": "speech-60", "at": "2026-10-15T01:25:23+09:00", "speaker": "person", "text": "맥북 에어랑 프로 중에 코딩용으로 고민 중이에요. 한국 가격 비교해 주고, 저한테 뭐가 맞는지 알려 주세요.", "interrupted": false},
-    {"type": "speech", "id": "speech-66", "at": "2026-10-15T01:25:35+09:00", "speaker": "ai", "text": "좋아요. 한국 가격이랑 배터리 시간을 찾아볼게요.", "interrupted": false},
-    {"type": "speech", "id": "speech-75", "at": "2026-10-15T01:26:10+09:00", "speaker": "person", "text": "얼마나 걸려요?", "interrupted": false},
-    {"type": "speech", "id": "speech-81", "at": "2026-10-15T01:26:37+09:00", "speaker": "ai", "text": "지금 애플 한국 가격표를 보고 있어요. 주로 어떤 코딩을 하세요?", "interrupted": false},
-    {"type": "speech", "id": "speech-86", "at": "2026-10-15T01:26:43+09:00", "speaker": "person", "text": "주로 파이썬이고 머신러닝도 조금 해요.", "interrupted": false},
+    {
+      "type": "speech",
+      "id": "speech-9",
+      "at": "2026-10-15T01:23:08+09:00",
+      "speaker": "ai",
+      "text": "안녕하세요, 민승 님. 오늘 밤엔 무슨 이야기 할까요?",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-14",
+      "at": "2026-10-15T01:23:14+09:00",
+      "speaker": "person",
+      "text": "토요일 촬영 장소를 아직 못 정했어요. 그거 할 일로 넣어 줄래요?",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-19",
+      "at": "2026-10-15T01:23:21+09:00",
+      "speaker": "ai",
+      "text": "Bee 할 일에 '토요일 촬영 장소 정하기'를 넣을까요?",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-24",
+      "at": "2026-10-15T01:23:27+09:00",
+      "speaker": "person",
+      "text": "네, 넣어 주세요.",
+      "interrupted": false
+    },
+    {
+      "type": "bee_write",
+      "id": "write-w1",
+      "at": "2026-10-15T01:23:30+09:00",
+      "kind": "todo_create",
+      "text": "토요일 촬영 장소 정하기",
+      "state": "written",
+      "will_retry": false,
+      "undoable": true
+    },
+    {
+      "type": "speech",
+      "id": "speech-29",
+      "at": "2026-10-15T01:23:32+09:00",
+      "speaker": "ai",
+      "text": "넣었어요. 오늘 아침 회의에서 노트북 이야기를 하셨던데, 정하셨어요?",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-35",
+      "at": "2026-10-15T01:23:42+09:00",
+      "speaker": "person",
+      "text": "아직이요. 지금 노트북이 너무 느려서 바꾸긴 해야 하는데, 뭘 살지 모르겠어요.",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-41",
+      "at": "2026-10-15T01:24:03+09:00",
+      "speaker": "ai",
+      "text": "요즘 어떤 게 제일 불편하세요?",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-46",
+      "at": "2026-10-15T01:24:11+09:00",
+      "speaker": "person",
+      "text": "배터리가 금방 닳고 무거워서 들고 다니기가 힘들어요. 도서관에 매일 가지고 가거든요.",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-53",
+      "at": "2026-10-15T01:24:46+09:00",
+      "speaker": "ai",
+      "text": "매일 들고 다니시면 무게랑 배터리가 중요하겠네요. 생각해 두신 모델이 있어요?",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-60",
+      "at": "2026-10-15T01:25:23+09:00",
+      "speaker": "person",
+      "text": "맥북 에어랑 프로 중에 코딩용으로 고민 중이에요. 한국 가격 비교해 주고, 저한테 뭐가 맞는지 알려 주세요.",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-66",
+      "at": "2026-10-15T01:25:35+09:00",
+      "speaker": "ai",
+      "text": "좋아요. 한국 가격이랑 배터리 시간을 찾아볼게요.",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-75",
+      "at": "2026-10-15T01:26:10+09:00",
+      "speaker": "person",
+      "text": "얼마나 걸려요?",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-81",
+      "at": "2026-10-15T01:26:37+09:00",
+      "speaker": "ai",
+      "text": "지금 애플 한국 가격표를 보고 있어요. 주로 어떤 코딩을 하세요?",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-86",
+      "at": "2026-10-15T01:26:43+09:00",
+      "speaker": "person",
+      "text": "주로 파이썬이고 머신러닝도 조금 해요.",
+      "interrupted": false
+    },
     {
       "type": "job",
       "id": "job-01",
@@ -50,6 +169,9 @@
       "failure": null
     }
   ],
-  "captions_included": {"person": 8, "ai": 7},
-  "version": "628b815bc639280f"
+  "captions_included": {
+    "person": 8,
+    "ai": 7
+  },
+  "version": "cdddfee7887c2167"
 }

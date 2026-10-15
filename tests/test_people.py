@@ -13,7 +13,8 @@ from aiohttp.test_utils import TestClient, TestServer
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from beelink import cli
-from tests.helpers import SEOUL, signed_in
+from tests.contract import check_body
+from tests.helpers import SEOUL, converse, signed_in
 from voice import apple_signin, costs, session_server, token_server, voip_push
 from voice.people import People, Settings, waiting_code
 from voice.recorder import CallRecorder
@@ -188,13 +189,16 @@ def test_signing_in_from_the_app(tmp_path):
     people = People(tmp_path / "data")
 
     async def sign_in(client):
-        nonce = (await (await client.get("/auth/nonce")).json())["nonce"]
+        given = await (await client.get("/auth/nonce")).json()
+        check_body("auth-nonce", given)
+        nonce = given["nonce"]
         return await client.post("/auth/apple", json={"identity_token": apple_token(nonce), "nonce": nonce})
 
     async def main():
         async with TestClient(TestServer(app_for(people))) as client:
             assert (await client.get("/me")).status == 401
             first = await sign_in(client)
+            check_body("auth-waiting", await first.json())
             code = (await first.json())["waiting"]
             assert first.status == 403 and code == waiting_code("001234.abcd")
             people.approve(code, "jiwoo")
@@ -207,6 +211,8 @@ def test_signing_in_from_the_app(tmp_path):
             return second.status, body, replayed.status, me, out.status, after.status
 
     status, body, replayed, me, out, after = asyncio.run(main())
+    check_body("auth-apple", body)
+    check_body("me", me)
     assert status == 200 and body["person"] == "jiwoo"
     assert replayed == 400  # a nonce the server never gave out
     assert me["person"] == "jiwoo" and me["settings"]["language"] == "en" and me["spent_today_usd"] == 0
@@ -225,6 +231,80 @@ def test_the_app_changes_its_settings(tmp_path):
     good, body, bad = asyncio.run(main())
     assert good == 200 and body["settings"]["language"] == "ko" and body["settings"]["record_on_phone"] is True
     assert bad == 400 and me.people.settings("matt").daily_budget_usd == Settings().daily_budget_usd
+
+
+def test_the_token_server_s_answers_are_never_cached_and_say_nothing_about_its_software(tmp_path):
+    """Black-box probe 3 and 5 (2026-10-15): /token's answer holds a LiveKit pass and had no Cache-Control; every
+    answer named Python and aiohttp with their versions; a bad sign-in token or a body that is not JSON came back
+    with the library's own words ("Not enough segments", "Expecting value: line 1 column 13")."""
+    me = signed_in(tmp_path)
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people))) as client:
+            mine = await client.get("/me", headers=me.headers)
+            nobody = await client.get("/me")
+            nonce = (await (await client.get("/auth/nonce")).json())["nonce"]
+            forged = await client.post("/auth/apple", json={"identity_token": "not-a-jwt", "nonce": nonce})
+            broken = await client.put("/settings", data='{"language":', headers=me.headers)
+            voip = await client.post("/voip", data="{", headers=me.headers)
+            return [(r.status, dict(r.headers), await r.text()) for r in (mine, nobody, forged, broken, voip)]
+
+    answers = asyncio.run(main())
+    for status, headers, _ in answers:
+        assert headers.get("Cache-Control") == "no-store", status
+        assert "aiohttp" not in headers.get("Server", "") and "Python" not in headers.get("Server", ""), status
+    (_, _, _), (_, _, _), (forged, _, forged_text), (broken, _, broken_text), (voip, _, voip_text) = answers
+    assert forged == 401 and forged_text == "Apple's sign-in token was not accepted\n"
+    assert broken == 400 and "Expecting value" not in broken_text and "line 1" not in broken_text
+    assert voip == 400 and "Expecting" not in voip_text
+
+
+def test_the_record_page_cannot_be_framed_and_says_nothing_about_its_software(tmp_path):
+    """Black-box probe 4 and 5: the private records page could be put in another site's frame, and it named Python
+    and aiohttp too."""
+    me = signed_in(tmp_path)
+
+    async def main():
+        async with TestClient(TestServer(session_server.make_app(me.people))) as client:
+            page = await client.get("/", headers=me.headers)
+            return page.status, dict(page.headers)
+
+    status, headers = asyncio.run(main())
+    assert status == 200 and "frame-ancestors 'none'" in headers["Content-Security-Policy"]
+    assert "aiohttp" not in headers.get("Server", "")
+
+
+def test_the_development_person_is_one_rule_for_the_web_servers_and_the_voice_server(tmp_path, monkeypatch):
+    """Server review 7: the fallback for requests without a sign-in was written three times with three conditions.
+    One rule now: only on a Mac (never on a server, whatever the environment says), only an approved person, and
+    for the web servers only a request made on this machine itself; the token server also wants its header."""
+    from voice.agent import person_for_call
+    from voice.people import dev_person
+
+    me = signed_in(tmp_path)
+    dev = {"X-Bee-Call-Dev": "1"}
+
+    async def statuses():
+        async with TestClient(TestServer(app_for(me.people))) as token, \
+                TestClient(TestServer(session_server.make_app(me.people))) as records:
+            return (await token.get("/me", headers=dev)).status, (await records.get("/api/sessions")).status
+
+    monkeypatch.setenv("BEE_CALL_DEV_PERSON", "ghost")  # nobody approved
+    assert asyncio.run(statuses()) == (401, 401) and person_for_call({}, me.people) is None
+    monkeypatch.setenv("BEE_CALL_DEV_PERSON", "matt")
+    assert asyncio.run(statuses()) == (200, 200) and person_for_call({}, me.people) == "matt"
+    monkeypatch.setenv("BEE_CALL_PUBLIC_HOST", "localhost")  # a server, reached by its own name
+    assert dev_person() is None and person_for_call({}, me.people) is None
+    assert asyncio.run(statuses()) == (401, 401)
+
+
+def test_the_token_server_takes_a_host_and_a_port():
+    """Outside test seam 11: the port could be set only through an undocumented TOKEN_SERVER_PORT and the host not at
+    all, so a test run could not start its own token server beside another."""
+    assert token_server.listen_on([], {}) == ("0.0.0.0", 8787)
+    assert token_server.listen_on([], {"TOKEN_SERVER_PORT": "9000"}) == ("0.0.0.0", 9000)
+    assert token_server.listen_on(["--host", "127.0.0.1", "--port", "18787"], {"TOKEN_SERVER_PORT": "9000"}) == (
+        "127.0.0.1", 18787)
 
 
 def test_without_a_sign_in_only_this_machine_gets_the_dev_person(tmp_path, monkeypatch):
@@ -277,7 +357,7 @@ def test_people_see_only_their_own_offers_tokens_and_calls(tmp_path):
             return (listed, answer.status, push.status, others_room.status, own_room.status, continued.status, new)
 
     listed, answer, push, others_room, own_room, continued, new = asyncio.run(main())
-    assert listed == {"offers": []} and answer == 404  # matt's offer is not there for jiwoo
+    assert listed["offers"] == [] and answer == 404  # matt's offer is not there for jiwoo
     assert push == 204 and voip_push.load_device_token(matt.person, "alert") is None
     assert voip_push.load_device_token(matt.people.person("jiwoo"), "alert")["environment"] == "production"
     assert (others_room, own_room, continued) == (400, 200, 400)
@@ -449,6 +529,7 @@ def test_connecting_and_disconnecting_bee_from_the_app(tmp_path, fake_bee, monke
     async def main():
         async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
             started = await (await client.post("/bee/connect")).json()
+            check_body("bee-connect", started)
             connecting = (await (await client.get("/me")).json())["bee_connecting"]
             (folder / "approve").write_text("")  # the person taps the approval link on their phone
             for _ in range(100):
@@ -557,6 +638,46 @@ def test_a_second_bee_connect_stops_the_first_before_it_starts(tmp_path, fake_be
 
     asyncio.run(main())
     assert first_done == [True, True]
+
+
+def test_bee_connects_and_disconnects_that_overlap_run_one_after_another(tmp_path, fake_bee, monkeypatch):
+    """Review of the user-noticed fixes, 6b: a double tap started two `bee login` runs on one folder at once, and
+    a disconnect while a connect was still starting removed the folder before the connect wrote its pending file
+    (an error), or let the connect's wait turn Bee back on. Bee's connect and disconnect now take turns."""
+    from beelink import cli
+    from voice import token_server as server
+
+    me = signed_in(tmp_path)
+    folder = me.people.bee_dir("matt")
+    running, overlapped = [0], []
+    real_start = cli.start_login
+
+    async def slow_start(folder, *a, **kw):
+        running[0] += 1
+        overlapped.append(running[0] > 1)
+        await asyncio.sleep(0.2)  # Bee takes a moment to hand out its approval link
+        try:
+            return await real_start(folder, *a, **kw)
+        finally:
+            running[0] -= 1
+
+    monkeypatch.setattr(server.bee, "start_login", slow_start)
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            first, second = await asyncio.gather(client.post("/bee/connect"), client.post("/bee/connect"))
+            connect = asyncio.create_task(client.post("/bee/connect"))
+            await asyncio.sleep(0.05)  # the connect is still starting
+            off = await client.post("/bee/disconnect")
+            connected = await connect
+            (folder / "approve").write_text("") if folder.exists() else None
+            await asyncio.sleep(0.3)
+            return [r.status for r in (first, second, connected, off)]
+
+    statuses = asyncio.run(main())
+    assert overlapped == [False, False, False]  # one `bee login` at a time
+    assert statuses == [200, 200, 200, 204]
+    assert not folder.exists() and me.people.settings("matt").bee is False  # the disconnect came last and won
 
 
 # ---------- the daily budget ----------
@@ -832,6 +953,41 @@ def test_the_operator_can_mint_a_sign_in_for_an_approved_person_only(tmp_path, c
         people_module.main(["--data", str(data), "session", "stranger"])
 
 
+def test_the_operator_changes_settings_only_for_an_approved_person(tmp_path, capsys):
+    """`voice.people set` on an id nobody approved made that person's folder and a settings file; a typo in the id
+    went unnoticed. It now stops and says so, and leaves nothing behind; a bad value names the problem."""
+    from voice import people as people_module
+
+    data = tmp_path / "data"
+    people_module.main(["--data", str(data), "add", "jiwoo"])
+    people_module.main(["--data", str(data), "set", "jiwoo", "daily_budget_usd", "2"])
+    assert People(data).settings("jiwoo").daily_budget_usd == 2.0
+    with pytest.raises(SystemExit, match="not approved"):
+        people_module.main(["--data", str(data), "set", "jiwo", "daily_budget_usd", "2"])
+    assert not (data / "people" / "jiwo").exists()
+    with pytest.raises(SystemExit, match="daily_budget_usd must be"):
+        people_module.main(["--data", str(data), "set", "jiwoo", "daily_budget_usd", "500"])
+
+
+def test_an_operator_command_makes_a_waiting_sign_in_for_tests(tmp_path, capsys):
+    """Outside test seam 10: a waiting sign-in came only from a real Sign in with Apple. `voice.people test-sign-in`
+    makes one for a made-up Apple id and prints its code; it waits like any other until the operator approves it,
+    and `session` then gives the token the app's next sign-in would get."""
+    from voice import people as people_module
+
+    data = tmp_path / "data"
+    people_module.main(["--data", str(data), "test-sign-in", "--email", "probe@example.com"])
+    made = json.loads(capsys.readouterr().out)
+    assert len(made["code"]) == 6 and made["sub"].startswith("test:")
+    people_module.main(["--data", str(data), "waiting"])
+    assert made["code"] in capsys.readouterr().out
+    people_module.main(["--data", str(data), "approve", made["code"], "--as", "probe"])
+    capsys.readouterr()
+    people_module.main(["--data", str(data), "session", "probe"])
+    assert People(data).who(capsys.readouterr().out.strip()) == "probe"
+    assert People(data).sign_in(made["sub"], None, datetime.now()) == "probe"  # the made-up id is that person now
+
+
 def test_the_prep_of_an_ai_call_counts_where_it_runs_even_if_nobody_answers(tmp_path, monkeypatch):
     """Server review finding 4, BC-102: the prep's model use was counted only once the phone answered."""
     from tests.helpers import placing
@@ -842,8 +998,8 @@ def test_the_prep_of_an_ai_call_counts_where_it_runs_even_if_nobody_answers(tmp_
 
     me = signed_in(tmp_path)
     monkeypatch.setenv("COORDINATOR_LLM", "bedrock")
-    monkeypatch.setattr(prep_module, "bedrock_client",
-                        lambda region: Converse(text("<opening>Hi!</opening><note>n</note>"), usage=(100_000, 0)))
+    monkeypatch.delenv("COORDINATOR_MODEL", raising=False)
+    converse(monkeypatch, Converse(text("<opening>Hi!</opening><note>n</note>"), usage=(100_000, 0)))
     OfferStore(me.workspace).book("the interview", datetime.now(SEOUL) - timedelta(seconds=1), datetime.now(SEOUL))
     rooms = []
     assert len(asyncio.run(call_due(me.person, place=placing(rooms)))) == 1  # placed; the phone is never answered
@@ -853,14 +1009,14 @@ def test_the_prep_of_an_ai_call_counts_where_it_runs_even_if_nobody_answers(tmp_
 
 def test_a_prep_cut_short_counts_an_estimate_of_what_it_sent(tmp_path):
     """A prep stopped mid-answer never gets Bedrock's usage line; what it sent is counted as an estimate."""
-    from tests.test_prep import Converse, MODEL, text
+    from tests.test_prep import Converse, glm, text
     from voice.costs import SpendLog
     from voice.prep import Preparation
 
     async def main():
         client = Converse(text("<opening>Hi Matt, what's up?</opening>" + "<note>" + "x" * 2000 + "</note>"), gap=0.05,
                           usage=(999, 999))
-        preparation = Preparation(CallInputs(), {"direction": "inbound"}, MODEL, client=client,
+        preparation = Preparation(CallInputs(), {"direction": "inbound"}, glm(client),
                                   spend=SpendLog(tmp_path), bee=True, now=datetime.now(SEOUL)).start()
         await preparation.opening(timeout=5)
         preparation.cancel()  # the caller hung up while it rang
@@ -887,8 +1043,9 @@ def test_without_bee_the_prep_of_an_ai_call_reads_nothing_and_never_mentions_bee
     monkeypatch.setenv("BEE_BIN", str(FAKE_BEE))
     monkeypatch.setenv("FAKE_BEE_LOG", str(log))
     monkeypatch.setenv("COORDINATOR_LLM", "bedrock")
+    monkeypatch.delenv("COORDINATOR_MODEL", raising=False)
     client = Converse(text("<opening>Hi!</opening><note>n</note>"))
-    monkeypatch.setattr(prep_module, "bedrock_client", lambda region: client)
+    converse(monkeypatch, client)
     me = signed_in(tmp_path)
     OfferStore(me.workspace).book("the flat prices", datetime.now(SEOUL) - timedelta(seconds=1), datetime.now(SEOUL))
 
@@ -936,6 +1093,112 @@ def test_a_sign_out_also_takes_the_push_tokens_kept_before_the_registry(tmp_path
     assert voip_push.load_device_token(people.person("matt"), "voip") is None
 
 
+def test_the_person_picks_the_call_ai_s_model_haiku_by_default_or_sonnet(tmp_path):
+    """Setting call_model (2026-10-15): "haiku" (the default) or "sonnet". The app sends it with its settings, a
+    bad value is refused like any bad setting, and a broken stored value keeps the default."""
+    me = signed_in(tmp_path)
+    assert me.people.settings("matt").call_model == "haiku"
+    for bad in ("opus", "Sonnet", "", None, 5, ["sonnet"]):
+        with pytest.raises(ValueError):
+            me.people.change_settings("matt", {"call_model": bad})
+    assert me.people.settings("matt").call_model == "haiku"
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            good = await client.put("/settings", json={"language": "ko", "time_zone": "Asia/Seoul",
+                                                       "call_model": "sonnet"})
+            bad = await client.put("/settings", json={"call_model": "gpt"})
+            mine = await (await client.get("/me")).json()
+            return good.status, bad.status, mine
+
+    good, bad, mine = asyncio.run(main())
+    assert good == 200 and bad == 400 and mine["settings"]["call_model"] == "sonnet"
+    (me.people.folder("matt") / "settings.json").write_text('{"call_model": "opus", "language": "ko"}')
+    assert (me.people.settings("matt").call_model, me.people.settings("matt").language) == ("haiku", "ko")
+
+
+def test_each_call_model_has_its_claude_settings_and_a_price():
+    """One place maps the person's choice to Claude's model and settings, and the daily budget prices both."""
+    from voice.call_models import CALL_MODELS, call_model_for
+    from voice.costs import llm_cost
+
+    haiku, sonnet = CALL_MODELS["haiku"], CALL_MODELS["sonnet"]
+    # Adaptive, the user's choice (2026-10-15) after the probe: with thinking disabled Haiku said it booked a call
+    # back and never called book_call in 3 of 6 calls; adaptive booked 6 of 6.
+    assert (haiku.model, haiku.thinking, haiku.effort) == ("claude-haiku-5-5", "adaptive", "low")
+    assert (sonnet.model, sonnet.thinking, sonnet.effort) == ("claude-sonnet-5-5", "between_tools", "low")
+    assert call_model_for(Settings(call_model="sonnet")) is sonnet and call_model_for(Settings()) is haiku
+    million = 1_000_000
+    assert llm_cost("claude-sonnet-5-5", million, million) == pytest.approx(12.00)  # 2.00 in + 10.00 out
+    assert llm_cost("claude-sonnet-5-5", million, 0, cached=million) == pytest.approx(0.20)  # cache reads
+    assert llm_cost("claude-sonnet-5-5", million, 0, cache_writes=million) == pytest.approx(2.50)  # 1.25x
+    assert llm_cost("claude-haiku-5-5", million, million) == pytest.approx(0.60)
+
+
+def test_an_approved_person_starts_with_these_settings(tmp_path):
+    """BC-088 with its values written out, not read from the code's own defaults."""
+    from dataclasses import asdict
+
+    people = People(tmp_path)
+    people.add("jiwoo")
+    assert asdict(people.settings("jiwoo")) == {
+        "language": "en", "call_time": "21:00", "record_on_server": True, "record_on_phone": False,
+        "daily_budget_usd": 3.0, "bee": False, "voice": None, "time_zone": "Asia/Seoul",
+        "call_model": "haiku", "worker_model": "glm"}
+
+
+def test_a_model_id_the_catalog_no_longer_has_reads_as_the_role_s_default(tmp_path):
+    """Contract section 6: call_model and worker_model hold catalog ids (voice/model_catalog.py)."""
+    people = People(tmp_path)
+    people.add("matt")
+    (people.folder("matt") / "settings.json").write_text(json.dumps({"call_model": "opus-9", "worker_model": "gpt"}))
+    assert (people.settings("matt").call_model, people.settings("matt").worker_model) == ("haiku", "glm")
+    assert people.change_settings("matt", {"worker_model": "glm"}).worker_model == "glm"
+
+
+def test_the_app_picks_a_voice_of_the_call_language(tmp_path):
+    """Contract section 6: the app sets voice, a catalog id of the call language's voices (GET /voices), or null for
+    the language's default. A change of language alone sets voice to null, unless the voice is the new language's."""
+    people = People(tmp_path)
+    people.add("matt")
+    assert people.change_settings("matt", {"voice": "en-hope"}).voice == "en-hope"
+    for bad in ({"voice": "ko-sian"}, {"voice": "nonsense"}, {"voice": 3}, {"language": "en", "voice": "ko-han"}):
+        with pytest.raises(ValueError):
+            people.change_settings("matt", bad)
+    assert people.settings("matt").voice == "en-hope"  # a refused change changes nothing
+    assert people.change_settings("matt", {"language": "ko"}).voice is None
+    assert people.change_settings("matt", {"language": "ko", "voice": "ko-han"}).voice == "ko-han"
+    assert people.change_settings("matt", {"language": "ko"}).voice == "ko-han"  # the same language: kept
+    assert people.change_settings("matt", {"voice": None}).voice is None
+
+
+def test_a_hand_set_voice_and_the_retired_tts_move_to_the_catalog(tmp_path):
+    """Decision 9 of the contract: tts (the operator's provider switch) retires, and a hand-set provider voice id moves
+    to its catalog id, or to null when the catalog has no such voice of the person's language."""
+    people = People(tmp_path)
+    people.add("matt")
+    settings = people.folder("matt") / "settings.json"
+    settings.write_text(json.dumps({"language": "ko", "tts": "elevenlabs", "voice": "5n5gqmaQi9Ewevrz7bOS"}))
+    assert (people.settings("matt").voice, people.settings("matt").language) == ("ko-sian", "ko")
+    settings.write_text(json.dumps({"language": "en", "voice": "5n5gqmaQi9Ewevrz7bOS"}))
+    assert people.settings("matt").voice is None  # Sian is a Korean voice
+    settings.write_text(json.dumps({"language": "ko", "voice": "Seoyeon"}))
+    assert people.settings("matt").voice is None
+    with pytest.raises(ValueError):
+        people.change_settings("matt", {"tts": "polly"}, allowed=("tts",))
+
+
+def test_a_person_s_bee_login_folder_is_theirs_alone(tmp_path, fake_bee):
+    """BC-156: the login folder Bee's CLI keeps its token in is made readable by the services' user only."""
+    import stat
+
+    from beelink import cli
+
+    folder = People(tmp_path).bee_dir("matt")
+    asyncio.run(cli.start_login(folder))
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o700
+
+
 def test_a_setting_of_the_wrong_kind_is_refused_not_a_server_error(tmp_path):
     """A list or an object where a name is expected is a bad value (400), never an unhandled error (acceptance
     BC-089 found a 500)."""
@@ -967,6 +1230,28 @@ def test_the_record_server_serves_only_the_page_s_own_files(tmp_path, monkeypatc
     statuses = asyncio.run(main())
     assert statuses.pop("/static/app.js") == 200 and statuses.pop("/static/style.css") == 200
     assert set(statuses.values()) <= {403, 404}, statuses
+
+
+def test_on_a_server_a_bare_ip_address_is_refused_by_both_servers(tmp_path, monkeypatch):
+    """BC-083: requests must name the server; a bare IP address was let in on purpose, which suits a Mac on the home
+    network but not a server. On a server only its own name and this machine's loopback come in; on a Mac (no
+    public name) an IP address still does, for the app and the session screen on the same Wi-Fi."""
+    me = signed_in(tmp_path)
+
+    async def statuses():
+        found = []
+        for app, path in ((app_for(me.people), "/me"), (session_server.make_app(me.people), "/api/sessions")):
+            async with TestClient(TestServer(app), headers=me.headers) as client:
+                for host in ("203.0.113.5", "[2001:db8::1]", "192.168.0.7", "call.example.com", "127.0.0.1", "localhost"):
+                    found.append((host, (await client.get(path, headers={"Host": host})).status))
+        return found
+
+    monkeypatch.setenv("BEE_CALL_PUBLIC_HOST", "call.example.com")
+    on_a_server = asyncio.run(statuses())
+    assert [status for host, status in on_a_server] == [421, 421, 421, 200, 200, 200] * 2, on_a_server
+    monkeypatch.delenv("BEE_CALL_PUBLIC_HOST")
+    on_a_mac = asyncio.run(statuses())
+    assert [status for host, status in on_a_mac if host == "192.168.0.7"] == [200, 200], on_a_mac
 
 
 def test_on_a_server_an_unknown_host_name_is_refused_without_a_hint_about_a_mac(tmp_path, monkeypatch):

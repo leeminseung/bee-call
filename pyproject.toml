@@ -9,12 +9,14 @@ dependencies = [
     "httpx[http2]>=0.28.1",
     "livekit-agents[aws,silero,turn-detector]==1.8.6",
     "livekit-plugins-elevenlabs==1.8.6",
+    "pillow>=12.3.0",
     "python-dotenv>=1.2.4",
     "regex>=2026.9.29",
 ]
 
 [dependency-groups]
 dev = [
+    "jsonschema>=4.26.0",
     "pytest>=9.1.1",
 ]
 

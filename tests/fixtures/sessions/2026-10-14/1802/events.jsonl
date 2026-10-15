@@ -1,0 +1,47 @@
+{"t": 0.0, "room": "call-minseung-20261014-180158", "started_at": "2026-10-14T18:02:11+09:00", "type": "call_started"}
+{"t": 0.004, "llm": "anthropic", "model": "claude-haiku-5-5", "call_model": "haiku", "language": "ko", "voice": {"provider": "elevenlabs", "voice": "5n5gqmaQi9Ewevrz7bOS", "model": "eleven_v4_turbo"}, "person": "minseung", "audio_on_server": true, "audio_on_phone": false, "type": "coordinator"}
+{"t": 0.005, "direction": "outbound", "topic": "성현이와 토요일 촬영 이야기", "reason": "새 음성 메모에서 토요일 촬영 장소를 아직 못 정했다고 하셨어요. 성현 님과 나눈 이야기로 후보를 같이 추려 보려고 전화했어요.", "continue_from": null, "kind": "voice note", "type": "call"}
+{"t": 0.2, "summary": "성현 님과 토요일 데모 촬영 시간과 장소를 이야기함", "conversation_id": 10785664, "started_at": "2026-10-13T18:40:00+09:00", "utterances": [{"at": "2026-10-13T18:41:00+09:00", "speaker": "speaker_1", "text": "토요일 오전 10시 괜찮아? 장소는 네가 정해 줘."}, {"at": "2026-10-13T18:41:00+09:00", "speaker": "me", "text": "응, 10시 좋아. 장소는 내일까지 알려 줄게."}], "pending_fact_ids": [], "type": "why_calling"}
+{"t": 0.21, "after_s": 0.2, "opening": "안녕하세요, 민승 님. 새 음성 메모 때문에 전화드렸어요. 잠깐 통화 괜찮으세요?", "opening_s": 1.9, "note_ready": true, "type": "prep_ready"}
+{"t": 0.3, "seconds": 7.4, "model": "zai.glm-5", "bee": true, "reads": [{"type": "conversation", "id": 10785664, "summary": "성현 님과 토요일 데모 촬영 시간과 장소를 이야기함", "at": "2026-10-13T18:40:00+09:00"}, {"type": "search", "query": "토요일 촬영 장소"}], "note": "10월 13일에 성현 님과 토요일 오전 10시 촬영을 정했고, 장소는 민승 님이 정하기로 했어요. 새 음성 메모에서 장소 후보로 한강공원과 학교 스튜디오를 말했어요.", "opening": "안녕하세요, 민승 님. 새 음성 메모 때문에 전화드렸어요. 잠깐 통화 괜찮으세요?", "error": null, "input_tokens": 6120, "output_tokens": 402, "type": "call_prep"}
+{"t": 0.6, "after_s": 12.6, "type": "picked_up"}
+{"t": 6.2, "role": "assistant", "text": "안녕하세요, 민승 님. 새 음성 메모 때문에 전화드렸어요. 잠깐 통화 괜찮으세요?", "interrupted": false, "metrics": {"started_speaking_at": 1791968532.0, "stopped_speaking_at": 1791968537.2, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 6.76, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 7.32, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 7.88, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 8.44, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 9.0, "text": "네, 괜찮아요.", "type": "user_transcript"}
+{"t": 9.3, "role": "user", "text": "네, 괜찮아요.", "interrupted": false, "metrics": {"started_speaking_at": 1791968537.5, "stopped_speaking_at": 1791968539.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
+{"t": 10.225, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 11.15, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 12.075, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 19.0, "role": "assistant", "text": "토요일 촬영 장소를 아직 못 정하셨다고 하셨죠. 메모에서 한강공원과 학교 스튜디오를 말씀하셨는데,", "interrupted": true, "metrics": {"started_speaking_at": 1791968544.0, "stopped_speaking_at": 1791968550.0, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 20.333, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 21.667, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 23.0, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 24.333, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 25.667, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 27.0, "text": "날씨가 걱정돼서 학교 스튜디오가 나을 것 같아요. 그런데 토요일에 문을 여는지 모르겠어요.", "type": "user_transcript"}
+{"t": 27.3, "role": "user", "text": "날씨가 걱정돼서 학교 스튜디오가 나을 것 같아요. 그런데 토요일에 문을 여는지 모르겠어요.", "interrupted": false, "metrics": {"started_speaking_at": 1791968555.5, "stopped_speaking_at": 1791968557.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
+{"t": 30.917, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 34.533, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 38.15, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 41.767, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 45.383, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 54.4, "role": "assistant", "text": "그럼 내일 성현 님과 이야기하기 전에 스튜디오가 토요일에 여는지 먼저 확인해 보세요.", "interrupted": false, "metrics": {"started_speaking_at": 1791968580.0, "stopped_speaking_at": 1791968585.4, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 59.343, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 64.286, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 69.229, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 74.171, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 79.114, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 84.057, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 89.0, "text": "네, 그럴게요. 고마워요.", "type": "user_transcript"}
+{"t": 89.3, "role": "user", "text": "네, 그럴게요. 고마워요.", "interrupted": false, "metrics": {"started_speaking_at": 1791968617.5, "stopped_speaking_at": 1791968619.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
+{"t": 90.725, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 92.15, "old": "listening", "new": "speaking", "type": "user_state"}
+{"t": 93.575, "old": "speaking", "new": "listening", "type": "user_state"}
+{"t": 97.0, "role": "assistant", "text": "네, 좋은 저녁 보내세요.", "interrupted": false, "metrics": {"started_speaking_at": 1791968626.0, "stopped_speaking_at": 1791968628.0, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 98.0, "type": "end_call_requested"}
+{"t": 124.0, "reason": "CloseReason.USER_INITIATED", "type": "session_closed"}
+{"t": 124.8, "user_audio_skipped_frames": 0, "ai_audio_skipped_frames": 0, "type": "call_ended"}
+{"t": 126.1, "title": "새 음성 메모: 성현이와 토요일 촬영 이야기", "model": "claude-haiku-5-5", "input_tokens": 980, "output_tokens": 21, "seconds": 1.1, "type": "call_titled"}

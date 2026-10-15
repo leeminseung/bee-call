@@ -118,6 +118,24 @@ def test_the_provider_token_is_kept_with_the_people_it_serves(person, config, tm
     assert (person.people.root / "apns_provider_token.json").exists() and not (elsewhere / "data").exists()
 
 
+def test_on_a_server_the_provider_token_is_kept_in_memory_and_only_its_owner_reads_it(person, config, tmp_path,
+                                                                                      monkeypatch):
+    """BC-154: the signed provider token (a credential for up to an hour) was cached under the data root, on the
+    server's disk. On a server it goes where deploy/config.py points APNS_TOKEN_CACHE (tmpfs under /run), and the
+    file is replaced whole, readable by its owner only, also when an older one was readable by others."""
+    import stat
+
+    cache = tmp_path / "run" / "apns" / "provider-token.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("{}")
+    cache.chmod(0o644)
+    monkeypatch.setenv("APNS_TOKEN_CACHE", str(cache))
+    save_device_token(person, DEVICE, "development")
+    push(person, config)
+    assert json.loads(cache.read_text())["token"] and stat.S_IMODE(cache.stat().st_mode) == 0o600
+    assert not (person.people.root / "apns_provider_token.json").exists()
+
+
 def test_a_token_apple_no_longer_knows_is_dropped(person, config):
     save_device_token(person, DEVICE, "production")
     with pytest.raises(PushError, match="410 Unregistered"):
@@ -170,3 +188,31 @@ def test_placing_a_call_pushes_its_ring_line_and_a_failed_push_does_not_stop_it(
     assert line["room"] == room and line["topic"] == plan.topic
     written = json.loads((person.workspace / "state" / "outbound.jsonl").read_text().splitlines()[-1])
     assert written == line
+
+
+
+def test_every_push_is_recorded_in_the_person_s_folder_and_can_go_to_a_test_receiver(person, config, monkeypatch):
+    """Outside test seam 2: APNs could not be pointed at a local stand-in and nothing recorded what was pushed.
+    Each push the server sends, or would send, is a line of state/pushes.jsonl in the person's folder: its type, its
+    payload, whether it went out and APNs' answer (never a device token or a credential). APNS_URL sends pushes to
+    a test receiver instead of Apple (never on a server)."""
+    from deploy.config import NOT_FOR_THE_SERVER
+
+    record = person.workspace / "state" / "pushes.jsonl"
+    seen = []
+
+    def receiver(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, headers={"apns-id": "id-1"})
+
+    asyncio.run(voip_push.ring(LINE, person, config, transport=httpx.MockTransport(receiver)))  # no phone yet
+    save_device_token(person, DEVICE, "production")
+    monkeypatch.setenv("APNS_URL", "http://127.0.0.1:9999")
+    asyncio.run(voip_push.ring(LINE, person, config, transport=httpx.MockTransport(receiver)))
+    lines = [json.loads(line) for line in record.read_text().splitlines()]
+    assert [(line["type"], line["sent"]) for line in lines] == [("voip", False), ("voip", True)]
+    assert lines[0]["reason"] == "the app has not sent its voip token" and lines[1]["apns_id"] == "id-1"
+    assert lines[1]["payload"]["room"] == LINE["room"] and lines[1]["status"] == 200
+    assert seen == [f"http://127.0.0.1:9999/3/device/{DEVICE}"]
+    assert DEVICE not in record.read_text() and "bearer" not in record.read_text()
+    assert "APNS_URL" in NOT_FOR_THE_SERVER

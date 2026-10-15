@@ -29,15 +29,15 @@ import secrets
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 
 from beelink.clock import parse_time
 from beelink.planner import OFFERS_DIR, Plan
 from voice.language import CallLanguage
+from voice.people import DEFAULT_CALL_TIME
 
-CALL_TIME = "21:00"  # the time an offer suggests when CALL_TIME is unset (arbitrary default; a setting later)
 MIN_LEAD = timedelta(minutes=10)  # closer than this to today's call time, an offer suggests tomorrow (arbitrary)
 LATE_BY = timedelta(minutes=10)  # a booked call this late is not placed any more (arbitrary)
 STUCK = timedelta(minutes=5)  # "calling" or "placing" this long means the placing process died (arbitrary)
@@ -52,6 +52,14 @@ class UnknownChoice(ValueError):
 
 class OfferClosed(ValueError):
     """The offer no longer takes this answer: answered, closed, or its call is being placed (409)."""
+
+
+class QuestionWaiting(ValueError):
+    """A question the user has not answered yet: no new one is asked meanwhile."""
+
+    def __init__(self, waiting: "Offer") -> None:
+        super().__init__(f'the user has not answered the offer about "{waiting.topic}" ({waiting.id}) yet')
+        self.waiting = waiting
 
 
 class AlreadyOffered(ValueError):
@@ -86,21 +94,31 @@ class Offer:
     # told once, by a plain notification (voice/outbound.py tell_not_placed), at told_at.
     not_placed: str | None = None
     told_at: str | None = None
+    soon_told_at: str | None = None  # when the meta agent heard this booked call is coming up (voice/outbound.py)
     history: list[dict[str, str]] = field(default_factory=list)  # [{"at": ISO, "state": ...}]
 
     def at(self, name: str) -> datetime | None:
         value = getattr(self, name)
         return parse_time(value) if value else None
 
-    def view(self) -> dict[str, Any]:
-        """What the app shows: the times also as epochs, for a phone in another time zone. The state is what the
-        user can do: the app offers "Call off" for "booked", so a booked call a runner already prepares is still
-        "booked" until its room is being made; from then on, like a "Call me now" being prepared, it is "calling"."""
-        data = {k: getattr(self, k) for k in ("id", "state", "topic", "kind", "source", "suggested_at", "call_at")}
+    def view(self, language: str = "en", zone: tzinfo | None = None) -> dict[str, Any]:
+        """What the app shows (contract section 4). The state is what the user can do: the app offers "Call off" for
+        "booked", so a booked call a runner already prepares is still "booked" until its room is being made; from
+        then on, like a "Call me now" ("now") being prepared, it is "calling". The topic is never empty: without one
+        of its own it is its notification's line in the person's `language`. Times carry the offset of the person's
+        time zone (`zone`). The epochs, kind and source are for app builds from before D."""
+        state = {"now": "calling", "placing": "calling"}.get(self.state, self.state)
         if self.state == "calling" and booked_call(self):
-            data["state"] = "booked"
-        elif self.state == "placing":
-            data["state"] = "calling"
+            state = "booked"
+        created = parse_time(self.history[0]["at"]) if self.history else datetime.strptime(
+            self.id[:15], "%Y%m%d-%H%M%S").astimezone()
+
+        def shown(moment: datetime | None) -> str | None:
+            return None if moment is None else moment.astimezone(zone).isoformat(timespec="seconds")
+
+        data = {"id": self.id, "state": state, "topic": topic_line(self.topic, self.kind, language),
+                "kind": self.kind, "source": self.source, "created_at": shown(created),
+                "suggested_at": shown(self.at("suggested_at")), "call_at": shown(self.at("call_at"))}
         for name in ("suggested_at", "call_at"):
             moment = self.at(name)
             data[name.replace("_at", "_epoch")] = int(moment.timestamp()) if moment else None
@@ -109,8 +127,8 @@ class Offer:
 
 def call_time(now: datetime, at: str | None = None) -> datetime:
     """Today's call time, or tomorrow's when today's is past or too close, on the person's clock (`now` is their
-    time). CALL_TIME is read here, after the processes have loaded .env.local."""
-    hour, minute = (int(x) for x in (at or os.environ.get("CALL_TIME") or CALL_TIME).split(":"))
+    time). `at`: the person's call_time setting; voice/people.py owns its default."""
+    hour, minute = (int(x) for x in (at or DEFAULT_CALL_TIME).split(":"))
     today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     return today if today - now >= MIN_LEAD else today + timedelta(days=1)
 
@@ -275,9 +293,10 @@ class OfferStore:
         return [o for o in self.open(now) if o.state == "asked" and not o.notified_at and o.notice != "app only"]
 
     def ask(self, plan: Plan, now: datetime, at: str | None = None) -> Offer:
-        """A plan the planner wants to call about becomes a question. An older question still unanswered is
-        closed: the newer one is about the user's latest day, and two would ring at the same suggested time.
-        AlreadyOffered: a Bee conversation of the plan already had an offer (BC-014)."""
+        """A plan the meta agent (or the rule-based planner) wants to call about becomes a question. One question at
+        a time: while one is still waiting for the user's answer, a new one is not asked (QuestionWaiting), so a
+        notification the user has not answered yet never stops working under them. AlreadyOffered: a Bee
+        conversation of the plan already had an offer (BC-014). The one place for both rules (server review 14)."""
         suggested = call_time(now, at)
         offer = Offer(id=self._new_id(now), state="asked", reason=plan.reason, topic=plan.topic, kind=plan.kind,
                       suggested_at=_iso(suggested), expires_at=_iso(suggested),
@@ -285,21 +304,23 @@ class OfferStore:
                       plan=str(plan.path) if plan.path else None, conversation_ids=list(plan.conversation_ids),
                       history=[{"at": _iso(now), "state": "asked"}])
         with self._lock():
+            self._expire(now)  # a question past its time no longer waits
             for earlier in self.all():
                 shared = sorted(set(plan.conversation_ids) & set(earlier.conversation_ids))
                 if shared:
                     raise AlreadyOffered(f"Bee conversation {', '.join(map(str, shared))} already had an offer "
                                          f"({earlier.id}, {earlier.state})")
-            for older in self.all():
-                if older.state == "asked":
-                    self._save(self._set(older, "expired", now, error="replaced by a newer question"))
+            waiting = [o for o in self.all() if o.state == "asked"]
+            if waiting:
+                raise QuestionWaiting(waiting[0])
             return self._save(offer)
 
-    def book(self, topic: str, call_at: datetime, now: datetime, continue_from: str | None = None) -> Offer:
-        """A call the user asked for out loud, such as "call me tomorrow at 8"."""
+    def book(self, topic: str, call_at: datetime, now: datetime, continue_from: str | None = None,
+             language: CallLanguage | None = None) -> Offer:
+        """A call the user asked for out loud, such as "call me tomorrow at 8". Its reason is said to the person, in
+        the call's `language`, as the call's card shows it (app contract, decision 2)."""
         offer = Offer(id=self._new_id(now), state="booked", source="call", topic=topic,
-                      reason=f"In a call at {now:%H:%M}, the user asked to be called back: {topic}",
-                      call_at=_iso(call_at), continue_from=continue_from,
+                      reason=booked_reason(now, language), call_at=_iso(call_at), continue_from=continue_from,
                       history=[{"at": _iso(now), "state": "booked"}])
         with self._lock():
             return self._save(offer)
@@ -341,6 +362,17 @@ class OfferStore:
         with self._lock():
             self._expire(now)
 
+    def tell_soon(self, offer_id: str, now: datetime) -> bool:
+        """Marks a booked call as announced to the meta agent; False when it already was. Kept in the offer's file,
+        so a restart never announces it again (BC-043)."""
+        with self._lock():
+            offer = self.get(offer_id)
+            if offer is None or offer.soon_told_at:
+                return False
+            offer.soon_told_at = _iso(now)
+            self._save(offer)
+            return True
+
     def to_tell(self, now: datetime) -> list[Offer]:
         """Calls the user agreed to that could not be placed, and the user was not told yet."""
         self.expire(now)
@@ -365,6 +397,13 @@ class OfferStore:
         self.expire(now)
         until = now + ahead
         return [o for o in self.all() if o.state in ("now", "booked") and o.at("call_at") and o.at("call_at") <= until]
+
+
+def booked_reason(now: datetime, language: CallLanguage | None) -> str:
+    """Why the AI calls at a time the person booked out loud, said to them in their language."""
+    if language is not None and language.code == "ko":
+        return f"{clock_label(now, language)} 통화에서 이 시간에 다시 전화해 달라고 하셨어요."
+    return f"In our call at {now:%-I:%M %p}, you asked me to call you back at this time."
 
 
 def booked_call(offer: Offer) -> bool:
@@ -429,17 +468,70 @@ def not_placed_notification(offer: Offer, language: CallLanguage) -> dict[str, A
     return {"aps": {"alert": {"title": "Bee Call", "body": body}, "sound": "default", "thread-id": "offers"}}
 
 
+# What an offer, or an AI call, is about when it has no topic of its own: the line its notification uses, in the
+# person's language. The app shows the same line as the call's or the question's topic (contract sections 1 and 4).
+NO_TOPIC = {"ko": {"voice note": "새 음성 메모 이야기", None: "오늘 하루 이야기"},
+            "en": {"voice note": "Your new voice note", None: "Your day"}}
+
+
+def topic_line(topic: str | None, kind: str | None, language: str) -> str:
+    """The topic, or for none the notification's line for the kind ("voice note" or another), in `language`."""
+    if isinstance(topic, str) and topic.strip():
+        return topic.strip()
+    lines = NO_TOPIC["ko" if language == "ko" else "en"]
+    return lines["voice note"] if kind == "voice note" else lines[None]
+
+
 def notification(offer: Offer, now: datetime, language: CallLanguage) -> dict[str, Any]:
     """The APNs payload for an offer. The app defines the buttons (CALL_OFFER, CALL_OFFER_KO)."""
     when = when_label(offer.at("suggested_at") or now, now, language)
     topic = (offer.topic or "").strip()
+    line = topic_line(None, offer.kind, language.code)
     if language.code == "ko":
-        about = f"“{topic}” 이야기" if topic else ("새 음성 메모 이야기" if offer.kind == "voice note" else "오늘 하루 이야기")
+        about = f"“{topic}” 이야기" if topic else line
         body, category = f"{about}, {when}에 잠깐 통화 괜찮으세요?", "CALL_OFFER_KO"
     else:
-        about = f"About “{topic}”" if topic else ("About your new voice note" if offer.kind == "voice note"
-                                                 else "About your day")
+        about = f"About “{topic}”" if topic else f"About {line[0].lower()}{line[1:]}"
         body, category = f"{about}: free for a quick call at {when}?", "CALL_OFFER"
     return {"aps": {"alert": {"title": "Bee Call", "body": body}, "sound": "default", "category": category,
                     "thread-id": "offers"},
             "offer": offer.id}
+
+
+def main(argv: list[str] | None = None) -> None:
+    """For tests from outside (README: Testing from outside): make an offer the way the meta agent does, without its
+    model. The offer asks; nothing rings until the user says yes."""
+    import argparse
+    import json as json_module
+    import sys
+
+    from voice.people import CALL_TIME, People
+
+    parser = argparse.ArgumentParser(prog="python -m voice.offers", description=main.__doc__)
+    parser.add_argument("--data", type=Path, help="data root (default: BEE_CALL_DATA or data/)")
+    sub = parser.add_subparsers(dest="command", required=True)
+    ask = sub.add_parser("ask", help="ask an approved person whether they want a call about one topic")
+    ask.add_argument("person")
+    ask.add_argument("--topic", required=True, help="what the call would be about, as the notification says it")
+    ask.add_argument("--reason", required=True, help="why the AI would call (the call's opening reads it)")
+    ask.add_argument("--conversation", type=int, action="append", default=[],
+                     help="a Bee conversation id behind it (one offer per conversation, ever)")
+    ask.add_argument("--at", help="the time to suggest, like 20:30 (default: the person's call_time)")
+    args = parser.parse_args(argv)
+    people = People(args.data)
+    if not people.known(args.person):
+        sys.exit(f"{args.person} is not approved")
+    if args.at and not CALL_TIME.fullmatch(args.at):
+        sys.exit("--at must look like 21:00")
+    person = people.person(args.person)
+    plan = Plan(call=True, reason=args.reason, inbox_dir=None, conversation_ids=args.conversation, topic=args.topic,
+                kind="conversation" if args.conversation else None)
+    try:
+        offer = OfferStore(person.workspace).ask(plan, person.now(), at=args.at or person.settings().call_time)
+    except (QuestionWaiting, AlreadyOffered) as exc:
+        sys.exit(f"not asked: {exc}")
+    print(json_module.dumps(offer.view(), ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

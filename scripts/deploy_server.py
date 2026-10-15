@@ -32,7 +32,7 @@ from dotenv import dotenv_values
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-from deploy.config import ENV_NAME, HOST_PARAMETER, HOSTNAME, PREFIX, REFUSED  # noqa: E402
+from deploy.config import ENV_NAME, HOST_PARAMETER, HOSTNAME, NOT_FOR_THE_SERVER, PREFIX  # noqa: E402
 
 PROFILE = "bee-call"  # always this one, even with another AWS_PROFILE exported in the shell
 REGION = "ap-southeast-2"
@@ -53,23 +53,13 @@ BOOTSTRAP = REPO / "deploy" / "bootstrap.sh"
 UNITS = {"token": "bee-call-token", "session": "bee-call-session", "agent": "bee-call-agent",
          "outbound": "bee-call-outbound", "caddy": "caddy", "env": "bee-call-env"}
 
-# .env.local settings that stay on this Mac, with why.
-MAC_ONLY = {
-    "AWS_PROFILE": "this Mac's AWS profile; the server uses its instance role",
-    "AWS_ACCESS_KEY_ID": "static AWS keys; the server uses its instance role",
-    "AWS_SECRET_ACCESS_KEY": "static AWS keys; the server uses its instance role",
-    "AWS_SESSION_TOKEN": "static AWS keys; the server uses its instance role",
-    "APNS_KEY_PATH": "a path on this Mac; the key itself goes to /bee-call/apns-key",
-    "LIVEKIT_AGENT_NAME": "each machine registers its own; the server keeps bee-call",
-    "BEE_CALL_DEV_PERSON": "lets requests in without signing in; never on a server",
-    "BEE_CALL_DATA": "the server's data root is set in its units",
-    "BEE_BIN": "the server's Bee CLI is set in its units",
-    "TOKEN_SERVER_PORT": "Caddy expects the token server on 8787",
-    HOST_PARAMETER: "set by dns",
-}
+# .env.local settings that stay on this Mac, with why: the server's list (deploy/config.py), and the public name,
+# which dns sets.
+MAC_ONLY = {**NOT_FOR_THE_SERVER, HOST_PARAMETER: "set by dns"}
 # Settings this Mac passes on the command line rather than in .env.local, as the server should run them:
-# Claude Haiku 5.5 on Anthropic's own API in the coordinator slot, with GLM 5 on Bedrock standing by (voice/agent.py;
-# the key is .env.local's ANTHROPIC_API_KEY), and the AgentCore worker (only when its ARN is known).
+# the model catalog's Claude models on Anthropic's own API (voice/model_catalog.py: the call AI, the prep, the meta
+# agent, the title), GLM 5 on Bedrock standing by (the key is .env.local's ANTHROPIC_API_KEY), and the AgentCore
+# worker (only when its ARN is known).
 SERVER_DEFAULTS = {"COORDINATOR_LLM": "anthropic", "WORKER": "harness"}
 
 STATUS_SCRIPT = r"""
@@ -132,8 +122,8 @@ def coordinator_note(chosen: Mapping[str, tuple[str, str]], existing: set[str]) 
         return None
     if "ANTHROPIC_API_KEY" in chosen or "ANTHROPIC_API_KEY" in existing:
         return None
-    return ("no ANTHROPIC_API_KEY in .env.local or on the server: every call runs on GLM 5 (the stand-by), and its "
-            "record says so, until the key is set")
+    return ("no ANTHROPIC_API_KEY in .env.local or on the server: every call, its prep and the meta agent run on "
+            "GLM 5 (the stand-by), each record says so, and calls get no title, until the key is set")
 
 
 def harness_on_this_mac(local: Mapping[str, str | None]) -> tuple[str, str] | None:
@@ -154,7 +144,7 @@ def parse_sets(pairs: list[str]) -> dict[str, str]:
         name, sep, value = pair.partition("=")
         if not sep or not ENV_NAME.fullmatch(name):
             raise SystemExit(f"--set wants NAME=VALUE with an upper-case NAME, not {name!r}")
-        if name in REFUSED or name in MAC_ONLY:
+        if name in MAC_ONLY:
             raise SystemExit(f"{name} is not set on the server through SSM")
         found[name] = value
     return found
@@ -468,16 +458,32 @@ def cmd_logs(args) -> None:
     print(run_on_server(s.client("ssm"), instance_id, script, timeout=60, comment="Bee Call logs"))
 
 
+def unit_environment(unit: str = "bee-call-token.service") -> dict[str, str]:
+    """The Environment= settings of one of the services' units (deploy/systemd/): the one place for them."""
+    found = {}
+    for line in (REPO / "deploy" / "systemd" / unit).read_text().splitlines():
+        if line.startswith("Environment="):
+            name, _, value = line[len("Environment="):].partition("=")
+            found[name] = value
+    return found
+
+
+def people_script(args: list[str]) -> str:
+    """voice.people on the server, as the services' user, with the token server's own environment and its home (the
+    data root): who may use the server."""
+    env = unit_environment()
+    assignments = " ".join(f"{k}={shlex.quote(v)}" for k, v in {"HOME": env["BEE_CALL_DATA"], **env}.items())
+    return (f"cd /opt/bee-call/app && exec runuser -u bee-call -- env {assignments} "
+            ".venv/bin/python -m voice.people " + " ".join(shlex.quote(a) for a in args))
+
+
 def cmd_people(args) -> None:
-    """voice.people on the server, as the services' user and with their data root: who may use the server."""
     if not args.args:
         raise SystemExit("people wants voice.people's own arguments, for example: people waiting")
     s = session()
     instance_id = running_instance(s.client("ec2"))
-    script = ("cd /opt/bee-call/app && exec runuser -u bee-call -- env HOME=/var/lib/bee-call TZ=Asia/Seoul "
-              "BEE_CALL_DATA=/var/lib/bee-call BEE_BIN=/opt/bee-call/bin/bee BEE_FORCE_FILE_STORE=1 "
-              ".venv/bin/python -m voice.people " + " ".join(shlex.quote(a) for a in args.args))
-    print(run_on_server(s.client("ssm"), instance_id, script, timeout=60, comment="Bee Call people"), end="")
+    print(run_on_server(s.client("ssm"), instance_id, people_script(args.args), timeout=60,
+                        comment="Bee Call people"), end="")
 
 
 def cmd_down(args) -> None:

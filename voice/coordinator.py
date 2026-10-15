@@ -334,15 +334,17 @@ class Coordinator(Agent):
     # ---------- tools ----------
 
     @function_tool
-    async def delegate(self, context: RunContext, task: str) -> str:
+    async def delegate(self, context: RunContext, task: str, title: str) -> str:
         """Hand slow work (research, calculation, analysis) to the background worker. Returns at once.
 
         A started job cannot be changed. For more or different work, call delegate again.
 
         Args:
             task: A self-contained description of the work and the result to bring back.
+            title: A few words naming the job for the user's screen, in the language you speak with the user, such
+                as "Saturday rain in Seoul by the hour".
         """
-        job = self._jobs.start(task)
+        job = self._jobs.start(task, title=" ".join(title.split()) or None, language=self._language.code)
         return (f"Job {job.job_id} is running in the background. A job notification will come when it has news. "
                 "If you already told the user you are on it, do not say it again; carry on the conversation.")
 
@@ -402,7 +404,7 @@ class Coordinator(Agent):
         store = OfferStore(self._workspace)
         moved = self._booked is not None and store.call_off(self._booked, now, "moved to a new time") is not None
         session = f"{self._recorder.dir.parent.name}/{self._recorder.dir.name}"  # the booked call continues this one
-        offer = store.book(topic.strip() or "a call back", when, now, continue_from=session)
+        offer = store.book(topic.strip() or "a call back", when, now, continue_from=session, language=self._language)
         self._booked = offer.id  # one call back per call: booking again moves it
         self._recorder.event("call_booked", offer=offer.id, at=offer.call_at, topic=offer.topic)
         verb = "Moved the call back" if moved else "Booked"

@@ -2,10 +2,11 @@
 
 Claude Haiku 5.5 on Anthropic's own API is a second provider next to AWS, with ways to fail that GLM 5 on Bedrock
 does not share: a missing or refused key (401), no credit left (400 "credit balance is too low"), a rate limit (429),
-an outage (5xx, 529), no route to api.anthropic.com. If the first request of a call fails in any way, or Claude
-declines it before saying a word, GLM 5 answers that request and every later one, and the record says which model
-answered and why (on_choice; voice/agent.py writes the "coordinator_model" event). The failed try is no failed turn:
-its error never reaches the session.
+an outage (5xx, 529), no route to api.anthropic.com. If the first request of a call fails in any of these ways, GLM 5
+answers that request and every later one, and the record says which model answered and why (on_choice;
+voice/agent.py writes the "coordinator_model" event). The failed try is no failed turn: its error never reaches
+the session. A decline (stop_reason "refusal") is no failure: it is a safety decision, never handed to another model
+to answer, so the caller hears the adapter's one short line and the call stays with Claude.
 
 Once a model has answered, it is the call's only model and requests go straight to it: a later failure is a failed
 turn, as with any model (LiveKit retries what is worth retrying, then gives the turn up). The call never switches
@@ -20,8 +21,6 @@ from typing import Any, Callable, ClassVar
 
 from livekit.agents import llm
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-
-from voice.claude_llm import REFUSAL_TAG
 
 log = logging.getLogger("bee-call.model")
 
@@ -125,11 +124,8 @@ class FirstRequest(llm.LLMStream):
                                     conn_options=dataclasses.replace(self._options, max_retry=0),
                                     **self._request) as stream:
                 async for chunk in stream:
-                    if owner.chosen is None:
-                        if chunk.delta and (chunk.delta.extra or {}).get(REFUSAL_TAG):
-                            return "Claude declined the first request before saying anything (see claude_refusal)"
-                        if chunk.has_response():
-                            owner._choose(primary)
+                    if owner.chosen is None and chunk.has_response():
+                        owner._choose(primary)  # a decline's line counts too: a decline is never a reason to switch
                     self._event_ch.send_nowait(chunk)
         except Exception as exc:
             if owner.chosen is primary:

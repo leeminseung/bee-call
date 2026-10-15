@@ -117,9 +117,11 @@ class FakeCall:
         if self.recording is None:  # as LiveKit's: the first call decides
             self.recording = dict(options)
 
+    console = False  # LiveKit's console mode: this Mac's microphone, no caller in a room
+
     def is_fake_job(self) -> bool:
         """LiveKit's console mode (no room, this Mac's mic) is a fake job; a dispatched call is not."""
-        return False
+        return self.console
 
     def add_shutdown_callback(self, callback) -> None:
         self.shutdown_callbacks.append(callback)
@@ -175,5 +177,9 @@ def use_fakes(monkeypatch, call: FakeCall) -> None:
     """Points voice/agent.py at the fakes of this call."""
     from voice import agent
 
-    monkeypatch.setattr(agent, "make_session", lambda ctx, language, voice, rec: call.session)
+    def make_session(ctx, language, voice, rec, call_model):
+        call.call_model = call_model  # the person's choice, as the session was given it
+        return call.session
+
+    monkeypatch.setattr(agent, "make_session", make_session)
     monkeypatch.setattr(agent, "ring_back", call.ring_back)

@@ -6,7 +6,7 @@ itself in without a token when they carry the header X-Bee-Call-Dev: 1 (curl, te
 browser cannot send that header to another site without asking first, and this server never says yes. The dev
 fallback is off on a server (BEE_CALL_PUBLIC_HOST set), and requests must name a known host.
 
-Run: uv run python -m voice.token_server
+Run: uv run python -m voice.token_server [--host 127.0.0.1] [--port 8787]   (port: TOKEN_SERVER_PORT, or 8787)
 
 Signing in (Sign in with Apple, voice/apple_signin.py):
 GET  /auth/nonce                         {"nonce"}: a one-time value the app hashes into Apple's sign-in request
@@ -16,14 +16,18 @@ POST /auth/apple {"identity_token", "nonce"}
 POST /auth/signout                       ends this sign-in; the push tokens it registered go with it
 GET  /me                                 who is signed in, their settings and today's estimated spend
 PUT  /settings {"language": "ko", ...}   the settings the app may change (voice/people.py APP_SETTINGS), with
-                                         time_zone, the phone's IANA zone (400 for a name zoneinfo does not know)
+                                         time_zone, the phone's IANA zone (400 for a name zoneinfo does not know),
+                                         call_model and worker_model, ids from GET /models, and voice, a
+                                         catalog id of the call language's voices or null (400 for another
+                                         language's; a change of language alone resets it unless it fits)
 
 Calls:
 GET  /token                              a token for a new call the user starts; the voice server is dispatched
                                          into the room when the app joins. 429 once today's budget is spent
 GET  /token?room=R&answer=1              a token to answer the AI's call in room R (already dispatched); 410 if
                                          the room is gone (the voice server gave up after RING_SECONDS)
-GET  /token?continue=D/T                 a new call that continues the earlier call D/T (voice/continuation.py)
+GET  /token?continue=CALL_ID             a new call that continues an earlier call (voice/continuation.py); the
+                                         pre-D form continue=<date>/<time> is still taken
 GET  /ring                               Server-Sent Events: one "ring" event per call the AI places for this
                                          person (calls placed in the last RING_SECONDS and not declined, then new
                                          ones): how an open app learns the AI is calling without VoIP push
@@ -38,7 +42,19 @@ POST /voip  {"token": hex, "environment": "development"|"production"}
 POST /push  {"token": hex, "environment": ...}
                                          the app's token for plain notifications (the offers that ask first),
                                          kept the same way
+GET  /calls?limit=20&before=CURSOR       the call list, newest first (voice/call_view.py; contract section 1)
+GET  /calls/<call_id>                    one call as its thread (contract section 2); 404 for a call with no record
+GET  /calls/<call_id>/files/<path>       one of its files, by the records server's rule (voice/call_folders.py)
+GET  /changes                            Server-Sent Events: `changed` {path, version} for /calls, /offers and each
+                                         call live or ended in the last ten minutes, on connect and whenever a
+                                         version changes, so the app fetches only what changed (contract section 3)
+GET  /models?role=call                   the models the person can pick for a role, call or worker
+                                         (voice/model_catalog.py)
+GET  /voices?language=ko                 the voices the person can pick for a call language (voice/catalog.py)
+GET  /voices/samples/<file>              a voice's sample, MP3: open to anyone and cached for good
 GET  /offers                             offers still waiting for an answer or a call
+     /calls, /calls/<call_id> and /offers carry their body's version as ETag; with If-None-Match the same
+     version answers 304 and no body (contract section 0)
 POST /offers/<id>  {"choice": "now"|"later"|"decline"}
                                          the user's answer; voice/outbound.py places the call. "decline" also
                                          calls off a booked call until its room is being made. 404 unknown
@@ -50,12 +66,16 @@ POST /bee/connect                        {"link"}: the approval link the app ope
 POST /bee/disconnect                     logs this person's Bee out and turns "bee" off
 """
 
+import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 import shutil
+import sys
 import time
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -68,23 +88,29 @@ from beelink import cli as bee
 from beelink.clock import parse_time
 from beelink.planner import OUTBOUND_LOG
 from meta.session import add_event
-from voice import apple_signin, voip_push
+from voice import apple_signin, call_view, model_catalog, voip_push
+from voice.call_folders import CALL_ID, NotServed, find_call, resolve_inside, served_headers
+from voice.catalog import SAMPLES, catalog, sample_files
+from voice.web_headers import plain_server_name
 from voice.continuation import session_dir
 from voice.costs import day_budget
 from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata, call_room_of, decline_ring, declined_rooms, \
     room_name
 from voice.offers import OfferClosed, OfferStore, UnknownChoice
-from voice.people import People, Person, dev_person, waiting_code
-from voice.session_server import local_host
+from voice.people import People, Person, dev_fallback, dev_person, waiting_code
+from voice.session_server import host_allowed
 
 load_dotenv(".env.local")
 log = logging.getLogger("bee-call.token")
 KEEPALIVE_SECONDS = 15.0
+CHANGES_POLL_S = 0.25  # how often /changes looks at the files: at most one event per path every 250 ms
+CHANGES_REBUILD_S = 30.0  # /changes rebuilds what it watches at least this often (contract section 3)
 BEE_APPROVAL_SECONDS = 330  # Bee's approval link lasts about 5 minutes (bee login --no-wait)
 # A Bee login waiting for the person's approval, kept in their Bee folder, so a restart of this server goes on
 # waiting for it: {"started_at": epoch seconds}.
 BEE_PENDING = "pending.json"
-OPEN_PATHS = ("/auth/nonce", "/auth/apple")  # the only paths that need no sign-in
+OPEN_PATHS = ("/auth/nonce", "/auth/apple")  # the only paths that need no sign-in, with the voice samples:
+SAMPLES_PATH = "/voices/samples/"  # the same for everyone, nothing personal: open and cached for good (section 5)
 BUNDLE_ID = os.environ.get("APNS_BUNDLE_ID") or voip_push.DEFAULT_BUNDLE_ID
 
 PERSON = web.RequestKey("person", str)  # who is asking, set by signed_in()
@@ -94,6 +120,8 @@ PEOPLE = web.AppKey("people", People)
 NONCES = web.AppKey("nonces", apple_signin.Nonces)
 VERIFY = web.AppKey("verify", object)  # apple_signin.verify, or a stand-in in tests
 BEE_LOGINS = web.AppKey("bee_logins", dict)  # person -> the task waiting for their Bee approval
+BEE_TURNS = web.AppKey("bee_turns", dict)  # person -> the lock their Bee connect and disconnect take turns on
+CALLS = web.AppKey("calls", dict)  # person -> call_view.Calls: what their call records say, kept by file stamps
 
 
 def env(name: str) -> str:
@@ -110,34 +138,23 @@ def bearer(request: web.Request) -> str | None:
     return header[7:].strip() if header.startswith("Bearer ") else None
 
 
-def from_this_machine(request: web.Request) -> bool:
-    """Made on this machine itself, not passed on by a proxy in front (which adds X-Forwarded-For)."""
-    return request.remote in ("127.0.0.1", "::1") and "X-Forwarded-For" not in request.headers
-
-
-def dev_request(request: web.Request) -> bool:
-    return (not os.environ.get("BEE_CALL_PUBLIC_HOST") and from_this_machine(request)
-            and request.headers.get("X-Bee-Call-Dev") == "1")
-
-
 @web.middleware
 async def known_hosts_only(request: web.Request, handler):
     """Refuses host names other than this machine's and the server's own, so a web page cannot point its own
-    domain at this server (DNS rebinding)."""
-    public = os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip().lower()
-    host = (request.url.host or "").lower().rstrip(".")
-    if not local_host(request.url.host) and not (public and host == public):
+    domain at this server (DNS rebinding); the rule is the session screen's (voice/session_server.py)."""
+    if not host_allowed(request):
         raise web.HTTPMisdirectedRequest(text="unknown host name\n")
     return await handler(request)
 
 
 @web.middleware
 async def signed_in(request: web.Request, handler):
-    if request.path in OPEN_PATHS:
+    if request.path in OPEN_PATHS or request.path.startswith(SAMPLES_PATH):
         return await handler(request)
     person = request.app[PEOPLE].who(bearer(request))
-    if person is None and not bearer(request) and dev_request(request):
-        person = dev_person()
+    if person is None and not bearer(request):
+        person = dev_fallback(request.app[PEOPLE], request.remote, "X-Forwarded-For" in request.headers,
+                              asked=request.headers.get("X-Bee-Call-Dev") == "1")
     if person is None:
         raise web.HTTPUnauthorized(text="sign in first\n")
     request[PERSON] = person
@@ -174,7 +191,8 @@ async def apple_sign_in(request: web.Request) -> web.Response:
     try:
         identity = await asyncio.to_thread(request.app[VERIFY], identity_token, BUNDLE_ID, nonce)
     except apple_signin.SignInError as exc:
-        raise web.HTTPUnauthorized(text=f"{exc}\n")
+        log.info("a sign-in was refused: %s", exc)  # the library's words stay in the log (black-box probe 5)
+        raise web.HTTPUnauthorized(text="Apple's sign-in token was not accepted\n")
     people = request.app[PEOPLE]
     who = people.sign_in(identity.sub, identity.email, datetime.now())
     if who is None:
@@ -199,14 +217,23 @@ async def me(request: web.Request) -> web.Response:
 
 
 async def change_settings(request: web.Request) -> web.Response:
+    changes = await json_object(request)
     try:
-        changes = await request.json()
-        if not isinstance(changes, dict):
-            raise ValueError("expected a JSON object")
         settings = request.app[PEOPLE].change_settings(person(request), changes)
-    except ValueError as exc:
+    except ValueError as exc:  # our own words: which setting, and what it takes
         raise web.HTTPBadRequest(text=f"{exc}\n")
     return web.json_response({"settings": asdict(settings)})
+
+
+async def json_object(request: web.Request) -> dict:
+    """The request's JSON object; 400 for anything else, without the parser's own words (black-box probe 5)."""
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text="expected a JSON object\n")
+    return body
 
 
 # ---------- calls ----------
@@ -251,7 +278,7 @@ async def token(request: web.Request) -> web.Response:
         room = room_name(who)
     continue_from = request.query.get("continue")  # "Continue this call" in an earlier call's record
     if continue_from is not None and (answer or session_dir(workspace(request), continue_from) is None):
-        raise web.HTTPBadRequest(text="continue= needs the id of an earlier call, like 2026-10-14/0055\n")
+        raise web.HTTPBadRequest(text="continue= needs the id of an earlier call of yours\n")
     if not answer:
         budget = day_budget(someone(request), someone(request).now())
         if budget.used_up:
@@ -327,32 +354,49 @@ async def decline_call(request: web.Request) -> web.Response:
 
 
 async def voip_token(request: web.Request) -> web.Response:
+    body = await json_object(request)
     try:
-        body = await request.json()
         voip_push.save_device_token(someone(request), str(body["token"]), str(body["environment"]),
                                     session_token=bearer(request))
     except (ValueError, KeyError, TypeError) as exc:
-        raise web.HTTPBadRequest(text=f"expected a VoIP token: {exc}")
+        raise web.HTTPBadRequest(text=f"expected a VoIP token: {exc}\n")
     log.info("VoIP push token saved for %s (%s)", person(request), body["environment"])
     return web.Response(status=204)
 
 
 async def alert_token(request: web.Request) -> web.Response:
     """The app's token for plain notifications (the offers that ask before a call)."""
+    body = await json_object(request)
     try:
-        body = await request.json()
         voip_push.save_device_token(someone(request), str(body["token"]), str(body["environment"]), "alert",
                                     session_token=bearer(request))
     except (ValueError, KeyError, TypeError) as exc:
-        raise web.HTTPBadRequest(text=f"expected a notification token: {exc}")
+        raise web.HTTPBadRequest(text=f"expected a notification token: {exc}\n")
     log.info("notification token saved for %s (%s)", person(request), body["environment"])
     return web.Response(status=204)
 
 
+def versioned(request: web.Request, body: dict) -> web.Response:
+    """A body with its version as its ETag; 304 and no body when If-None-Match names that version already."""
+    tag = f'"{body["version"]}"'
+    asked = {part.strip().removeprefix("W/").strip('"') for part in request.headers.get("If-None-Match", "").split(",")}
+    if body["version"] in asked or "*" in asked:
+        return web.Response(status=304, headers={"ETag": tag})
+    return web.json_response(body, headers={"ETag": tag}, dumps=lambda data: json.dumps(data, ensure_ascii=False))
+
+
+def offers_body(request: web.Request) -> dict:
+    """The offers still waiting for an answer or a call, as GET /offers answers them."""
+    store = OfferStore(workspace(request))
+    settings = request.app[PEOPLE].settings(person(request))
+    body = {"offers": [o.view(settings.language, settings.zone()) for o in store.open(someone(request).now())]}
+    body["version"] = call_view.version_of(body)
+    return body
+
+
 async def list_offers(request: web.Request) -> web.Response:
     """The offers still waiting for an answer or a call, for the app's first screen."""
-    store = OfferStore(workspace(request))
-    return web.json_response({"offers": [o.view() for o in store.open(someone(request).now())]})
+    return versioned(request, offers_body(request))
 
 
 async def answer_offer(request: web.Request) -> web.Response:
@@ -376,7 +420,151 @@ async def answer_offer(request: web.Request) -> web.Response:
         raise web.HTTPConflict(text=f"{exc}\n")
     log.info("offer %s of %s: %s -> %s", offer.id, person(request), choice, offer.state)
     add_event(workspace(request), "offer_answered", now=now, offer=offer.id, choice=choice, topic=offer.topic)
-    return web.json_response({"offer": offer.view()})
+    settings = request.app[PEOPLE].settings(person(request))
+    return web.json_response({"offer": offer.view(settings.language, settings.zone())},
+                             dumps=lambda data: json.dumps(data, ensure_ascii=False))
+
+
+# ---------- the call list and the call view (contract sections 1 and 2) ----------
+
+def call_records(request: web.Request) -> call_view.Calls:
+    """What this person's call records say, kept between requests until a file changes."""
+    found = request.app[CALLS]
+    if person(request) not in found:
+        found[person(request)] = call_view.Calls(workspace(request))
+    return found[person(request)]
+
+
+async def list_calls(request: web.Request) -> web.Response:
+    """GET /calls?limit=20&before=<cursor>: every call, newest first, a page at a time."""
+    settings = request.app[PEOPLE].settings(person(request))
+    try:
+        limit = int(request.query.get("limit", call_view.DEFAULT_LIMIT))
+    except ValueError:
+        raise web.HTTPBadRequest(text=f"limit must be a whole number from 1 to {call_view.MAX_LIMIT}\n") from None
+    try:
+        body = call_view.call_list(workspace(request), zone=settings.zone(), language=settings.language,
+                                   now=someone(request).now(), limit=limit, before=request.query.get("before"),
+                                   cache=call_records(request))
+    except call_view.BadRequest as exc:
+        raise web.HTTPBadRequest(text=f"{exc}\n") from None
+    return versioned(request, body)
+
+
+async def show_call(request: web.Request) -> web.Response:
+    """GET /calls/<call_id>: one call as its thread; 404 for any call this person has no record of."""
+    call_id = request.match_info["call_id"]
+    settings = request.app[PEOPLE].settings(person(request))
+    body = call_view.call_view(workspace(request), call_id, zone=settings.zone(), language=settings.language,
+                               now=someone(request).now(), cache=call_records(request)) \
+        if CALL_ID.fullmatch(call_id) else None
+    if body is None:
+        raise web.HTTPNotFound(text="no such call\n")
+    return versioned(request, body)
+
+
+async def call_file(request: web.Request) -> web.FileResponse:
+    """GET /calls/<call_id>/files/<path>: a call's file, never a private part (403) or a path out of its folder."""
+    call_id = request.match_info["call_id"]
+    folder = find_call(workspace(request), call_id) if CALL_ID.fullmatch(call_id) else None
+    if folder is None:
+        raise web.HTTPNotFound(text="no such call\n")
+    try:
+        target = resolve_inside(folder, request.match_info["path"])
+    except NotServed as exc:
+        raise web.HTTPForbidden(text=f"{exc}\n") from None
+    except FileNotFoundError:
+        raise web.HTTPNotFound() from None
+    return web.FileResponse(target, headers=served_headers(target))
+
+
+def versions_now(request: web.Request) -> tuple[dict[str, str], list[Path]]:
+    """The version of each path /changes watches (the list's first page, the offers, each watched call), and the
+    folders of the watched calls."""
+    settings = request.app[PEOPLE].settings(person(request))
+    zone, now, cache = settings.zone(), someone(request).now(), call_records(request)
+    found = {"/calls": call_view.call_list(workspace(request), zone=zone, language=settings.language, now=now,
+                                           cache=cache)["version"],
+             "/offers": offers_body(request)["version"]}
+    watched = call_view.watched_calls(workspace(request), zone=zone, now=now, cache=cache)
+    for call_id, _ in watched:
+        body = call_view.call_view(workspace(request), call_id, zone=zone, language=settings.language, now=now,
+                                   cache=cache)
+        if body is not None:
+            found[f"/calls/{call_id}"] = body["version"]
+    return found, [folder for _, folder in watched]
+
+
+async def changes(request: web.Request) -> web.StreamResponse:
+    """GET /changes: Server-Sent Events, one `changed` {path, version} whenever a version the app may show changes
+    (contract section 3). On connect, one for each watched path. The files are looked at every CHANGES_POLL_S and
+    everything watched is rebuilt when they changed, and at least every CHANGES_REBUILD_S for what the clock alone
+    changes (a quiet live call turning dropped, a ring turning missed)."""
+    response = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-store",
+                                           "X-Accel-Buffering": "no"})
+    await response.prepare(request)
+    sent: dict[str, str] = {}
+
+    async def tell(found: dict[str, str]) -> bool:
+        """Sends what changed since it was last sent; whether anything was."""
+        told = False
+        for path, version in found.items():
+            if sent.get(path) != version:
+                data = json.dumps({"path": path, "version": version})
+                await response.write(f"event: changed\ndata: {data}\n\n".encode())
+                sent[path], told = version, True
+        return told
+
+    folders: list[Path] = []
+    stamp, rebuilt, written = None, -math.inf, time.monotonic()
+    try:
+        while True:
+            # Looked at before the rebuild, so a change made during it shows at the next look.
+            seen = call_view.files_stamp(workspace(request), folders)
+            if seen != stamp or time.monotonic() - rebuilt >= CHANGES_REBUILD_S:
+                found, watched = versions_now(request)
+                if await tell(found):
+                    written = time.monotonic()
+                stamp = seen if watched == folders else None  # newly watched calls: look again at once
+                folders, rebuilt = watched, time.monotonic()
+            if time.monotonic() - written >= KEEPALIVE_SECONDS:
+                await response.write(b": keepalive\n\n")
+                written = time.monotonic()
+            await asyncio.sleep(CHANGES_POLL_S)
+    except (ConnectionResetError, asyncio.CancelledError):
+        pass
+    return response
+
+
+# ---------- models (contract section 5b) ----------
+
+async def list_models(request: web.Request) -> web.Response:
+    """GET /models?role=call|worker: the models the person can pick for that role, the default first."""
+    name = request.query.get("role", "")
+    if name not in model_catalog.ROLES or not model_catalog.role(name).person:
+        raise web.HTTPBadRequest(text="role must be call or worker\n")
+    return web.json_response(model_catalog.models_body(name), dumps=lambda data: json.dumps(data, ensure_ascii=False))
+
+
+# ---------- voices (contract section 5) ----------
+
+async def list_voices(request: web.Request) -> web.Response:
+    """GET /voices?language=ko: the voices the person can pick for that call language, the default first."""
+    language = request.query.get("language", "")
+    voices = catalog(language)
+    if not voices:
+        raise web.HTTPBadRequest(text="language must be one of en, ko\n")
+    return web.json_response({"language": language, "voices": [
+        {"id": v.id, "name": v.name, "character": dict(v.character), "sample_url": f"{SAMPLES_PATH}{v.sample}",
+         "default": v.default} for v in voices]}, dumps=lambda data: json.dumps(data, ensure_ascii=False))
+
+
+async def voice_sample(request: web.Request) -> web.FileResponse:
+    """GET /voices/samples/<file>: one of the catalog's samples, to anyone."""
+    name = request.match_info["file"]
+    if name not in sample_files():
+        raise web.HTTPNotFound()
+    return web.FileResponse(SAMPLES / name, headers={"Content-Type": "audio/mpeg"})
 
 
 # ---------- Bee ----------
@@ -414,16 +602,24 @@ async def stop_waiting_for_bee(app: web.Application, who: str) -> None:
         await asyncio.gather(task, return_exceptions=True)
 
 
+def bee_turn(app: web.Application, who: str) -> asyncio.Lock:
+    """A person's Bee connect and disconnect take turns: a double tap never runs two `bee login` on one folder, and
+    a disconnect never removes the folder under a connect that is still starting (or lets its wait turn Bee back
+    on)."""
+    return app[BEE_TURNS].setdefault(who, asyncio.Lock())
+
+
 async def connect_bee(request: web.Request) -> web.Response:
     who, people = person(request), request.app[PEOPLE]
     folder = people.bee_dir(who)
-    await stop_waiting_for_bee(request.app, who)  # one `bee login` at a time on a folder
-    try:
-        link = await bee.start_login(folder)
-    except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
-        raise web.HTTPBadGateway(text=f"could not start a Bee login: {exc}\n")
-    (folder / BEE_PENDING).write_text(json.dumps({"started_at": time.time()}))
-    wait_for_bee_approval(request.app, who, BEE_APPROVAL_SECONDS)
+    async with bee_turn(request.app, who):
+        await stop_waiting_for_bee(request.app, who)  # one `bee login` at a time on a folder
+        try:
+            link = await bee.start_login(folder)
+        except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
+            raise web.HTTPBadGateway(text=f"could not start a Bee login: {exc}\n")
+        (folder / BEE_PENDING).write_text(json.dumps({"started_at": time.time()}))
+        wait_for_bee_approval(request.app, who, BEE_APPROVAL_SECONDS)
     return web.json_response({"link": link})
 
 
@@ -431,20 +627,21 @@ async def disconnect_bee(request: web.Request) -> web.Response:
     """Bee off, and the person's Bee login gone from this server, whatever `bee logout` says: 204 only once the
     login folder is removed (the app clears its status on 204)."""
     who, people = person(request), request.app[PEOPLE]
-    await stop_waiting_for_bee(request.app, who)
-    folder = people.bee_dir(who)
-    try:
-        await bee.logout(folder)
-    except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
-        log.warning("bee logout for %s failed (%s); removing the login here anyway", who, exc)
-    people.change_settings(who, {"bee": False}, allowed=("bee",))
-    try:
-        shutil.rmtree(folder)
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        log.error("could not remove the Bee login of %s: %s", who, exc)
-        raise web.HTTPBadGateway(text="Bee is off, but the server could not remove the Bee login; try again\n")
+    async with bee_turn(request.app, who):
+        await stop_waiting_for_bee(request.app, who)
+        folder = people.bee_dir(who)
+        try:
+            await bee.logout(folder)
+        except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
+            log.warning("bee logout for %s failed (%s); removing the login here anyway", who, exc)
+        people.change_settings(who, {"bee": False}, allowed=("bee",))
+        try:
+            shutil.rmtree(folder)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.error("could not remove the Bee login of %s: %s", who, exc)
+            raise web.HTTPBadGateway(text="Bee is off, but the server could not remove the Bee login; try again\n")
     return web.Response(status=204)
 
 
@@ -469,11 +666,23 @@ async def stop_bee_logins(app: web.Application) -> None:
         task.cancel()
 
 
+async def private_answers(request: web.Request, response: web.StreamResponse) -> None:
+    """Every answer is one person's (a call pass, settings, offers): never kept by a cache (black-box probe 3). The
+    one exception is a voice sample, the same for everyone, whose name changes with its content."""
+    if request.path.startswith(SAMPLES_PATH) and response.status == 200:
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    else:
+        response.headers["Cache-Control"] = "no-store"
+
+
 def make_app(url: str, key: str, secret: str, people: People, room_exists=livekit_room_exists,
              verify=apple_signin.verify) -> web.Application:
     app = web.Application(middlewares=[known_hosts_only, signed_in])
+    app.on_response_prepare.append(private_answers)
+    app.on_response_prepare.append(plain_server_name)
     app[URL], app[KEY], app[SECRET], app[ROOM_EXISTS] = url, key, secret, room_exists
     app[PEOPLE], app[NONCES], app[VERIFY], app[BEE_LOGINS] = people, apple_signin.Nonces(), verify, {}
+    app[BEE_TURNS], app[CALLS] = {}, {}
     app.on_startup.append(resume_bee_logins)
     app.on_shutdown.append(stop_bee_logins)
     app.router.add_get("/auth/nonce", new_nonce)
@@ -484,6 +693,13 @@ def make_app(url: str, key: str, secret: str, people: People, room_exists=liveki
     app.router.add_get("/token", token)
     app.router.add_get("/ring", ring)
     app.router.add_post("/calls/decline", decline_call)
+    app.router.add_get("/calls", list_calls)
+    app.router.add_get("/calls/{call_id}", show_call)
+    app.router.add_get("/calls/{call_id}/files/{path:.+}", call_file)
+    app.router.add_get("/changes", changes)
+    app.router.add_get("/models", list_models)
+    app.router.add_get("/voices", list_voices)
+    app.router.add_get(SAMPLES_PATH + "{file}", voice_sample)
     app.router.add_post("/voip", voip_token)
     app.router.add_post("/push", alert_token)
     app.router.add_get("/offers", list_offers)
@@ -493,14 +709,25 @@ def make_app(url: str, key: str, secret: str, people: People, room_exists=liveki
     return app
 
 
-if __name__ == "__main__":
+def listen_on(argv: list[str], env: Mapping[str, str]) -> tuple[str, int]:
+    """Where the token server listens: --host (every interface when left out) and --port (TOKEN_SERVER_PORT, or
+    8787, where Caddy on the server expects it)."""
+    parser = argparse.ArgumentParser(description="The token server for the iPhone app (voice/token_server.py).")
+    parser.add_argument("--host", default="0.0.0.0", help="the address to listen on (default: every interface)")
+    parser.add_argument("--port", type=int, default=int(env.get("TOKEN_SERVER_PORT") or 8787),
+                        help="the port (default: TOKEN_SERVER_PORT, or 8787)")
+    args = parser.parse_args(argv)
+    return args.host, args.port
+
+
+def main(argv: list[str] | None = None) -> None:
     # One line per request, so a phone that cannot reach the server is easy to tell apart.
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     bee.use_bee(None)  # Bee works only through a person's own login (beelink/cli.py)
     # The default route can be a VPN, so list the Wi-Fi addresses a phone can actually reach.
     from voice.session_server import lan_addresses
 
-    port = int(os.environ.get("TOKEN_SERVER_PORT", "8787"))
+    host, port = listen_on(sys.argv[1:] if argv is None else argv, os.environ)
     people = People()
     app = make_app(env("LIVEKIT_URL"), env("LIVEKIT_API_KEY"), env("LIVEKIT_API_SECRET"), people)
     print(f"token server on port {port}, people in {people.root.resolve()}. For the iPhone app on the same Wi-Fi:",
@@ -510,4 +737,8 @@ if __name__ == "__main__":
     if dev_person():
         print(f"requests made on this Mac without a sign-in, with the header X-Bee-Call-Dev: 1, act as {dev_person()} "
               "(BEE_CALL_DEV_PERSON)", flush=True)
-    web.run_app(app, host="0.0.0.0", port=port, print=None)
+    web.run_app(app, host=host, port=port, print=None)
+
+
+if __name__ == "__main__":
+    main()

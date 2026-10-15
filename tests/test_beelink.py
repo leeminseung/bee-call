@@ -139,6 +139,7 @@ def test_the_call_ai_the_prep_and_the_meta_agent_read_nothing_bee_made_of_our_ca
     from tests.helpers import seoul_now
     from voice.coordinator import BeeCoordinator
     from voice.prep import Prep, _read
+    from voice.providers import ToolCall
     from voice.recorder import CallRecorder
     from beelink.calls import OurCalls
 
@@ -146,16 +147,16 @@ def test_the_call_ai_the_prep_and_the_meta_agent_read_nothing_bee_made_of_our_ca
     make_session(workspace, datetime.fromtimestamp(time.time() - 3600 - 120), 3600)
     rec = CallRecorder(workspace, room="r", now=seoul_now())
     coordinator = BeeCoordinator(rec, SimpleNamespace(), workspace, clock=seoul_now)
-    thinker = Thinker(workspace, ("m", "r"), client=None, bee=True)
+    thinker = Thinker(workspace, bee=True)
 
     async def main():
         today = await coordinator.bee_today(None)
         conversation = await coordinator.bee_conversation(None, 5)
         meta_today = await thinker._tool("bee_today", {}, seoul_now(), [])
         pending = await thinker._tool("bee_pending", {}, seoul_now(), [])
-        read = await _read({"name": "bee_conversation", "input": {"conversation_id": 5}, "toolUseId": "t"}, Prep(),
-                           seoul_now().tzinfo, ours=OurCalls.of(workspace))
-        return today, conversation, meta_today, pending, read["toolResult"]["content"][0]["text"]
+        read = await _read(ToolCall("t", "bee_conversation", {"conversation_id": 5}), Prep(), seoul_now().tzinfo,
+                           ours=OurCalls.of(workspace))
+        return today, conversation, meta_today, pending, read.text
 
     today, conversation, meta_today, pending, read = asyncio.run(main())
     rec.close()
@@ -163,6 +164,27 @@ def test_the_call_ai_the_prep_and_the_meta_agent_read_nothing_bee_made_of_our_ca
     assert "[unconfirmed fact 7]" not in pending
     for text in (conversation, read):
         assert "left out" in text and "Talked through a job offer" not in text
+
+
+def test_our_call_windows_read_each_finished_call_once(tmp_path, monkeypatch):
+    """Review of the user-noticed fixes, 4: every Bee read re-read every call record of the person, on the call's own
+    event loop (250 ms at 300 calls, and growing). A call's window is read again only when its record changed."""
+    from beelink import calls
+
+    workspace = tmp_path / "workspace"
+    for hours in (5, 4, 3):
+        make_session(workspace, datetime.fromtimestamp(time.time() - hours * 3600), 600)
+    reads = []
+    real_read = calls.read_events
+    monkeypatch.setattr(calls, "read_events", lambda path: reads.append(path) or real_read(path))
+    first = calls.our_call_windows(workspace)
+    second = calls.our_call_windows(workspace)
+    assert second == first and len(first) == 3 and len(reads) == 3  # the second time from what was read
+    latest = sorted(workspace.glob("*/*/events.jsonl"))[-1]
+    with latest.open("a") as f:
+        f.write(json.dumps({"t": 700.0, "type": "bee_write", "ok": True}) + "\n")  # a later line, as Bee writes add
+    calls.our_call_windows(workspace)
+    assert reads[3:] == [latest]
 
 
 def test_our_call_windows_survive_a_line_still_being_written(tmp_path):
@@ -178,6 +200,25 @@ def test_our_call_windows_survive_a_line_still_being_written(tmp_path):
                       + '{"t": 61.0, "type": "bee_wr')
     (window,) = our_call_windows(workspace)
     assert window[1] - window[0] == 60
+
+
+def test_a_cursor_save_cut_off_halfway_keeps_the_last_cursor(tmp_path, monkeypatch):
+    """Server review 19: the meta session saved its cursor in one step (a new file put in place), the watcher wrote
+    over its cursor file directly, so a save cut off halfway (a full disk, a kill) left half a file, and the next
+    catch-up could not read where it was."""
+    watcher = BeeWatcher(tmp_path / "workspace", lambda trigger: None)
+    watcher._save_cursor("cursor-1")
+    real_write = Path.write_text
+
+    def cut_off(self, text, *args, **kwargs):
+        real_write(self, text[: len(text) // 2], *args, **kwargs)
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(Path, "write_text", cut_off)
+    with pytest.raises(OSError):
+        watcher._save_cursor("cursor-2")
+    monkeypatch.setattr(Path, "write_text", real_write)
+    assert watcher._load_cursor() == "cursor-1"
 
 
 def test_watcher_ignores_empty_batches(tmp_path, fake_bee, monkeypatch):
@@ -212,6 +253,10 @@ def test_context_saves_inputs_and_card(tmp_path, fake_bee):
     assert card["conversation_id"] == 5 and card["summary"] == "Talked through a job offer"
     assert card["pending_fact_ids"] == [7]
     assert card["utterances"][0]["text"] == "They offered 15 percent bonus."
+    # Full times with the person's offset (contract 2.2): a quote and the conversation's start, not "HH:MM".
+    from datetime import datetime
+    for moment in (card["utterances"][0]["at"], card["started_at"]):
+        assert datetime.fromisoformat(moment).utcoffset().total_seconds() == 9 * 3600
 
 
 def test_a_conversation_bee_returns_as_null_does_not_break_a_call(tmp_path, fake_bee):
@@ -263,10 +308,11 @@ def test_a_new_event_never_cancels_a_call_being_placed(tmp_path, fake_bee, monke
 
     async def main():
         watcher = BeeWatcher(workspace, slow_call, debounce=0.05)
-        watcher._schedule("first")
+        watcher.on_event("update-conversation-summary")  # as bee stream reports them (server review 16)
         await asyncio.sleep(0.15)  # past the quiet period: the first catch-up is placing its call
-        watcher._schedule("second")
+        watcher.on_event("journal-created")
+        watcher.on_event("journal-text")  # not a settled change: it starts nothing
         await asyncio.sleep(1.0)
 
     asyncio.run(main())
-    assert finished == ["first", "second"]
+    assert finished == ["update-conversation-summary", "journal-created"]

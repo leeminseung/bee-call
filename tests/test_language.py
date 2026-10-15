@@ -37,16 +37,20 @@ def test_the_coordinator_speaks_the_call_language(tmp_path):
 
 
 def test_the_prep_opening_is_in_the_call_language(tmp_path):
+    """Read from the request the prep sends its model, not from the prep's private state (server review 16)."""
+    import asyncio
+
+    from tests.test_prep import Converse, glm, text
     from voice.costs import SpendLog
 
-    async def main():
-        return (Preparation(CallInputs(), {}, None, spend=SpendLog(tmp_path), bee=True, now=NOW,
-                            language=call_language("ko"))._system,
-                Preparation(CallInputs(), {}, None, spend=SpendLog(tmp_path), bee=True, now=NOW,
-                            language=call_language("en"))._system)
+    async def prompt(code: str) -> str:
+        client = Converse(text("<opening>Hi</opening><note>n</note>"))
+        preparation = Preparation(CallInputs(), {}, glm(client), spend=SpendLog(tmp_path), bee=True, now=NOW,
+                                  language=call_language(code)).start()
+        await preparation.done
+        return client.requests[0]["system"][0]["text"]
 
-    import asyncio
-    korean, english = asyncio.run(main())
+    korean, english = asyncio.run(prompt("ko")), asyncio.run(prompt("en"))
     assert "spoken Korean, in the polite style, as the end of the next message asks" in korean
     assert "under 20 words of spoken English" in english and "{opening}" not in english
 

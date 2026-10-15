@@ -5,10 +5,11 @@
   3. A call ended where the user asked to sort out the offers later and mentioned a fact Bee got wrong.
 
 Bee reads return canned text and notifications are not sent, so nothing touches the user's Bee or phone. The
-model is the coordinator's (COORDINATOR_MODEL, GLM 5 when unset) on Bedrock.
+model is the meta role's as COORDINATOR_LLM runs it (voice/model_catalog.py: with anthropic, Claude Sonnet 5.5 and GLM
+5 standing by; with bedrock, COORDINATOR_MODEL or GLM 5 on Bedrock).
 
 Run:  uv run python -m probes.meta_probe [--out DIR]
-Cost: about 1-3 US cents (three thinks of a few requests each).
+Cost: about 1-3 US cents on GLM 5, about 10-20 on Claude Sonnet 5.5 (three thinks of a few requests each).
 """
 
 import argparse

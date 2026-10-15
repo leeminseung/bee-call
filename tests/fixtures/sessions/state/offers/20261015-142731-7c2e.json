@@ -1,0 +1,29 @@
+{
+ "id": "20261015-142731-7c2e",
+ "state": "booked",
+ "reason": "14:27 통화에서 다시 전화해 달라고 하셨어요: 도서관에서 정리한 할 일 다시 보기",
+ "topic": "도서관에서 정리한 할 일 다시 보기",
+ "kind": null,
+ "source": "call",
+ "suggested_at": null,
+ "call_at": "2026-10-15T19:00:00+09:00",
+ "expires_at": null,
+ "inbox": null,
+ "plan": null,
+ "conversation_ids": [],
+ "continue_from": "2026-10-15/1422",
+ "room": null,
+ "claim": null,
+ "error": null,
+ "notified_at": null,
+ "notice": null,
+ "not_placed": null,
+ "told_at": null,
+ "soon_told_at": null,
+ "history": [
+  {
+   "at": "2026-10-15T14:27:31+09:00",
+   "state": "booked"
+  }
+ ]
+}

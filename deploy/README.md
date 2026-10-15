@@ -15,7 +15,7 @@ One EC2 instance in Sydney (`ap-southeast-2`) runs the four Bee Call processes b
 | Call media | LiveKit Cloud | the phone and the voice server connect to it directly |
 | Background jobs | AgentCore Harness in Sydney, as before | the voice server invokes it |
 
-Routing: port 443 goes to the token server and port 8443 to the session screen, both on one hostname with one Let's Encrypt certificate. Port 80 answers Let's Encrypt's HTTP challenge and redirects everything else to `https://<hostname>/`. Caddy forwards every write at once (`flush_interval -1`), so the ring stream and a call's live events are not held back. HTTP/3 is off because the security group opens TCP only. The security group opens 80, 443 and 8443 and nothing else: the token server (8787) and the voice server's health check (8081) listen on every interface of the instance, since their code does not take an address, but nothing outside reaches them.
+Routing: port 443 goes to the token server and port 8443 to the session screen, both on one hostname with one Let's Encrypt certificate. Port 80 answers Let's Encrypt's HTTP challenge and redirects everything else to `https://<hostname>/`, whatever name the request used. Over HTTPS a request whose Host is not the name of its TLS connection gets 421, and both sites send HSTS (`Strict-Transport-Security`, one year). A new Caddyfile is checked with `caddy validate` before it replaces the one in use; if Caddy refuses it, the deploy stops with Caddy's message and the server keeps the old config. Caddy forwards every write at once (`flush_interval -1`), so the ring stream and a call's live events are not held back. HTTP/3 is off because the security group opens TCP only. The security group opens 80, 443 and 8443 and nothing else: the token server (8787) and the voice server's health check (8081) listen on every interface of the instance, since their code does not take an address, but nothing outside reaches them.
 
 The four services run as the system user `bee-call` with `Restart=always`, log to journald, and get `TZ=Asia/Seoul` (the system clock is set to Seoul too). Each person's times follow their own `time_zone` setting, which their phone sends; Seoul time only reads back the times stored before that setting existed, which carry no zone. Their settings come from `/run/bee-call/env`, which `bee-call-env.service` writes at every boot from SSM (root only, mode 0600, in memory). The voice server keeps one idle job process (`num_idle_processes=1` in `voice/agent.py`); on stop it takes no new calls and lets calls in progress end, for up to 10 minutes.
 
@@ -29,6 +29,7 @@ On the instance:
 | `/var/lib/bee-call` | the data root (`BEE_CALL_DATA`), also `bee-call`'s home |
 | `/var/lib/caddy` | Caddy's certificates |
 | `/run/bee-call/env`, `/run/bee-call/apns-key.p8` | settings and the APNs key, rewritten at every boot |
+| `/run/bee-call/apns/` | the signed APNs token the services share (good for up to an hour), only in memory, readable by `bee-call` only |
 | `/swapfile` | 2 GB of swap |
 
 ## Before the first deployment

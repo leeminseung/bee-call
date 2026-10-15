@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from aiohttp.test_utils import TestClient, TestServer
 
 from meta.session import add_event, quiet
-from tests.helpers import SEOUL, another_conversation, placing, signed_in
+from tests.helpers import SEOUL, next_question, placing, signed_in
 from tests.test_offers import asked
 from voice import outbound, voip_push
 from voice.offers import OfferStore
@@ -129,6 +129,33 @@ def test_the_meta_agent_wakes_only_for_events(tmp_path, monkeypatch):
     assert (event["offer"], event["topic"]) == (soon.id, "the interview") and later.id != soon.id
 
 
+def test_a_booked_call_coming_up_is_announced_once_even_across_a_restart(tmp_path, monkeypatch):
+    """BC-043: the booked calls already announced were remembered in memory only, so after a restart (a deploy) the
+    meta agent heard about the same call coming up again."""
+    me = signed_in(tmp_path)
+    store = OfferStore(me.workspace)
+    thought: list[list[str]] = []
+
+    class Thinker:
+        async def think(self, events, now):
+            thought.append([e["kind"] for e in events])
+            return {"seconds": 0.0, "decision": "nothing to do"}
+
+    monkeypatch.setattr(outbound, "META_CHECK_S", 0.01)
+    soon = store.book("the interview", datetime.now(SEOUL) + timedelta(minutes=9), datetime.now(SEOUL))
+
+    async def run_for_a_moment():
+        loop = asyncio.create_task(serve_meta(me.person, Thinker()))
+        await asyncio.sleep(0.15)
+        loop.cancel()
+        await asyncio.gather(loop, return_exceptions=True)
+
+    asyncio.run(run_for_a_moment())
+    asyncio.run(run_for_a_moment())  # outbound.py restarted
+    assert thought == [["booked_soon"]]
+    assert store.get(soon.id).soon_told_at is not None
+
+
 def test_an_unanswered_offer_closes_at_its_suggested_time(tmp_path):
     store = OfferStore(tmp_path / "workspace")
     offer, _ = asked(tmp_path, now=datetime(2026, 10, 14, 18, 30, tzinfo=SEOUL))  # suggests 21:00
@@ -168,9 +195,9 @@ def test_the_fifth_offer_of_a_day_shows_only_in_the_app_list(tmp_path, monkeypat
     question, plan = asked(tmp_path, now=morning, workspace=me.workspace)
     for i in range(4):  # 40 minutes apart: a notification waits 30 minutes after the last one (2026-10-15)
         at = morning + timedelta(minutes=40 * i)
-        offer = question if i == 0 else store.ask(another_conversation(plan, i), at)
+        offer = question if i == 0 else next_question(store, plan, i, at)
         assert asyncio.run(send_offer(offer, me.person, at)).startswith("notification sent")
-    fifth = store.ask(another_conversation(plan, 9), morning + timedelta(hours=3))
+    fifth = next_question(store, plan, 9, morning + timedelta(hours=3))
     assert asyncio.run(send_offer(fifth, me.person, morning + timedelta(hours=3))).startswith("held: 4 notifications")
     assert [o.id for o in store.open(morning + timedelta(hours=3, minutes=1))] == [fifth.id]  # what the app lists
     for moment in (morning + timedelta(hours=3), datetime(2026, 10, 16, 8, 0, tzinfo=SEOUL)):
@@ -178,12 +205,12 @@ def test_the_fifth_offer_of_a_day_shows_only_in_the_app_list(tmp_path, monkeypat
     assert fifth.id not in sent and len(sent) == 4
 
 
-def test_a_background_job_fails_after_forty_rounds(tmp_path):
+def test_a_background_job_fails_after_eighty_rounds(tmp_path):
     from tests.test_harness import FakeHarness, assistant, fake_search
     from worker.harness import MAX_ROUNDS, HarnessWorker
     from worker.runner import JobRunner
 
-    assert MAX_ROUNDS == 40
+    assert MAX_ROUNDS == 80  # 40 until 2026-10-15: background jobs need not be quick
     rounds = [assistant(("tool", f"t{i}", "progress", ['{"text": "still working"}'])) for i in range(MAX_ROUNDS)]
     news = []
 
@@ -199,4 +226,4 @@ def test_a_background_job_fails_after_forty_rounds(tmp_path):
         return runner.jobs["01"].status
 
     assert asyncio.run(main()) == "failed"
-    assert news == [("failed", "the worker did not finish within 40 rounds")]
+    assert news == [("failed", "the worker did not finish within 80 rounds")]

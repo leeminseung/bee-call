@@ -15,6 +15,7 @@ import argparse
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Mapping
@@ -25,18 +26,37 @@ REGION = "ap-southeast-2"
 RUN_DIR = Path("/run/bee-call")
 ENV_FILE = RUN_DIR / "env"
 APNS_KEY = RUN_DIR / "apns-key.p8"
+# The signed APNs provider token the services share (voice/voip_push.py): a credential for up to an hour, so it is
+# kept on tmpfs, never on the disk (BC-154), in a folder only the services' user can open.
+APNS_TOKEN_DIR = RUN_DIR / "apns"
+APNS_TOKEN_CACHE = APNS_TOKEN_DIR / "provider-token.json"
 CADDYFILE = Path("/etc/caddy/Caddyfile")
+CADDY_BIN = Path("/opt/bee-call/bin/caddy")  # where deploy/install.sh puts it
 TEMPLATE = Path(__file__).with_name("Caddyfile.template")
 HOST_PARAMETER = "BEE_CALL_PUBLIC_HOST"
 SERVICE_GROUP = "bee-call"
 
 ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 HOSTNAME = re.compile(r"(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])")
-# Never taken from SSM: a profile or static keys would replace the instance role, the APNs key path is this
-# server's own file, BEE_CALL_DEV_PERSON lets requests in without signing in, which only a Mac may allow, and the
-# units set the rest themselves; this file would override them (a Mac's agent name would share its calls).
-REFUSED = {"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "APNS_KEY_PATH",
-           "BEE_CALL_DEV_PERSON", "LIVEKIT_AGENT_NAME", "BEE_CALL_DATA", "BEE_BIN", "TZ", "TOKEN_SERVER_PORT"}
+# Settings that never go to the server, with why: scripts/deploy_server.py keeps them on the Mac, and the server never
+# takes them from SSM (one list, server review 19).
+NOT_FOR_THE_SERVER = {
+    "AWS_PROFILE": "this Mac's AWS profile; the server uses its instance role",
+    "AWS_ACCESS_KEY_ID": "static AWS keys; the server uses its instance role",
+    "AWS_SECRET_ACCESS_KEY": "static AWS keys; the server uses its instance role",
+    "AWS_SESSION_TOKEN": "static AWS keys; the server uses its instance role",
+    "APNS_KEY_PATH": "a path on this Mac; the key itself goes to /bee-call/apns-key",
+    "APNS_TOKEN_CACHE": "the server's own place for it, set when its environment is written",
+    "LIVEKIT_AGENT_NAME": "each machine registers its own; the server keeps bee-call",
+    "BEE_CALL_DEV_PERSON": "lets requests in without signing in; never on a server",
+    "BEE_CALL_DATA": "the server's data root is set in its units",
+    "BEE_BIN": "the server's Bee CLI is set in its units",
+    "TZ": "the units set the server's clock zone",
+    "TOKEN_SERVER_PORT": "Caddy expects the token server on 8787",
+    "BEE_CALL_CLOCK_FILE": "a test clock (voice/people.py clock_now); a server keeps the real one",
+    "APNS_URL": "a test receiver for pushes (voice/voip_push.py); a server pushes to Apple",
+}
+REFUSED = set(NOT_FOR_THE_SERVER)
 
 
 def quoted(value: str) -> str:
@@ -59,6 +79,7 @@ def env_file(params: Mapping[str, str], apns_key: Path | None = None) -> tuple[s
             lines.append(f"{name}={quoted(value)}")
     if apns_key is not None:
         lines.append(f"APNS_KEY_PATH={quoted(str(apns_key))}")
+        lines.append(f"APNS_TOKEN_CACHE={quoted(str(APNS_TOKEN_CACHE))}")
     return "\n".join(lines) + "\n", skipped
 
 
@@ -128,6 +149,9 @@ def write_env() -> None:
     key = params.get("apns-key", "").strip()
     if key:
         write(APNS_KEY, key + "\n", 0o640, SERVICE_GROUP)
+        APNS_TOKEN_DIR.mkdir(mode=0o700, exist_ok=True)
+        shutil.chown(APNS_TOKEN_DIR, SERVICE_GROUP, SERVICE_GROUP)  # the services' user, who signs the token
+        APNS_TOKEN_DIR.chmod(0o700)
     else:
         APNS_KEY.unlink(missing_ok=True)
     text, skipped = env_file(params, APNS_KEY if key else None)
@@ -145,7 +169,17 @@ def write_caddyfile() -> None:
         print(f"no {HOST_PARAMETER} yet: Caddy stays off until scripts/deploy_server.py dns sets one")
         return
     CADDYFILE.parent.mkdir(exist_ok=True)
-    write(CADDYFILE, caddyfile(hostname, TEMPLATE.read_text()), 0o644)
+    candidate = CADDYFILE.with_name(CADDYFILE.name + ".new")
+    write(candidate, caddyfile(hostname, TEMPLATE.read_text()), 0o644)
+    # Caddy checks the new config before it takes the working one's place: a mistake in it stops the deploy with
+    # Caddy's own words, and the server keeps the config that works.
+    checked = subprocess.run([str(CADDY_BIN), "validate", "--config", str(candidate), "--adapter", "caddyfile"],
+                             capture_output=True, text=True, timeout=120)
+    if checked.returncode != 0:
+        candidate.unlink(missing_ok=True)
+        why = (checked.stderr or checked.stdout).strip()[-2000:]
+        raise RuntimeError(f"Caddy refused the new config, so {CADDYFILE} stays as it was: {why}")
+    candidate.replace(CADDYFILE)
     print(f"wrote {CADDYFILE} for {hostname}")
 
 
