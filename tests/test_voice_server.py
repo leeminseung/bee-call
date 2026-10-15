@@ -4,6 +4,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 from datetime import datetime
 
 import pytest
@@ -744,6 +745,33 @@ def test_the_record_server_never_serves_the_model_log_or_the_claude_history(tmp_
 
     statuses = asyncio.run(main())
     assert statuses.pop("transcript.md") == 200 and set(statuses.values()) == {403}, statuses
+
+
+def test_the_record_server_never_serves_a_call_s_audio_or_its_raw_bee_inputs(tmp_path):
+    """Server review 16: the record server's refusal of audio/ and inputs/ had no test, and the fixture call that has
+    both folders was never used. Served by name or by any spelling of it, they are refused; the call's transcript
+    and its job files are served."""
+    import shutil
+
+    from aiohttp.test_utils import TestClient, TestServer
+    from voice import session_server
+
+    me = signed_in(tmp_path)
+    fixture = Path(__file__).parent / "fixtures" / "sessions" / "2026-10-11" / "1930"
+    shutil.copytree(fixture, me.workspace / "2026-10-11" / "1930")
+    names = ("audio/user.wav", "AUDIO/USER.WAV", "audio/ai.wav", "inputs/conversation-5121.json",
+             "Inputs/unconfirmed_facts.json", "jobs/../audio/user.wav", "transcript.md")
+
+    async def main():
+        async with TestClient(TestServer(session_server.make_app(me.people)), headers=me.headers) as client:
+            found = {name: (await client.get(f"/api/sessions/2026-10-11/1930/files/{name}")) for name in names}
+            return {name: (r.status, await r.read()) for name, r in found.items()}
+
+    answers = asyncio.run(main())
+    status, body = answers.pop("transcript.md")
+    assert status == 200 and body
+    for name, (status, body) in answers.items():
+        assert status in (403, 404) and b"RIFF" not in body and b"utterances" not in body, (name, status)
 
 
 # ---------- where the time of each turn went (the user's request, 2026-10-15) ----------
