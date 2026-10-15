@@ -58,9 +58,12 @@ final class ContractExamples: HTTPTransport {
         case ("POST", _) where path.hasPrefix("/offers/"):
             reply = answer(offer: String(path.dropFirst("/offers/".count)))
         case ("GET", "/voices"):
-            let voices = example("voices")
-            let language = query.first { $0.name == "language" }?.value
-            reply = object(voices)?["language"] as? String == language ? (200, voices) : (404, Data())
+            // voices.json, or voices-<language>.json for another language, whichever lists that language
+            let language = query.first { $0.name == "language" }?.value ?? ""
+            let voices = [example("voices-\(language)"), example("voices")].first {
+                object($0)?["language"] as? String == language
+            }
+            reply = voices.map { (200, $0) } ?? (404, Data())
         case ("GET", "/models"):
             let role = query.first { $0.name == "role" }?.value ?? ""
             let models = example("models-\(role)")

@@ -53,10 +53,12 @@ final class ContractExamplesTests: XCTestCase {
     }
 
     @MainActor func testVoicesOffersAndThePerson() async throws {
-        let (status, voices) = try await get("/voices?language=ko")
-        XCTAssertEqual(status, 200)
-        XCTAssertEqual(try Contract.decode(VoiceList.self, from: voices).voices.map(\.id),
-                       try Examples.decode(VoiceList.self, "voices").voices.map(\.id))
+        for (language, name) in [("ko", "voices"), ("en", "voices-en")] {
+            let (status, voices) = try await get("/voices?language=\(language)")
+            XCTAssertEqual(status, 200)
+            XCTAssertEqual(try Contract.decode(VoiceList.self, from: voices).voices.map(\.id),
+                           try Examples.decode(VoiceList.self, name).voices.map(\.id))
+        }
         let (unknown, _) = try await get("/voices?language=fr")
         XCTAssertEqual(unknown, 404)
         let (_, offers) = try await get("/offers")
