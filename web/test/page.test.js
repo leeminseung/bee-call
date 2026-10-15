@@ -430,3 +430,21 @@ test("between calls, the debug view still shows the raw tool calls, the model an
     assert.match(shown, internal);
   }
 });
+
+// ---------- when the records cannot be read (review finding 7) ----------
+
+test("a 401 says the sign-in ended, on every page that reads the records", async () => {
+  for (const hash of ["#/", "#/calls", "#/meta"]) {
+    const page = loadPage({ hash, fetch: answering("sign in first\n", 401) });
+    await page.settle();
+    const note = page.visibleText(page.byId("view"));
+    assert.match(note, /Your sign-in ended\. Open Bee Call and sign in again\./, hash);
+    assert.doesNotMatch(note, /Can't reach/, hash);
+  }
+});
+
+test("a server error says the records are not available, with its code", async () => {
+  const page = loadPage({ hash: "#/calls", fetch: answering("Bad Gateway", 502) });
+  await page.settle();
+  assert.match(page.visibleText(page.byId("view")), /The call records are not available right now \(error 502\)\. Retrying…/);
+});

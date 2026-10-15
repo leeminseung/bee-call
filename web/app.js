@@ -179,15 +179,35 @@
     try { localStorage.setItem(`beecall.${key}`, value); } catch { /* private mode: the setting just is not kept */ }
   }
 
-  async function fetchSessions() {
+  // One read of the API: its JSON, or why there is none. The one place that reads an answer's status: a 401
+  // means the sign-in ended (the app signs in again), no answer means the network or the server is away.
+  async function getJSON(path) {
+    let response;
     try {
-      const response = await fetch(API, { cache: "no-store" });
-      if (!response.ok) return null;
-      const data = await response.json();
-      return Array.isArray(data) ? data : null;
+      response = await fetch(path, { cache: "no-store" });
     } catch {
-      return null;
+      return { problem: "unreachable" };
     }
+    if (response.status === 401) return { problem: "signedOut" };
+    if (!response.ok) return { problem: "failed", status: response.status };
+    try {
+      return { data: await response.json() };
+    } catch {
+      return { problem: "failed", status: response.status };
+    }
+  }
+
+  // What to say when a read failed.
+  function problemText(answer) {
+    if (answer.problem === "signedOut") return SIGNED_OUT;
+    if (answer.problem === "unreachable") return UNREACHABLE;
+    return `The call records are not available right now (error ${answer.status}). Retrying…`;
+  }
+
+  // The list of calls, newest first, or why there is none.
+  async function getSessions() {
+    const answer = await getJSON(API);
+    return answer.data !== undefined && !Array.isArray(answer.data) ? { problem: "failed", status: 200 } : answer;
   }
 
   function setHeader(title, back) {
@@ -212,6 +232,7 @@
   }
 
   const UNREACHABLE = "Can't reach the call records right now. Retrying…"; // the server is on the Mac or in the cloud
+  const SIGNED_OUT = "Your sign-in ended. Open Bee Call and sign in again.";
   const NO_CALLS = "No calls yet. When the AI calls you, the call shows up here.";
 
   // ---------- file viewer (keeps the iPhone web view on this page) ----------
@@ -265,14 +286,14 @@
     }
 
     async load() {
-      const sessions = await fetchSessions();
+      const answer = await getSessions();
       if (this.closed) return;
-      const key = JSON.stringify(sessions);
+      const key = JSON.stringify(answer);
       if (key === this.shown) return;
       this.shown = key;
-      if (sessions === null) showNote(UNREACHABLE);
-      else if (!sessions.length) view.replaceChildren(metaLink(), el("p", "empty", NO_CALLS));
-      else this.render(sessions);
+      if (answer.problem) showNote(problemText(answer));
+      else if (!answer.data.length) view.replaceChildren(metaLink(), el("p", "empty", NO_CALLS));
+      else this.render(answer.data);
     }
 
     render(sessions) {
@@ -329,17 +350,13 @@
     }
 
     async load() {
-      let data = null;
-      try {
-        const response = await fetch(`${API.replace(/\/sessions$/, "")}/meta`, { cache: "no-store" });
-        if (response.ok) data = await response.json();
-      } catch { /* shown below */ }
+      const answer = await getJSON(`${API.replace(/\/sessions$/, "")}/meta`);
       if (this.closed) return;
-      const key = JSON.stringify(data);
+      const key = JSON.stringify(answer);
       if (key === this.shown) return;
       this.shown = key;
-      if (data === null) showNote(UNREACHABLE);
-      else this.render(data);
+      if (answer.problem) showNote(problemText(answer));
+      else this.render(answer.data || {});
     }
 
     render(data) {
@@ -431,15 +448,16 @@
     }
 
     async tick() {
-      const sessions = await fetchSessions();
+      const answer = await getSessions();
       if (this.closed) return;
-      if (sessions === null || !sessions.length) {
-        if (!this.session) showNote(sessions === null ? UNREACHABLE : NO_CALLS);
+      if (answer.problem || !answer.data.length) {
+        if (!this.session) showNote(answer.problem ? problemText(answer) : NO_CALLS);
         return;
       }
-      if (this.session && this.session.id === sessions[0].id) return;
+      const newest = answer.data[0];
+      if (this.session && this.session.id === newest.id) return;
       if (this.session) this.session.close();
-      this.session = new SessionPage(sessions[0].id);
+      this.session = new SessionPage(newest.id);
     }
 
     close() {
