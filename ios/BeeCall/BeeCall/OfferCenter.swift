@@ -39,7 +39,12 @@ enum OfferAnswer: Equatable {
 /// a missed notification can still be answered there.
 @Observable
 final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
-    static let shared = OfferCenter()
+    static let shared: OfferCenter = {
+        #if DEBUG
+        if OfferDemo.requested() { return OfferCenter(transport: OfferDemo.StandIn()) } // OfferDemo.swift
+        #endif
+        return OfferCenter()
+    }()
 
     struct Offer: Decodable, Identifiable, Equatable {
         let id: String
@@ -209,7 +214,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         #if DEBUG
-        guard VoiceDemo.requested() == nil else { return true } // a pretend call: no notifications, no server
+        // A pretend call or offer: no notifications, no server.
+        guard VoiceDemo.requested() == nil, !OfferDemo.requested() else { return true }
         #endif
         OfferCenter.shared.setUp() // before launch ends, so a button tapped while the app was closed is delivered
         // Every kind of launch, also one for a VoIP push or a notification button, which never reach the

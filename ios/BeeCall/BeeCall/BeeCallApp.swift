@@ -42,10 +42,11 @@ struct BeeCallApp: App {
         }
     }
 
-    /// The call screen once signed in; in a Debug build, also for the voice demo (VoiceDemo.swift).
+    /// The call screen once signed in; in a Debug build, also for the voice and offer demos (VoiceDemo.swift,
+    /// OfferDemo.swift).
     private var showsCallScreen: Bool {
         #if DEBUG
-        if VoiceDemo.requested() != nil { return true }
+        if VoiceDemo.requested() != nil || OfferDemo.requested() { return true }
         #endif
         return server.isSignedIn
     }
