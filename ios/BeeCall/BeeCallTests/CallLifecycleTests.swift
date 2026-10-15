@@ -262,6 +262,24 @@ final class CallLifecycleTests: XCTestCase {
         XCTAssertFalse(calls.isSpeakerOn)
     }
 
+    /// Review of 2026-10-15, finding 12: CallKit counts Bee Call's own call from the answer, so the app's clock
+    /// does too, instead of starting seconds later when the room is joined.
+    @MainActor func testTheClockOfBeeCallsOwnCallStartsAtTheAnswer() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room)
+        room.holdsJoin = true
+        calls.ringPhone(for: ring())
+        await waitUntil("the call rings") { callKit.incoming.count == 1 }
+        let id = try XCTUnwrap(callKit.incoming.first?.call)
+        await waitUntil("the ring is reported") { calls.isRinging }
+        calls.perform(CXAnswerCallAction(call: id))
+        XCTAssertNotNil(calls.connectedAt, "the clock starts at the answer")
+        let answered = try XCTUnwrap(calls.connectedAt)
+        await waitUntil("the join has begun") { room.joins.count == 1 }
+        room.releaseJoin()
+        room.aiAnswers()
+        XCTAssertEqual(calls.connectedAt, answered, "the AI's arrival does not restart it")
+    }
+
     /// The call screen's clock runs from the moment the AI is there.
     @MainActor func testTheCallsClockStartsWhenTheAIIsThereAndStopsWithTheCall() async throws {
         let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room)

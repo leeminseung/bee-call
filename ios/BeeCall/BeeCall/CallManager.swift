@@ -404,7 +404,7 @@ final class CallManager: NSObject {
         pickedUp = true
         pickUpTimeout?.cancel()
         pickUpTimeout = nil
-        connectedAt = .now
+        if connectedAt == nil { connectedAt = .now } // Bee Call's own call counts from its answer
         if !rungRooms.values.contains(id) { callKit.reportConnected(id) }
         status = "Connected"
     }
@@ -514,6 +514,7 @@ extension CallManager: CXProviderDelegate {
         ringTimeout?.cancel() // answered in time; if the AI gave up anyway, the token server says 410
         ringTimeout = nil
         action.fulfill() // CallKit activates the audio session after this.
+        connectedAt = .now // CallKit counts the call from its answer, and so does the call screen's clock
         status = "Answering…"
         join(action.callUUID, answering: room)
     }
