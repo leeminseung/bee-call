@@ -577,20 +577,68 @@
 
     onError() {
       if (this.closed) return;
-      if (this.callEnded || this.source.readyState === EventSource.CLOSED) {
-        this.source.close(); // the stream ends at call_ended; do not reconnect
-        if (!this.events.length) {
-          setStatus(null);
-          view.replaceChildren(el("p", "empty", "This call could not be loaded."));
-        }
+      if (this.callEnded) {
+        this.source.close(); // the stream ends at call_ended: nothing more will come
         return;
       }
-      this.reconnecting = true; // EventSource retries and resumes after the last line it got
+      this.reconnecting = true;
+      this.renderStatus();
+      // After a dropped connection EventSource tries again by itself and resumes after the last line it got.
+      // A stream the server refused (Caddy's 502 while the session server restarts, a 401) it gives up on.
+      if (this.source.readyState === EventSource.CLOSED) this.recover();
+    }
+
+    // Finds out from the call list why the stream was refused, then opens a new stream and rebuilds the call
+    // from its backlog. While the server is away it asks again, after 2 s, then up to every 10 s.
+    async recover() {
+      this.source.close();
+      if (this.recovering) return;
+      this.recovering = true;
+      let wait = 2000;
+      while (!this.closed) {
+        const answer = await getSessions();
+        if (this.closed) break;
+        if (answer.problem === "signedOut") {
+          this.stopWith(SIGNED_OUT);
+          break;
+        }
+        if (!answer.problem) {
+          if (answer.data.some((s) => s.id === this.id)) this.reopen();
+          else this.stopWith("This call could not be loaded.");
+          break;
+        }
+        await new Promise((resolve) => { this.retry = setTimeout(resolve, wait); });
+        wait = Math.min(wait * 2, 10000);
+      }
+      this.recovering = false;
+    }
+
+    reopen() {
+      this.events = [];
+      this.ready = false;
+      this.reset();
+      this.connect();
+    }
+
+    // The page can do no more: a call with nothing shown says so in its place, else the status line does.
+    stopWith(text) {
+      this.reconnecting = false;
+      if (!this.events.length) {
+        setStatus(null);
+        view.replaceChildren(el("p", "empty", text));
+        this.stopped = text;
+        return;
+      }
+      this.stopped = text;
       this.renderStatus();
     }
 
     renderStatus() {
       if (this.closed) return;
+      if (this.stopped) {
+        if (this.events.length) setStatus({ state: "ended", text: this.stopped });
+        return;
+      }
       const now = performance.now();
       const idle = (now - this.lastAt) / 1000;
       if (this.endT !== null || (this.ready && idle > STALE_S)) this.renderContinue();
@@ -621,6 +669,7 @@
     close() {
       this.closed = true;
       if (this.source) this.source.close();
+      clearTimeout(this.retry);
       clearInterval(this.ticker);
       window.removeEventListener("scroll", this.onScroll);
       ui.jump.hidden = true;

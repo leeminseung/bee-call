@@ -295,14 +295,27 @@ function loadPage({ hash = "#/", search = "", fetch, bridge = false, prefs = {} 
     fail() {
       if (this.onerror) this.onerror({});
     }
+
+    /** The server answered with something other than a stream (a 502, a 401): the browser gives up on it. */
+    refuse() {
+      this.readyState = FakeEventSource.CLOSED;
+      this.fail();
+    }
+
+    /** The connection dropped: the browser tries again by itself. */
+    drop() {
+      this.readyState = FakeEventSource.CONNECTING;
+      this.fail();
+    }
   }
   FakeEventSource.CONNECTING = 0;
   FakeEventSource.OPEN = 1;
   FakeEventSource.CLOSED = 2;
 
-  const timers = new Map();
+  const intervals = new Map();
+  const timeouts = new Map();
   let nextTimer = 1;
-  const addTimer = (fn) => { timers.set(nextTimer, fn); return nextTimer++; };
+  const addTimer = (timers, fn) => { timers.set(nextTimer, fn); return nextTimer++; };
   const clock = { now: 0 };
   const store = new Map(Object.entries(prefs).map(([key, value]) => [`beecall.${key}`, String(value)]));
   const posted = [];
@@ -318,10 +331,10 @@ function loadPage({ hash = "#/", search = "", fetch, bridge = false, prefs = {} 
     performance: { now: () => clock.now },
     EventSource: FakeEventSource,
     fetch: fetch || (async () => { throw new TypeError("Failed to fetch"); }),
-    setInterval: (fn) => addTimer(fn),
-    clearInterval: (id) => timers.delete(id),
-    setTimeout: (fn) => addTimer(fn),
-    clearTimeout: (id) => timers.delete(id),
+    setInterval: (fn) => addTimer(intervals, fn),
+    clearInterval: (id) => intervals.delete(id),
+    setTimeout: (fn) => addTimer(timeouts, fn),
+    clearTimeout: (id) => timeouts.delete(id),
     console,
     innerHeight: 800,
     scrollY: 0,
@@ -359,9 +372,12 @@ function loadPage({ hash = "#/", search = "", fetch, bridge = false, prefs = {} 
     live(lines) {
       for (const line of lines) page.stream.message(typeof line === "string" ? line : JSON.stringify(line));
     },
-    /** Runs every timer the page has set once (the status ticker, the list's poll). */
+    /** Lets time pass: every interval runs once (the status ticker, the list's poll) and every timeout is due. */
     tick() {
-      for (const fn of [...timers.values()]) fn();
+      for (const fn of [...intervals.values()]) fn();
+      const due = [...timeouts.values()];
+      timeouts.clear();
+      for (const fn of due) fn();
     },
     /** Lets pending promises (fetch) finish. */
     async settle() {

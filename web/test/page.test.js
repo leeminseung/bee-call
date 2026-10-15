@@ -448,3 +448,67 @@ test("a server error says the records are not available, with its code", async (
   await page.settle();
   assert.match(page.visibleText(page.byId("view")), /The call records are not available right now \(error 502\)\. Retrying…/);
 });
+
+// ---------- the live stream after a server restart (review finding 7) ----------
+
+/** A fetch that gives these answers in turn, then the last one again and again. */
+const inTurn = (...answers) => {
+  let next = 0;
+  return async (...args) => answers[Math.min(next++, answers.length - 1)](...args);
+};
+const listed = (...ids) => answering(ids.map((id) => ({ id, started_at: "2026-10-15T21:00:02", live: true })));
+
+test("a stream the server refuses while it restarts reopens, and the call is rebuilt from its backlog", async () => {
+  const lines = fixture(AI_CALL);
+  const page = loadPage({ hash: "#/s/2026-10-15/2100",
+    fetch: inTurn(answering("Bad Gateway", 502), listed("2026-10-15/2100")) });
+  page.feed(lines.slice(0, 12)); // a live call, mid-way
+  page.stream.refuse(); // Caddy's 502 while the session server restarts
+  assert.equal(page.byId("status-text").textContent, "Reconnecting…");
+  await page.settle(); // the list answers 502 too: wait and ask again
+  assert.equal(page.streams.length, 1);
+  page.tick();
+  await page.settle(); // now the call is listed again
+  assert.equal(page.streams.length, 2, "a new stream");
+  page.feed(lines.slice(0, 20)); // the new stream sends the whole backlog, and more
+  assert.equal(userBubbles(page)[0], "Yes, now is fine. Dana says her knee is better, but she still wants an easy route.");
+  assert.equal(page.all("speech").filter((s) => /Is now still good/.test(page.text(s))).length, 1, "nothing twice");
+});
+
+test("a dropped connection is left to the browser, which resumes by itself", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(fixture(AI_CALL).slice(0, 12));
+  page.stream.drop();
+  assert.equal(page.byId("status-text").textContent, "Reconnecting…");
+  assert.equal(page.streams.length, 1);
+});
+
+test("the stream of an ended call is not reopened", async () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100", fetch: listed("2026-10-15/2100") });
+  page.feed(fixture(AI_CALL));
+  page.stream.refuse(); // the 204 a finished stream answers
+  await page.settle();
+  page.tick();
+  await page.settle();
+  assert.equal(page.streams.length, 1);
+  assert.equal(page.byId("status-text").textContent, "Call ended");
+});
+
+test("a call the server does not have says it could not be loaded", async () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2359", fetch: listed("2026-10-15/2100") });
+  page.stream.refuse(); // 404
+  await page.settle();
+  assert.match(page.visibleText(page.byId("view")), /This call could not be loaded\./);
+  assert.equal(page.streams.length, 1);
+});
+
+test("a sign-in that ended while watching says so and stops", async () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100", fetch: answering("sign in first\n", 401) });
+  page.feed(fixture(AI_CALL).slice(0, 12));
+  page.stream.refuse();
+  await page.settle();
+  page.tick();
+  await page.settle();
+  assert.equal(page.streams.length, 1);
+  assert.equal(page.byId("status-text").textContent, "Your sign-in ended. Open Bee Call and sign in again.");
+});
