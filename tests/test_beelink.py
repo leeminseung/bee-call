@@ -252,6 +252,10 @@ def test_context_saves_inputs_and_card(tmp_path, fake_bee):
     assert card["conversation_id"] == 5 and card["summary"] == "Talked through a job offer"
     assert card["pending_fact_ids"] == [7]
     assert card["utterances"][0]["text"] == "They offered 15 percent bonus."
+    # Full times with the person's offset (contract 2.2): a quote and the conversation's start, not "HH:MM".
+    from datetime import datetime
+    for moment in (card["utterances"][0]["at"], card["started_at"]):
+        assert datetime.fromisoformat(moment).utcoffset().total_seconds() == 9 * 3600
 
 
 def test_a_conversation_bee_returns_as_null_does_not_break_a_call(tmp_path, fake_bee):

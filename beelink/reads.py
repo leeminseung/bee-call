@@ -109,16 +109,22 @@ async def recent_conversations(zone: tzinfo, limit: int = 8, ours: OurCalls | No
 
 
 async def conversation(conversation_id: int, zone: tzinfo, ours: OurCalls | None = None) -> str:
+    return (await conversation_read(conversation_id, zone, ours))[0]
+
+
+async def conversation_read(conversation_id: int, zone: tzinfo,
+                            ours: OurCalls | None = None) -> tuple[str, dict[str, Any] | None]:
+    """The conversation as text for a model, and as Bee gave it (None when it could not be read or is left out)."""
     try:
         got, said = await asyncio.gather(cli.conversation(conversation_id, timeout=READ_TIMEOUT_S),
                                          cli.transcript(conversation_id, timeout=READ_TIMEOUT_S))
     except Exception as exc:
-        return f"Bee read failed: {exc}"
+        return f"Bee read failed: {exc}", None
     found = got.get("conversation") or {"id": conversation_id}
     if ours is not None and ours.conversation(found):
         return (f"Bee conversation {conversation_id} is left out: Bee recorded it during one of the user's calls with "
-                "this assistant, and that call's own record is the source.")
-    return conversation_text(found, said.get("transcript") or [], zone)
+                "this assistant, and that call's own record is the source."), None
+    return conversation_text(found, said.get("transcript") or [], zone), found
 
 
 async def day(date: str) -> str:

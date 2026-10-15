@@ -105,7 +105,11 @@ OPENING = re.compile(r"<opening>(.*?)</opening>", re.S | re.I)
 class Prep:
     note: str | None = None  # for the coordinator's instructions
     opening: str | None = None  # the first thing the AI says
-    reads: list[str] = field(default_factory=list)  # the extra Bee reads the model asked for
+    # What it read of Bee, as data, in the order read (contract 2.3): the conversation behind the call ({"type":
+    # "conversation", "id", "summary", "at"}), the day's summary ({"type": "day", "date"}), then each read the model
+    # chose (a conversation, a day, {"type": "search", "query"}). Records before 2026-10-15 kept "tool {json}" text.
+    reads: list[dict[str, Any]] = field(default_factory=list)
+    bee: bool = False  # it read the person's Bee (Use Bee on); else the note comes from earlier calls only
     seconds: float = 0.0
     opening_s: float | None = None  # when the opening was ready, from the start of the prep
     model: str | None = None
@@ -121,8 +125,8 @@ class Prep:
     def from_meta(cls, data: Any) -> "Prep | None":
         if not isinstance(data, dict):
             return None
-        names = ("note", "opening", "reads", "seconds", "opening_s", "model", "error", "input_tokens", "output_tokens",
-                 "usage_estimated")
+        names = ("note", "opening", "reads", "bee", "seconds", "opening_s", "model", "error", "input_tokens",
+                 "output_tokens", "usage_estimated")
         return cls(**{k: data[k] for k in names if k in data})
 
 
@@ -228,18 +232,33 @@ def parse_note(text: str) -> str | None:
     return (found.group(1).strip() or None) if found else None
 
 
+def conversation_read(conversation_id: Any, conversation: dict[str, Any] | None, zone) -> dict[str, Any]:
+    """A conversation read, as the prep records it: its id, Bee's short summary and when it began."""
+    began = (conversation or {}).get("start_time")
+    return {"type": "conversation", "id": conversation_id, "summary": (conversation or {}).get("short_summary"),
+            "at": datetime.fromtimestamp(began / 1000, zone).isoformat(timespec="seconds")
+            if isinstance(began, (int, float)) else None}
+
+
 async def _read(use: dict[str, Any], prep: Prep, zone, ours: OurCalls | None = None) -> dict[str, Any]:
-    """One of the prep's extra Bee reads; `ours`: the person's own calls, left out of what is read (BC-060)."""
+    """One of the prep's extra Bee reads, recorded as data; `ours`: the person's own calls, left out of what is read
+    (BC-060)."""
     name, args = use.get("name"), use.get("input") or {}
-    prep.reads.append(f"{name} {json.dumps(args, ensure_ascii=False)}")
     if name == "search_bee":
+        prep.reads.append({"type": "search", "query": str(args.get("query", ""))})
         text = await reads.search(str(args.get("query", "")), ours=ours)
     elif name == "bee_conversation":
         try:
-            text = await reads.conversation(int(args.get("conversation_id")), zone, ours=ours)
+            conversation_id = int(args.get("conversation_id"))
         except (TypeError, ValueError):
+            conversation_id = None
+        if conversation_id is None:
             text = "conversation_id must be a number."
+        else:
+            text, found = await reads.conversation_read(conversation_id, zone, ours=ours)
+            prep.reads.append(conversation_read(conversation_id, found, zone))
     elif name == "bee_day":
+        prep.reads.append({"type": "day", "date": str(args.get("date", ""))})
         text = await reads.day(str(args.get("date", "")))
     else:
         text = f"There is no tool named {name}."
@@ -328,7 +347,11 @@ class Preparation:
     def __init__(self, inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *, spend: SpendLog,
                  bee: bool, now: datetime, client=None, language: CallLanguage | None = None,
                  ours: OurCalls | None = None) -> None:
-        self.prep = Prep(model=model[0] if model else None)
+        self.prep = Prep(model=model[0] if model else None, bee=bee)
+        if bee:  # what was read before the prep: the conversations behind the call, and the day's summary
+            self.prep.reads += [conversation_read(conv_id, conv, now.tzinfo) for conv_id, conv, _ in inputs.conversations]
+            if inputs.today is not None:
+                self.prep.reads.append({"type": "day", "date": str(inputs.today.get("date") or now.date().isoformat())})
         self._ours = ours  # the person's own calls, left out of the prep's extra Bee reads (BC-060)
         self._spend = spend  # the person's spend log: the prep's model use goes there when it ends
         self._bee = bee  # the person uses Bee: Bee data, Bee tools and Bee's words; otherwise none of them

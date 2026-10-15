@@ -656,7 +656,7 @@ async def record_prep(rec: CallRecorder, prep: Prep, preparation: Preparation | 
     """The prep in the record once it is done, and its note as prep.md (BC-031)."""
     if preparation is not None:
         await preparation.done
-    rec.event("call_prep", seconds=prep.seconds, model=prep.model, reads=prep.reads, note=prep.note,
+    rec.event("call_prep", seconds=prep.seconds, model=prep.model, reads=prep.reads, bee=prep.bee, note=prep.note,
               opening=prep.opening, error=prep.error, input_tokens=prep.input_tokens,
               output_tokens=prep.output_tokens)
     if prep.note:

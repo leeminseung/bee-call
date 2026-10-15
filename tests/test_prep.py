@@ -91,7 +91,12 @@ def test_the_seed_says_who_calls_why_and_what_bee_has(fake_bee):
 def test_opening_then_note_in_one_answer(fake_bee):
     client = Converse(text(OPENING + "\n" + NOTE))
     prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, spend=SPEND, bee=True, client=client, now=NOW))
-    assert prep.error is None and prep.reads == [] and prep.model == "zai.glm-5"
+    # What it read, as data (contract 2.3): the conversation behind the call and the day, then no more.
+    (behind, day) = prep.reads
+    assert (behind["type"], behind["id"], behind["summary"], day) == (
+        "conversation", 5, "Talked through a job offer", {"type": "day", "date": "2026-10-13"})
+    assert datetime.fromisoformat(behind["at"]).utcoffset().total_seconds() == 9 * 3600
+    assert prep.error is None and prep.bee is True and prep.model == "zai.glm-5"
     assert prep.opening == "Hi Matt, it's Bee Call. What's on your mind?"
     assert prep.note == "Matt is weighing a job offer with a 15% bonus; fact 7 is unconfirmed."
     (request,) = client.requests
@@ -119,7 +124,11 @@ def test_opening_then_one_round_of_reads_then_the_note(fake_bee):
          tool(2, "bee_conversation", {"conversation_id": 4}), tool(3, "bee_conversation", {"conversation_id": 5})],
         text(NOTE))
     prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, spend=SPEND, bee=True, client=client, now=NOW))
-    assert prep.note and prep.opening.startswith("Hi Matt") and len(prep.reads) == MAX_READS
+    assert prep.note and prep.opening.startswith("Hi Matt")
+    extra = prep.reads[2:]  # after the conversation behind the call and the day, each read the prep chose, as data
+    assert len(extra) == MAX_READS and extra[:2] == [{"type": "search", "query": "hike with Dana"},
+                                                     {"type": "day", "date": "2026-10-12"}]
+    assert (extra[2]["type"], extra[2]["id"], extra[2]["summary"]) == ("conversation", 4, "Talked through a job offer")
     second = client.requests[1]["messages"]
     assert second[1]["content"][0] == {"text": OPENING}  # the first answer goes back as it was
     results = [b["toolResult"] for b in second[-1]["content"] if "toolResult" in b]
@@ -128,6 +137,13 @@ def test_opening_then_one_round_of_reads_then_the_note(fake_bee):
     assert "Hiked with Dana in the morning" in results[1]["content"][0]["text"]
     assert results[3]["status"] == "error" and "at most 3 reads" in results[3]["content"][0]["text"]
     assert second[-1]["content"][-1] == {"text": "Now write the note."}
+
+
+def test_a_person_without_bee_has_a_prep_that_read_nothing_of_bee(fake_bee):
+    client = Converse(text(OPENING + NOTE))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, MODEL, spend=SPEND, bee=False,
+                                    client=client, now=NOW))
+    assert (prep.reads, prep.bee) == ([], False)
 
 
 def test_reads_before_the_opening_still_give_an_opening(fake_bee):
@@ -168,8 +184,8 @@ def test_the_opening_is_spoken_text_only():
 
 
 def test_prep_travels_in_the_dispatch_and_lands_in_the_instructions(tmp_path):
-    prep = Prep(note="Matt planned a hike with Dana.", opening="Hi Matt!", reads=["search_bee {}"], seconds=4.2,
-                opening_s=1.1, model="zai.glm-5")
+    prep = Prep(note="Matt planned a hike with Dana.", opening="Hi Matt!", reads=[{"type": "search", "query": "hike"}],
+                seconds=4.2, opening_s=1.1, model="zai.glm-5", bee=True)
     assert Prep.from_meta(json.loads(json.dumps(prep.to_meta()))) == prep
     assert Prep.from_meta(None) is None
     agent = BeeCoordinator(CallRecorder(tmp_path, room="r", now=NOW), SimpleNamespace(), tmp_path, clock=lambda: NOW,

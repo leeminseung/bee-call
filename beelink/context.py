@@ -42,8 +42,9 @@ def _write(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1))
 
 
-def _clock(ms: int | None, zone: tzinfo) -> str | None:
-    return datetime.fromtimestamp(ms / 1000, zone).strftime("%H:%M") if ms else None
+def _moment(ms: int | None, zone: tzinfo) -> str | None:
+    """Bee's epoch milliseconds as a full time with the person's offset (contract section 0)."""
+    return datetime.fromtimestamp(ms / 1000, zone).isoformat(timespec="seconds") if ms else None
 
 
 async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: list[int] | None = None,
@@ -101,7 +102,7 @@ def save_call_inputs(session_dir: Path, inputs: CallInputs, zone: tzinfo) -> dic
         _write(folder / "today.json", inputs.today)
     _write(folder / "recent_conversations.json", inputs.recent)
 
-    card: dict[str, Any] = {"summary": None, "conversation_id": None, "utterances": [],
+    card: dict[str, Any] = {"summary": None, "conversation_id": None, "started_at": None, "utterances": [],
                             "pending_fact_ids": [f["id"] for f in inputs.facts if "id" in f]}
     for conv_id, conv, lines in inputs.conversations:
         _write(folder / f"conversation-{conv_id}.json", conv)
@@ -109,8 +110,9 @@ def save_call_inputs(session_dir: Path, inputs: CallInputs, zone: tzinfo) -> dic
         if card["conversation_id"] is None:
             card["conversation_id"] = conv_id
             card["summary"] = conv.get("short_summary")
+            card["started_at"] = _moment(conv.get("start_time"), zone)
             card["utterances"] = [
-                {"at": _clock(u.get("spoken_at") or u.get("start"), zone), "speaker": u.get("speaker"),
+                {"at": _moment(u.get("spoken_at") or u.get("start"), zone), "speaker": u.get("speaker"),
                  "text": u.get("text")}
                 for u in lines[-CARD_UTTERANCES:]
             ]
