@@ -14,7 +14,7 @@
     {
       "id": "glm",
       "name": "GLM 5",
-      "maker": "AWS",
+      "maker": "Z.ai",
       "description": {
         "ko": "AWS에서 돌아가요",
         "en": "Runs on AWS"

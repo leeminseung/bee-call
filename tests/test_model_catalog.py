@@ -35,6 +35,9 @@ def test_the_user_s_decisions_on_who_runs_what():
     assert worker.extra["anthropic"] == {"cache_control": {"type": "ephemeral"}}
     glm = choice("worker", "glm")
     assert (glm.offering.provider, glm.offering.model, glm.default) == ("agentcore", "zai.glm-5", False)
+    # Z.ai makes GLM 5 and AWS runs it: the app's row reads "Z.ai · AWS에서 돌아가요", never "AWS · AWS에서 ...".
+    assert {c.maker for c in (glm, role("call").standby, role("meta").standby, role("prep").standby)} == {"Z.ai"}
+    assert glm.description == {"ko": "AWS에서 돌아가요", "en": "Runs on AWS"}
     meta, prep = choice("meta"), choice("prep")
     assert (meta.offering.model, prep.offering.model) == ("claude-sonnet-5-5", "claude-haiku-5-5")
     for name in ("call", "meta", "prep"):
