@@ -37,6 +37,7 @@ from beelink.planner import Plan
 from voice.aws_session import aws_session
 from voice.costs import SpendLog
 from voice.language import CallLanguage, call_language
+from voice.speech_filter import speech_only
 
 log = logging.getLogger("bee-call.prep")
 
@@ -55,7 +56,8 @@ at their notes before answering.
 
 The next message says who is calling whom and why, and what the user's Bee wearable recorded.
 1. First write <opening>what you say when you pick up</opening>: {opening}, as the end of the next message \
-asks. The call is answered as soon as this is written.
+asks. The call is answered as soon as this is written. It is spoken aloud word for word, so write no stage \
+directions, sound effects or descriptions of the situation, in parentheses, brackets or asterisks.
 2. Then, if one more look would help your note, such as a conversation in full, a search by topic or another \
 day's summary, call up to three tools at once. You get one round of tools.
 3. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to, open \
@@ -72,7 +74,8 @@ at their notes before answering.
 The next message says who is calling whom and why, and what you know from earlier calls and the notes kept \
 between calls.
 1. First write <opening>what you say when you pick up</opening>: {opening}, as the end of the next message \
-asks. The call is answered as soon as this is written.
+asks. The call is answered as soon as this is written. It is spoken aloud word for word, so write no stage \
+directions, sound effects or descriptions of the situation, in parentheses, brackets or asterisks.
 2. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to and \
 open threads worth raising later. Only what the message says; when it says little, note that, and plan to ask \
 the user about their day.
@@ -212,7 +215,7 @@ def parse_opening(text: str) -> str | None:
     if not found:
         return None
     spoken = " ".join(re.sub(r"<[^>]*>", " ", found.group(1)).split())  # said as is: no markup, no line breaks
-    return spoken[:300] or None
+    return speech_only(spoken)[:300] or None  # no stage directions either (voice/speech_filter.py)
 
 
 def parse_note(text: str) -> str | None:

@@ -1,4 +1,4 @@
-"""Tool-call markup in a reply's text never reaches the voice; the words around it do."""
+"""Tool-call markup and stage directions in a reply's text never reach the voice; the words around them do."""
 
 from voice.speech_filter import SpeechFilter
 
@@ -42,3 +42,46 @@ def test_text_without_markup_is_unchanged():
     chunks = ["Saturday looks dry. ", "Gwanaksan is the easier hike, ", "about two and a half hours."]
     said, f = speak(chunks)
     assert said == "".join(chunks) and f.dropped == ""
+
+
+# ---------- stage directions (the user's 14:22 call of 2026-10-15) ----------
+
+def test_a_reply_that_is_only_a_stage_direction_says_nothing():
+    """The user said only "어"; GLM 5 wrote its whole reply as "(사용자가 잠시 멈춤)" and the voice read it out."""
+    for chunks in (["(사용자가 잠시 멈춤)"], ["(사용자가", " 잠시 멈춤)"], ["(사용자가 잠시 멈춤).\n"]):
+        said, f = speak(chunks)
+        assert said.strip() == "" and "사용자가 잠시 멈춤" in f.dropped, chunks
+
+
+def test_an_english_pause_in_brackets_is_not_read_out():
+    said, _ = speak(["[pause] Take your time."])
+    assert said == "Take your time."
+
+
+def test_only_the_aside_sentence_goes_from_a_mixed_reply():
+    said, f = speak(["Sure. ", "[pause", "] What would you like ", "to do next? *thinks* Maybe a walk."])
+    assert said == "Sure. What would you like to do next? Maybe a walk."
+    assert "[pause]" in f.dropped and "*thinks*" in f.dropped
+
+
+def test_a_parenthesis_inside_a_sentence_stays():
+    for text in ("AWS(아마존 웹 서비스)는 클라우드예요.", "It costs about 3 dollars (plus tax) a day.",
+                 "(1)번이 좋아요."):
+        said, f = speak([text])
+        assert said == text and f.dropped == "", text
+
+
+def test_the_call_ai_is_told_that_every_word_it_writes_is_spoken():
+    from voice.coordinator import INSTRUCTIONS
+    from voice.prep import PREP_INSTRUCTIONS, PREP_INSTRUCTIONS_WITHOUT_BEE
+
+    for text in (INSTRUCTIONS, PREP_INSTRUCTIONS, PREP_INSTRUCTIONS_WITHOUT_BEE):
+        assert "spoken aloud" in text and "stage directions" in text
+
+
+def test_an_opening_with_a_stage_direction_is_said_without_it():
+    from voice.prep import parse_opening
+
+    assert parse_opening("<opening>(밝게 웃으며) 안녕하세요, 맷!</opening>") == "안녕하세요, 맷!"
+    assert parse_opening("<opening>[pause]</opening>") is None  # nothing left to say: the fixed greeting
+
