@@ -86,6 +86,7 @@ class Offer:
     # told once, by a plain notification (voice/outbound.py tell_not_placed), at told_at.
     not_placed: str | None = None
     told_at: str | None = None
+    soon_told_at: str | None = None  # when the meta agent heard this booked call is coming up (voice/outbound.py)
     history: list[dict[str, str]] = field(default_factory=list)  # [{"at": ISO, "state": ...}]
 
     def at(self, name: str) -> datetime | None:
@@ -340,6 +341,17 @@ class OfferStore:
     def expire(self, now: datetime) -> None:
         with self._lock():
             self._expire(now)
+
+    def tell_soon(self, offer_id: str, now: datetime) -> bool:
+        """Marks a booked call as announced to the meta agent; False when it already was. Kept in the offer's file,
+        so a restart never announces it again (BC-043)."""
+        with self._lock():
+            offer = self.get(offer_id)
+            if offer is None or offer.soon_told_at:
+                return False
+            offer.soon_told_at = _iso(now)
+            self._save(offer)
+            return True
 
     def to_tell(self, now: datetime) -> list[Offer]:
         """Calls the user agreed to that could not be placed, and the user was not told yet."""

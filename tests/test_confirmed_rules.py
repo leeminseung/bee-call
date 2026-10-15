@@ -129,6 +129,33 @@ def test_the_meta_agent_wakes_only_for_events(tmp_path, monkeypatch):
     assert (event["offer"], event["topic"]) == (soon.id, "the interview") and later.id != soon.id
 
 
+def test_a_booked_call_coming_up_is_announced_once_even_across_a_restart(tmp_path, monkeypatch):
+    """BC-043: the booked calls already announced were remembered in memory only, so after a restart (a deploy) the
+    meta agent heard about the same call coming up again."""
+    me = signed_in(tmp_path)
+    store = OfferStore(me.workspace)
+    thought: list[list[str]] = []
+
+    class Thinker:
+        async def think(self, events, now):
+            thought.append([e["kind"] for e in events])
+            return {"seconds": 0.0, "decision": "nothing to do"}
+
+    monkeypatch.setattr(outbound, "META_CHECK_S", 0.01)
+    soon = store.book("the interview", datetime.now(SEOUL) + timedelta(minutes=9), datetime.now(SEOUL))
+
+    async def run_for_a_moment():
+        loop = asyncio.create_task(serve_meta(me.person, Thinker()))
+        await asyncio.sleep(0.15)
+        loop.cancel()
+        await asyncio.gather(loop, return_exceptions=True)
+
+    asyncio.run(run_for_a_moment())
+    asyncio.run(run_for_a_moment())  # outbound.py restarted
+    assert thought == [["booked_soon"]]
+    assert store.get(soon.id).soon_told_at is not None
+
+
 def test_an_unanswered_offer_closes_at_its_suggested_time(tmp_path):
     store = OfferStore(tmp_path / "workspace")
     offer, _ = asked(tmp_path, now=datetime(2026, 10, 14, 18, 30, tzinfo=SEOUL))  # suggests 21:00

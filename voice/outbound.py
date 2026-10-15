@@ -295,7 +295,7 @@ async def serve_meta(person: Person, thinker: Thinker, until_offer_closes: bool 
     once they may go out. With until_offer_closes (for --once), stops when no offer is open any more. Past the
     person's daily budget it does not think; the events wait for the next day."""
     workspace = person.workspace
-    session, store, announced, tries = MetaSession(workspace), OfferStore(workspace), set(), 0
+    session, store, tries = MetaSession(workspace), OfferStore(workspace), 0
     think_after = 0.0  # time.monotonic() after which the meta agent may think again (later after a failed think)
     while True:
         now = person.now()
@@ -303,8 +303,7 @@ async def serve_meta(person: Person, thinker: Thinker, until_offer_closes: bool 
             for offer in store.open(now):
                 call_at = offer.at("call_at")
                 if offer.state == "booked" and call_at and timedelta(0) < call_at - now <= BOOKED_NOTICE \
-                        and offer.id not in announced:
-                    announced.add(offer.id)
+                        and not offer.soon_told_at and store.tell_soon(offer.id, now):
                     add_event(workspace, "booked_soon", now=now, offer=offer.id, call_at=offer.call_at,
                               topic=offer.topic)
             if not day_budget(person, now).used_up and time.monotonic() >= think_after:
