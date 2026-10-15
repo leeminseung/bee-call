@@ -7,12 +7,12 @@ batches (beelink/watcher.py), a call's Bee inputs (beelink/context.py) and the r
 the meta agent (beelink/reads.py).
 """
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from beelink.clock import parse_time
+from voice.call_folders import EVENTS, read_events
 
 MARGIN_SECONDS = 60.0
 # Bee derives facts, todos and notes from a conversation some time after it ends. What it made from one of our calls
@@ -23,18 +23,20 @@ DERIVED_AFTER_SECONDS = 600.0
 
 def our_call_windows(workspace: Path) -> list[tuple[float, float]]:
     windows = []
-    for events in workspace.glob("*/*/events.jsonl"):
-        lines = events.read_text().splitlines()
-        if not lines:
+    for path in workspace.glob(f"*/*/{EVENTS}"):
+        events = read_events(path)  # the call in progress may have a line still being written
+        if not events:
             continue
-        first = json.loads(lines[0])
+        first = events[0]
         if first.get("type") != "call_started" or "started_at" not in first:
             continue
-        start = parse_time(first["started_at"]).timestamp()
+        try:
+            start = parse_time(str(first["started_at"])).timestamp()
+        except ValueError:
+            continue
         # The call ends at call_ended; lines after it (Bee write results) come later and are not the call.
-        events_seen = [json.loads(line) for line in lines if line.strip()]
-        ended = [e.get("t", 0.0) for e in events_seen if e.get("type") == "call_ended"]
-        end_t = ended[0] if ended else events_seen[-1].get("t", 0.0)
+        ended = [e.get("t", 0.0) for e in events if e.get("type") == "call_ended"]
+        end_t = ended[0] if ended else events[-1].get("t", 0.0)
         windows.append((start, start + float(end_t or 0.0)))
     return windows
 

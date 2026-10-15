@@ -148,6 +148,21 @@ def test_the_call_ai_the_prep_and_the_meta_agent_read_nothing_bee_made_of_our_ca
         assert "left out" in text and "Talked through a job offer" not in text
 
 
+def test_our_call_windows_survive_a_line_still_being_written(tmp_path):
+    """The call AI's Bee reads now look at our calls' records, including the call in progress, whose last line
+    may be half-written when it is read (server review finding 13)."""
+    from beelink.calls import our_call_windows
+
+    workspace = tmp_path / "workspace"
+    started = datetime.fromtimestamp(time.time() - 120)
+    make_session(workspace, started, 60)
+    events = next(workspace.glob("*/*/events.jsonl"))
+    events.write_text(events.read_text().replace('{"t": 60', '{"t": 30.0, "type": "x"}\n{"t": 60')
+                      + '{"t": 61.0, "type": "bee_wr')
+    (window,) = our_call_windows(workspace)
+    assert window[1] - window[0] == 60
+
+
 def test_watcher_ignores_empty_batches(tmp_path, fake_bee, monkeypatch):
     changed_file = tmp_path / "changed.json"
     changed_file.write_text(json.dumps({"meta": {"next_cursor": "c"}, "conversations": [], "facts": [],
