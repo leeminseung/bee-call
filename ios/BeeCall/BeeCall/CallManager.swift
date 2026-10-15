@@ -17,7 +17,12 @@ final class CallManager: NSObject {
     private(set) var isInCall = false
     private(set) var isRinging = false // the AI's call, until it is answered or ends
     private(set) var isEnding = false
-    let liveKit = LiveKitClient()
+    let liveKit: LiveKitClient // the call screen shows its captions and voice levels
+
+    /// The call's room: `liveKit` in the app, a stand-in in tests.
+    @ObservationIgnored private let room: any CallRoom
+    /// Before an answered call joins: the Settings-app switches go to the server (contract section 1).
+    @ObservationIgnored private let beforeAnswering: () async -> Void
 
     @ObservationIgnored private let callKit: any CallKitReports
     @ObservationIgnored private let calls: any CallKitRequests
@@ -34,19 +39,29 @@ final class CallManager: NSObject {
     // A call the user starts rings until the AI picks up (it reads Bee first, at most about 8 s).
     @ObservationIgnored private var pickUpTimeout: Task<Void, Never>?
     @ObservationIgnored private var pickedUp = false
+    @ObservationIgnored private let pickUpWait: Duration
     @ObservationIgnored private let decline = CallDecline(transport: URLSession.shared,
                                                           noteStatus: { Server.shared.noteStatus($0) })
-    private static let pickUpSeconds = 30 // the voice server picks up within about 8 s; this catches a stuck one
     /// The name of every call, both ways, on CallKit's call screen and in the Phone app's Recents.
     private static let handle = CXHandle(type: .generic, value: "Bee Call")
 
-    /// CallKit's provider and controller and the microphone prompt, unless a test passes stand-ins.
+    /// CallKit's provider and controller, the microphone prompt, the LiveKit room and the settings sent before an
+    /// answer, unless a test passes stand-ins. `pickUpWait`: how long a call waits for the AI to pick up; the
+    /// voice server picks up within about 8 s, so this catches a stuck one.
     init(callKit: (any CallKitReports)? = nil, calls: (any CallKitRequests)? = nil,
-         microphone: @escaping () async -> Bool = { await LiveKitSDK.ensureDeviceAccess(for: [.audio]) }) {
+         microphone: @escaping () async -> Bool = { await LiveKitSDK.ensureDeviceAccess(for: [.audio]) },
+         room: (any CallRoom)? = nil,
+         beforeAnswering: @escaping () async -> Void = { await Server.shared.settings.sendBeforeAnswering() },
+         pickUpWait: Duration = .seconds(30)) {
         let provider: CXProvider? = callKit == nil ? Self.provider() : nil
         self.callKit = callKit ?? provider!
         self.calls = calls ?? CXCallController()
         self.microphone = microphone
+        let liveKit = LiveKitClient()
+        self.liveKit = liveKit
+        self.room = room ?? liveKit
+        self.beforeAnswering = beforeAnswering
+        self.pickUpWait = pickUpWait
         super.init()
         provider?.setDelegate(self, queue: nil) // nil = main queue
 
@@ -56,7 +71,7 @@ final class CallManager: NSObject {
         AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
         try? AudioManager.shared.setEngineAvailability(.none)
 
-        liveKit.onLinkChange = { [weak self] link in
+        self.room.onLinkChange = { [weak self] link in
             self?.linkChanged(link)
         }
         pushRegistry.delegate = self
@@ -111,7 +126,7 @@ final class CallManager: NSObject {
         } catch {
             // CallKit no longer knows this call, so clean up here.
             connecting?.cancel()
-            await liveKit.disconnect()
+            await room.disconnect()
             finish("Call ended")
         }
     }
@@ -290,29 +305,29 @@ final class CallManager: NSObject {
     private func join(_ id: UUID, answering roomName: String?) {
         let url = tokenServerURL
         pickedUp = false
-        liveKit.onAgentAnswered = { [weak self] in self?.agentPickedUp(id) }
+        room.onAgentAnswered = { [weak self] in self?.agentPickedUp(id) }
         connecting = Task {
             do {
                 if roomName != nil {
                     // The voice server reads "Save on the server" when the phone joins, so the switches go first;
                     // a slow network holds the call at most SettingsSync.answerWait (contract section 1).
-                    await Server.shared.settings.sendBeforeAnswering()
+                    await beforeAnswering()
                     try Task.checkCancellation() // the call ended while the settings went out
                 }
-                let room = try await liveKit.connect(tokenServerURL: url, answering: roomName,
-                                                     continuing: roomName == nil ? earlierCall : nil)
+                let joined = try await room.connect(tokenServerURL: url, answering: roomName,
+                                                    continuing: roomName == nil ? earlierCall : nil)
                 try Task.checkCancellation() // the call ended while we were connecting
                 // CallKit counts an answered call as connected once the answer action is fulfilled. A call the
                 // user starts counts as connected when the AI picks up, which may already have happened.
                 if roomName == nil && !pickedUp {
                     status = "Ringing…"
                     pickUpTimeout = Task {
-                        try? await Task.sleep(for: .seconds(Self.pickUpSeconds))
+                        try? await Task.sleep(for: pickUpWait)
                         guard !Task.isCancelled, callID == id, !pickedUp else { return }
                         hangUp(.failed, "Bee Call didn't pick up")
                     }
                 } else {
-                    status = "Connected · \(room)"
+                    status = "Connected · \(joined)"
                 }
             } catch {
                 guard !Task.isCancelled else { return } // whoever ended the call cleans up
@@ -356,7 +371,7 @@ final class CallManager: NSObject {
         callKit.reportEnded(id, reason: reason)
         connecting?.cancel()
         Task {
-            await liveKit.disconnect()
+            await room.disconnect()
             finish(message)
         }
     }
@@ -368,7 +383,7 @@ final class CallManager: NSObject {
         ringTimeout = nil
         pickUpTimeout?.cancel()
         pickUpTimeout = nil
-        liveKit.onAgentAnswered = nil
+        room.onAgentAnswered = nil
         pickedUp = false
         callID = nil
         earlierCall = nil
@@ -409,18 +424,25 @@ extension CallManager: CXProviderDelegate {
         try? AudioManager.shared.setEngineAvailability(.none)
         connecting?.cancel()
         Task {
-            await liveKit.disconnect()
+            await room.disconnect()
             finish("iOS reset the call")
         }
     }
 
-    func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
+    func provider(_ provider: CXProvider, perform action: CXStartCallAction) { perform(action) }
+    func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) { perform(action) }
+    func provider(_ provider: CXProvider, perform action: CXEndCallAction) { perform(action) }
+    func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) { perform(action) }
+
+    // What CallKit asks of a call, apart from the provider that asks it, so tests can ask it too.
+
+    func perform(_ action: CXStartCallAction) {
         action.fulfill() // CallKit activates the audio session after this.
         callKit.reportStartedConnecting(action.callUUID)
         join(action.callUUID, answering: nil)
     }
 
-    func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+    func perform(_ action: CXAnswerCallAction) {
         guard isRinging, action.callUUID == callID,
               let room = rungRooms.first(where: { $0.value == action.callUUID })?.key else {
             action.fail()
@@ -434,7 +456,7 @@ extension CallManager: CXProviderDelegate {
         join(action.callUUID, answering: room)
     }
 
-    func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+    func perform(_ action: CXEndCallAction) {
         // Also reached when iOS ends the call (lock screen, AirPods, Dynamic Island).
         let declined = isRinging // the AI's call, ended before it was answered
         if declined, let room = rungRooms.first(where: { $0.value == action.callUUID })?.key {
@@ -449,16 +471,16 @@ extension CallManager: CXProviderDelegate {
         isEnding = true
         connecting?.cancel()
         Task {
-            await liveKit.disconnect()
+            await room.disconnect()
             action.fulfill()
             finish(declined ? "Declined" : "Call ended")
         }
     }
 
-    func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
+    func perform(_ action: CXSetMutedCallAction) {
         Task {
             do {
-                try await liveKit.setMicrophone(enabled: !action.isMuted)
+                try await room.setMicrophone(enabled: !action.isMuted)
                 action.fulfill()
             } catch {
                 action.fail()
