@@ -584,3 +584,66 @@ def test_an_ai_call_whose_room_drops_while_it_rings_is_missed_not_answered(tmp_p
     assert call.session.started is None and call_folders(me.workspace) == []
     (event,) = MetaSession(me.workspace).take_events()
     assert event["kind"] == "call_missed"
+
+
+# ---------- the model log: everything the call AI's model received (the user's decision, 2026-10-15) ----------
+
+def test_every_model_request_of_a_call_is_kept_whole_on_the_server(tmp_path, monkeypatch):
+    """Whatever the model: the instructions, the whole chat with tool calls and their results, the tools offered,
+    and what came back, one line per request in the call folder's model-log.jsonl."""
+    from types import SimpleNamespace
+    from livekit.agents import Agent, llm
+    from tests.helpers import seoul_now
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+    coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
+
+    async def model(agent_, chat_ctx, tools, model_settings):
+        yield llm.ChatChunk(id="1", delta=llm.ChoiceDelta(role="assistant", content="Let me check."))
+        yield llm.ChatChunk(id="1", delta=llm.ChoiceDelta(role="assistant", tool_calls=[
+            llm.FunctionToolCall(name="job_status", arguments="{}", call_id="c1")]))
+
+    monkeypatch.setattr(Agent.default, "llm_node", staticmethod(model))
+
+    async def main():
+        chat = llm.ChatContext()
+        chat.add_message(role="system", content=coordinator.instructions)
+        chat.add_message(role="user", content="Did Bee hear about the trip?")
+        chat.insert(llm.FunctionCall(call_id="c0", name="search_bee", arguments='{"query": "trip"}'))
+        chat.insert(llm.FunctionCallOutput(call_id="c0", name="search_bee", output="A trip to Busan", is_error=False))
+        return [chunk async for chunk in coordinator.llm_node(chat, list(coordinator.tools), None)]
+
+    asyncio.run(main())
+    rec.close()
+    (entry,) = [json.loads(line) for line in (rec.dir / "model-log.jsonl").read_text().splitlines()]
+    items = entry["chat"]
+    assert items[0]["role"] == "system" and "Bee Call" in items[0]["content"][0]
+    assert [i.get("type") for i in items[2:]] == ["function_call", "function_call_output"]
+    assert items[3]["output"] == "A trip to Busan"
+    assert "delegate" in [tool["name"] for tool in entry["tools"]]
+    assert entry["reply"] == {"text": "Let me check.",
+                              "tool_calls": [{"name": "job_status", "arguments": "{}", "call_id": "c1"}]}
+
+
+def test_the_record_server_never_serves_the_model_log_or_the_claude_history(tmp_path, monkeypatch):
+    """BC-095: both hold what the model was given, Bee's raw data included."""
+    from aiohttp.test_utils import TestClient, TestServer
+    from voice import session_server
+
+    me = signed_in(tmp_path)
+    folder = me.workspace / "2026-10-15" / "2100"
+    folder.mkdir(parents=True)
+    (folder / "events.jsonl").write_text('{"t": 0, "type": "call_started", "room": "call-matt-x"}\n')
+    for name in ("model-log.jsonl", "claude-history.json", "transcript.md"):
+        (folder / name).write_text("{}")
+
+    async def main():
+        async with TestClient(TestServer(session_server.make_app(me.people)), headers=me.headers) as client:
+            return {name: (await client.get(f"/api/sessions/2026-10-15/2100/files/{name}")).status
+                    for name in ("model-log.jsonl", "MODEL-LOG.JSONL", "claude-history.json", "transcript.md")}
+
+    statuses = asyncio.run(main())
+    assert statuses.pop("transcript.md") == 200 and set(statuses.values()) == {403}, statuses
+

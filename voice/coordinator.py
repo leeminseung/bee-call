@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import AsyncIterable, Callable
+from typing import Any, AsyncIterable, Callable
 
 from livekit import rtc
 from livekit.agents import Agent, ModelSettings, RunContext, function_tool, llm
@@ -119,6 +119,42 @@ ASK_LIKE = {"todo_create": "Shall I add '{text}' to your Bee todos?",
 ENGLISH = call_language("en")  # what the tools tell the model is in English, like the rest of its instructions
 
 
+def model_request(agent: Agent, chat_ctx: llm.ChatContext, tools: list[llm.Tool]) -> dict[str, Any]:
+    """What one request gives the model, model-agnostic: the whole chat as LiveKit holds it (the instructions are
+    its first item), and each tool offered with its parameters. Never raises."""
+    try:
+        return _model_request(agent, chat_ctx, tools)
+    except Exception as exc:
+        return {"error": f"could not record the request: {exc!r}"}
+
+
+def _model_request(agent: Agent, chat_ctx: llm.ChatContext, tools: list[llm.Tool]) -> dict[str, Any]:
+    try:
+        model = getattr(agent.session.llm, "model", None)
+    except RuntimeError:  # no session (a direct call, as in tests)
+        model = None
+    try:
+        offered = [{"name": t["function"]["name"], "description": t["function"].get("description"),
+                    "parameters": t["function"].get("parameters")}
+                   for t in llm.ToolContext(tools).parse_function_tools("openai", strict=False)]
+    except Exception as exc:  # a tool LiveKit cannot describe: its name at least
+        offered = [{"name": getattr(getattr(t, "info", None), "name", repr(t)), "error": repr(exc)} for t in tools]
+    return {"model": model, "chat": chat_ctx.to_dict(exclude_image=True, exclude_audio=True,
+                                                       exclude_timestamp=False)["items"], "tools": offered}
+
+
+def keep_reply(reply: dict[str, Any], chunk: Any) -> None:
+    """Adds a streamed chunk of the model's answer to `reply`: its text and its tool calls."""
+    if isinstance(chunk, str):
+        reply["text"] += chunk
+    elif isinstance(chunk, llm.ChatChunk) and chunk.delta:
+        reply["text"] += chunk.delta.content or ""
+        for call in chunk.delta.tool_calls or []:
+            reply["tool_calls"].append({"name": call.name, "arguments": call.arguments, "call_id": call.call_id})
+        if chunk.usage:
+            reply["usage"] = chunk.usage.model_dump(mode="json")
+
+
 def job_notification(news: JobNotification) -> str:
     """The note for news about a background job, modeled on how Claude Code tells its model about a background
     task: a label, then a tagged block. What to do with it is in INSTRUCTIONS, not in each note."""
@@ -218,15 +254,31 @@ class Coordinator(Agent):
     async def llm_node(self, chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings):
         # Tool-call markup written as reply text is cut before it reaches the voice, the captions
         # and the history (see voice/speech_filter.py). Tool calls themselves pass through.
+        # Every request, whatever the model, goes into the call's model log as the model received it, with what
+        # came back before the filter (voice/recorder.py MODEL_LOG).
+        sent = model_request(self, chat_ctx, tools)
+        reply: dict[str, Any] = {"text": "", "tool_calls": []}
+        ended = "error"
         speech = SpeechFilter()
-        async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
-            if isinstance(chunk, llm.ChatChunk) and chunk.delta and chunk.delta.content:
-                kept = speech.feed(chunk.delta.content)
-                if kept != chunk.delta.content:
-                    chunk = chunk.model_copy(update={"delta": chunk.delta.model_copy(update={"content": kept})})
-            elif isinstance(chunk, str):
-                chunk = speech.feed(chunk)
-            yield chunk
+        try:
+            async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+                keep_reply(reply, chunk)
+                if isinstance(chunk, llm.ChatChunk) and chunk.delta and chunk.delta.content:
+                    kept = speech.feed(chunk.delta.content)
+                    if kept != chunk.delta.content:
+                        chunk = chunk.model_copy(update={"delta": chunk.delta.model_copy(update={"content": kept})})
+                elif isinstance(chunk, str):
+                    chunk = speech.feed(chunk)
+                yield chunk
+            ended = "done"
+        except (GeneratorExit, asyncio.CancelledError):
+            ended = "cut off"  # the user spoke, or the call ended
+            raise
+        except Exception as exc:
+            ended = f"error: {exc!r}"[:500]
+            raise
+        finally:
+            self._recorder.model_request({**sent, "reply": reply, "ended": ended})
         tail = speech.flush()
         if tail:
             yield tail

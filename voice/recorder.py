@@ -3,6 +3,9 @@
 workspace/<date>/<time>/
   transcript.md   what both sides said, with times and interruptions
   events.jsonl    everything that happened, one JSON object per line
+  model-log.jsonl every request the call AI's model received, whatever the model, one line each: the whole chat
+                  (instructions, both sides, tool calls and their results), the tools offered, and what came back.
+                  For debugging; kept on the server only (it holds Bee data), never served (voice/session_server.py)
   audio/user.wav  the caller's microphone audio as received
   audio/ai.wav    the AI's synthesized speech, utterances back to back
 
@@ -12,6 +15,7 @@ record_on_server, on by default); the record and transcript are always written.
 """
 
 import json
+import logging
 import time
 import wave
 from datetime import datetime
@@ -19,6 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from livekit import rtc
+
+log = logging.getLogger("voice.recorder")
 
 
 class WavSink:
@@ -47,6 +53,9 @@ class WavSink:
         if self._wav is not None:
             self._wav.close()
             self._wav = None
+
+
+MODEL_LOG = "model-log.jsonl"
 
 
 class CallRecorder:
@@ -94,6 +103,16 @@ class CallRecorder:
         self.ai_audio.close()
         self._events.close()
         self._transcript.close()
+
+    def model_request(self, entry: dict[str, Any]) -> None:
+        """One request the call AI's model received and what came back (MODEL_LOG), with the call's time. Never
+        raises: the log must not break a call (a call left before the AI spoke has no folder any more)."""
+        line = {"t": round(time.monotonic() - self._t0, 3), "at": datetime.now().astimezone().isoformat(), **entry}
+        try:
+            with (self.dir / MODEL_LOG).open("a") as f:
+                f.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
+        except (OSError, TypeError, ValueError) as exc:
+            log.warning("could not keep a model request of %s: %s", self.dir, exc)
 
     def after_call(self, event_type: str, /, **data: Any) -> None:
         """An event that comes after call_ended (Bee writes tried again once the call is over)."""
