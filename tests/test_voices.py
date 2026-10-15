@@ -44,11 +44,22 @@ def test_the_model_and_the_stability_can_be_set():
             voice_choice(ENGLISH, {**ELEVEN, "ELEVENLABS_STABILITY": bad})
 
 
-def test_each_choice_builds_its_livekit_tts():
-    polly = make_tts(voice_choice(KOREAN, {}), KOREAN, "ap-southeast-2")
-    assert (polly._opts.voice, polly._opts.speech_engine) == ("Seoyeon", "neural")
+def test_each_choice_builds_its_livekit_tts(monkeypatch):
+    """What each LiveKit TTS is given, read from the arguments the plugins get rather than their private state
+    (server review 16)."""
+    from voice import voices
 
+    built = []
+
+    def plugin(name):
+        return lambda **kwargs: built.append((name, kwargs)) or name
+
+    monkeypatch.setattr(voices.aws, "TTS", plugin("polly"))
+    monkeypatch.setattr(voices.elevenlabs, "TTS", plugin("elevenlabs"))
+    assert make_tts(voice_choice(KOREAN, {}), KOREAN, "ap-southeast-2") == "polly"
     choice = voice_choice(KOREAN, {**ELEVEN, "ELEVENLABS_STABILITY": "0.3"})
-    eleven = make_tts(choice, KOREAN, "ap-southeast-2", env=ELEVEN)
-    assert (eleven._opts.voice_id, eleven._opts.model, eleven._opts.language) == ("voice123", ELEVENLABS_MODEL, "ko")
-    assert eleven._opts.voice_settings.stability == 0.3
+    assert make_tts(choice, KOREAN, "ap-southeast-2", env=ELEVEN) == "elevenlabs"
+    (_, polly), (_, eleven) = built
+    assert polly == {"voice": "Seoyeon", "speech_engine": "neural", "region": "ap-southeast-2"}
+    assert (eleven["voice_id"], eleven["model"], eleven["language"]) == ("voice123", ELEVENLABS_MODEL, "ko")
+    assert eleven["voice_settings"].stability == 0.3 and eleven["api_key"]

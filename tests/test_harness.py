@@ -301,8 +301,15 @@ def test_a_warm_up_that_calls_a_tool_is_told_not_to(tmp_path):
     ])
 
     async def main():
+        # Through the warm-up a call runs (keep_warm), not its private step (server review 16).
         worker = HarnessWorker("arn:harness", client=harness, search=fake_search)
-        await worker._ping("beecall-warm-test-0123456789abcdef0123456789", [0, 0])
+        warming = asyncio.create_task(worker.keep_warm(SpendLog(tmp_path)))
+        for _ in range(100):
+            if len(harness.requests) == 2:
+                break
+            await asyncio.sleep(0.01)
+        warming.cancel()
+        await asyncio.gather(warming, return_exceptions=True)
 
     asyncio.run(main())
     answer = harness.requests[1]["messages"][0]["content"][0]["toolResult"]

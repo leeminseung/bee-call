@@ -324,9 +324,12 @@ def unit(name: str) -> list[str]:
 def test_every_service_runs_unprivileged_in_seoul_time_with_the_settings_from_ssm(name):
     lines = unit(name)
     for expected in ["User=bee-call", "Restart=always", "EnvironmentFile=/run/bee-call/env",
-                     "After=bee-call-env.service network-online.target", "Environment=TZ=Asia/Seoul",
-                     "Environment=BEE_CALL_DATA=/var/lib/bee-call", "WorkingDirectory=/opt/bee-call/app"]:
+                     "Environment=TZ=Asia/Seoul", "Environment=BEE_CALL_DATA=/var/lib/bee-call",
+                     "WorkingDirectory=/opt/bee-call/app"]:
         assert expected in lines, f"{name}: {expected}"
+    # Started after the settings and the network, in whatever order the line names them (server review 16).
+    after = {unit_name for line in lines if line.startswith("After=") for unit_name in line[len("After="):].split()}
+    assert {"bee-call-env.service", "network-online.target"} <= after, name
     assert next(line for line in lines if line.startswith("ExecStart=")).startswith(
         "ExecStart=/opt/bee-call/app/.venv/bin/python -m ")
     # Wants, not Requires: a failed settings read must not keep a service down, since Restart= never retries a

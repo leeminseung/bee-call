@@ -303,10 +303,11 @@ def test_a_new_event_never_cancels_a_call_being_placed(tmp_path, fake_bee, monke
 
     async def main():
         watcher = BeeWatcher(workspace, slow_call, debounce=0.05)
-        watcher._schedule("first")
+        watcher.on_event("update-conversation-summary")  # as bee stream reports them (server review 16)
         await asyncio.sleep(0.15)  # past the quiet period: the first catch-up is placing its call
-        watcher._schedule("second")
+        watcher.on_event("journal-created")
+        watcher.on_event("journal-text")  # not a settled change: it starts nothing
         await asyncio.sleep(1.0)
 
     asyncio.run(main())
-    assert finished == ["first", "second"]
+    assert finished == ["update-conversation-summary", "journal-created"]

@@ -119,6 +119,12 @@ class BeeWatcher:
         self._save_cursor(next_cursor)
         return trigger
 
+    def on_event(self, name: str) -> None:
+        """One event from `bee stream`: a settled change starts the quiet period before a catch-up, and a later one
+        starts it over; a catch-up already running (placing a call) is never cancelled."""
+        if name in SETTLED_EVENTS:
+            self._schedule(name)
+
     def _schedule(self, reason: str) -> None:
         self._reason = reason
         if self._timer and not self._timer.done():
@@ -162,8 +168,7 @@ class BeeWatcher:
                         continue
                     name, _ = parsed
                     backoff = 2.0
-                    if name in SETTLED_EVENTS:
-                        self._schedule(name)
+                    self.on_event(name)
             except Exception as exc:  # keep watching through transient failures
                 log.warning("bee stream error: %s", exc)
             finally:
