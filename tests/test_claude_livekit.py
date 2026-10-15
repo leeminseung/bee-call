@@ -100,44 +100,17 @@ def test_a_reply_that_is_only_a_stage_direction_leaves_no_blank_turn_for_bedrock
     """GLM 5 on Bedrock (no Claude adapter, no tags): a reply of "(사용자가 잠시 멈춤)" and a line break leaves no
     assistant turn behind. A turn of "\n" would go into every later Bedrock request, which refuses a blank text
     block, so every later reply of the call would fail."""
-    import uuid
     from types import SimpleNamespace
-    from typing import Any
 
-    from livekit.agents import llm
-    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-
-    from tests.helpers import seoul_now
+    from tests.helpers import ScriptedLLM, seoul_now
     from voice.coordinator import Coordinator
     from voice.recorder import CallRecorder
-
-    replies = [["(사용자가 잠시 멈춤)", ".\n"], ["\n", "Sure. ", "What should we look at?"]]
-
-    class Plain(llm.LLM):
-        """Streams scripted replies as plain text, the way the Converse plugin does for GLM 5."""
-
-        @property
-        def model(self) -> str:
-            return "plain"
-
-        def chat(self, *, chat_ctx: llm.ChatContext, tools: list[llm.Tool] | None = None,
-                 conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-                 parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-                 tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
-                 extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN) -> llm.LLMStream:
-            return PlainStream(self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options)
-
-    class PlainStream(llm.LLMStream):
-        async def _run(self) -> None:
-            chunk_id = uuid.uuid4().hex
-            for piece in replies.pop(0):
-                self._event_ch.send_nowait(llm.ChatChunk(id=chunk_id, delta=llm.ChoiceDelta(role="assistant",
-                                                                                             content=piece)))
 
     async def main():
         rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
         coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
-        async with AgentSession(llm=Plain()) as session:
+        glm = ScriptedLLM([["(사용자가 잠시 멈춤)", ".\n"], ["\n", "Sure. ", "What should we look at?"]])
+        async with AgentSession(llm=glm) as session:
             await session.start(coordinator)
             await session.run(user_input="어")
             await session.run(user_input="Let's plan tomorrow")
@@ -151,3 +124,50 @@ def test_a_reply_that_is_only_a_stage_direction_leaves_no_blank_turn_for_bedrock
     messages, _ = history.to_provider_format("aws")
     blocks = [b["text"] for m in messages for b in m["content"] if "text" in b]
     assert blocks and all(text.strip() for text in blocks)
+
+
+def test_when_claude_fails_the_first_request_glm_answers_and_the_model_log_says_so(tmp_path):
+    """COORDINATOR_LLM=anthropic in a real LiveKit session: Anthropic refuses the key on the first request, so GLM 5
+    answers it and the next one. The model log names the model that answered each request, and the record says why
+    GLM 5 took the call."""
+    import json
+    from types import SimpleNamespace
+
+    import anthropic
+    import httpx2
+
+    from tests.helpers import ScriptedLLM, seoul_now
+    from voice.agent import wire_events
+    from voice.coordinator import Coordinator
+    from voice.fallback_llm import FirstRequestFallback
+    from voice.recorder import CallRecorder
+
+    response = httpx2.Response(401, request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"))
+    refused = anthropic.AuthenticationError(
+        "invalid x-api-key", response=response,
+        body={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}})
+
+    async def main():
+        rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+        coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
+        claude = ClaudeBedrockLLM(client=FakeAnthropic([refused]), model="claude-haiku-5-5", thinking="disabled")
+        glm = ScriptedLLM([["네, 말씀하세요."], ["내일 일정을 같이 볼까요?"]])
+        model = FirstRequestFallback(claude, lambda: glm, on_choice=lambda chosen, reason: rec.event(
+            "coordinator_model", model=chosen.model, reason=reason))
+        async with AgentSession(llm=model) as session:
+            wire_events(session, rec)
+            await session.start(coordinator)
+            await session.run(user_input="여보세요?")
+            await session.run(user_input="내일 계획 세우자")
+            said = [i.text_content for i in session.history.items if getattr(i, "role", None) == "assistant"]
+        rec.close()
+        return rec, said
+
+    rec, said = asyncio.run(main())
+    assert said == ["네, 말씀하세요.", "내일 일정을 같이 볼까요?"]
+    log = [json.loads(line) for line in (rec.dir / "model-log.jsonl").read_text().splitlines()]
+    assert [entry["model"] for entry in log] == ["zai.glm-5", "zai.glm-5"]
+    events = [json.loads(line) for line in (rec.dir / "events.jsonl").read_text().splitlines()]
+    (choice,) = [e for e in events if e["type"] == "coordinator_model"]
+    assert choice["model"] == "zai.glm-5" and "401" in choice["reason"]
+    assert not [e for e in events if e["type"] == "error"]  # the failed first try is no failed turn

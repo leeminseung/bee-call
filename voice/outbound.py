@@ -18,9 +18,9 @@ each decision is written to plan.md in the inbox folder, call or not.
 A "call" decision becomes an offer (voice/offers.py): a notification asks the user, and
 this process places the call when they tap "Call me now" or when the time they accepted
 comes, and also for calls the user booked out loud in a call.
-Before the phone rings, the coordinator's model reads Bee and writes its call prep note
-(voice/prep.py), with the model the voice server uses: set COORDINATOR_LLM and
-COORDINATOR_MODEL the same way for both (GLM 5 when unset).
+Before the phone rings, a model reads Bee and writes the call prep note (voice/prep.py), picked
+from COORDINATOR_LLM as the voice server's prep picks it, so set COORDINATOR_LLM and
+COORDINATOR_MODEL the same way for both (GLM 5 with anthropic and bedrock; prep_model).
 """
 
 import argparse

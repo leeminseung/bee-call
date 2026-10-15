@@ -68,8 +68,9 @@ MAC_ONLY = {
     HOST_PARAMETER: "set by dns",
 }
 # Settings this Mac passes on the command line rather than in .env.local, as the server should run them:
-# GLM 5 on Bedrock in the coordinator slot, and the AgentCore worker (only when its ARN is known).
-SERVER_DEFAULTS = {"COORDINATOR_LLM": "bedrock", "WORKER": "harness"}
+# Claude Haiku 5.5 on Anthropic's own API in the coordinator slot, with GLM 5 on Bedrock standing by (voice/agent.py;
+# the key is .env.local's ANTHROPIC_API_KEY), and the AgentCore worker (only when its ARN is known).
+SERVER_DEFAULTS = {"COORDINATOR_LLM": "anthropic", "WORKER": "harness"}
 
 STATUS_SCRIPT = r"""
 echo "first boot: $(cloud-init status 2>/dev/null | sed -n 's/^status: //p')"
@@ -123,6 +124,16 @@ def server_settings(local: Mapping[str, str | None], harness: tuple[str, str] | 
     for name, value in (extra or {}).items():
         chosen[name] = (value, "--set")
     return chosen, skipped
+
+
+def coordinator_note(chosen: Mapping[str, tuple[str, str]], existing: set[str]) -> str | None:
+    """What `secrets` says when the call AI is to run on Anthropic's API and no key will be on the server."""
+    if chosen.get("COORDINATOR_LLM", ("", ""))[0] != "anthropic":
+        return None
+    if "ANTHROPIC_API_KEY" in chosen or "ANTHROPIC_API_KEY" in existing:
+        return None
+    return ("no ANTHROPIC_API_KEY in .env.local or on the server: every call runs on GLM 5 (the stand-by), and its "
+            "record says so, until the key is set")
 
 
 def harness_on_this_mac(local: Mapping[str, str | None]) -> tuple[str, str] | None:
@@ -301,6 +312,9 @@ def cmd_secrets(args) -> None:
     if "WORKER_HARNESS_ARN" not in chosen and "WORKER_HARNESS_ARN" not in existing:
         print(f"no worker ARN in {' or '.join(HARNESS_STATES)}: the server runs the fake worker until WORKER and "
               "WORKER_HARNESS_ARN are set")
+    note = coordinator_note(chosen, existing)
+    if note:
+        print(note)
     if "apns-key" not in existing:
         print("no APNs key on the server yet, so no pushes from it. Upload the .p8 file yourself:")
         print(f"  aws ssm put-parameter --profile bee-call --region {REGION} --name {PREFIX}apns-key "

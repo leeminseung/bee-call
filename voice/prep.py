@@ -41,6 +41,7 @@ from voice.speech_filter import speech_only
 
 log = logging.getLogger("bee-call.prep")
 
+GLM_5 = "zai.glm-5"  # on Bedrock: the prep's and the meta agent's model, and the call AI's stand-by
 PREP_SECONDS = 8.0  # the most a caller hears ringing before the AI picks up (agreed with Matt, 2026-10-13)
 # Starting the voice and its first syllable took about 2 s after the opening was ready (2026-10-13), and the
 # caller keeps hearing ringing meanwhile, so the opening must be ready this long into the call.
@@ -125,11 +126,14 @@ class Prep:
 
 
 def prep_model(mode: str) -> tuple[str, str] | None:
-    """The coordinator's model for this COORDINATOR_LLM mode and its Bedrock region; None for the stand-ins
-    without a model (echo, fake)."""
+    """The prep's model (and the meta agent's, meta/agent.py) for this COORDINATOR_LLM mode, and its Bedrock region;
+    None for the stand-ins without a model (echo, fake). With anthropic it is GLM 5: the prep and the meta agent call
+    Bedrock's Converse API, and COORDINATOR_MODEL names the call AI's Claude model there."""
     region = os.environ.get("BEDROCK_REGION", os.environ.get("AWS_REGION", "ap-southeast-2"))
+    if mode == "anthropic":
+        return GLM_5, region
     if mode == "bedrock":
-        return os.environ.get("COORDINATOR_MODEL", "zai.glm-5"), region
+        return os.environ.get("COORDINATOR_MODEL", GLM_5), region
     if mode == "nova":
         return "us.amazon.nova-2-lite-v1:0", "us-east-1"
     if mode == "claude":

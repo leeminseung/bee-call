@@ -130,11 +130,16 @@ def model_request(agent: Agent, chat_ctx: llm.ChatContext, tools: list[llm.Tool]
         return {"error": f"could not record the request: {exc!r}"}
 
 
-def _model_request(agent: Agent, chat_ctx: llm.ChatContext, tools: list[llm.Tool]) -> dict[str, Any]:
+def model_name(agent: Agent) -> str | None:
+    """The model answering the agent's requests (with GLM 5 standing by, the one that took the call)."""
     try:
-        model = getattr(agent.session.llm, "model", None)
+        return getattr(agent.session.llm, "model", None)
     except RuntimeError:  # no session (a direct call, as in tests)
-        model = None
+        return None
+
+
+def _model_request(agent: Agent, chat_ctx: llm.ChatContext, tools: list[llm.Tool]) -> dict[str, Any]:
+    model = model_name(agent)
     try:
         offered = [{"name": t["function"]["name"], "description": t["function"].get("description"),
                     "parameters": t["function"].get("parameters")}
@@ -283,7 +288,8 @@ class Coordinator(Agent):
             ended = f"error: {exc!r}"[:500]
             raise
         finally:
-            self._recorder.model_request({**sent, "reply": reply, "ended": ended})
+            # The model is named once the reply is in: the first request of a call can go to GLM 5 instead.
+            self._recorder.model_request({**sent, "model": model_name(self), "reply": reply, "ended": ended})
         tail = speech.flush()
         if tail:
             yield tail

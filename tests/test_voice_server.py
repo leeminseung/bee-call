@@ -451,6 +451,31 @@ def test_a_hang_up_after_the_ai_spoke_keeps_the_call(tmp_path, monkeypatch, quic
     assert [e["kind"] for e in MetaSession(me.workspace).take_events()] == ["call_ended"]
 
 
+def test_claude_s_history_is_kept_when_it_answers_with_glm_5_standing_by(tmp_path, monkeypatch, quick):
+    """COORDINATOR_LLM=anthropic: the session's model is the stand-by wrapper, and Claude's history (exactly what
+    Claude was sent) is still kept for checking the call afterwards."""
+    from tests.helpers import ScriptedLLM
+    from voice.claude_llm import ClaudeBedrockLLM
+    from voice.fake_claude import FakeAnthropic
+    from voice.fallback_llm import FirstRequestFallback
+
+    me = signed_in(tmp_path)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    claude = ClaudeBedrockLLM(client=FakeAnthropic(), model="claude-haiku-5-5", thinking="disabled")
+    call.session.llm = FirstRequestFallback(claude, lambda: ScriptedLLM([]), on_choice=lambda model, reason: None)
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    (folder,) = call_folders(me.workspace)
+    assert json.loads((folder / "claude-history.json").read_text()) == {"system": None, "messages": []}
+
+
 def test_a_caller_whose_phone_drops_and_comes_back_before_the_ai_speaks_keeps_the_call(tmp_path, monkeypatch, quick):
     """Second review of this round's fixes, finding 3: LiveKit keeps the session through a dropped network and the
     caller comes back to it; that call is not one hung up while it rang."""

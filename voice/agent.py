@@ -6,13 +6,19 @@ call is recorded into its session folder by CallRecorder, the Bee context for
 the call is saved into inputs/, and delegated jobs run in the background.
 
 COORDINATOR_LLM picks the model in the coordinator slot:
-  claude  Claude Sonnet 5.5 on Bedrock (the product)
-  fake    the Claude adapter with scripted replies and no network (test stand-in
-          that checks every request the way the Messages API would)
-  bedrock any other Bedrock model through the Converse API, named by COORDINATOR_MODEL
-          (stand-in while Claude is blocked on this account; probes/coordinator_bench.py compares them)
-  nova    Amazon Nova 2 Lite on Bedrock (test stand-in that can call tools)
-  echo    repeats the caller (test stand-in for the audio path)
+  anthropic Claude Haiku 5.5 on Anthropic's own API (the server's default from 2026-10-15), with the key in
+            ANTHROPIC_API_KEY and the model in COORDINATOR_MODEL (claude-haiku-5-5 when unset). GLM 5 on Bedrock
+            stands by: without a key, or when the first request of a call fails, GLM 5 takes the call, and the
+            record's coordinator_model event says which model answered and why (voice/fallback_llm.py).
+  claude    Claude on Bedrock through the same adapter: Claude Sonnet 5.5, or the model in COORDINATOR_MODEL
+            (Claude is blocked on this AWS account for now)
+  fake      the Claude adapter with scripted replies and no network (test stand-in
+            that checks every request the way the Messages API would)
+  bedrock   any other Bedrock model through the Converse API, named by COORDINATOR_MODEL (GLM 5 when unset;
+            probes/coordinator_bench.py compares them)
+  nova      Amazon Nova 2 Lite on Bedrock (test stand-in that can call tools)
+  echo      repeats the caller (test stand-in for the audio path)
+The prep and the meta agent run on GLM 5 with anthropic (voice/prep.py prep_model).
 WORKER picks what runs delegated jobs:
   fake     pretends to work for a few seconds (test stand-in, the default)
   search   one Nova Web Grounding search per job, with sources (test stand-in, costs about 0.03 USD a job)
@@ -37,6 +43,7 @@ import shutil
 import time
 from pathlib import Path
 
+import anthropic
 import boto3
 from dotenv import load_dotenv
 from livekit import rtc
@@ -58,9 +65,10 @@ from voice.coordinator import BeeCoordinator, Coordinator
 from voice.dispatch import AGENT_NAME, RING_SECONDS, declined
 from voice.echo_llm import EchoLLM
 from voice.fake_claude import FakeAnthropic
+from voice.fallback_llm import FirstRequestFallback
 from voice.language import CallLanguage, call_language
 from voice.people import People, dev_person
-from voice.prep import INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_model
+from voice.prep import GLM_5, INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_model
 from voice.recorder import CallRecorder
 from voice.ringback import STATE_ATTRIBUTE, ring_back
 from voice.voices import make_tts, voice_choice
@@ -77,7 +85,11 @@ COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
 # For COORDINATOR_LLM=bedrock. GLM 5 speaks while it calls a tool. MiniMax M2.5 scored best in
 # probes/coordinator_bench.py (2026-10-12) but calls tools without a word, and in the first real
 # call (2026-10-13) the caller heard silence for 23-28 s whenever they kept talking meanwhile.
-COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "zai.glm-5")
+COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", GLM_5)
+HAIKU = "claude-haiku-5-5"  # COORDINATOR_LLM=anthropic when COORDINATOR_MODEL is unset; no prefix on Anthropic's API
+# Anthropic's API, as the call AI uses it: the SDK does not retry (a failed first request goes to GLM 5 at once, and
+# LiveKit retries later ones); no route to it shows within 3 s.
+ANTHROPIC_TIMEOUT = anthropic.Timeout(20.0, connect=3.0)
 WORKER = os.environ.get("WORKER", "fake")
 # A call the user started rings until the AI's voice starts, and at most this long after the caller is in the
 # room: the opening is ready within OPENING_BY_S (6 s) and the voice takes about 2 s more (BC-025).
@@ -116,7 +128,9 @@ def transcribe_credentials(session: boto3.Session | None) -> Credentials | None:
                        session_token=creds.token)
 
 
-def make_llm(rec: CallRecorder) -> llm.LLM:
+def make_llm(rec: CallRecorder, language: CallLanguage) -> llm.LLM:
+    if COORDINATOR_LLM == "anthropic":
+        return claude_with_glm_standing_by(rec, language)
     if COORDINATOR_LLM == "echo":
         return EchoLLM()
     if COORDINATOR_LLM == "nova":
@@ -130,6 +144,37 @@ def make_llm(rec: CallRecorder) -> llm.LLM:
         client = FakeAnthropic(first_delay=0.7, word_delay=0.03, log_path=rec.dir / "fake-claude.jsonl")
         return ClaudeBedrockLLM(client=client, on_event=rec.event)
     raise SystemExit(f"unknown COORDINATOR_LLM {COORDINATOR_LLM!r}")
+
+
+def anthropic_client(**options) -> anthropic.AsyncAnthropic:
+    """Anthropic's own API (tests put a fake here)."""
+    return anthropic.AsyncAnthropic(**options)
+
+
+def claude_with_glm_standing_by(rec: CallRecorder, language: CallLanguage) -> llm.LLM:
+    """COORDINATOR_LLM=anthropic: Claude Haiku 5.5 on Anthropic's own API, GLM 5 on Bedrock standing by. The record's
+    coordinator_model event names the model that answered the call, and why it is not Claude when it is not."""
+    def glm() -> llm.LLM:
+        return aws.LLM(model=GLM_5, region=BEDROCK_REGION)
+
+    claude_model = os.environ.get("COORDINATOR_MODEL") or HAIKU
+
+    def chosen(model: llm.LLM, reason: str | None) -> None:
+        rec.event("coordinator_model", model=model.model, provider=model.provider,
+                  **({"instead_of": claude_model, "reason": reason} if reason else {}))
+
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        model = glm()
+        chosen(model, "ANTHROPIC_API_KEY is not set")
+        return model
+    client = anthropic_client(api_key=key, max_retries=0, timeout=ANTHROPIC_TIMEOUT)
+    # Thinking off for speed (Claude Haiku 5.5 takes "disabled" at effort high or below); one effort per call.
+    claude = ClaudeBedrockLLM(client=client, model=claude_model,
+                              thinking=os.environ.get("COORDINATOR_THINKING", "disabled"),
+                              effort=os.environ.get("COORDINATOR_EFFORT", "low"), auto_cache=True,
+                              refusal_line=language.refusal, on_event=rec.event)
+    return FirstRequestFallback(claude, glm, on_choice=chosen)
 
 
 def as_dict(obj):
@@ -389,7 +434,7 @@ def make_session(ctx: JobContext, language: CallLanguage, tts_voice, rec: CallRe
     ctx.proc.userdata["transcribe_credentials"] = transcribe_credentials(ctx.proc.userdata["aws"])
     return AgentSession(
         stt=aws.STT(region=REGION, language=language.transcribe, credentials=ctx.proc.userdata["transcribe_credentials"]),
-        llm=make_llm(rec),
+        llm=make_llm(rec, language),
         tts=make_tts(tts_voice, language, REGION),
         vad=ctx.proc.userdata["vad"],
         # Named rather than left to LiveKit's defaults, which follow the launch mode: `dev` (a Mac) picks LiveKit's
@@ -632,11 +677,12 @@ async def run_call(ctx: JobContext, people: People) -> None:
             rec.close()
             shutil.rmtree(rec.dir, ignore_errors=True)
             return
-        if isinstance(session.llm, ClaudeBedrockLLM):
-            session.llm.settle()  # a last reply may still be waiting to be committed
+        claude = getattr(session.llm, "active", session.llm)  # behind GLM 5 standing by, the model that answered
+        if isinstance(claude, ClaudeBedrockLLM):
+            claude.settle()  # a last reply may still be waiting to be committed
             # Exactly what Claude was sent, for checking a call afterwards.
             (rec.dir / "claude-history.json").write_text(json.dumps(
-                {"system": session.llm.system_prompt, "messages": session.llm.history}, ensure_ascii=False, indent=1))
+                {"system": claude.system_prompt, "messages": claude.history}, ensure_ascii=False, indent=1))
         write_usage(rec, session)
         rec.close()
         # The meta agent looks at every call once it is over (meta/agent.py).
