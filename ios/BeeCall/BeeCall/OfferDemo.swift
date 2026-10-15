@@ -16,7 +16,8 @@ enum OfferDemo {
         private let offer: [String: Any]
         private var cancelled = false
 
-        init(language: String = AppSettings(.standard).language, now: Date = .now, zone: TimeZone = .current) {
+        init(language: String = AppSettings(.standard).language, now: Date = .now, zone: TimeZone = .current,
+             topic: String? = nil) {
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = zone
             var at = calendar.date(bySettingHour: 19, minute: 0, second: 0, of: now) ?? now
@@ -24,7 +25,7 @@ enum OfferDemo {
             let iso = ISO8601DateFormatter()
             iso.timeZone = zone // written on the person's clock, as the server writes call_at
             offer = ["id": "20261015-183000-demo", "state": "booked", "source": "call", "kind": NSNull(),
-                     "topic": language == "ko" ? "토요일 등산 계획" : "Saturday hike plan",
+                     "topic": topic ?? (language == "ko" ? "토요일 등산 계획" : "Saturday hike plan"),
                      "suggested_at": NSNull(), "suggested_epoch": NSNull(),
                      "call_at": iso.string(from: at), "call_epoch": Int(at.timeIntervalSince1970)]
         }
