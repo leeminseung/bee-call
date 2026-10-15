@@ -326,6 +326,29 @@ def test_at_a_limit_beside_a_server_tool_still_waiting_only_the_tool_results_go_
     assert third["tool_choice"] == {"type": "none"} and "web searches" in third["messages"][-1]["content"][-1]["text"]
 
 
+def test_a_limit_put_off_once_cuts_a_turn_whose_server_tool_still_waits(tmp_path, monkeypatch):
+    """Seen in the real-API limit probe of 2026-10-15: with dynamic filtering Claude's searches run in code execution,
+    and nearly every turn leaves a code execution call waiting beside our tools, so putting the limit off kept putting
+    it off. After one such request the turn is cut where its server tools finished (our tool calls stay, with their
+    results) and the answer is asked for."""
+    monkeypatch.setattr(claude, "JOB_WEB_SEARCHES", 3)
+    code = {"type": "server_tool_use", "id": "srvtoolu_5", "name": "code_execution", "input": {"code": "search()"}}
+    again = {"type": "server_tool_use", "id": "srvtoolu_6", "name": "code_execution", "input": {"code": "more()"}}
+    client = api([reply([code, tool("toolu_1", "progress", text="Searching")], searches=3),
+                  reply([{"type": "code_execution_tool_result", "tool_use_id": "srvtoolu_5", "content": {
+                      "type": "code_execution_result", "stdout": "", "stderr": "", "return_code": 0, "content": []}},
+                         again, tool("toolu_2", "progress", text="Writing")], searches=2),
+                  reply([text("The Air.")], "end_turn")])
+    summary, _, _ = run(job_in(tmp_path, None), client)
+    assert summary == "The Air."
+    final = client.messages.sent[-1]
+    assert final["tool_choice"] == {"type": "none"}
+    cut = final["messages"][-2]
+    assert cut["role"] == "assistant" and "srvtoolu_6" not in json.dumps(cut) and "toolu_2" in json.dumps(cut)
+    assert [b["type"] for b in final["messages"][-1]["content"]] == ["tool_result", "text"]
+    assert usage_of(job_in(tmp_path, None))["limit"] == "web searches"
+
+
 def test_a_paused_turn_at_either_limit_still_ends_with_the_answer(tmp_path, monkeypatch):
     """Review of 2026-10-15, finding 3: a turn that paused (pause_turn) at the request or search limit skipped the
     request for the answer, so the job failed and its work was lost. Now the answer is asked for at either limit,

@@ -13,8 +13,9 @@ into the job folder under a free, safe name at once, and deletes it from Anthrop
 Background jobs need not be quick (the user, 2026-10-15): every request may write up to the role's max_tokens with
 thinking at effort high, a job may make MAX_REQUESTS requests and JOB_WEB_SEARCHES web searches, and at either limit,
 whatever the turn's stop, Claude is asked for its answer in one more request without tools (a paused turn is cut
-where its server tools finished first; a turn that left a server tool waiting beside our tools is continued first,
-as only tool results may follow it). So a job makes at most MAX_REQUESTS + LATE_LIMIT_REQUESTS + 1 requests. A request that fails midway (a dropped connection, an overloaded
+where its server tools finished first; a turn that left a server tool waiting beside our tools is continued once,
+as only tool results may follow it, and then cut too). So a job makes at most MAX_REQUESTS + LATE_LIMIT_REQUESTS + 1
+requests. A request that fails midway (a dropped connection, an overloaded
 or failing server) is tried again twice. What each request used goes into usage.json at once (tokens, cache reads and
 writes, server tool uses), so the day's budget counts a job that fails, or is cancelled when the call ends (then
 the request still running counts as an estimate), as well as one that finishes (voice/costs.py job_cost).
@@ -44,8 +45,8 @@ FETCHED_TOKENS = 30_000  # at most this much of one fetched page or PDF reaches 
 REQUEST_DEADLINE_S = 900.0
 REQUEST_IDLE_S = 300.0
 RETRY_WAITS_S = (15, 60)  # before each new try of a request that failed midway
-# Past a limit, a turn that also left a server tool waiting is continued without the note; at most this many times.
-LATE_LIMIT_REQUESTS = 5
+# Past a limit, a turn that also left a server tool waiting is continued without the note this many times, then cut.
+LATE_LIMIT_REQUESTS = 1
 
 SERVER_TOOLS: list[dict[str, Any]] = [
     # A search or fetch whose result code execution already filtered (dynamic filtering) is left out of the answer
@@ -139,7 +140,7 @@ class ClaudeWorker:
         container: str | None = None
         last = False  # the next request asks for the answer without tools
         outputs: dict[str, str] = {}  # file id -> what became of it
-        made = 0
+        made = late = 0  # requests made; requests the limit was put off for
         try:
             while True:
                 params = anthropic_api.ADAPTER.params(self.choice, SYSTEM_PROMPT, turns, CLIENT_TOOLS)
@@ -179,11 +180,14 @@ class ClaudeWorker:
                 write_usage(job, usage)
                 if limit and waiting(content):
                     # A server tool Claude called beside ours runs when our results go back, and then the message may
-                    # hold nothing else (a note would end the turn: refused with a 400). The limit applies next time.
-                    if made >= MAX_REQUESTS + LATE_LIMIT_REQUESTS:
-                        raise RuntimeError(f"the worker did not finish within {made} requests")
-                    turns.append(Turn("user", results=results))
-                    continue
+                    # hold nothing else (a note would end the turn: refused with a 400). The limit is put off once;
+                    # with dynamic filtering nearly every turn leaves code execution waiting, so the next time the
+                    # turn is cut where its server tools finished (our calls stay, with their results).
+                    late += 1
+                    if late <= LATE_LIMIT_REQUESTS:
+                        turns.append(Turn("user", results=results))
+                        continue
+                    turns[-1] = Turn("assistant", native=finished_part(content), native_provider=anthropic_api.PROVIDER)
                 turns.append(Turn("user", text=LIMIT_NOTE.format(what=limit) if limit else "", results=results))
                 last = bool(limit)
                 if limit:
