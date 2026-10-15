@@ -1,23 +1,30 @@
 import SwiftUI
 import UIKit
 
-/// Design D, frame 8: the home's gear opens this sheet. "목소리" and "언어" open the first run's own lists; the last
-/// row opens the Bee Call page of the iOS Settings app, which keeps the other switches (evening call time, saving
-/// call audio, Bee, the call model). Language belongs to the app: once design D is the app, the Settings app's
-/// page drops its language row, so one place sets it.
+/// Design D, frame 8: the home's gear opens this sheet. "목소리" and "언어" open the first run's own lists, and each
+/// pick goes to the server at once (PUT /settings); the last row opens the Bee Call page of the iOS Settings app,
+/// which keeps the other switches (evening call time, saving call audio, Bee, the call model). The language and the
+/// voice belong to the app: the Settings app has no language row (contract section 6).
 struct SettingsSheet: View {
-    let catalog: any VoiceCatalog
+    let person: PersonStore
+    let catalog: VoiceCatalog
     let preview: VoicePreview
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
-    @AppStorage("language") private var language = "en"
-    @AppStorage(FirstRun.voiceKey) private var voice = ""
+    @AppStorage("language") private var appLanguage = "en"
+    @State private var picked: CallLanguage?
+    @State private var pickedVoice: String?
 
-    private var korean: Bool { language == "ko" }
+    private var language: CallLanguage {
+        picked ?? person.me?.settings.language ?? CallLanguage(rawValue: appLanguage) ?? .en
+    }
+
+    private var korean: Bool { language == .ko }
     private var words: SettingsWords { SettingsWords(korean: korean) }
     private var listWords: FirstRunWords { FirstRunWords(korean: korean) }
-    private var callLanguage: CallLanguage { CallLanguage(rawValue: language) ?? .en }
-    private var voices: [CallVoice] { catalog.voices(for: callLanguage) }
+    private var voice: Voice? {
+        VoiceChoice.effective(stored: pickedVoice ?? person.me?.settings.voice, in: catalog.voices[language] ?? [])
+    }
 
     var body: some View {
         NavigationStack {
@@ -26,15 +33,17 @@ struct SettingsSheet: View {
                     NavigationLink {
                         voiceList
                     } label: {
-                        LabeledContent(words.voice, value: words.voiceValue(VoiceChoice.effective(stored: voice, in: voices)))
+                        LabeledContent(words.voice, value: words.voiceValue(voice))
                     }
                     NavigationLink {
                         languageList
                     } label: {
-                        LabeledContent(words.language, value: callLanguage.name)
+                        LabeledContent(words.language, value: language.name)
                     }
                 } header: {
                     Text(words.calls)
+                } footer: {
+                    ProblemLine(problem: person.problem, words: listWords)
                 }
                 Section {
                     Button {
@@ -68,14 +77,21 @@ struct SettingsSheet: View {
         }
         .tint(BeeStyle.ink)
         .presentationDragIndicator(.visible)
+        .task(id: language) { await catalog.load(language) }
     }
 
     private var voiceList: some View {
         List {
             Section {
-                VoiceRows(voices: voices, picked: $voice, preview: preview, words: listWords)
+                VoicesSection(language: language, catalog: catalog, picked: pickedVoice ?? person.me?.settings.voice,
+                          preview: preview, words: listWords) { voice in
+                    pickedVoice = voice.id
+                    Task { if await !person.choose(voice: voice.id) { pickedVoice = nil } }
+                }
             } header: {
-                Text(listWords.voices)
+                Text(listWords.voices(language))
+            } footer: {
+                ProblemLine(problem: person.problem, words: listWords)
             }
         }
         .navigationTitle(words.voice)
@@ -85,7 +101,18 @@ struct SettingsSheet: View {
     private var languageList: some View {
         List {
             Section {
-                LanguageRows(language: $language)
+                LanguageRows(selected: language) { language in
+                    picked = language
+                    pickedVoice = nil
+                    appLanguage = language.rawValue
+                    Task {
+                        guard await !person.choose(language: language) else { return }
+                        picked = nil
+                        appLanguage = self.language.rawValue
+                    }
+                }
+            } footer: {
+                ProblemLine(problem: person.problem, words: listWords)
             }
         }
         .navigationTitle(words.language)
@@ -111,8 +138,8 @@ struct SettingsWords {
                 + "page of the iOS Settings app."
     }
 
-    /// The voice row's value: "하린 · 친근함"; nothing while there are no voices.
-    func voiceValue(_ voice: CallVoice?) -> String {
-        voice.map { "\($0.name) · \($0.manner)" } ?? ""
+    /// The voice row's value: its own name and how it sounds, "하린 · 친근함"; nothing while there are no voices.
+    func voiceValue(_ voice: Voice?) -> String {
+        voice.map { "\($0.name) · \(korean ? $0.character.ko : $0.character.en)" } ?? ""
     }
 }

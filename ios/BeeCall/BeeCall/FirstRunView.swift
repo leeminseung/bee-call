@@ -2,26 +2,35 @@ import SwiftUI
 
 /// Design D, frame 7: the first run, in the iOS Settings look. Step 1 picks the call language (the check at the
 /// end of the picked row, as in iOS's language list), step 2 the voice (the check in front, as in Accessibility's
-/// voice list), with a yellow button that plays each voice for 5 seconds.
+/// voice list), with a yellow button that plays each voice for 5 seconds. Each pick goes to the server at once;
+/// the screens' words follow the language picked.
 struct FirstRunView: View {
     enum Step: Hashable { case voice }
 
-    let catalog: any VoiceCatalog
+    let person: PersonStore
+    let catalog: VoiceCatalog
     let preview: VoicePreview
     let done: () -> Void
     @State private var path: [Step]
-    @AppStorage("language") private var language = "en"
-    @AppStorage(FirstRun.voiceKey) private var voice = ""
+    @State private var picked: CallLanguage? // the language tapped, before the server's answer
+    @State private var pickedVoice: String? // the voice tapped, before the server's answer
+    @AppStorage("language") private var appLanguage = "en"
+    @AppStorage(FirstRun.doneKey) private var finished = false
 
-    init(catalog: any VoiceCatalog, preview: VoicePreview, startOn step: Step? = nil, done: @escaping () -> Void) {
+    init(person: PersonStore, catalog: VoiceCatalog, preview: VoicePreview, startOn step: Step? = nil,
+         done: @escaping () -> Void) {
+        self.person = person
         self.catalog = catalog
         self.preview = preview
         self.done = done
         _path = State(initialValue: step.map { [$0] } ?? [])
     }
 
-    private var words: FirstRunWords { FirstRunWords(korean: language == "ko") }
-    private var voices: [CallVoice] { catalog.voices(for: CallLanguage(rawValue: language) ?? .en) }
+    private var language: CallLanguage {
+        picked ?? FirstRun.language(me: person.me, preferred: Locale.preferredLanguages)
+    }
+
+    private var words: FirstRunWords { FirstRunWords(korean: language == .ko) }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -29,56 +38,95 @@ struct FirstRunView: View {
                 .navigationDestination(for: Step.self) { _ in voiceStep }
         }
         .tint(BeeStyle.ink)
-        .task {
-            let written = UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "")?["language"]
-            FirstRun.start(.standard, written: written as? String, preferred: Locale.preferredLanguages)
-        }
     }
 
     private var languageStep: some View {
         List {
             Section {
-                LanguageRows(language: $language)
+                LanguageRows(selected: language, pick: pick)
             } header: {
                 StepHeader(orb: true, step: words.step(1), title: words.languageTitle, lead: words.languageLead)
+            } footer: {
+                ProblemLine(problem: person.problem, words: words)
             }
         }
         .toolbar(.hidden, for: .navigationBar)
         .navigationTitle(words.languageBack) // the back button's name on step 2
         .safeAreaInset(edge: .bottom) {
-            StepFooter(page: 0, button: words.next) { path = [.voice] }
+            StepFooter(page: 0, button: words.next) {
+                let shown = language
+                Task { // a language shown but never sent (GET /me had not come) goes out now
+                    if person.me?.settings.language != shown { _ = await person.choose(language: shown) }
+                }
+                path = [.voice]
+            }
         }
     }
 
     private var voiceStep: some View {
         List {
             Section {
-                VoiceRows(voices: voices, picked: $voice, preview: preview, words: words)
+                VoicesSection(language: language, catalog: catalog, picked: pickedVoice ?? person.me?.settings.voice,
+                          preview: preview, words: words, pick: pick)
             } header: {
                 StepHeader(orb: false, step: words.step(2), title: words.voiceTitle, lead: words.voiceLead,
-                           group: words.voices)
+                           group: words.voices(language))
+            } footer: {
+                ProblemLine(problem: person.problem, words: words)
             }
         }
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) {
             StepFooter(page: 1, button: words.start) {
                 preview.stop()
-                FirstRun.finish(.standard, voice: VoiceChoice.effective(stored: voice, in: voices))
+                finished = true
                 done()
             }
         }
         .onDisappear { preview.stop() }
     }
+
+    private func pick(_ language: CallLanguage) {
+        picked = language
+        pickedVoice = nil
+        appLanguage = language.rawValue // the words follow at once
+        Task {
+            guard await !person.choose(language: language) else { return }
+            picked = nil // not saved: back to what the server holds
+            appLanguage = self.language.rawValue
+        }
+    }
+
+    private func pick(_ voice: Voice) {
+        pickedVoice = voice.id
+        Task {
+            if await !person.choose(voice: voice.id) { pickedVoice = nil }
+        }
+    }
+}
+
+/// A pick the server did not take, under the list.
+struct ProblemLine: View {
+    let problem: String?
+    let words: FirstRunWords
+
+    var body: some View {
+        if let problem {
+            Text(words.notSaved(problem))
+                .foregroundStyle(BeeStyle.red)
+        }
+    }
 }
 
 /// The two languages, the picked one with a check at its end.
 struct LanguageRows: View {
-    @Binding var language: String
+    let selected: CallLanguage
+    let pick: (CallLanguage) -> Void
 
     var body: some View {
         ForEach(CallLanguage.choices) { option in
-            let picked = option.rawValue == language
-            Button { language = option.rawValue } label: {
+            let picked = option == selected
+            Button { pick(option) } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(option.name)
@@ -102,19 +150,50 @@ struct LanguageRows: View {
     }
 }
 
-/// The voices of the call language, the picked one with a check in front, each with its 5-second sample.
-struct VoiceRows: View {
-    let voices: [CallVoice]
-    @Binding var picked: String
+/// A language's voices from GET /voices, any number of them, or why they are not there.
+struct VoicesSection: View {
+    let language: CallLanguage
+    let catalog: VoiceCatalog
+    let picked: String?
     let preview: VoicePreview
     let words: FirstRunWords
+    let pick: (Voice) -> Void
 
     var body: some View {
-        let shown = VoiceChoice.effective(stored: picked, in: voices)
+        Group {
+            if let voices = catalog.voices[language] {
+                VoiceRows(voices: voices, picked: VoiceChoice.effective(stored: picked, in: voices)?.id,
+                          preview: preview, words: words, pick: pick)
+            } else if catalog.failed.contains(language) {
+                HStack {
+                    Text(words.voicesFailed)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(words.tryAgain) { Task { await catalog.load(language) } }
+                        .buttonStyle(.borderless)
+                }
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .task(id: language) { await catalog.load(language) }
+    }
+}
+
+/// The voices of the call language, the picked one with a check in front, each with its 5-second sample.
+struct VoiceRows: View {
+    let voices: [Voice]
+    let picked: String?
+    let preview: VoicePreview
+    let words: FirstRunWords
+    let pick: (Voice) -> Void
+
+    var body: some View {
         ForEach(voices) { voice in
-            let isPicked = voice == shown, playing = preview.playing == voice.id
+            let isPicked = voice.id == picked, playing = preview.playing == voice.id
             HStack(spacing: 10) {
-                Button { picked = voice.id } label: {
+                Button { pick(voice) } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "checkmark")
                             .font(.body.weight(.semibold))

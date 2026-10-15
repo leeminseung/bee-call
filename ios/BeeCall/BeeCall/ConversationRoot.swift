@@ -10,7 +10,8 @@ struct ConversationRoot: View {
     let source: any ConversationSource
     let offers: OfferCenter
     let status: String
-    let voices: any VoiceCatalog & VoiceSamples
+    let person: PersonStore
+    let catalog: VoiceCatalog
     @State private var presentation: CallPresentation
     @State private var preview: VoicePreview
     @State private var settingsOpen = false // the gear's sheet (frame 8)
@@ -23,15 +24,16 @@ struct ConversationRoot: View {
     @State private var jump: String?
     @Namespace private var zoom
 
-    init(calls: CallManager, source: any ConversationSource, offers: OfferCenter, status: String,
-         voices: any VoiceCatalog & VoiceSamples, presentation: CallPresentation = CallPresentation()) {
+    init(calls: CallManager, source: any ConversationSource, offers: OfferCenter, status: String, person: PersonStore,
+         catalog: VoiceCatalog, samples: any VoiceSamples, presentation: CallPresentation = CallPresentation()) {
         self.calls = calls
         self.source = source
         self.offers = offers
         self.status = status
-        self.voices = voices
+        self.person = person
+        self.catalog = catalog
         _presentation = State(initialValue: presentation)
-        _preview = State(initialValue: VoicePreview(samples: voices))
+        _preview = State(initialValue: VoicePreview(samples: samples))
     }
 
     var body: some View {
@@ -52,7 +54,7 @@ struct ConversationRoot: View {
                     .zoomTransition("call", in: zoom)
             }
             .sheet(isPresented: $settingsOpen, onDismiss: { sheetUp = false }) {
-                SettingsSheet(catalog: voices, preview: preview)
+                SettingsSheet(person: person, catalog: catalog, preview: preview)
             }
             .sheet(item: $opened, onDismiss: continueOpenedCall) { call in
                 CallSheet(callID: call.id, source: source, canContinue: !calls.isInCall) {

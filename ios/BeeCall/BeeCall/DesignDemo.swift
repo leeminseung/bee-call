@@ -43,31 +43,15 @@ enum DesignDemo: String {
     }
 }
 
-/// The first run's voices before the server has any: the design's five Korean names, which are provisional, and
-/// five English ones made up for the demo. Nothing plays.
-struct DemoVoices: VoiceCatalog, VoiceSamples {
-    func voices(for language: CallLanguage) -> [CallVoice] {
-        let voices: [(String, String, String)] = switch language {
-        case .ko: [("harin", "하린", "친근함"), ("seojun", "서준", "차분함"), ("daon", "다온", "또렷함"),
-                   ("narae", "나래", "밝음"), ("doyun", "도윤", "낮고 안정적")]
-        case .en, .unrecognized: [("ava", "Ava", "Warm"), ("ethan", "Ethan", "Calm"), ("nora", "Nora", "Clear"),
-                   ("lily", "Lily", "Bright"), ("owen", "Owen", "Low and steady")]
-        }
-        return voices.map { CallVoice(id: $0.0, name: $0.1, manner: $0.2) }
-    }
-
-    func play(_ voice: CallVoice) {}
-    func stop() {}
-}
-
 /// One frame of design D, with the contract's example content.
 struct DesignDemoView: View {
     let demo: DesignDemo
     let calls: CallManager
     @State private var examples: ContractExamples
     @State private var data: ThreadData
+    @State private var catalog: VoiceCatalog
+    @State private var preview: VoicePreview
     @State private var presentation = CallPresentation()
-    @State private var preview = VoicePreview(samples: DemoVoices())
     @State private var jump: String?
 
     init(demo: DesignDemo, calls: CallManager) {
@@ -77,7 +61,10 @@ struct DesignDemoView: View {
         let server = ServerClient(transport: examples)
         _examples = State(initialValue: examples)
         _data = State(initialValue: ThreadData(calls: calls, store: CallStore(server: server),
-                                               offers: OfferCenter(server: server), person: PersonStore(server: server)))
+                                               offers: OfferCenter(server: server),
+                                               person: PersonStore(server: server, store: DesignDemo.store)))
+        _catalog = State(initialValue: VoiceCatalog(server: server))
+        _preview = State(initialValue: VoicePreview(samples: SamplePlayer(callIsOn: { calls.callIsOn })))
     }
 
     var body: some View {
@@ -97,17 +84,21 @@ struct DesignDemoView: View {
             }
         case .settings:
             home.sheet(isPresented: .constant(true)) {
-                SettingsSheet(catalog: DemoVoices(), preview: preview)
+                SettingsSheet(person: data.person, catalog: catalog, preview: preview)
             }
         case .firstRun, .firstRunVoice:
-            FirstRunView(catalog: DemoVoices(), preview: preview, startOn: demo == .firstRunVoice ? .voice : nil) {}
+            FirstRunView(person: data.person, catalog: catalog, preview: preview,
+                         startOn: demo == .firstRunVoice ? .voice : nil) {}
                 .task {
+                    await data.person.refresh()
                     guard demo == .firstRunVoice else { return }
+                    await catalog.load(.ko)
                     try? await Task.sleep(for: .milliseconds(800))
-                    if let daon = DemoVoices().voices(for: .ko).first(where: { $0.id == "daon" }) { preview.toggle(daon) }
+                    if let daon = catalog.voices[.ko]?.first(where: { $0.id == "ko-daon" }) { preview.toggle(daon) }
                 }
         case .call, .conversation, .live, .result, .resultConversation:
-            ConversationRoot(calls: calls, source: data, offers: data.offers, status: "", voices: DemoVoices(),
+            ConversationRoot(calls: calls, source: data, offers: data.offers, status: "", person: data.person,
+                             catalog: catalog, samples: SamplePlayer(callIsOn: { calls.callIsOn }),
                              presentation: presentation)
                 .task { await playLiveCall() }
         }

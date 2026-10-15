@@ -5,12 +5,11 @@ import XCTest
 /// Design D, frame 8: the home's gear opens a settings sheet in the app: the voice and the language, which open the
 /// first run's lists, and a row that opens the Bee Call page of the iOS Settings app for the other switches.
 final class SettingsSheetTests: XCTestCase {
-    private let harin = CallVoice(id: "harin", name: "하린", manner: "친근함")
-
-    @MainActor func testTheRowsSayWhatIsPicked() {
-        let ko = SettingsWords(korean: true)
-        XCTAssertEqual(ko.voiceValue(harin), "하린 · 친근함")
-        XCTAssertEqual(ko.voiceValue(nil), "", "no voices yet: the row shows no value")
+    @MainActor func testTheRowsSayWhatIsPicked() throws {
+        let harin = try XCTUnwrap(try Contract.decode(VoiceList.self, from: ContractTests.example("voices")).voices.first)
+        XCTAssertEqual(SettingsWords(korean: true).voiceValue(harin), "하린 · 친근함")
+        XCTAssertEqual(SettingsWords(korean: false).voiceValue(harin), "하린 · Friendly", "the voice's own name")
+        XCTAssertEqual(SettingsWords(korean: true).voiceValue(nil), "", "no voices yet: the row shows no value")
         XCTAssertEqual(CallLanguage.ko.name, "한국어")
     }
 

@@ -2,26 +2,25 @@ import Foundation
 import Observation
 
 /// Design D, frame 7: the first run, shown once before the home. Step 1 picks the call language, step 2 the voice
-/// heard on calls, each from a list in the iOS Settings look. The settings sheet (frame 8) opens the same lists.
-/// The language is the app's "language" setting, which goes to the server with the others (SettingsSync); the
-/// voice is kept on the phone until the server's contract says how it travels.
+/// heard on calls, each from a list in the iOS Settings look; the settings sheet (frame 8) opens the same lists. Both
+/// belong to the app after D (contract section 6): each pick goes to the server at once (PUT /settings,
+/// PersonStore), and the server's GET /me says what is picked. Only "the first run is over" stays on the phone.
 enum FirstRun {
     static let doneKey = "first_run_done"
-    static let voiceKey = "voice"
 
     static func isNeeded(_ store: UserDefaults) -> Bool {
         !store.bool(forKey: doneKey)
     }
 
-    /// Writes the language the first run starts on (CallLanguage.initial), so its screens and the server follow
-    /// it at once.
-    static func start(_ store: UserDefaults, written: String?, preferred: [String]) {
-        store.set(CallLanguage.initial(written: written, preferred: preferred).rawValue, forKey: "language")
+    /// The language the first run starts on: the one the server holds for the person; before GET /me has come, the
+    /// phone's own.
+    static func language(me: Me?, preferred: [String]) -> CallLanguage {
+        if let language = me?.settings.language, language != .unrecognized { return language }
+        return CallLanguage.initial(written: nil, preferred: preferred)
     }
 
-    /// "시작하기": the voice shown as picked is the one kept, and the first run is over for good.
-    static func finish(_ store: UserDefaults, voice: CallVoice?) {
-        if let voice { store.set(voice.id, forKey: voiceKey) }
+    /// "시작하기": the first run is over for good.
+    static func finish(_ store: UserDefaults) {
         store.set(true, forKey: doneKey)
     }
 }
@@ -62,79 +61,6 @@ enum CallLanguage: String, ContractValue, Identifiable {
     }
 }
 
-/// A voice for calls: a name and a few words on how it sounds, such as 하린, 친근함.
-struct CallVoice: Identifiable, Equatable {
-    let id: String
-    let name: String
-    let manner: String
-}
-
-/// Where the voices of a language come from: the server, once its contract is in.
-protocol VoiceCatalog {
-    func voices(for language: CallLanguage) -> [CallVoice]
-}
-
-/// Plays and stops a voice's sample. The server will hold the samples; until then nothing plays.
-protocol VoiceSamples {
-    func play(_ voice: CallVoice)
-    func stop()
-}
-
-enum VoiceChoice {
-    /// The voice shown as picked: the stored one when it is in the list, else the list's first (nothing stored
-    /// yet, or a voice of the other language after the language changed).
-    static func effective(stored: String, in voices: [CallVoice]) -> CallVoice? {
-        voices.first { $0.id == stored } ?? voices.first
-    }
-}
-
-/// The one sample playing in a voice list: the yellow button plays a voice for 5 seconds, or stops it.
-@Observable
-final class VoicePreview {
-    private(set) var playing: String?
-    private var startedAt: Date?
-    @ObservationIgnored private let samples: any VoiceSamples
-    @ObservationIgnored private let length: Duration
-    @ObservationIgnored private var ending: Task<Void, Never>?
-
-    init(samples: any VoiceSamples, length: Duration = .seconds(5)) {
-        self.samples = samples
-        self.length = length
-    }
-
-    /// Plays the voice's sample, stopping any other; on the voice that is playing, stops it.
-    func toggle(_ voice: CallVoice, now: Date = .now) {
-        let wasPlaying = playing == voice.id
-        stop()
-        guard !wasPlaying else { return }
-        playing = voice.id
-        startedAt = now
-        samples.play(voice)
-        ending = Task { [weak self, length] in
-            try? await Task.sleep(for: length)
-            guard !Task.isCancelled else { return }
-            self?.stop()
-        }
-    }
-
-    /// Stops the sample, as at its end or when the list goes away.
-    func stop() {
-        ending?.cancel()
-        ending = nil
-        guard playing != nil else { return }
-        samples.stop()
-        playing = nil
-        startedAt = nil
-    }
-
-    /// How much of the sample has played, 0 to 1: the ring around the stop button.
-    func progress(at now: Date) -> Double {
-        guard let startedAt else { return 0 }
-        let seconds = Double(length.components.seconds) + Double(length.components.attoseconds) / 1e18
-        return min(max(now.timeIntervalSince(startedAt) / seconds, 0), 1)
-    }
-}
-
 /// The first run's words, in the call language.
 struct FirstRunWords {
     let korean: Bool
@@ -151,15 +77,28 @@ struct FirstRunWords {
         korean ? "통화에서 들을 목소리를 고르세요. 노란 버튼을 누르면 5초 동안 들려 드려요."
             : "Pick the voice you hear on calls. The yellow button plays it for 5 seconds."
     }
-    var voices: String { korean ? "한국어 목소리" : "English voices" }
+    /// The list's name: its language's voices.
+    func voices(_ language: CallLanguage) -> String {
+        switch (language, korean) {
+        case (.ko, true): "한국어 목소리"
+        case (_, true): "영어 목소리"
+        case (.ko, false): "Korean voices"
+        case (_, false): "English voices"
+        }
+    }
+
+    var voicesFailed: String { korean ? "목소리를 불러오지 못했어요." : "The voices could not be loaded." }
+    var tryAgain: String { korean ? "다시 시도" : "Try again" }
+    func notSaved(_ problem: String) -> String { korean ? "저장하지 못했어요: \(problem)" : "Not saved: \(problem)" }
     var next: String { korean ? "다음" : "Next" }
     var start: String { korean ? "시작하기" : "Get started" }
 
-    /// The line under a voice's name: how it sounds, and whether its sample is playing.
-    func manner(_ voice: CallVoice, playing: Bool) -> String {
-        playing ? "\(voice.manner) · \(korean ? "듣는 중" : "playing")" : voice.manner
+    /// The line under a voice's name: how it sounds, in the app's language, and whether its sample is playing.
+    func manner(_ voice: Voice, playing: Bool) -> String {
+        let character = korean ? voice.character.ko : voice.character.en
+        return playing ? "\(character) · \(korean ? "듣는 중" : "playing")" : character
     }
 
-    func play(_ voice: CallVoice) -> String { korean ? "\(voice.name) 5초 들어 보기" : "Hear \(voice.name) for 5 seconds" }
-    func stop(_ voice: CallVoice) -> String { korean ? "\(voice.name) 멈추기" : "Stop \(voice.name)" }
+    func play(_ voice: Voice) -> String { korean ? "\(voice.name) 5초 들어 보기" : "Hear \(voice.name) for 5 seconds" }
+    func stop(_ voice: Voice) -> String { korean ? "\(voice.name) 멈추기" : "Stop \(voice.name)" }
 }
