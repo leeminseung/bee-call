@@ -36,11 +36,52 @@ TASK = ("지금 한국 애플 공식 홈페이지 기준으로 맥북 에어와 
 TITLE = "맥북 에어·프로 가격 비교"
 
 
+def traced(client, at) -> None:
+    """Prints the kind of each event the API streams (and a server tool's name as it starts), as it comes."""
+    original = client.messages.stream
+
+    class Traced:
+        def __init__(self, manager) -> None:
+            self.manager = manager
+
+        async def __aenter__(self):
+            self.stream = await self.manager.__aenter__()
+            return self
+
+        async def __aexit__(self, *exc):
+            return await self.manager.__aexit__(*exc)
+
+        def __aiter__(self):
+            async def events():
+                async for event in self.stream:
+                    kind = getattr(event, "type", "?")
+                    block = getattr(event, "content_block", None)
+                    if kind == "content_block_start":
+                        print(f"{at()}   {getattr(block, 'type', '?')} {getattr(block, 'name', '') or ''}".rstrip())
+                    elif kind in ("message_start", "message_delta", "message_stop"):
+                        print(f"{at()}   {kind}")
+                    yield event
+            return events()
+
+        async def get_final_message(self):
+            return await self.stream.get_final_message()
+
+    client.messages.stream = lambda **params: Traced(original(**params))
+
+
 async def main(args: argparse.Namespace) -> None:
     from voice import costs, model_catalog
     from worker.claude import ClaudeWorker
     from worker.runner import JobRunner
 
+    from worker import claude
+
+    if args.search_limit is not None:
+        claude.JOB_WEB_SEARCHES = args.search_limit
+    if args.deadline is not None:
+        claude.REQUEST_DEADLINE_S = args.deadline
+    if args.late_limit is not None:
+        claude.LATE_LIMIT_REQUESTS = args.late_limit
     choice = model_catalog.choice("worker")
     root = Path(args.keep) if args.keep else Path(tempfile.mkdtemp(prefix="claude-worker-"))
     call = root / datetime.now(SEOUL).strftime("%Y-%m-%d") / datetime.now(SEOUL).strftime("%H%M")
@@ -61,7 +102,10 @@ async def main(args: argparse.Namespace) -> None:
     async def notify(news) -> None:
         print(f"{at()} the coordinator hears: {news.status} {news.summary or news.error or ''}"[:400])
 
-    runner = JobRunner(call, emit, ClaudeWorker(choice), notify, clock=lambda: datetime.now(SEOUL))
+    worker = ClaudeWorker(choice)
+    if args.trace:
+        traced(worker.client(), at)
+    runner = JobRunner(call, emit, worker, notify, clock=lambda: datetime.now(SEOUL))
     job = runner.start(args.task, title=args.title, language=args.language)
     await asyncio.gather(*runner.tasks.values(), return_exceptions=True)
     took = time.monotonic() - started
@@ -71,7 +115,8 @@ async def main(args: argparse.Namespace) -> None:
           f"{usage['cache_write']:,}), output {usage['output_tokens']:,}; server tools {usage['server_tools']}"
           + (" (estimated in part)" if usage.get("estimated") else ""))
     print(f"cost as the budget counts it: {costs.job_cost(usage):.3f} USD")
-    print("seconds per request:", [step["request_s"] for step in usage["steps"]])
+    print("requests (seconds, stop):", [(step["request_s"], step.get("stop")) for step in usage["steps"]],
+          f"; asked for its answer at the limit of {usage['limit']}" if usage.get("limit") else "")
     print("files:")
     for path in sorted(job.dir.iterdir()):
         if path.is_file() and not path.name.startswith("."):
@@ -89,6 +134,13 @@ if __name__ == "__main__":
     parser.add_argument("--title", default=TITLE)
     parser.add_argument("--language", default="ko", choices=("ko", "en"))
     parser.add_argument("--keep", help="the folder to keep the job in (a new scratch folder by default)")
+    parser.add_argument("--search-limit", type=int, help="the job's web searches before it is asked for its answer "
+                        "(worker/claude.py JOB_WEB_SEARCHES), to see a job reach it")
+    parser.add_argument("--deadline", type=float, help="seconds a request may take before it is cut and tried again "
+                        "(worker/claude.py REQUEST_DEADLINE_S)")
+    parser.add_argument("--trace", action="store_true", help="print each streamed event's kind as it comes")
+    parser.add_argument("--late-limit", type=int, help="requests a limit is put off for while a server tool waits "
+                        "(worker/claude.py LATE_LIMIT_REQUESTS)")
     parser.add_argument("--env-file", type=Path, default=REPO / ".env.local")
     args = parser.parse_args()
     if not os.environ.get("ANTHROPIC_API_KEY"):
