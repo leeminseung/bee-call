@@ -1016,7 +1016,8 @@
         "record_on_phone",
         "time_zone",
         "bee",
-        "daily_budget_usd"
+        "daily_budget_usd",
+        "worker_model"
       ],
       "properties": {
         "language": {
@@ -1038,11 +1039,8 @@
           "description": "A voice id from GET /voices for the call language, or null for that language's default. Owner: the app."
         },
         "call_model": {
-          "enum": [
-            "haiku",
-            "sonnet"
-          ],
-          "description": "The call AI's model. Owner: iOS Settings."
+          "$ref": "#/$defs/model_id",
+          "description": "The call AI's model: an id from GET /models?role=call. Owner: the app (settings sheet)."
         },
         "call_time": {
           "type": "string",
@@ -1079,6 +1077,10 @@
           ],
           "deprecated": true,
           "description": "Server's operator only, being retired: the voice catalog names the provider. The app never reads it."
+        },
+        "worker_model": {
+          "$ref": "#/$defs/model_id",
+          "description": "The background worker's model: an id from GET /models?role=worker. Owner: the app (settings sheet)."
         }
       }
     },
@@ -1128,6 +1130,56 @@
         "default": {
           "type": "boolean",
           "description": "The language's default voice. Exactly one per language."
+        }
+      }
+    },
+    "model_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]{0,40}$",
+      "description": "A model choice's id in the server's model catalog (GET /models). Never a provider's own model id."
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "maker",
+        "description",
+        "default"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/model_id"
+        },
+        "name": {
+          "$ref": "#/$defs/text",
+          "description": "The model's name as shown: \"Claude Haiku 5.5\"."
+        },
+        "maker": {
+          "$ref": "#/$defs/text",
+          "description": "Who makes or runs it, as shown: \"Anthropic\", \"AWS\"."
+        },
+        "description": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ko",
+            "en"
+          ],
+          "properties": {
+            "ko": {
+              "$ref": "#/$defs/text"
+            },
+            "en": {
+              "$ref": "#/$defs/text"
+            }
+          },
+          "description": "One short line for this role, in Korean and in English."
+        },
+        "default": {
+          "type": "boolean",
+          "description": "The role's default. Exactly one per role."
         }
       }
     }

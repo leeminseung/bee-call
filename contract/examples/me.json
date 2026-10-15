@@ -4,6 +4,7 @@
     "language": "ko",
     "voice": "ko-harin",
     "call_model": "haiku",
+    "worker_model": "sonnet",
     "call_time": "20:30",
     "record_on_server": true,
     "record_on_phone": false,
