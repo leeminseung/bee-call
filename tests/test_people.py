@@ -95,6 +95,32 @@ def test_sign_ins_wait_for_approval_and_end_when_the_person_is_removed(tmp_path)
         people.new_session("jiwoo")
 
 
+def test_a_sign_in_is_never_approved_under_someone_else_s_id_by_a_slip(tmp_path, capsys):
+    """Server review finding 9: approving a newcomer's code "as matt", or as a removed person whose folder and Bee
+    login are still here, handed them that person's calls and Bee. The operator has to say it is the same person."""
+    from voice import people as people_module
+
+    people = People(tmp_path)
+    now = datetime(2026, 10, 15, 21, 0, tzinfo=SEOUL)
+    people.add("matt", apple_sub="matt.apple")
+    people.add("jiwoo", apple_sub="jiwoo.apple")
+    people.bee_dir("jiwoo").mkdir(parents=True)
+    people.remove("jiwoo")  # their folder and Bee login stay
+    for sub in ("stranger.apple", "newcomer.apple", "matt.ipad"):
+        people.sign_in(sub, None, now)
+    for sub, taken in (("stranger.apple", "matt"), ("newcomer.apple", "jiwoo")):
+        with pytest.raises(ValueError, match="same-person"):
+            people.approve(waiting_code(sub), taken)
+        with pytest.raises(SystemExit, match="same-person"):
+            people_module.main(["--data", str(tmp_path), "approve", waiting_code(sub), "--as", taken])
+    assert people.sign_in("stranger.apple", None, now) is None and people.sign_in("newcomer.apple", None, now) is None
+    assert people.ids() == ["matt"]
+    people_module.main(["--data", str(tmp_path), "approve", waiting_code("matt.ipad"), "--as", "matt", "--same-person"])
+    assert people.sign_in("matt.ipad", None, now) == "matt"  # Matt's second Apple id, on purpose
+    people.approve(waiting_code("newcomer.apple"), "dana")  # a new id is fine
+    assert people.sign_in("newcomer.apple", None, now) == "dana"
+
+
 # ---------- Sign in with Apple ----------
 
 def test_only_apple_tokens_made_for_this_app_and_this_request_sign_in():

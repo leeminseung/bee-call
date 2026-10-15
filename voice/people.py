@@ -18,7 +18,7 @@ Under the data root (BEE_CALL_DATA, default data/):
 Every request, call and tool works inside one person's folder, so one person's calls, Bee data and notes never
 reach another person's AI or screen.
 
-Run: uv run python -m voice.people list | waiting | approve CODE --as ID | add ID | remove ID
+Run: uv run python -m voice.people list | waiting | approve CODE --as ID [--same-person] | add ID | remove ID
                                   | set ID KEY VALUE | move WORKSPACE --to ID
 """
 
@@ -282,11 +282,22 @@ class People:
         return [dict(entry, sub=sub) for sub, entry in self._read("accounts.json").get("waiting", {}).items()
                 if isinstance(entry, dict)]
 
-    def approve(self, code: str, person: str) -> str:
-        """Approves the waiting sign-in with this code as `person`. Returns its Apple id."""
+    def approve(self, code: str, person: str, same_person: bool = False) -> str:
+        """Approves the waiting sign-in with this code as `person`. Returns its Apple id.
+
+        An id already approved, or one whose folder or Bee login is still here (a person removed earlier), is
+        refused unless `same_person` says the sign-in is that very person (a second Apple id of theirs): otherwise
+        a slip of the operator's would hand a newcomer someone else's calls and Bee login."""
         matches = [entry["sub"] for entry in self.waiting() if entry.get("code") == code.strip().upper()]
         if len(matches) != 1:
             raise ValueError(f"no single sign-in waits with code {code!r}")
+        if not same_person:
+            if self.known(person):
+                raise ValueError(f"{person} is already someone's id; choose another, or pass --same-person if this "
+                                 f"sign-in is {person} themselves")
+            if self.folder(person).exists() or self.bee_dir(person).exists():
+                raise ValueError(f"{person}'s folder or Bee login from before is still here; choose another id, or "
+                                 f"pass --same-person if this sign-in is {person} themselves")
         email = next(entry.get("email") for entry in self.waiting() if entry["sub"] == matches[0])
         self.add(person, apple_sub=matches[0], email=email)
         return matches[0]
@@ -437,6 +448,8 @@ def main(argv: list[str] | None = None) -> None:
     approve = sub.add_parser("approve", help="approve a waiting sign-in by the code the app shows")
     approve.add_argument("code")
     approve.add_argument("--as", dest="person", required=True, help="a short id for the person, like jiwoo")
+    approve.add_argument("--same-person", action="store_true",
+                         help="the id is already in use (or was), and this sign-in is that same person")
     add = sub.add_parser("add", help="approve a person for use from this Mac only (no Apple sign-in)")
     add.add_argument("person")
     remove = sub.add_parser("remove", help="take a person's access away (their folder stays)")
@@ -460,7 +473,10 @@ def main(argv: list[str] | None = None) -> None:
         for entry in people.waiting():
             print(f"{entry['code']}  since {entry.get('at')}  {entry.get('email') or '(email hidden)'}")
     elif args.command == "approve":
-        people.approve(args.code, args.person)
+        try:
+            people.approve(args.code, args.person, same_person=args.same_person)
+        except ValueError as exc:
+            sys.exit(str(exc))
         print(f"approved as {args.person}")
     elif args.command == "add":
         people.add(args.person)

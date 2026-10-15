@@ -39,7 +39,7 @@ The app signs in with Apple. A new person waits until you approve them; the app 
 
 ```bash
 uv run python -m voice.people waiting                 # sign-ins waiting, with their codes
-uv run python -m voice.people approve 7F3K2A --as jiwoo
+uv run python -m voice.people approve 7F3K2A --as jiwoo   # refused if jiwoo is (or was) someone's id; add --same-person for a second Apple id of the same person
 uv run python -m voice.people list                    # approved people and their settings
 uv run python -m voice.people set jiwoo daily_budget_usd 2
 uv run python -m voice.people remove jiwoo            # takes access away; the folder stays
