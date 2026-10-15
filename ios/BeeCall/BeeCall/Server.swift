@@ -120,19 +120,22 @@ final class Server {
 
     // MARK: - Signing in
 
-    /// A one-time value from the server, fetched before the Sign in with Apple button is tapped (its request
-    /// is made synchronously).
-    func prepare() async {
-        problem = await signIn.prepare() ? nil : "The server cannot be reached right now."
-    }
+    private static let unreachable = "The server cannot be reached right now."
 
-    /// For Apple's request: the nonce's SHA-256, which Apple puts into the identity token.
-    func hashedNonce() -> String {
-        signIn.hashForRequest()
+    /// While the sign-in screen shows and no one-time value is ready for the button (none yet, or the last one
+    /// went to Apple), fetches one, every 5 s while the server cannot be reached.
+    func prepareSignIn() async {
+        while !signIn.isReady, !Task.isCancelled {
+            if await signIn.prepare() {
+                if problem == Self.unreachable { problem = nil }
+            } else {
+                problem = Self.unreachable
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
     }
 
     func finish(_ result: Result<ASAuthorization, any Error>) async {
-        defer { Task { await prepare() } } // a nonce works once
         var identityToken: String?
         var cancelled = false
         switch result {

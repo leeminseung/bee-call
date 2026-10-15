@@ -4,7 +4,8 @@ import Observation
 
 /// Sign in with Apple against the server (voice/token_server.py). The server hands out a one-time value
 /// (GET /auth/nonce); Apple puts its SHA-256 into the identity token, and the server checks the value it gets
-/// back with that token (POST /auth/apple).
+/// back with that token (POST /auth/apple). So each attempt takes one value at the tap and sends that same value
+/// to the server, and the button waits while no value is ready.
 @Observable
 final class AppleSignIn {
     enum Outcome: Equatable {
@@ -14,32 +15,41 @@ final class AppleSignIn {
         case failed(String)
     }
 
-    @ObservationIgnored private var value: String?
+    /// A value is waiting for the button; the button waits until one is.
+    private(set) var isReady = false
+    @ObservationIgnored private var ready: String? {
+        didSet { isReady = ready != nil }
+    }
+    @ObservationIgnored private var taken: String? // the value Apple was given, for the server
     @ObservationIgnored private let transport: any HTTPTransport
 
     init(transport: any HTTPTransport = URLSession.shared) {
         self.transport = transport
     }
 
-    /// Fetches a one-time value; false when the server could not give one.
+    /// Fetches a value for the next attempt; false when the server could not give one.
     func prepare() async -> Bool {
         guard let request = Server.request("/auth/nonce"),
               let (data, response) = try? await transport.send(request), response.httpStatus == 200,
-              let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            value = nil
-            return false
-        }
-        value = body["nonce"] as? String
+              let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let value = body["nonce"] as? String else { return false }
+        ready = value
         return true
     }
 
-    /// For Apple's request: the value's SHA-256, which Apple puts into the identity token.
-    func hashForRequest() -> String {
-        SHA256.hash(data: Data((value ?? "").utf8)).map { String(format: "%02x", $0) }.joined()
+    /// At the tap: the value's SHA-256 for Apple's request. The value is taken: the same one goes to the server
+    /// with Apple's answer, and the next attempt needs a new one. Nil when no value is ready.
+    func takeForRequest() -> String? {
+        guard let value = ready else { return nil }
+        ready = nil
+        taken = value
+        return SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Apple answered: with its identity token, or without one (`cancelled` when the person closed Apple's sheet).
     func finish(identityToken: String?, cancelled: Bool) async -> Outcome {
+        let value = taken
+        taken = nil
         guard let identityToken, let value else {
             return cancelled ? .cancelled : .failed("Sign in with Apple did not finish.")
         }

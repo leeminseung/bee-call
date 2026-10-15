@@ -18,7 +18,44 @@ final class AppleSignInTests: XCTestCase {
 
     @MainActor func testAppleGetsTheValuesHash() async {
         let signIn = await signIn(FakeServer())
-        XCTAssertEqual(signIn.hashForRequest(), sha256("n1"))
+        XCTAssertEqual(signIn.takeForRequest(), sha256("n1"))
+    }
+
+    // MARK: - One value per attempt (review finding 16)
+
+    @MainActor func testTheButtonWaitsForAValue() async {
+        let server = FakeServer()
+        server.replies["GET /auth/nonce"] = .json(200, ["nonce": "n1"])
+        let signIn = AppleSignIn(transport: server)
+        XCTAssertFalse(signIn.isReady, "no value yet")
+        _ = await signIn.prepare()
+        XCTAssertTrue(signIn.isReady)
+        _ = signIn.takeForRequest()
+        XCTAssertFalse(signIn.isReady, "the value went to Apple: the button waits for the next one")
+    }
+
+    @MainActor func testAValueIsTakenOnce() async {
+        let signIn = await signIn(FakeServer())
+        XCTAssertNotNil(signIn.takeForRequest())
+        XCTAssertNil(signIn.takeForRequest())
+    }
+
+    /// A new value can arrive while Apple's sheet is open; the server still gets the one Apple was given.
+    @MainActor func testTheServerGetsTheValueAppleWasGiven() async throws {
+        let server = FakeServer()
+        let signIn = await signIn(server, nonce: "n1")
+        XCTAssertEqual(signIn.takeForRequest(), sha256("n1"))
+        server.replies["GET /auth/nonce"] = .json(200, ["nonce": "n2"])
+        _ = await signIn.prepare()
+        server.replies["POST /auth/apple"] = .json(200, ["token": "t0ken", "person": "matt"])
+        _ = await signIn.finish(identityToken: "apple-jwt", cancelled: false)
+        XCTAssertEqual(try server.body(of: "POST /auth/apple")["nonce"] as? String, "n1")
+    }
+
+    @MainActor func testAnAnswerWithNoValueGivenToAppleDidNotFinish() async {
+        let signIn = await signIn(FakeServer())
+        let outcome = await signIn.finish(identityToken: "apple-jwt", cancelled: false)
+        XCTAssertEqual(outcome, .failed("Sign in with Apple did not finish."))
     }
 
     @MainActor func testAServerThatCannotGiveAValueSaysSo() async {
@@ -31,6 +68,7 @@ final class AppleSignInTests: XCTestCase {
     @MainActor func testTheServerGetsAppleTokenAndTheValue() async throws {
         let server = FakeServer()
         let signIn = await signIn(server)
+        _ = signIn.takeForRequest()
         server.replies["POST /auth/apple"] = .json(200, ["token": "t0ken", "person": "matt"])
         let outcome = await signIn.finish(identityToken: "apple-jwt", cancelled: false)
         XCTAssertEqual(outcome, .signedIn(token: "t0ken", person: "matt"))
@@ -41,6 +79,7 @@ final class AppleSignInTests: XCTestCase {
     @MainActor func testAPersonNotApprovedYetWaitsWithACode() async {
         let server = FakeServer()
         let signIn = await signIn(server)
+        _ = signIn.takeForRequest()
         server.replies["POST /auth/apple"] = .json(403, ["waiting": "ABC123"])
         let outcome = await signIn.finish(identityToken: "apple-jwt", cancelled: false)
         XCTAssertEqual(outcome, .waiting(code: "ABC123"))
@@ -51,6 +90,7 @@ final class AppleSignInTests: XCTestCase {
                                  (.unreachable, "The server cannot be reached right now.")] {
             let server = FakeServer()
             let signIn = await signIn(server)
+            _ = signIn.takeForRequest()
             server.replies["POST /auth/apple"] = reply
             let outcome = await signIn.finish(identityToken: "apple-jwt", cancelled: false)
             XCTAssertEqual(outcome, .failed(message))
