@@ -37,6 +37,8 @@ final class CallManager: NSObject {
     @ObservationIgnored private let decline = CallDecline(transport: URLSession.shared,
                                                           noteStatus: { Server.shared.noteStatus($0) })
     private static let pickUpSeconds = 30 // the voice server picks up within about 8 s; this catches a stuck one
+    /// The name of every call, both ways, on CallKit's call screen and in the Phone app's Recents.
+    private static let handle = CXHandle(type: .generic, value: "Bee Call")
 
     /// CallKit's provider and controller and the microphone prompt, unless a test passes stand-ins.
     init(callKit: (any CallKitReports)? = nil, calls: (any CallKitRequests)? = nil,
@@ -93,7 +95,7 @@ final class CallManager: NSObject {
         let id = UUID()
         callID = id
         self.tokenServerURL = tokenServerURL
-        let start = CXStartCallAction(call: id, handle: CXHandle(type: .generic, value: "AI"))
+        let start = CXStartCallAction(call: id, handle: Self.handle)
         do {
             try await calls.request(CXTransaction(action: start))
         } catch {
@@ -172,7 +174,7 @@ final class CallManager: NSObject {
     /// What CallKit shows for the AI's call: Bee Call, and what it is about.
     private func callUpdate(topic: String?) -> CXCallUpdate {
         let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: "Bee Call")
+        update.remoteHandle = Self.handle
         update.localizedCallerName = callerName(topic: topic)
         update.hasVideo = false
         return update
