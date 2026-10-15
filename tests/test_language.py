@@ -40,13 +40,13 @@ def test_the_prep_opening_is_in_the_call_language(tmp_path):
     """Read from the request the prep sends its model, not from the prep's private state (server review 16)."""
     import asyncio
 
-    from tests.test_prep import Converse, text
+    from tests.test_prep import Converse, glm, text
     from voice.costs import SpendLog
 
     async def prompt(code: str) -> str:
         client = Converse(text("<opening>Hi</opening><note>n</note>"))
-        preparation = Preparation(CallInputs(), {}, ("zai.glm-5", "ap-southeast-2"), client=client,
-                                  spend=SpendLog(tmp_path), bee=True, now=NOW, language=call_language(code)).start()
+        preparation = Preparation(CallInputs(), {}, glm(client), spend=SpendLog(tmp_path), bee=True, now=NOW,
+                                  language=call_language(code)).start()
         await preparation.done
         return client.requests[0]["system"][0]["text"]
 

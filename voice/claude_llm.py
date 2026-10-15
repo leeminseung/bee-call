@@ -94,7 +94,9 @@ LEFT_OUT = "The result came back but is left out: your reply to it was stopped b
 
 
 def default_model(region: str) -> str:
-    return "au.anthropic.claude-sonnet-5-5" if region == "ap-southeast-2" else "us.anthropic.claude-sonnet-5-5"
+    from voice.model_catalog import bedrock_claude
+
+    return bedrock_claude(region)
 
 
 def current_speech() -> Any | None:

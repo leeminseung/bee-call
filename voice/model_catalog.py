@@ -65,7 +65,7 @@ CLAUDE_SONNET = Offering("anthropic", "claude-sonnet-5-5", 2.00 / MILLION, 10.00
 GLM_5 = Offering("bedrock", "zai.glm-5", 1.00 / MILLION, 3.20 / MILLION)
 # The same GLM 5, run by the AgentCore harness worker (worker/harness.py), priced the same.
 GLM_5_WORKER = Offering("agentcore", "zai.glm-5", 1.00 / MILLION, 3.20 / MILLION)
-OFFERINGS = (CLAUDE_HAIKU, CLAUDE_SONNET, GLM_5, GLM_5_WORKER)
+OFFERINGS = (CLAUDE_HAIKU, CLAUDE_SONNET, GLM_5, GLM_5_WORKER)  # NOVA (a development mode's) is below
 # A model not listed is priced like this: above every model we use.
 UNKNOWN = Offering("unknown", "unknown", 3.00 / MILLION, 15.00 / MILLION)
 # Server tools a provider charges for apart from tokens, USD a use: Anthropic's web search ($10 per 1,000; web
@@ -115,6 +115,38 @@ ROLES: dict[str, Role] = {role.name: role for role in (
 )}
 
 
+# ---------- the COORDINATOR_LLM modes (voice/call_models.py coordinator_llm) ----------
+
+NOVA = Offering("bedrock", "us.amazon.nova-2-lite-v1:0", 0.06 / MILLION, 0.24 / MILLION)
+
+
+def bedrock_claude(region: str) -> str:
+    """Claude Sonnet 5.5 on Bedrock (COORDINATOR_LLM=claude; Claude on Bedrock is blocked for this account)."""
+    return "au.anthropic.claude-sonnet-5-5" if region == "ap-southeast-2" else "us.anthropic.claude-sonnet-5-5"
+
+
+def mode_role(name: str, mode: str, env: dict[str, str] | None = None) -> Role | None:
+    """A server-decided role (meta, prep, title) as a COORDINATOR_LLM mode runs it: the catalog's own in the
+    server's mode (anthropic); for the development modes, one Bedrock model (bedrock: COORDINATOR_MODEL or GLM 5;
+    nova: Nova 2 Lite; claude: Claude on Bedrock). The prep has no model in the stand-in modes (echo, fake); the meta
+    agent and the title run the catalog's there."""
+    import os
+
+    env = os.environ if env is None else env
+    found = role(name)
+    if mode not in ("bedrock", "nova", "claude"):
+        return None if name == "prep" and mode in ("echo", "fake") else found
+    region = env.get("BEDROCK_REGION", env.get("AWS_REGION", "ap-southeast-2"))
+    model = {"bedrock": env.get("COORDINATOR_MODEL") or GLM_5.model, "nova": NOVA.model,
+             "claude": bedrock_claude(region)}[mode]
+    known = price(model)
+    offering = Offering("bedrock", model, known.usd_in, known.usd_out)
+    standby = found.standby or found.choices[0]
+    extra = {**standby.extra, **({"region": "us-east-1"} if mode == "nova" else {})}
+    return Role(name, choices=(Choice(mode, model, "AWS", standby.description, offering, default=True,
+                                      max_tokens=standby.max_tokens, extra=extra),))
+
+
 def role(name: str) -> Role:
     """A role by name; KeyError for an unknown one."""
     return ROLES[name]
@@ -133,7 +165,7 @@ def ids(role_name: str) -> tuple[str, ...]:
 
 def price(provider_model: str | None) -> Offering:
     """How a provider's model is priced, by the provider's model id (as usage records name it)."""
-    return next((o for o in OFFERINGS if o.model == provider_model), UNKNOWN)
+    return next((o for o in OFFERINGS + (NOVA,) if o.model == provider_model), UNKNOWN)
 
 
 def models_body(role_name: str) -> dict[str, Any]:

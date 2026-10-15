@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from voice import model_catalog
-from voice.model_catalog import Choice
+from voice.model_catalog import Choice, Role
 
 log = logging.getLogger("bee-call.providers")
 
@@ -87,6 +87,7 @@ class Reply:
     provider: str
     instead_of: str | None = None  # the choice that failed, when the standby answered
     reason: str | None = None  # why it failed
+    choice: Choice | None = None  # the choice that answered: the conversation's next request goes to it
 
 
 def estimated_tokens(*parts: Any) -> int:
@@ -117,8 +118,10 @@ def adapter(name: str) -> Any:
 async def reply(choice: Choice, system: str, turns: list[Turn], tools: list[ToolSpec] = (), *,
                 on_text: Callable[[str], None] | None = None, usage: Usage | None = None) -> Reply:
     """One request to a choice's model, through its provider's adapter."""
-    return await adapter(choice.offering.provider).reply(choice, system, list(turns), list(tools), on_text=on_text,
-                                                         usage=usage)
+    found = await adapter(choice.offering.provider).reply(choice, system, list(turns), list(tools), on_text=on_text,
+                                                          usage=usage)
+    found.choice = choice
+    return found
 
 
 async def answer(role_name: str, system: str, turns: list[Turn], tools: list[ToolSpec] = (), *,
@@ -126,7 +129,15 @@ async def answer(role_name: str, system: str, turns: list[Turn], tools: list[Too
                  usage: Usage | None = None) -> Reply:
     """The role's model answers (its choice `model_id`, or its default). When its request fails before it streamed
     any text, the role's standby answers instead, and the reply says so (instead_of, reason)."""
-    first = model_catalog.choice(role_name, model_id)
+    return await answer_with(model_catalog.role(role_name), system, turns, tools, model_id=model_id,
+                             on_text=on_text, usage=usage)
+
+
+async def answer_with(role: Role, system: str, turns: list[Turn], tools: list[ToolSpec] = (), *,
+                      model_id: str | None = None, on_text: Callable[[str], None] | None = None,
+                      usage: Usage | None = None) -> Reply:
+    """answer() for a role as a mode runs it (model_catalog.mode_role)."""
+    first = next((c for c in role.choices if c.id == model_id), None) or next(c for c in role.choices if c.default)
     streamed = False
 
     def seen(text: str) -> None:
@@ -137,11 +148,11 @@ async def answer(role_name: str, system: str, turns: list[Turn], tools: list[Too
     try:
         return await reply(first, system, turns, tools, on_text=seen if on_text else None, usage=usage)
     except Exception as exc:
-        standby = model_catalog.role(role_name).standby
+        standby = role.standby
         if standby is None or streamed:
             raise
         why = f"{type(exc).__name__}: {exc}"[:300]
-        log.warning("%s on %s failed (%s); %s answers", role_name, first.offering.model, why, standby.offering.model)
+        log.warning("%s on %s failed (%s); %s answers", role.name, first.offering.model, why, standby.offering.model)
         found = await reply(standby, system, turns, tools, on_text=on_text, usage=usage)
         found.instead_of, found.reason = first.id, why
         return found

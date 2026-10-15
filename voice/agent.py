@@ -19,7 +19,8 @@ COORDINATOR_LLM picks the model in the coordinator slot:
             probes/coordinator_bench.py compares them)
   nova      Amazon Nova 2 Lite on Bedrock (test stand-in that can call tools)
   echo      repeats the caller (test stand-in for the audio path)
-The prep and the meta agent run on GLM 5 with anthropic (voice/prep.py prep_model).
+With anthropic, the prep runs on Claude Haiku 5.5 and the meta agent on Claude Sonnet 5.5, each with GLM 5 standing
+by (the model catalog, voice/model_catalog.py); the other modes run them on one Bedrock model, as mode_role says.
 WORKER picks what runs delegated jobs:
   fake     pretends to work for a few seconds (test stand-in, the default)
   search   one Nova Web Grounding search per job, with sources (test stand-in, costs about 0.03 USD a job)
@@ -73,7 +74,7 @@ from voice.fake_claude import FakeAnthropic
 from voice.fallback_llm import FirstRequestFallback
 from voice.language import CallLanguage, call_language
 from voice.people import People, Person, Settings, dev_person
-from voice.prep import GLM_5, INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_model
+from voice.prep import GLM_5, INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_role
 from voice.recorder import CallRecorder
 from voice.titles import title_call
 from voice.ringback import STATE_ATTRIBUTE, ring_back
@@ -590,7 +591,7 @@ async def ring_and_prepare(ctx: JobContext, caller: Caller, meta: dict, inbox: P
         nonlocal preparation
         ours = OurCalls.of(caller.workspace)  # what Bee made of earlier calls is not new context (BC-060)
         got = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S, ours=ours)
-        preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM), spend=SpendLog(caller.workspace),
+        preparation = Preparation(got, meta, prep_role(COORDINATOR_LLM), spend=SpendLog(caller.workspace),
                                   bee=caller.uses_bee, now=caller.someone.now(), language=caller.language,
                                   ours=ours).start()
         await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - seen))
@@ -661,9 +662,9 @@ async def record_prep(rec: CallRecorder, prep: Prep, preparation: Preparation | 
     """The prep in the record once it is done, and its note as prep.md (BC-031)."""
     if preparation is not None:
         await preparation.done
-    rec.event("call_prep", seconds=prep.seconds, model=prep.model, reads=prep.reads, bee=prep.bee, note=prep.note,
-              opening=prep.opening, error=prep.error, input_tokens=prep.input_tokens,
-              output_tokens=prep.output_tokens)
+    rec.event("call_prep", seconds=prep.seconds, model=prep.model, standby_reason=prep.standby_reason,
+              reads=prep.reads, bee=prep.bee, note=prep.note, opening=prep.opening, error=prep.error,
+              input_tokens=prep.input_tokens, output_tokens=prep.output_tokens)
     if prep.note:
         (rec.dir / "prep.md").write_text(f"# Call prep note\n\n{prep.note}\n\nOpening: {prep.opening}\n")
 

@@ -37,7 +37,8 @@ class Bedrock:
     def client(self, choice: Choice) -> Any:
         if self._client is not None:
             return self._client
-        region = os.environ.get("BEDROCK_REGION", os.environ.get("AWS_REGION", "ap-southeast-2"))
+        region = choice.extra.get("region") or os.environ.get("BEDROCK_REGION",
+                                                               os.environ.get("AWS_REGION", "ap-southeast-2"))
         return bedrock_client(region, int(choice.extra.get("read_timeout", 60)), int(choice.extra.get("retries", 1)))
 
     async def reply(self, choice: Choice, system: str, turns: list[Turn], tools: list[ToolSpec], *,

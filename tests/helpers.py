@@ -94,3 +94,12 @@ class _ScriptedStream(llm.LLMStream):
                                                                                          content=piece)))
         self._event_ch.send_nowait(llm.ChatChunk(id=chunk_id, usage=llm.CompletionUsage(
             completion_tokens=5, prompt_tokens=50, total_tokens=55)))
+
+
+def converse(monkeypatch, client) -> None:
+    """Bedrock's Converse API answers from `client` (a stand-in such as tests/test_prep.py Converse), for whatever
+    runs on Bedrock: the bedrock development mode's prep, and GLM 5 standing by."""
+    from voice import providers
+    from voice.providers.bedrock import Bedrock
+
+    monkeypatch.setitem(providers._ADAPTERS, "bedrock", Bedrock(client=client))

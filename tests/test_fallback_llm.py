@@ -302,7 +302,7 @@ def test_every_process_reads_the_same_coordinator_mode_with_the_same_default(tmp
     from meta import agent as meta_agent
 
     modes = []
-    monkeypatch.setattr(prep_module, "prep_model", lambda mode: modes.append(mode))
+    monkeypatch.setattr(prep_module, "prep_role", lambda mode: modes.append(mode))
     monkeypatch.setattr(meta_agent, "prep_model", lambda mode: modes.append(mode))
     asyncio.run(prep_module.prepare_outbound(Plan(call=True, reason="r", inbox_dir=None), spend=SpendLog(tmp_path),
                                              bee=False, now=datetime.now(SEOUL)))

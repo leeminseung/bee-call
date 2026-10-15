@@ -139,6 +139,7 @@ def test_the_call_ai_the_prep_and_the_meta_agent_read_nothing_bee_made_of_our_ca
     from tests.helpers import seoul_now
     from voice.coordinator import BeeCoordinator
     from voice.prep import Prep, _read
+    from voice.providers import ToolCall
     from voice.recorder import CallRecorder
     from beelink.calls import OurCalls
 
@@ -153,9 +154,9 @@ def test_the_call_ai_the_prep_and_the_meta_agent_read_nothing_bee_made_of_our_ca
         conversation = await coordinator.bee_conversation(None, 5)
         meta_today = await thinker._tool("bee_today", {}, seoul_now(), [])
         pending = await thinker._tool("bee_pending", {}, seoul_now(), [])
-        read = await _read({"name": "bee_conversation", "input": {"conversation_id": 5}, "toolUseId": "t"}, Prep(),
-                           seoul_now().tzinfo, ours=OurCalls.of(workspace))
-        return today, conversation, meta_today, pending, read["toolResult"]["content"][0]["text"]
+        read = await _read(ToolCall("t", "bee_conversation", {"conversation_id": 5}), Prep(), seoul_now().tzinfo,
+                           ours=OurCalls.of(workspace))
+        return today, conversation, meta_today, pending, read.text
 
     today, conversation, meta_today, pending, read = asyncio.run(main())
     rec.close()

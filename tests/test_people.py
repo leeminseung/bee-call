@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from beelink import cli
 from tests.contract import check_body
-from tests.helpers import SEOUL, signed_in
+from tests.helpers import SEOUL, converse, signed_in
 from voice import apple_signin, costs, session_server, token_server, voip_push
 from voice.people import People, Settings, waiting_code
 from voice.recorder import CallRecorder
@@ -998,8 +998,8 @@ def test_the_prep_of_an_ai_call_counts_where_it_runs_even_if_nobody_answers(tmp_
 
     me = signed_in(tmp_path)
     monkeypatch.setenv("COORDINATOR_LLM", "bedrock")
-    monkeypatch.setattr(prep_module, "bedrock_client",
-                        lambda region: Converse(text("<opening>Hi!</opening><note>n</note>"), usage=(100_000, 0)))
+    monkeypatch.delenv("COORDINATOR_MODEL", raising=False)
+    converse(monkeypatch, Converse(text("<opening>Hi!</opening><note>n</note>"), usage=(100_000, 0)))
     OfferStore(me.workspace).book("the interview", datetime.now(SEOUL) - timedelta(seconds=1), datetime.now(SEOUL))
     rooms = []
     assert len(asyncio.run(call_due(me.person, place=placing(rooms)))) == 1  # placed; the phone is never answered
@@ -1009,14 +1009,14 @@ def test_the_prep_of_an_ai_call_counts_where_it_runs_even_if_nobody_answers(tmp_
 
 def test_a_prep_cut_short_counts_an_estimate_of_what_it_sent(tmp_path):
     """A prep stopped mid-answer never gets Bedrock's usage line; what it sent is counted as an estimate."""
-    from tests.test_prep import Converse, MODEL, text
+    from tests.test_prep import Converse, glm, text
     from voice.costs import SpendLog
     from voice.prep import Preparation
 
     async def main():
         client = Converse(text("<opening>Hi Matt, what's up?</opening>" + "<note>" + "x" * 2000 + "</note>"), gap=0.05,
                           usage=(999, 999))
-        preparation = Preparation(CallInputs(), {"direction": "inbound"}, MODEL, client=client,
+        preparation = Preparation(CallInputs(), {"direction": "inbound"}, glm(client),
                                   spend=SpendLog(tmp_path), bee=True, now=datetime.now(SEOUL)).start()
         await preparation.opening(timeout=5)
         preparation.cancel()  # the caller hung up while it rang
@@ -1043,8 +1043,9 @@ def test_without_bee_the_prep_of_an_ai_call_reads_nothing_and_never_mentions_bee
     monkeypatch.setenv("BEE_BIN", str(FAKE_BEE))
     monkeypatch.setenv("FAKE_BEE_LOG", str(log))
     monkeypatch.setenv("COORDINATOR_LLM", "bedrock")
+    monkeypatch.delenv("COORDINATOR_MODEL", raising=False)
     client = Converse(text("<opening>Hi!</opening><note>n</note>"))
-    monkeypatch.setattr(prep_module, "bedrock_client", lambda region: client)
+    converse(monkeypatch, client)
     me = signed_in(tmp_path)
     OfferStore(me.workspace).book("the flat prices", datetime.now(SEOUL) - timedelta(seconds=1), datetime.now(SEOUL))
 

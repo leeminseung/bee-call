@@ -20,7 +20,8 @@ this process places the call when they tap "Call me now" or when the time they a
 comes, and also for calls the user booked out loud in a call.
 Before the phone rings, a model reads Bee and writes the call prep note (voice/prep.py), picked
 from COORDINATOR_LLM as the voice server's prep picks it, so set COORDINATOR_LLM and
-COORDINATOR_MODEL the same way for both (GLM 5 with anthropic and bedrock; prep_model).
+COORDINATOR_MODEL the same way for both (with anthropic, the model catalog's prep role: Claude
+Haiku 5.5 with GLM 5 standing by; voice/prep.py prep_role).
 """
 
 import argparse

@@ -37,10 +37,12 @@ def quick(monkeypatch):
 
 
 def with_prep_model(monkeypatch, client) -> None:
-    """The coordinator's model writes the opening and the note (scripted)."""
+    """The prep's model writes the opening and the note (scripted), as the bedrock mode runs it."""
+    from tests.helpers import converse
+
     monkeypatch.setattr(agent, "COORDINATOR_LLM", "bedrock")
-    monkeypatch.setattr(agent, "prep_model", lambda mode: ("zai.glm-5", "ap-southeast-2"))
-    monkeypatch.setattr(prep_module, "bedrock_client", lambda region: client)
+    monkeypatch.delenv("COORDINATOR_MODEL", raising=False)
+    converse(monkeypatch, client)
 
 
 def test_whose_call_it_is_and_what_it_runs_on_is_decided_without_livekit(tmp_path):
