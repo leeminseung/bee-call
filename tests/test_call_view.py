@@ -353,6 +353,26 @@ def test_in_a_live_call_a_failed_write_will_be_retried_and_the_last_write_in_bee
                      ("write-w3", "failed", True, False)]
 
 
+def test_a_failed_write_tried_again_after_the_call_reads_failed_until_the_try_ends(tmp_path):
+    """The retry after the call (voice/agent.py after_bee_writes) marks the write applying again: while it runs the
+    write still reads failed, not unknown. A retry's applying line left far past the retry's time limit was cut off
+    by a stopped process, so Bee may have it."""
+    todo = {"kind": "todo_create", "text": "Call mom"}
+    retry_at = datetime.fromtimestamp(WALL - 3, SEOUL).isoformat(timespec="seconds")
+    writes = [bee("w1", "applying", "2026-10-15T20:00:30+09:00", item=todo, **ASKED),
+              bee("w1", "failed", "2026-10-15T20:00:31+09:00", error="Bee said no"), bee("w1", "applying", retry_at)]
+    record(tmp_path, [INBOUND, say(2, "Hi."), CLOSED, ENDED], writes=writes, age_s=5)
+
+    def written(wall: float) -> tuple:
+        body = call_view.call_view(tmp_path, "call-matt-1", zone=SEOUL, language="en", now=EVENING, wall=wall)
+        check_body("call-view", body)
+        (item,) = [i for i in body["items"] if i["type"] == "bee_write"]
+        return item["state"], item["will_retry"]
+
+    assert written(WALL) == ("failed", False)
+    assert written(WALL + call_view.RETRY_SETTLES_S) == ("unknown", False)
+
+
 def test_without_the_writer_s_record_writes_are_read_from_the_call_s_events(tmp_path):
     """Moved from the page's tests: a write and its undo by key, the retry after the call by key, a write Bee may
     have taken; without keys, an undo takes out the last saved write and only a retry updates the failed one."""

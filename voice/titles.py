@@ -55,7 +55,7 @@ def what_was_said(folder: Path) -> tuple[str, bool]:
     from zoneinfo import ZoneInfo
 
     call = read_call(read_record(folder), ZoneInfo("UTC"))
-    items, _ = items_of("call", call, "ended", ZoneInfo("UTC"))
+    items, _ = items_of("call", call, "ended", ZoneInfo("UTC"), time.time())
     lines = [f"{'Person' if i['speaker'] == 'person' else 'AI'}: {i['text']}" for i in items if i["type"] == "speech"]
     said = "\n".join(lines)
     if len(said) > SAID_CHARS:

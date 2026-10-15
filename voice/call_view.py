@@ -31,6 +31,9 @@ from worker.chart import svg_title
 
 LIVE_S = 120  # no new line or file refresh for this long, and no end: the call no longer reads as live
 RECENT_S = 600  # an ended call is still announced by /changes on connect for this long (contract section 3)
+# The retry of failed Bee writes after a call ends within 5 s (voice/agent.py BEE_RETRY_S): a retry still applying
+# after this long was cut off by a stopped process.
+RETRY_SETTLES_S = 30
 DEFAULT_LIMIT, MAX_LIMIT = 20, 50
 TITLE_CHARS = 60  # the person's first sentence as a title
 JOB_TITLE_CHARS = 40  # a job's title cut from its task, for jobs started before delegate took a title
@@ -243,6 +246,7 @@ class Write:
     line: float
     state: str  # written, undone, unknown, failed, or applying while it is being made
     ok: bool = False  # the writer's latest status is "ok": the one an undo in the call may take
+    retried_at: float | None = None  # applying again after it failed: when the retry after the call began (wall)
 
 
 @dataclass
@@ -390,9 +394,11 @@ def _writes_from_writer(record: Record, call: Call, zone: tzinfo) -> list[Write]
             found[key] = Write(f"write-{key}", item["kind"], _text(item.get("text")), at, t, n, "applying")
         write = found[key]
         status = line.get("status")
+        retried = _time(line.get("at"), zone) if status == "applying" and write.state == "failed" else None
         write.ok = status == "ok"
         write.state = {"ok": "written", "undo_failed": "written", "undone": "undone", "failed": "failed",
                        "applying": "applying"}.get(status, "unknown")
+        write.retried_at = retried.timestamp() if retried else None
     return list(found.values())
 
 
@@ -520,7 +526,8 @@ def _job_item(call_id: str, call: Call, job: Job, state: str, zone: tzinfo) -> t
     return item, (end_t, end_line)
 
 
-def items_of(call_id: str, call: Call, state: str, zone: tzinfo) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
+             wall: float) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """The thread's items in the order to draw (contract 2.4, 2.5), and how many caption lines they hold."""
     placed: list[tuple[tuple, Any]] = [((p.t, p.line), p) for p in call.pieces]
     docked = []
@@ -532,9 +539,12 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo) -> tuple[list[d
     for write in call.writes:
         if write.state == "applying" and live:
             continue  # still being made: it shows once Bee answered
+        shown = write.state
+        if shown == "applying":  # left by a stopped process, unless it is the retry after the call, still running
+            retrying = write.retried_at is not None and wall - write.retried_at < RETRY_SETTLES_S
+            shown = "failed" if retrying else "unknown"
         item = {"type": "bee_write", "id": write.id, "at": _iso(write.at or call.when(write.t), zone),
-                "kind": write.kind, "text": write.text,
-                "state": "unknown" if write.state == "applying" else write.state,
+                "kind": write.kind, "text": write.text, "state": shown,
                 "will_retry": live and write.state == "failed", "undoable": write is last_ok}
         placed.append(((write.t, write.line), item))
     placed.sort(key=lambda entry: entry[0])
@@ -602,7 +612,7 @@ class Context:
 def summary(call_id: str, call: Call, ctx: Context) -> tuple[dict[str, Any], list[dict[str, Any]], dict]:
     """The call summary (section 1), with its items and caption counts (section 2)."""
     state = state_of(call, ctx.wall)
-    items, captions = items_of(call_id, call, state, ctx.zone)
+    items, captions = items_of(call_id, call, state, ctx.zone, ctx.wall)
     by = started_by(call, ctx.rang)
     ring = ctx.rang.get(call.room or "", {})
     language = call.language or ctx.language
