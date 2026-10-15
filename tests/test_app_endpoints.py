@@ -332,3 +332,27 @@ def test_me_and_settings_answer_the_contract_s_settings_and_the_voice_follows_th
     assert json.loads(english)["settings"]["voice"] is None and json.loads(both)["settings"]["voice"] == "ko-anna"
     write_example("settings", json.loads(picked_body))
     write_example("me", json.loads(me_body))
+
+
+# ---------- models ----------
+
+def test_models_list_a_person_facing_role_s_choices_and_settings_take_only_those(minseung):
+    """Contract section 5b and 6: GET /models?role=call|worker, default first; PUT /settings takes call_model and
+    worker_model only from their role's ids; the server's own roles are not the person's to pick."""
+    found = run(minseung.people, minseung.headers, [
+        ("GET", "/models?role=call", None, None), ("GET", "/models?role=worker", None, None),
+        ("GET", "/models?role=meta", None, None), ("GET", "/models", None, None),
+        ("PUT", "/settings", None, {"worker_model": "glm", "call_model": "sonnet"}),
+        ("PUT", "/settings", None, {"worker_model": "haiku"}),
+        ("PUT", "/settings", None, {"call_model": "glm"})])
+    (call, _, call_body), (worker, _, worker_body), (meta, _, _), (missing, _, _) = found[:4]
+    (picked, _, picked_body), (wrong_worker, _, _), (wrong_call, _, _) = found[4:]
+    for name, body in (("models-call", call_body), ("models-worker", worker_body)):
+        check_body(name, json.loads(body))
+        write_example(name, json.loads(body))
+    assert (call, worker, meta, missing) == (200, 200, 400, 400)
+    assert [m["id"] for m in json.loads(worker_body)["models"]] == ["sonnet", "glm"]
+    settings = json.loads(picked_body)["settings"]
+    check_body("settings", json.loads(picked_body))
+    assert (picked, settings["worker_model"], settings["call_model"]) == (200, "glm", "sonnet")
+    assert (wrong_worker, wrong_call) == (400, 400)

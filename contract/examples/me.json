@@ -9,7 +9,8 @@
     "bee": true,
     "voice": "ko-yooni",
     "time_zone": "Asia/Seoul",
-    "call_model": "haiku"
+    "call_model": "haiku",
+    "worker_model": "sonnet"
   },
   "spent_today_usd": 1.45,
   "bee_connecting": false

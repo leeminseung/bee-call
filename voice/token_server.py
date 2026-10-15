@@ -17,7 +17,7 @@ POST /auth/signout                       ends this sign-in; the push tokens it r
 GET  /me                                 who is signed in, their settings and today's estimated spend
 PUT  /settings {"language": "ko", ...}   the settings the app may change (voice/people.py APP_SETTINGS), with
                                          time_zone, the phone's IANA zone (400 for a name zoneinfo does not know),
-                                         call_model, "haiku" or "sonnet" (voice/call_models.py), and voice, a
+                                         call_model and worker_model, ids from GET /models, and voice, a
                                          catalog id of the call language's voices or null (400 for another
                                          language's; a change of language alone resets it unless it fits)
 
@@ -48,6 +48,8 @@ GET  /calls/<call_id>/files/<path>       one of its files, by the records server
 GET  /changes                            Server-Sent Events: `changed` {path, version} for /calls, /offers and each
                                          call live or ended in the last ten minutes, on connect and whenever a
                                          version changes, so the app fetches only what changed (contract section 3)
+GET  /models?role=call                   the models the person can pick for a role, call or worker
+                                         (voice/model_catalog.py)
 GET  /voices?language=ko                 the voices the person can pick for a call language (voice/catalog.py)
 GET  /voices/samples/<file>              a voice's sample, MP3: open to anyone and cached for good
 GET  /offers                             offers still waiting for an answer or a call
@@ -86,7 +88,7 @@ from beelink import cli as bee
 from beelink.clock import parse_time
 from beelink.planner import OUTBOUND_LOG
 from meta.session import add_event
-from voice import apple_signin, call_view, voip_push
+from voice import apple_signin, call_view, model_catalog, voip_push
 from voice.call_folders import CALL_ID, NotServed, find_call, resolve_inside, served_headers
 from voice.catalog import SAMPLES, catalog, sample_files
 from voice.web_headers import plain_server_name
@@ -534,6 +536,16 @@ async def changes(request: web.Request) -> web.StreamResponse:
     return response
 
 
+# ---------- models (contract section 5b) ----------
+
+async def list_models(request: web.Request) -> web.Response:
+    """GET /models?role=call|worker: the models the person can pick for that role, the default first."""
+    name = request.query.get("role", "")
+    if name not in model_catalog.ROLES or not model_catalog.role(name).person:
+        raise web.HTTPBadRequest(text="role must be call or worker\n")
+    return web.json_response(model_catalog.models_body(name), dumps=lambda data: json.dumps(data, ensure_ascii=False))
+
+
 # ---------- voices (contract section 5) ----------
 
 async def list_voices(request: web.Request) -> web.Response:
@@ -685,6 +697,7 @@ def make_app(url: str, key: str, secret: str, people: People, room_exists=liveki
     app.router.add_get("/calls/{call_id}", show_call)
     app.router.add_get("/calls/{call_id}/files/{path:.+}", call_file)
     app.router.add_get("/changes", changes)
+    app.router.add_get("/models", list_models)
     app.router.add_get("/voices", list_voices)
     app.router.add_get(SAMPLES_PATH + "{file}", voice_sample)
     app.router.add_post("/voip", voip_token)

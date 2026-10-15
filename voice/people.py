@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from voice import model_catalog
 from voice.catalog import catalog, catalog_id
 
 PERSON_ID = re.compile(r"[a-z][a-z0-9-]{0,31}")
@@ -111,7 +112,8 @@ class Settings:
     bee: bool = False  # Bee is connected (POST /bee/connect)
     voice: str | None = None  # a catalog id of the call language's voices (voice/catalog.py); None: its default
     time_zone: str = DEFAULT_TIME_ZONE  # an IANA name; the app sends the phone's (contract section 1)
-    call_model: str = "haiku"  # the call AI's model: haiku or sonnet (voice/call_models.py)
+    call_model: str = "haiku"  # the call AI's model: a catalog id of the call role (voice/model_catalog.py)
+    worker_model: str = "sonnet"  # the background worker's model: a catalog id of the worker role
 
     def zone(self) -> ZoneInfo:
         return ZoneInfo(self.time_zone)
@@ -166,10 +168,11 @@ class Settings:
                 ZoneInfo(value)
             except (TypeError, ValueError, ZoneInfoNotFoundError):
                 raise ValueError("time_zone must be an IANA time zone name, like Asia/Seoul")
-        elif name == "call_model":
-            from voice.call_models import CALL_MODELS
-            if not isinstance(value, str) or value not in CALL_MODELS:
-                raise ValueError(f"call_model must be one of {', '.join(CALL_MODELS)}")
+        elif name in ("call_model", "worker_model"):
+            choices = model_catalog.ids(name.removesuffix("_model"))
+            if not isinstance(value, str) or value not in choices:
+                raise ValueError(f"{name} must be one of {', '.join(choices)} (GET /models?role="
+                                 f"{name.removesuffix('_model')})")
         else:
             raise ValueError(f"unknown setting {name!r}")
         setattr(self, name, value)
@@ -187,7 +190,7 @@ class Settings:
 
 
 APP_SETTINGS = ("language", "voice", "call_time", "record_on_server", "record_on_phone", "time_zone",
-                "call_model")  # the app's
+                "call_model", "worker_model")  # the app's
 
 
 @dataclass(frozen=True)

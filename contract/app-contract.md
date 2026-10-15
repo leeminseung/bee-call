@@ -327,6 +327,29 @@ AVPlayer can stream them. It is the one token server answer that may be cached
 (`Cache-Control: public, max-age=31536000, immutable`). A file's name carries its content hash, so a new sample
 gets a new URL.
 
+## 5b. Models: `GET /models?role=call` and `GET /models?role=worker`
+
+The settings sheet's "통화 모델" and "일꾼 모델" lists. The server keeps one model catalog, the only place that knows
+providers, their model ids, prices and how each role runs a model (section 10). The app shows only what this answer
+gives, so a new model or a new provider (for example Nebius Token Factory later) is a server change, never an app
+update.
+
+Response 200, `schemas/models.json`, examples `examples/models-call.json` and `examples/models-worker.json`:
+`role` and `models`, 1 to 12 choices, the default first.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | A catalog id such as `haiku`, `sonnet` or `glm`: the value `settings.call_model` or `settings.worker_model` holds. Never a provider's own model id. |
+| `name` | string | As shown: "Claude Haiku 5.5". |
+| `maker` | string | Who makes or runs it, as shown: "Anthropic", "AWS". |
+| `description` | object | One short line for this role, `ko` and `en`. |
+| `default` | bool | The role's default. Exactly one per role. |
+
+Errors: 400 for a missing or unknown `role`, 401. Today: call `haiku` (default) and `sonnet`; worker `sonnet`
+(default: Claude Sonnet 5.5 on Anthropic's API with web search, page reading and code execution) and `glm` (GLM 5
+on the AWS AgentCore worker). The meta agent and the call prep are not person settings: the server runs them on
+`sonnet` and `haiku` with GLM 5 standing by.
+
 ## 6. Settings: `GET /me`, `PUT /settings`
 
 `GET /me` returns 200 with `{person, settings, spent_today_usd, bee_connecting}` (`schemas/me.json`). `settings` is
@@ -334,7 +357,8 @@ the object in the table below. `bee_connecting` is true while a Bee approval wai
 
 `PUT /settings` takes any subset of the fields the app sends (table) and returns 200 with `{settings}`
 (`schemas/settings.json`). Fields left out keep their values. 400 with the reason for an unknown field or a bad
-value, and for a `voice` that is not one of the language's voices. A change of `language` without a `voice` in the
+value, for a `voice` that is not one of the language's voices, and for a `call_model` or `worker_model` that is not
+one of its role's ids (a stored id the catalog no longer has reads as the role's default). A change of `language` without a `voice` in the
 same request sets `voice` to null (the new language's default), unless the stored voice belongs to the new
 language. 401.
 
@@ -344,7 +368,8 @@ Each setting has one owner after D:
 |---|---|---|---|---|
 | `language` | **In the app**: the first run and the settings sheet | `PUT` when the person picks it, never again from the Settings app | `/me` | The call language |
 | `voice` | **In the app** | `PUT` when the person picks it | `/me`, with `/voices` for its name and character; null means the entry marked `default` | The AI's voice |
-| `call_model` | **iOS Settings** | `PUT` at every launch and change, as `SettingsSync` does now | Its own switch | The call AI's model, `haiku` or `sonnet` |
+| `call_model` | **In the app**: the settings sheet, from `GET /models?role=call` | `PUT` when the person picks it | `/me` | The call AI's model |
+| `worker_model` | **In the app**: the settings sheet, from `GET /models?role=worker` | `PUT` when the person picks it | `/me` | The background worker's model |
 | `call_time` | **iOS Settings** | Same | Its own field | The time an offer suggests |
 | `record_on_server` | **iOS Settings** | Same, and before joining an answered call (at most 2 s) | Its own switch | Keeping call audio |
 | `record_on_phone` | **iOS Settings** | Same | Its own switch: the app records the call itself | Noted in the record |
@@ -463,6 +488,14 @@ server held (DECISIONS 2026-10-15: the friend's calls stayed in English until th
    stability, and how it laughs: a tag or written laughter), empty for now and tuned by ear later; the app never
    sees it.
 
+10. Models (the user, 2026-10-15): every model choice is provider-independent, so switching providers is easy and
+   another provider's version can be added later (the user plans one with Nebius Token Factory for another
+   hackathon). One server catalog holds every role: the call AI (`call_model`), the worker (`worker_model`), the
+   meta agent (Claude Sonnet 5.5) and the call prep (Claude Haiku 5.5), with GLM 5 standing by for each. The worker's
+   Claude runs in our own runner on Anthropic's API with Anthropic's web search, page reading and code execution
+   tools and our own progress, relay, file and chart tools, thinking on and effort high; the AWS AgentCore worker
+   stays selectable as `glm`. Both model settings move from iOS Settings into the app's settings sheet.
+
 **Changing this contract.** The repository's `contract/` folder is the one copy. The server's tests regenerate
 `examples/` from real code. Any change to a field name, type or meaning is logged in the server's progress notes and
 told to the coordinator, who passes it to the app side before either side relies on it.
@@ -488,7 +521,11 @@ told to the coordinator, who passes it to the app side before either side relies
 - `voice/offers.py`: `Offer.view()` adds `created_at`, reports `now` and `placing` as `calling`, and fills an empty
   topic with the same function its notification uses, which also gives an AI call without a topic its line. The
   epochs, `kind` and `source` stay for pre-D builds.
-- `voice/people.py`: `APP_SETTINGS` gains `voice`, with the language rule of section 6; `tts` retires.
+- `voice/people.py`: `APP_SETTINGS` gains `voice` and `worker_model`, with the language rule of section 6; `tts` retires.
+- A model catalog (`voice/model_catalog.py` or beside it as data), the one place for every model choice and role
+  (decision 10), with one small adapter per provider (Anthropic Messages, Bedrock Converse, the AgentCore harness;
+  later Nebius); `GET /models`; `voice/call_models.py`, the meta agent and the call prep read it; a Claude worker
+  runner next to the harness one, chosen by `worker_model`.
 - `voice/voices.py` and a voice catalog beside it with the sample files: the voices of decision 9, catalog ids, one
   default per language; `voice_choice` reads the person's catalog id.
 - `voice/titles.py`, new: the after-call title (open question 7). `voice/agent.py` runs it in its shutdown, and
@@ -523,7 +560,8 @@ told to the coordinator, who passes it to the app side before either side relies
   attribute changes; `passPath(continuing:)` sends a call id); `CallManager.swift` (`startCall(continuing:)` takes a
   call id); `OfferCenter.swift` and `BookedCall.swift` (`created_at`, `suggested_at`, `call_at`, no epochs, and no
   topic fallback of their own: `about()` goes); `RingStream.swift` (`expires_at` only); `SettingsSync.swift` (stops
-  sending `language`); `Settings.bundle/Root.plist` and its strings (the Language row goes); `Server.swift`
+  sending `language`); `Settings.bundle/Root.plist` and its strings (the Language and call model rows go; the settings sheet lists
+both models from `GET /models`); `Server.swift`
   (`recordsURL` goes); `CallScreen.swift` (replaced by the home thread and the call screen); `BeeCallApp.swift` (the
   first run comes before the home).
 - Removed: `CallRecordSheet.swift` and `RecordPagePolicy.swift`, the in-app web record sheet, with their tests.
