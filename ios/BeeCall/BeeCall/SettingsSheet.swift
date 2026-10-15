@@ -230,7 +230,8 @@ struct SettingsWords {
                 + "page of the iOS Settings app."
     }
 
-    /// The voice row's value: its own name and how it sounds, "하린 · 친근함"; nothing while there are no voices.
+    /// The voice row's value: the voice's own name and how it sounds, in the app's language; nothing while there
+    /// are no voices.
     func voiceValue(_ voice: Voice?) -> String {
         voice.map { "\($0.name) · \(korean ? $0.character.ko : $0.character.en)" } ?? ""
     }

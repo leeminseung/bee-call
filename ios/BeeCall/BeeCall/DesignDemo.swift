@@ -23,13 +23,22 @@ enum DesignDemo: String {
         store.string(forKey: "designD").flatMap(DesignDemo.init(rawValue:))
     }
 
-    /// The frames with the MacBook call on (call-view-live.json).
+    /// The frames with the live example's call on (call-view-live.json).
     var isLive: Bool {
         [.call, .conversation, .live, .result, .resultConversation].contains(self)
     }
 
-    /// The call of the examples that the live frames are in.
-    static let macbook = "call-minseung-20261015-012301"
+    /// The call the live frames and the record frames are in: the live example's call (call-view-live.json).
+    static let liveCall: String = {
+        let file = Bundle.main.url(forResource: "call-view-live", withExtension: "json")
+        let view = file.flatMap { try? Data(contentsOf: $0) }.flatMap { try? Contract.decode(CallView.self, from: $0) }
+        return view?.call.callID ?? ""
+    }()
+
+    /// The voice whose sample plays in frame 7's voice step: the one shown as the person's.
+    static func sampleVoice(settings: PersonSettings?, in voices: [Voice]) -> Voice? {
+        VoiceChoice.effective(stored: settings?.voice, in: voices)
+    }
 
     /// The defaults a frame writes to, apart from the app's own.
     static let store = UserDefaults(suiteName: "BeeCallDesignDemo") ?? .standard
@@ -79,7 +88,7 @@ struct DesignDemoView: View {
             home
         case .record, .recordEnd:
             home.sheet(isPresented: .constant(true)) {
-                CallSheet(callID: DesignDemo.macbook, source: data, canContinue: true, continueCall: {},
+                CallSheet(callID: DesignDemo.liveCall, source: data, canContinue: true, continueCall: {},
                           startAtEnd: demo == .recordEnd)
             }
         case .settings:
@@ -92,9 +101,11 @@ struct DesignDemoView: View {
                 .task {
                     await data.person.refresh()
                     guard demo == .firstRunVoice else { return }
-                    await catalog.load(.ko)
+                    let language = FirstRun.language(settings: data.person.settings, preferred: Locale.preferredLanguages)
+                    await catalog.load(language)
                     try? await Task.sleep(for: .milliseconds(800))
-                    if let daon = catalog.voices[.ko]?.first(where: { $0.id == "ko-daon" }) { preview.toggle(daon) }
+                    let voices = catalog.voices[language] ?? []
+                    if let voice = DesignDemo.sampleVoice(settings: data.person.settings, in: voices) { preview.toggle(voice) }
                 }
         case .call, .conversation, .live, .result, .resultConversation:
             ConversationRoot(calls: calls, source: data, offers: data.offers, status: "", person: data.person,
@@ -110,13 +121,13 @@ struct DesignDemoView: View {
             .onAppear { data.keepFresh(true) }
     }
 
-    /// The MacBook call while it is on; in the result frames, its job then finishes (the view after the call, the
-    /// examples' one view with the job done).
+    /// The live example's call while it is on; in the result frames, its job then finishes (the view after the
+    /// call, the examples' one view with the job done).
     private func playLiveCall() async {
-        await data.store.refreshView(DesignDemo.macbook)
-        let view = data.store.views[DesignDemo.macbook]
+        await data.store.refreshView(DesignDemo.liveCall)
+        let view = data.store.views[DesignDemo.liveCall]
         calls.playDesignDemo(lines: DesignDemo.lastLines(of: view), voice: demo == .conversation ? .person : .ai,
-                             connectedAgo: 221, room: DesignDemo.macbook)
+                             connectedAgo: 221, room: DesignDemo.liveCall)
         if demo == .conversation || demo == .resultConversation {
             try? await Task.sleep(for: .milliseconds(300))
             presentation.show(.conversation)
@@ -124,7 +135,7 @@ struct DesignDemoView: View {
         guard demo == .result || demo == .resultConversation else { return }
         try? await Task.sleep(for: .seconds(5)) // time for a screenshot of the running job, too
         examples.live = false
-        await data.store.refreshView(DesignDemo.macbook)
+        await data.store.refreshView(DesignDemo.liveCall)
     }
 }
 #endif
