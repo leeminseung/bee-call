@@ -54,6 +54,11 @@ class OfferClosed(ValueError):
     """The offer no longer takes this answer: answered, closed, or its call is being placed (409)."""
 
 
+class AlreadyOffered(ValueError):
+    """A Bee conversation that already had an offer, whatever became of it: one conversation leads to at most one
+    offer (BC-014)."""
+
+
 @dataclass
 class Offer:
     id: str
@@ -271,7 +276,8 @@ class OfferStore:
 
     def ask(self, plan: Plan, now: datetime, at: str | None = None) -> Offer:
         """A plan the planner wants to call about becomes a question. An older question still unanswered is
-        closed: the newer one is about the user's latest day, and two would ring at the same suggested time."""
+        closed: the newer one is about the user's latest day, and two would ring at the same suggested time.
+        AlreadyOffered: a Bee conversation of the plan already had an offer (BC-014)."""
         suggested = call_time(now, at)
         offer = Offer(id=self._new_id(now), state="asked", reason=plan.reason, topic=plan.topic, kind=plan.kind,
                       suggested_at=_iso(suggested), expires_at=_iso(suggested),
@@ -279,6 +285,11 @@ class OfferStore:
                       plan=str(plan.path) if plan.path else None, conversation_ids=list(plan.conversation_ids),
                       history=[{"at": _iso(now), "state": "asked"}])
         with self._lock():
+            for earlier in self.all():
+                shared = sorted(set(plan.conversation_ids) & set(earlier.conversation_ids))
+                if shared:
+                    raise AlreadyOffered(f"Bee conversation {', '.join(map(str, shared))} already had an offer "
+                                         f"({earlier.id}, {earlier.state})")
             for older in self.all():
                 if older.state == "asked":
                     self._save(self._set(older, "expired", now, error="replaced by a newer question"))

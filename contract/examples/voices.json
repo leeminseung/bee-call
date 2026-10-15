@@ -1,0 +1,10 @@
+{
+  "language": "ko",
+  "voices": [
+    {"id": "ko-harin", "name": "하린", "character": {"ko": "친근함", "en": "Friendly"}, "sample_url": "/voices/samples/ko-harin-3f9c2a1b.mp3", "default": true},
+    {"id": "ko-seojun", "name": "서준", "character": {"ko": "차분함", "en": "Calm"}, "sample_url": "/voices/samples/ko-seojun-8d04e7c2.mp3", "default": false},
+    {"id": "ko-daon", "name": "다온", "character": {"ko": "또렷함", "en": "Clear"}, "sample_url": "/voices/samples/ko-daon-51b6fa90.mp3", "default": false},
+    {"id": "ko-narae", "name": "나래", "character": {"ko": "밝음", "en": "Bright"}, "sample_url": "/voices/samples/ko-narae-c27e1d43.mp3", "default": false},
+    {"id": "ko-doyoon", "name": "도윤", "character": {"ko": "묵직함", "en": "Deep"}, "sample_url": "/voices/samples/ko-doyoon-0a9b35e6.mp3", "default": false}
+  ]
+}

@@ -71,6 +71,47 @@ def test_settings_are_checked_and_the_app_changes_only_its_own(tmp_path):
     assert people.settings("matt").record_on_server is True  # never set: the default, on (Matt, 2026-10-14)
 
 
+def test_a_phone_whose_sign_in_expired_gets_no_more_pushes_for_that_person(tmp_path):
+    """Round 2 (server review finding 1, minor leftover): only a sign-out or a removal dropped a phone's push tokens,
+    so a sign-in that expired after 180 days kept them, and the phone kept ringing for that person."""
+    people = People(tmp_path)
+    people.add("matt")
+    long_ago = datetime.now() - timedelta(days=181)
+    old_sign_in = people.new_session("matt", now=long_ago)
+    people.register_device("matt", "voip", "aa" * 32, "production", session_token=old_sign_in, now=long_ago)
+    people.register_device("matt", "alert", "bb" * 32, "production", session_token=people.new_session("matt"))
+    assert people.device("matt", "voip") is None  # that sign-in has expired
+    assert people.device("matt", "alert")["token"] == "bb" * 32  # a fresh one keeps its phone
+    assert "aa" * 32 not in (tmp_path / "devices.json").read_text()
+
+
+def test_two_settings_changes_at_once_both_stay(tmp_path, monkeypatch):
+    """Server review finding 10: each change read, changed and wrote the file on its own, so of two at once (the
+    app's PUT /settings and Bee's connect turning bee on) the later write undid the other's change."""
+    import threading
+
+    people = People(tmp_path)
+    people.add("matt")
+    real = Settings.from_file.__func__
+
+    def slow(cls, path):
+        read = real(cls, path)
+        time.sleep(0.2)  # the other change reads now
+        return read
+
+    monkeypatch.setattr(Settings, "from_file", classmethod(slow))
+    changes = [threading.Thread(target=people.change_settings, args=("matt", {"language": "ko"})),
+               threading.Thread(target=people.change_settings, args=("matt", {"bee": True}),
+                                kwargs={"allowed": ("bee",)})]
+    for change in changes:
+        change.start()
+    for change in changes:
+        change.join()
+    monkeypatch.undo()
+    settings = people.settings("matt")
+    assert (settings.language, settings.bee) == ("ko", True)
+
+
 def test_sign_ins_wait_for_approval_and_end_when_the_person_is_removed(tmp_path):
     people = People(tmp_path)
     now = datetime(2026, 10, 14, 21, 0, tzinfo=SEOUL)
@@ -93,6 +134,32 @@ def test_sign_ins_wait_for_approval_and_end_when_the_person_is_removed(tmp_path)
     assert people.folder("jiwoo").is_dir()  # their calls stay
     with pytest.raises(ValueError):
         people.new_session("jiwoo")
+
+
+def test_a_sign_in_is_never_approved_under_someone_else_s_id_by_a_slip(tmp_path, capsys):
+    """Server review finding 9: approving a newcomer's code "as matt", or as a removed person whose folder and Bee
+    login are still here, handed them that person's calls and Bee. The operator has to say it is the same person."""
+    from voice import people as people_module
+
+    people = People(tmp_path)
+    now = datetime(2026, 10, 15, 21, 0, tzinfo=SEOUL)
+    people.add("matt", apple_sub="matt.apple")
+    people.add("jiwoo", apple_sub="jiwoo.apple")
+    people.bee_dir("jiwoo").mkdir(parents=True)
+    people.remove("jiwoo")  # their folder and Bee login stay
+    for sub in ("stranger.apple", "newcomer.apple", "matt.ipad"):
+        people.sign_in(sub, None, now)
+    for sub, taken in (("stranger.apple", "matt"), ("newcomer.apple", "jiwoo")):
+        with pytest.raises(ValueError, match="same-person"):
+            people.approve(waiting_code(sub), taken)
+        with pytest.raises(SystemExit, match="same-person"):
+            people_module.main(["--data", str(tmp_path), "approve", waiting_code(sub), "--as", taken])
+    assert people.sign_in("stranger.apple", None, now) is None and people.sign_in("newcomer.apple", None, now) is None
+    assert people.ids() == ["matt"]
+    people_module.main(["--data", str(tmp_path), "approve", waiting_code("matt.ipad"), "--as", "matt", "--same-person"])
+    assert people.sign_in("matt.ipad", None, now) == "matt"  # Matt's second Apple id, on purpose
+    people.approve(waiting_code("newcomer.apple"), "dana")  # a new id is fine
+    assert people.sign_in("newcomer.apple", None, now) == "dana"
 
 
 # ---------- Sign in with Apple ----------
@@ -398,7 +465,112 @@ def test_connecting_and_disconnecting_bee_from_the_app(tmp_path, fake_bee, monke
     assert not (folder / "token-prod").exists()
 
 
+async def until(check, seconds: float = 5.0) -> bool:
+    for _ in range(int(seconds / 0.05)):
+        if check():
+            return True
+        await asyncio.sleep(0.05)
+    return check()
+
+
+def test_disconnecting_bee_takes_the_login_off_the_server_even_when_bee_logout_fails(tmp_path, fake_bee, monkeypatch):
+    """Server review finding 11: a failing `bee logout` still answered 204 and left the login on the server, while
+    the app (since b9f96c7) clears its status on that 204."""
+    me = signed_in(tmp_path)
+    folder = me.people.bee_dir("matt")
+    folder.mkdir(parents=True)
+    (folder / "token-prod").write_text("fake")
+    me.people.change_settings("matt", {"bee": True}, allowed=("bee",))
+    monkeypatch.setenv("FAKE_BEE_DOWN", "logout")
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            return (await client.post("/bee/disconnect")).status
+
+    assert asyncio.run(main()) == 204
+    assert not folder.exists() and me.people.settings("matt").bee is False
+
+
+def test_disconnecting_bee_says_so_when_the_login_cannot_be_removed(tmp_path, fake_bee, monkeypatch):
+    from voice import token_server as server
+
+    me = signed_in(tmp_path)
+    folder = me.people.bee_dir("matt")
+    folder.mkdir(parents=True)
+    (folder / "token-prod").write_text("fake")
+
+    def stuck(path, *a, **kw):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(server.shutil, "rmtree", stuck)
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            answer = await client.post("/bee/disconnect")
+            return answer.status, await answer.text()
+
+    status, text = asyncio.run(main())
+    assert status == 502 and "could not remove" in text and me.people.settings("matt").bee is False
+
+
+def test_a_bee_connect_waiting_for_approval_survives_a_restart(tmp_path, fake_bee):
+    """Server review finding 11: the wait for the person's approval lived only in memory."""
+    me = signed_in(tmp_path)
+    folder = me.people.bee_dir("matt")
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            await client.post("/bee/connect")
+        # the token server restarts while the person has not approved yet
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            connecting = (await (await client.get("/me")).json())["bee_connecting"]
+            (folder / "approve").write_text("")
+            return connecting, await until(lambda: me.people.settings("matt").bee)
+
+    connecting, connected = asyncio.run(main())
+    assert connecting is True and connected is True
+    assert not (folder / "pending.json").exists()
+
+
+def test_a_second_bee_connect_stops_the_first_before_it_starts(tmp_path, fake_bee, monkeypatch):
+    """Server review finding 11: two `bee login` runs on one login folder at once."""
+    from beelink import cli
+    from voice import token_server as server
+
+    me = signed_in(tmp_path)
+    app = app_for(me.people)
+    first_done = []
+    real_start = cli.start_login
+
+    async def start_login(folder, *a, **kw):
+        waiting = app[server.BEE_LOGINS].get("matt")
+        first_done.append(waiting is None or waiting.done())
+        return await real_start(folder, *a, **kw)
+
+    monkeypatch.setattr(server.bee, "start_login", start_login)
+
+    async def main():
+        async with TestClient(TestServer(app), headers=me.headers) as client:
+            await client.post("/bee/connect")
+            await asyncio.sleep(0.2)  # the first login waits for the approval
+            await client.post("/bee/connect")
+
+    asyncio.run(main())
+    assert first_done == [True, True]
+
+
 # ---------- the daily budget ----------
+
+def test_claude_haiku_5_5_is_priced_with_its_cache(tmp_path):
+    """The coordinator on Anthropic's API (2026-10-15): Claude Haiku 5.5 at 0.10 / 0.50 USD per million input /
+    output tokens (prompts of 100K tokens or fewer); a cache read costs a tenth of an input token, a cache write a
+    quarter more. LiveKit counts cached tokens inside the input tokens."""
+    usage = {"models": [{"type": "llm_usage", "provider": "anthropic", "model": "claude-haiku-5-5",
+                         "input_tokens": 1_000_000, "input_cached_tokens": 800_000,
+                         "input_cache_creation_tokens": 100_000, "output_tokens": 100_000}]}
+    expected = (100_000 * 0.10 + 800_000 * 0.10 * 0.1 + 100_000 * 0.10 * 1.25 + 100_000 * 0.50) / 1_000_000
+    assert costs.call_cost(usage) == pytest.approx(expected)
+
 
 def test_spend_counts_calls_prep_jobs_searches_and_meta_thinks_of_today(tmp_path):
     from livekit.agents.metrics.usage import LLMModelUsage, STTModelUsage, TTSModelUsage

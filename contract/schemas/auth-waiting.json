@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract.bee-call.invalid/schemas/auth-waiting.json",
+  "title": "POST /auth/apple, 403: waiting for the operator's approval",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["waiting"],
+  "properties": {"waiting": {"type": "string", "pattern": "^[0-9A-F]{6}$", "description": "The code the app shows; the operator approves it."}}
+}

@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import AsyncIterable, Callable
+from typing import Any, AsyncIterable, Callable
 
 from livekit import rtc
 from livekit.agents import Agent, ModelSettings, RunContext, function_tool, llm
@@ -22,6 +22,7 @@ from livekit.agents.llm import StopResponse
 from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_instructions
 
 from beelink import reads
+from beelink.calls import OurCalls
 from beelink.clock import now_text
 from beelink.writer import KINDS, BeeWrites, event_fields, item_label, label
 from voice.language import CallLanguage, call_language
@@ -45,6 +46,8 @@ and keep the conversation going while it runs.
 6. Repeat back names and numbers that change the outcome, and ask whether you got them right.
 7. If the user starts talking, stop and listen.
 8. When the user says goodbye or that they are done, say a short goodbye and call end_call.
+9. Every word you write is spoken aloud, so never write stage directions, sound effects or descriptions of the \
+situation, in parentheses, brackets or asterisks, such as "(pauses)", "[laughs]" or "*sighs*".
 
 Notes from the app arrive as system messages, as <instructions> blocks in a user turn, or as text in \
 parentheses in a user turn, such as "(The phone call has connected.)": job notifications, tool results that came \
@@ -118,6 +121,47 @@ ASK_LIKE = {"todo_create": "Shall I add '{text}' to your Bee todos?",
 ENGLISH = call_language("en")  # what the tools tell the model is in English, like the rest of its instructions
 
 
+def model_request(agent: Agent, chat_ctx: llm.ChatContext, tools: list[llm.Tool]) -> dict[str, Any]:
+    """What one request gives the model, model-agnostic: the whole chat as LiveKit holds it (the instructions are
+    its first item), and each tool offered with its parameters. Never raises."""
+    try:
+        return _model_request(agent, chat_ctx, tools)
+    except Exception as exc:
+        return {"error": f"could not record the request: {exc!r}"}
+
+
+def model_name(agent: Agent) -> str | None:
+    """The model answering the agent's requests (with GLM 5 standing by, the one that took the call)."""
+    try:
+        return getattr(agent.session.llm, "model", None)
+    except RuntimeError:  # no session (a direct call, as in tests)
+        return None
+
+
+def _model_request(agent: Agent, chat_ctx: llm.ChatContext, tools: list[llm.Tool]) -> dict[str, Any]:
+    model = model_name(agent)
+    try:
+        offered = [{"name": t["function"]["name"], "description": t["function"].get("description"),
+                    "parameters": t["function"].get("parameters")}
+                   for t in llm.ToolContext(tools).parse_function_tools("openai", strict=False)]
+    except Exception as exc:  # a tool LiveKit cannot describe: its name at least
+        offered = [{"name": getattr(getattr(t, "info", None), "name", repr(t)), "error": repr(exc)} for t in tools]
+    return {"model": model, "chat": chat_ctx.to_dict(exclude_image=True, exclude_audio=True,
+                                                       exclude_timestamp=False)["items"], "tools": offered}
+
+
+def keep_reply(reply: dict[str, Any], chunk: Any) -> None:
+    """Adds a streamed chunk of the model's answer to `reply`: its text and its tool calls."""
+    if isinstance(chunk, str):
+        reply["text"] += chunk
+    elif isinstance(chunk, llm.ChatChunk) and chunk.delta:
+        reply["text"] += chunk.delta.content or ""
+        for call in chunk.delta.tool_calls or []:
+            reply["tool_calls"].append({"name": call.name, "arguments": call.arguments, "call_id": call.call_id})
+        if chunk.usage:
+            reply["usage"] = chunk.usage.model_dump(mode="json")
+
+
 def job_notification(news: JobNotification) -> str:
     """The note for news about a background job, modeled on how Claude Code tells its model about a background
     task: a label, then a tagged block. What to do with it is in INSTRUCTIONS, not in each note."""
@@ -141,7 +185,8 @@ class Coordinator(Agent):
 
     def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *, clock: Callable[[], datetime],
                  prep_note: str | None = None, pending_note: "asyncio.Future[str | None] | None" = None,
-                 language: CallLanguage | None = None, earlier_call: str | None = None) -> None:
+                 language: CallLanguage | None = None, earlier_call: str | None = None,
+                 direction: str = "inbound") -> None:
         # `clock` is the person's clock (Person.now): the time the call starts goes into the instructions, and
         # book_call reads it again when the user books.
         # The date and the prep note go into the instructions before the call's first reply, and stay as they
@@ -149,9 +194,11 @@ class Coordinator(Agent):
         # AI picks up (pending_note) replaces prep_note, the plain Bee context, if it arrives before that.
         self._clock = clock
         rule = f"\n{language.rule}\n" if language and language.rule else ""
-        # A call the user continued from an earlier call's record (voice/continuation.py).
-        earlier = (f"\nThe user started this call to continue an earlier call with you. That call, as it was "
-                   f"recorded:\n{earlier_call.strip()}\n") if earlier_call else ""
+        # A call that continues an earlier one (voice/continuation.py): the user started it from that call's record,
+        # or the AI places it because the user booked it in that call (BC-042).
+        how = ("You placed this call, as the user booked it in an earlier call with you; it continues that call"
+               if direction == "outbound" else "The user started this call to continue an earlier call with you")
+        earlier = (f"\n{how}. That call, as it was recorded:\n{earlier_call.strip()}\n") if earlier_call else ""
         self._base_instructions = INSTRUCTIONS + self.NOTE_RULES + rule + earlier + \
             f"\nIt is now {now_text(clock())}. Use this for words like today, tomorrow and this Saturday.\n"
         super().__init__(instructions=self._with_note(prep_note))
@@ -217,15 +264,32 @@ class Coordinator(Agent):
     async def llm_node(self, chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings):
         # Tool-call markup written as reply text is cut before it reaches the voice, the captions
         # and the history (see voice/speech_filter.py). Tool calls themselves pass through.
+        # Every request, whatever the model, goes into the call's model log as the model received it, with what
+        # came back before the filter (voice/recorder.py MODEL_LOG).
+        sent = model_request(self, chat_ctx, tools)
+        reply: dict[str, Any] = {"text": "", "tool_calls": []}
+        ended = "error"
         speech = SpeechFilter()
-        async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
-            if isinstance(chunk, llm.ChatChunk) and chunk.delta and chunk.delta.content:
-                kept = speech.feed(chunk.delta.content)
-                if kept != chunk.delta.content:
-                    chunk = chunk.model_copy(update={"delta": chunk.delta.model_copy(update={"content": kept})})
-            elif isinstance(chunk, str):
-                chunk = speech.feed(chunk)
-            yield chunk
+        try:
+            async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+                keep_reply(reply, chunk)
+                if isinstance(chunk, llm.ChatChunk) and chunk.delta and chunk.delta.content:
+                    kept = speech.feed(chunk.delta.content)
+                    if kept != chunk.delta.content:
+                        chunk = chunk.model_copy(update={"delta": chunk.delta.model_copy(update={"content": kept})})
+                elif isinstance(chunk, str):
+                    chunk = speech.feed(chunk)
+                yield chunk
+            ended = "done"
+        except (GeneratorExit, asyncio.CancelledError):
+            ended = "cut off"  # the user spoke, or the call ended
+            raise
+        except Exception as exc:
+            ended = f"error: {exc!r}"[:500]
+            raise
+        finally:
+            # The model is named once the reply is in: the first request of a call can go to GLM 5 instead.
+            self._recorder.model_request({**sent, "model": model_name(self), "reply": reply, "ended": ended})
         tail = speech.flush()
         if tail:
             yield tail
@@ -401,13 +465,13 @@ class BeeCoordinator(Coordinator):
             query: What to look for, in plain words.
         """
         async with self.waiting(context):
-            return await reads.search(query)
+            return await reads.search(query, ours=OurCalls.of(self._workspace))
 
     @function_tool
     async def bee_today(self, context: RunContext) -> str:
         """What the user's Bee wearable has for today: the daily summary, active todos, notes and recent conversations."""
         async with self.waiting(context):
-            return await reads.today(self._clock().tzinfo)
+            return await reads.today(self._clock().tzinfo, ours=OurCalls.of(self._workspace))
 
     @function_tool
     async def bee_conversation(self, context: RunContext, conversation_id: int) -> str:
@@ -417,7 +481,7 @@ class BeeCoordinator(Coordinator):
             conversation_id: The Bee conversation id, from the prep note, bee_today or search_bee.
         """
         async with self.waiting(context):
-            return await reads.conversation(conversation_id, self._clock().tzinfo)
+            return await reads.conversation(conversation_id, self._clock().tzinfo, ours=OurCalls.of(self._workspace))
 
     @function_tool
     async def propose_bee_save(self, context: RunContext, kind: str, text: str, fact_id: int | None = None,

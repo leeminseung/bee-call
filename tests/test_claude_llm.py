@@ -478,3 +478,100 @@ def test_check_request_flags_shapes_the_api_rejects():
     assert check_request([user, tool_reply, user])  # no tool_result
     assert check_request([user, tool_reply, note])  # a note between tool_use and tool_result
     assert check_request([user, reply])  # ends with an assistant message
+
+
+# ---------- Claude Haiku 5.5 on Anthropic's own API (the coordinator from 2026-10-15) ----------
+
+def test_on_anthropic_s_api_the_growing_history_is_cached_and_cache_writes_are_counted():
+    async def main():
+        client = FakeAnthropic([say("Hi!")])
+        model = ClaudeBedrockLLM(client=client, model="claude-haiku-5-5", thinking="disabled", effort="low",
+                                 auto_cache=True)
+        ctx = new_ctx()
+        ctx.add_message(role="user", content="Hello?")
+        chunks = await run_turn(model, ctx)
+        return client.calls[0], chunks
+
+    params, chunks = asyncio.run(main())
+    assert params["model"] == "claude-haiku-5-5" and params["thinking"] == {"type": "disabled"}
+    assert params["cache_control"] == {"type": "ephemeral"}  # the last block: the whole prefix is cached
+    assert params["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert not {"temperature", "top_p", "top_k"} & params.keys()  # Haiku 5.5 refuses non-default sampling
+    (usage,) = [c.usage for c in chunks if c.usage]
+    assert usage.cache_creation_tokens == 0 and usage.prompt_tokens == 100
+
+
+def test_between_tools_thinking_is_never_sent_to_a_model_other_than_sonnet_5_5():
+    """Only Claude Sonnet 5.5 accepts thinking "between_tools"; Claude Haiku 5.5 answers it with a 400."""
+    async def main():
+        client = FakeAnthropic([say("Hi!")])
+        haiku = ClaudeBedrockLLM(client=client, model="claude-haiku-5-5", thinking="between_tools", effort="low")
+        ctx = new_ctx()
+        ctx.add_message(role="user", content="Hello?")
+        await run_turn(haiku, ctx)
+        sonnet = ClaudeBedrockLLM(client=client, model="au.anthropic.claude-sonnet-5-5", thinking="between_tools")
+        await run_turn(sonnet, ctx)
+        return [c["thinking"] for c in client.calls]
+
+    assert asyncio.run(main()) == [{"type": "disabled"}, {"type": "between_tools"}]
+
+
+def said_aloud(ctx, chunks):
+    """The assistant item LiveKit adds once a turn's text is spoken: the text, with every chunk's extra merged."""
+    extra = {}
+    for c in chunks:
+        if c.delta and c.delta.extra:
+            extra.update(c.delta.extra)
+    return ctx.add_message(role="assistant", content=text_of(chunks), extra=extra)
+
+
+def test_a_refusal_is_said_as_one_short_line_and_the_call_goes_on():
+    """stop_reason "refusal" (Claude Haiku 5.5 has no server-side fallback): the caller hears a short line, nothing
+    is added to Claude's history, the words it declined are never sent again (they would be declined again, turn
+    after turn), the record says so, and the next turn works."""
+    events = []
+
+    async def main():
+        client = FakeAnthropic([[{"type": "refusal"}], say("Sure, let's plan your Saturday.")])
+        model = ClaudeBedrockLLM(client=client, model="claude-haiku-5-5", thinking="disabled",
+                                 refusal_line="Sorry, I can't help with that one.",
+                                 on_event=lambda kind, **data: events.append((kind, data)))
+        ctx = new_ctx()
+        ctx.add_message(role="user", content="something it declines")
+        first = await run_turn(model, ctx)
+        said_aloud(ctx, first)
+        ctx.add_message(role="user", content="Then let's plan Saturday.")
+        second = await run_turn(model, ctx)
+        return first, second, model, client
+
+    first, second, model, client = asyncio.run(main())
+    assert text_of(first) == "Sorry, I can't help with that one."
+    assert not any(TURN_TAG in (c.delta.extra or {}) for c in first if c.delta)  # not a reply of Claude's
+    assert text_of(second) == "Sure, let's plan your Saturday." and client.problems == []
+    turn = next(data["turn"] for kind, data in events if kind == "claude_refusal")
+    assert ("claude_refusal", {"turn": turn, "category": "general_harms", "words_out": False}) in events
+    sent = str(client.calls[1]["messages"])
+    assert "something it declines" not in sent and "Then let's plan Saturday." in sent
+    (note,) = [m["content"] for m in client.calls[1]["messages"] if m["role"] == "system"]
+    assert 'the app said this to the caller instead: "Sorry, I can\'t help with that one."' in note
+    assert [b["text"] for b in model.history[-1]["content"] if b["type"] == "text"] == ["Sure, let's plan your Saturday."]
+
+
+def test_a_refusal_after_some_words_files_none_of_them_as_claude_s():
+    """A decline can come mid-reply, after words went out: they are discarded, as the API asks, not filed as a
+    finished reply of Claude's."""
+    async def main():
+        client = FakeAnthropic([[{"type": "text", "text": "Well, the way to"}, {"type": "refusal"}], say("Okay.")])
+        model = ClaudeBedrockLLM(client=client, model="claude-haiku-5-5", thinking="disabled")
+        ctx = new_ctx()
+        ctx.add_message(role="user", content="something it declines halfway")
+        first = await run_turn(model, ctx)
+        said_aloud(ctx, first)
+        ctx.add_message(role="user", content="Never mind.")
+        await run_turn(model, ctx)
+        return first, client
+
+    first, client = asyncio.run(main())
+    assert " ".join(text_of(first).split()) == "Well, the way to Sorry, I can't help with that one."
+    sent = str(client.calls[1]["messages"])
+    assert "Well, the way to" not in sent and "something it declines halfway" not in sent and client.problems == []

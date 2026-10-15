@@ -54,6 +54,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import time
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -80,6 +81,9 @@ load_dotenv(".env.local")
 log = logging.getLogger("bee-call.token")
 KEEPALIVE_SECONDS = 15.0
 BEE_APPROVAL_SECONDS = 330  # Bee's approval link lasts about 5 minutes (bee login --no-wait)
+# A Bee login waiting for the person's approval, kept in their Bee folder, so a restart of this server goes on
+# waiting for it: {"started_at": epoch seconds}.
+BEE_PENDING = "pending.json"
 OPEN_PATHS = ("/auth/nonce", "/auth/apple")  # the only paths that need no sign-in
 BUNDLE_ID = os.environ.get("APNS_BUNDLE_ID") or voip_push.DEFAULT_BUNDLE_ID
 
@@ -377,43 +381,87 @@ async def answer_offer(request: web.Request) -> web.Response:
 
 # ---------- Bee ----------
 
-async def connect_bee(request: web.Request) -> web.Response:
-    who, people = person(request), request.app[PEOPLE]
+def wait_for_bee_approval(app: web.Application, who: str, seconds: float) -> None:
+    """Waits (in the background) up to `seconds` for the person to approve their Bee login, then turns Bee on.
+    The pending file stays while the wait is only stopped (a restart, another connect), so it can go on."""
+    people = app[PEOPLE]
     folder = people.bee_dir(who)
-    try:
-        link = await bee.start_login(folder)
-    except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
-        raise web.HTTPBadGateway(text=f"could not start a Bee login: {exc}\n")
-    waiting = request.app[BEE_LOGINS]
-    if who in waiting:
-        waiting.pop(who).cancel()
+    waiting = app[BEE_LOGINS]
 
-    async def wait_for_approval() -> None:
+    async def wait() -> None:
         try:
-            if await bee.finish_login(folder, timeout=BEE_APPROVAL_SECONDS):
-                people.change_settings(who, {"bee": True}, allowed=("bee",))
-                log.info("Bee connected for %s", who)
-        except Exception:
-            log.exception("finishing the Bee login for %s failed", who)
+            try:
+                if await bee.finish_login(folder, timeout=seconds):
+                    people.change_settings(who, {"bee": True}, allowed=("bee",))
+                    log.info("Bee connected for %s", who)
+            except asyncio.CancelledError:
+                raise  # a restart or another connect: the pending login is kept
+            except Exception:
+                log.exception("finishing the Bee login for %s failed", who)
+            (folder / BEE_PENDING).unlink(missing_ok=True)  # it ended: approved, timed out or failed
         finally:
             if waiting.get(who) is asyncio.current_task():
                 waiting.pop(who)
 
-    waiting[who] = asyncio.create_task(wait_for_approval())
+    waiting[who] = asyncio.create_task(wait())
+
+
+async def stop_waiting_for_bee(app: web.Application, who: str) -> None:
+    """Stops a wait for this person's Bee approval, and its `bee login`, before anything else runs on the folder."""
+    task = app[BEE_LOGINS].pop(who, None)
+    if task:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def connect_bee(request: web.Request) -> web.Response:
+    who, people = person(request), request.app[PEOPLE]
+    folder = people.bee_dir(who)
+    await stop_waiting_for_bee(request.app, who)  # one `bee login` at a time on a folder
+    try:
+        link = await bee.start_login(folder)
+    except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
+        raise web.HTTPBadGateway(text=f"could not start a Bee login: {exc}\n")
+    (folder / BEE_PENDING).write_text(json.dumps({"started_at": time.time()}))
+    wait_for_bee_approval(request.app, who, BEE_APPROVAL_SECONDS)
     return web.json_response({"link": link})
 
 
 async def disconnect_bee(request: web.Request) -> web.Response:
+    """Bee off, and the person's Bee login gone from this server, whatever `bee logout` says: 204 only once the
+    login folder is removed (the app clears its status on 204)."""
     who, people = person(request), request.app[PEOPLE]
-    task = request.app[BEE_LOGINS].pop(who, None)
-    if task:
-        task.cancel()
+    await stop_waiting_for_bee(request.app, who)
+    folder = people.bee_dir(who)
     try:
-        await bee.logout(people.bee_dir(who))
-    except (OSError, asyncio.TimeoutError) as exc:
-        log.warning("bee logout for %s failed: %s", who, exc)
+        await bee.logout(folder)
+    except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
+        log.warning("bee logout for %s failed (%s); removing the login here anyway", who, exc)
     people.change_settings(who, {"bee": False}, allowed=("bee",))
+    try:
+        shutil.rmtree(folder)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        log.error("could not remove the Bee login of %s: %s", who, exc)
+        raise web.HTTPBadGateway(text="Bee is off, but the server could not remove the Bee login; try again\n")
     return web.Response(status=204)
+
+
+async def resume_bee_logins(app: web.Application) -> None:
+    """At start: goes on waiting for the Bee logins a restart interrupted, while their approval links last."""
+    people = app[PEOPLE]
+    for pending in sorted((people.root / "bee").glob(f"*/{BEE_PENDING}")):
+        who = pending.parent.name
+        try:
+            started = float(json.loads(pending.read_text())["started_at"])
+        except (OSError, ValueError, KeyError, TypeError):
+            started = 0.0
+        left = BEE_APPROVAL_SECONDS - (time.time() - started)
+        if left > 0 and people.known(who):
+            wait_for_bee_approval(app, who, left)
+        else:
+            pending.unlink(missing_ok=True)
 
 
 async def stop_bee_logins(app: web.Application) -> None:
@@ -426,6 +474,7 @@ def make_app(url: str, key: str, secret: str, people: People, room_exists=liveki
     app = web.Application(middlewares=[known_hosts_only, signed_in])
     app[URL], app[KEY], app[SECRET], app[ROOM_EXISTS] = url, key, secret, room_exists
     app[PEOPLE], app[NONCES], app[VERIFY], app[BEE_LOGINS] = people, apple_signin.Nonces(), verify, {}
+    app.on_startup.append(resume_bee_logins)
     app.on_shutdown.append(stop_bee_logins)
     app.router.add_get("/auth/nonce", new_nonce)
     app.router.add_post("/auth/apple", apple_sign_in)

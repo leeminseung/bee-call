@@ -19,7 +19,6 @@ Run (voice server already running: uv run python -m voice.agent dev):
 
 import argparse
 import asyncio
-import json
 import os
 import subprocess
 import tempfile
@@ -30,6 +29,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from beelink.planner import RulePlanner
+from voice.call_folders import EVENTS, read_events
 from voice.aws_session import aws_session
 from voice.costs import SpendLog
 from voice.dispatch import open_inbound_room, open_test_call
@@ -90,9 +90,8 @@ def newest_session(workspace: Path, after: float) -> Path | None:
 def summarize(session: Path) -> None:
     print(f"\nsession folder: {session}")
     print((session / "transcript.md").read_text())
-    for line in (session / "events.jsonl").read_text().splitlines():
-        ev = json.loads(line)
-        if ev["type"] != "metrics":
+    for ev in read_events(session / EVENTS):
+        if ev.get("type") != "metrics":
             continue
         data = ev["data"]
         keep = {k: data[k] for k in ("end_of_utterance_delay", "transcription_delay", "ttft", "ttfb", "duration")

@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract.bee-call.invalid/schemas/call-view.json",
+  "title": "GET /calls/{call_id}: one call as its thread",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "call",
+    "why_calling",
+    "prep",
+    "items",
+    "captions_included",
+    "version"
+  ],
+  "properties": {
+    "call": {
+      "$ref": "defs.json#/$defs/call_summary"
+    },
+    "why_calling": {
+      "description": "Why the AI called. Null for a call the person placed.",
+      "oneOf": [
+        {
+          "$ref": "defs.json#/$defs/why_calling"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "prep": {
+      "description": "What the AI looked at before it picked up. Null when the record has no prep.",
+      "oneOf": [
+        {
+          "$ref": "defs.json#/$defs/prep"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "items": {
+      "description": "In the order to draw: each where it began (a finished job where it finished); running jobs last.",
+      "type": "array",
+      "items": {
+        "$ref": "defs.json#/$defs/item"
+      }
+    },
+    "captions_included": {
+      "description": "How many caption lines of each speaker the items already hold, counted from the start of the record. The app draws a caption line only while its number is greater (app-contract.md, section 3).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "person",
+        "ai"
+      ],
+      "properties": {
+        "person": {
+          "$ref": "defs.json#/$defs/count"
+        },
+        "ai": {
+          "$ref": "defs.json#/$defs/count"
+        }
+      }
+    },
+    "version": {
+      "$ref": "defs.json#/$defs/version"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "call": {
+            "properties": {
+              "started_by": {
+                "const": "person"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "why_calling": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "call": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "missed",
+                  "declined"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": false
+    }
+  ]
+}

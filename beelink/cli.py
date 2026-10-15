@@ -238,4 +238,6 @@ async def logged_in(folder: Path, timeout: float = 15.0) -> bool:
 
 
 async def logout(folder: Path, timeout: float = 15.0) -> None:
-    await _run_text(folder, "logout", timeout=timeout)
+    code, out = await _run_text(folder, "logout", timeout=timeout)
+    if code != 0:
+        raise BeeError(f"bee logout failed (exit {code}): {out.strip()[:200]}")

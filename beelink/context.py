@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from beelink import cli
+from beelink.calls import OurCalls
 
 MAX_CONVERSATIONS = 3
 CARD_UTTERANCES = 6
@@ -46,8 +47,9 @@ def _clock(ms: int | None, zone: tzinfo) -> str | None:
 
 
 async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: list[int] | None = None,
-                            timeout: float = READ_TIMEOUT_S) -> CallInputs:
-    """Everything a call reads from Bee, or nothing at all for a person with Use Bee off (no reads, no errors)."""
+                            timeout: float = READ_TIMEOUT_S, *, ours: OurCalls | None = None) -> CallInputs:
+    """Everything a call reads from Bee, or nothing at all for a person with Use Bee off (no reads, no errors).
+    `ours`: the person's own calls, whose Bee conversations, facts and todo suggestions are left out (BC-060)."""
     if not cli.connected():
         return CallInputs(inbox_dir=inbox_dir)
     # Each Bee CLI call takes about a second, so everything is read at once.
@@ -74,6 +76,12 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
             conv_raw, transcript_raw = pair
             inputs.conversations.append((conv_id, (conv_raw or {}).get("conversation") or {},
                                          (transcript_raw or {}).get("transcript") or []))
+    if ours is not None:
+        inputs.facts, inputs.suggestions = ours.others(inputs.facts), ours.others(inputs.suggestions)
+        inputs.recent = ours.conversations(inputs.recent)
+        if isinstance(inputs.today, dict):
+            inputs.today = {**inputs.today,
+                            "recentConversations": ours.conversations(inputs.today.get("recentConversations"))}
     return inputs
 
 

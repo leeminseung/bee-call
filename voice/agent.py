@@ -6,13 +6,19 @@ call is recorded into its session folder by CallRecorder, the Bee context for
 the call is saved into inputs/, and delegated jobs run in the background.
 
 COORDINATOR_LLM picks the model in the coordinator slot:
-  claude  Claude Sonnet 5.5 on Bedrock (the product)
-  fake    the Claude adapter with scripted replies and no network (test stand-in
-          that checks every request the way the Messages API would)
-  bedrock any other Bedrock model through the Converse API, named by COORDINATOR_MODEL
-          (stand-in while Claude is blocked on this account; probes/coordinator_bench.py compares them)
-  nova    Amazon Nova 2 Lite on Bedrock (test stand-in that can call tools)
-  echo    repeats the caller (test stand-in for the audio path)
+  anthropic Claude Haiku 5.5 on Anthropic's own API (the server's default from 2026-10-15), with the key in
+            ANTHROPIC_API_KEY and the model in COORDINATOR_MODEL (claude-haiku-5-5 when unset). GLM 5 on Bedrock
+            stands by: without a key, or when the first request of a call fails, GLM 5 takes the call, and the
+            record's coordinator_model event says which model answered and why (voice/fallback_llm.py).
+  claude    Claude on Bedrock through the same adapter: Claude Sonnet 5.5, or the model in COORDINATOR_MODEL
+            (Claude is blocked on this AWS account for now)
+  fake      the Claude adapter with scripted replies and no network (test stand-in
+            that checks every request the way the Messages API would)
+  bedrock   any other Bedrock model through the Converse API, named by COORDINATOR_MODEL (GLM 5 when unset;
+            probes/coordinator_bench.py compares them)
+  nova      Amazon Nova 2 Lite on Bedrock (test stand-in that can call tools)
+  echo      repeats the caller (test stand-in for the audio path)
+The prep and the meta agent run on GLM 5 with anthropic (voice/prep.py prep_model).
 WORKER picks what runs delegated jobs:
   fake     pretends to work for a few seconds (test stand-in, the default)
   search   one Nova Web Grounding search per job, with sources (test stand-in, costs about 0.03 USD a job)
@@ -37,6 +43,7 @@ import shutil
 import time
 from pathlib import Path
 
+import anthropic
 import boto3
 from dotenv import load_dotenv
 from livekit import rtc
@@ -45,6 +52,7 @@ from livekit.plugins import aws, silero
 from livekit.plugins.aws.stt import Credentials
 
 from beelink import cli as bee
+from beelink.calls import OurCalls
 from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
 from beelink.writer import BeeWrites, event_fields, summary_notification
 from voice.aws_session import aws_profile, aws_session
@@ -57,9 +65,10 @@ from voice.coordinator import BeeCoordinator, Coordinator
 from voice.dispatch import AGENT_NAME, RING_SECONDS, declined
 from voice.echo_llm import EchoLLM
 from voice.fake_claude import FakeAnthropic
+from voice.fallback_llm import FirstRequestFallback
 from voice.language import CallLanguage, call_language
 from voice.people import People, dev_person
-from voice.prep import INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_model
+from voice.prep import GLM_5, INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_model
 from voice.recorder import CallRecorder
 from voice.ringback import STATE_ATTRIBUTE, ring_back
 from voice.voices import make_tts, voice_choice
@@ -76,22 +85,30 @@ COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
 # For COORDINATOR_LLM=bedrock. GLM 5 speaks while it calls a tool. MiniMax M2.5 scored best in
 # probes/coordinator_bench.py (2026-10-12) but calls tools without a word, and in the first real
 # call (2026-10-13) the caller heard silence for 23-28 s whenever they kept talking meanwhile.
-COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "zai.glm-5")
+COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", GLM_5)
+HAIKU = "claude-haiku-5-5"  # COORDINATOR_LLM=anthropic when COORDINATOR_MODEL is unset; no prefix on Anthropic's API
+# Anthropic's API, as the call AI uses it: the SDK does not retry (a failed first request goes to GLM 5 at once, and
+# LiveKit retries later ones); no route to it shows within 3 s.
+ANTHROPIC_TIMEOUT = anthropic.Timeout(20.0, connect=3.0)
 WORKER = os.environ.get("WORKER", "fake")
-FIRST_WORDS_WAIT_S = 6.0  # ringing stops when the AI starts to speak, or after this long anyway (arbitrary)
+# A call the user started rings until the AI's voice starts, and at most this long after the caller is in the
+# room: the opening is ready within OPENING_BY_S (6 s) and the voice takes about 2 s more (BC-025).
+RINGING_AT_MOST_S = 8.0
 # The ways of leaving a room that LiveKit ends the session for (livekit/agents/voice/room_io/types.py
 # DEFAULT_CLOSE_ON_DISCONNECT_REASONS): the caller hung up. Others (a lost network) it waits out.
 HANG_UPS = (rtc.DisconnectReason.CLIENT_INITIATED, rtc.DisconnectReason.ROOM_DELETED,
             rtc.DisconnectReason.USER_REJECTED)
-CALLER_WAIT_S = 5.0  # how long a call the user started waits to see the caller in the room (arbitrary)
+# How long a call the user started waits to see the caller in the room: as long as the app keeps ringing once it
+# joined (ios CallManager.pickUpSeconds), so a phone slow to join is never given up while it still rings.
+CALLER_WAIT_S = 30.0
 DECLINE_CHECK_S = 1.0  # how often a ringing AI call looks whether the user declined it (arbitrary)
 # After a call, its failed Bee writes are tried again for at most this long: LiveKit gives a job's shutdown about
 # 10 s (shutdown_process_timeout), and the call's own record is closed first (arbitrary).
 BEE_RETRY_S = 5.0
-TURN_ENDPOINTING = {"mode": "dynamic", "min_delay": 0.5, "max_delay": 3.0}  # LiveKit 1.8.6 EndpointingOptions
-# After the user answers an AI call, its prepared opening does not wait longer than this for the Bee read
-# that only feeds the call record (arbitrary).
-OUTBOUND_INPUTS_WAIT_S = 0.5
+# How long LiveKit waits after the caller stops before it ends their turn, learned during the call between these
+# bounds (LiveKit 1.8.6 EndpointingOptions). The user's choice (2026-10-15): 0.5-3.0 s left most turns waiting at
+# the cap, about 2.4 s; 0.3-2.5 s.
+TURN_ENDPOINTING = {"mode": "dynamic", "min_delay": 0.3, "max_delay": 2.5}
 
 log = logging.getLogger("bee-call")
 
@@ -111,7 +128,9 @@ def transcribe_credentials(session: boto3.Session | None) -> Credentials | None:
                        session_token=creds.token)
 
 
-def make_llm(rec: CallRecorder) -> llm.LLM:
+def make_llm(rec: CallRecorder, language: CallLanguage) -> llm.LLM:
+    if COORDINATOR_LLM == "anthropic":
+        return claude_with_glm_standing_by(rec, language)
     if COORDINATOR_LLM == "echo":
         return EchoLLM()
     if COORDINATOR_LLM == "nova":
@@ -127,6 +146,37 @@ def make_llm(rec: CallRecorder) -> llm.LLM:
     raise SystemExit(f"unknown COORDINATOR_LLM {COORDINATOR_LLM!r}")
 
 
+def anthropic_client(**options) -> anthropic.AsyncAnthropic:
+    """Anthropic's own API (tests put a fake here)."""
+    return anthropic.AsyncAnthropic(**options)
+
+
+def claude_with_glm_standing_by(rec: CallRecorder, language: CallLanguage) -> llm.LLM:
+    """COORDINATOR_LLM=anthropic: Claude Haiku 5.5 on Anthropic's own API, GLM 5 on Bedrock standing by. The record's
+    coordinator_model event names the model that answered the call, and why it is not Claude when it is not."""
+    def glm() -> llm.LLM:
+        return aws.LLM(model=GLM_5, region=BEDROCK_REGION)
+
+    claude_model = os.environ.get("COORDINATOR_MODEL") or HAIKU
+
+    def chosen(model: llm.LLM, reason: str | None) -> None:
+        rec.event("coordinator_model", model=model.model, provider=model.provider,
+                  **({"instead_of": claude_model, "reason": reason} if reason else {}))
+
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        model = glm()
+        chosen(model, "ANTHROPIC_API_KEY is not set")
+        return model
+    client = anthropic_client(api_key=key, max_retries=0, timeout=ANTHROPIC_TIMEOUT)
+    # Thinking off for speed (Claude Haiku 5.5 takes "disabled" at effort high or below); one effort per call.
+    claude = ClaudeBedrockLLM(client=client, model=claude_model,
+                              thinking=os.environ.get("COORDINATOR_THINKING", "disabled"),
+                              effort=os.environ.get("COORDINATOR_EFFORT", "low"), auto_cache=True,
+                              refusal_line=language.refusal, on_event=rec.event)
+    return FirstRequestFallback(claude, glm, on_choice=chosen)
+
+
 def as_dict(obj):
     if isinstance(obj, dict):
         return obj
@@ -137,9 +187,64 @@ def as_dict(obj):
     return str(obj)
 
 
+class TurnTiming:
+    """Where the time of each user turn went, as one turn_timing event in the call record: when the user's speech
+    ended, how long the transcript and the end-of-turn decision took, the model's first token, the voice's first
+    audio and the total from the end of speech to it. From LiveKit's metrics on each message (MetricsReport): a user
+    turn's own, and those of the reply that follows it; a turn the next user turn came before any reply to has
+    reply None. Never raises into the call."""
+
+    USER = {"user_started_at": "started_speaking_at", "user_stopped_at": "stopped_speaking_at",
+            "transcription_delay": "transcription_delay", "end_of_turn_delay": "end_of_turn_delay",
+            "on_user_turn_completed_delay": "on_user_turn_completed_delay"}
+    REPLY = {"llm_ttft": "llm_node_ttft", "llm_ttfs": "llm_node_ttfs", "tts_ttfb": "tts_node_ttfb",
+             "ai_started_at": "started_speaking_at", "speech_end_to_first_audio": "e2e_latency"}
+
+    def __init__(self, rec: CallRecorder) -> None:
+        self.rec = rec
+        self.waiting: list[dict] = []  # user turns not answered yet
+
+    def user(self, metrics) -> None:
+        self.waiting.append(metrics if isinstance(metrics, dict) else {})
+
+    def reply(self, metrics) -> None:
+        if not self.waiting:
+            return
+        *unanswered, answered = self.waiting
+        self.waiting = []
+        for user in unanswered:
+            self._write(user, None)
+        self._write(answered, metrics if isinstance(metrics, dict) else {})
+
+    def flush(self) -> None:
+        for user in self.waiting:
+            self._write(user, None)
+        self.waiting = []
+
+    def _write(self, user: dict, reply: dict | None) -> None:
+        try:
+            fields = {name: number_or_none(user.get(key)) for name, key in self.USER.items()}
+            if reply is None:
+                fields["reply"] = None
+            else:
+                fields |= {name: number_or_none(reply.get(key)) for name, key in self.REPLY.items()}
+                if fields["speech_end_to_first_audio"] is None and None not in (fields["ai_started_at"],
+                                                                                 fields["user_stopped_at"]):
+                    fields["speech_end_to_first_audio"] = round(fields["ai_started_at"] - fields["user_stopped_at"], 3)
+            self.rec.event("turn_timing", **fields)
+        except Exception:
+            log.exception("could not record a turn's timing")
+
+
+def number_or_none(value) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def wire_events(session: AgentSession, rec: CallRecorder) -> None:
     # LiveKit calls these handlers inside its reply pipeline; an exception here would
     # cut the pipeline (a missing reply), so every handler is wrapped.
+    timing = TurnTiming(rec)
+
     def on(event_name: str):
         def register(handler):
             def safe(ev) -> None:
@@ -174,6 +279,7 @@ def wire_events(session: AgentSession, rec: CallRecorder) -> None:
         metrics = as_dict(item.metrics) if getattr(item, "metrics", None) else None
         rec.event("message", role=role, text=text, interrupted=interrupted, metrics=metrics)
         rec.line("User" if role == "user" else "AI", text, interrupted)
+        (timing.user if role == "user" else timing.reply)(metrics)
 
     @on("function_tools_executed")
     def _(ev) -> None:
@@ -199,6 +305,7 @@ def wire_events(session: AgentSession, rec: CallRecorder) -> None:
 
     @on("close")
     def _(ev) -> None:
+        timing.flush()
         rec.event("session_closed", reason=str(getattr(ev, "reason", "")))
 
 
@@ -295,11 +402,18 @@ def greeting(meta: dict, language: CallLanguage) -> str:
     return lines["inbound"]
 
 
-async def read_by(task: asyncio.Task, seconds: float) -> CallInputs | None:
-    """The task's Bee inputs if they are read within `seconds`; None while still reading (the task keeps going)."""
+def read_already(task: asyncio.Task) -> CallInputs | None:
+    """The task's Bee inputs if it has read them already; None while it is still reading (or it failed)."""
+    if task.done() and not task.cancelled() and task.exception() is None:
+        return task.result()
+    return None
+
+
+async def brief_once_read(task: asyncio.Task, meta: dict) -> str | None:
+    """The plain Bee context, once the task has read Bee (None if the read failed)."""
     try:
-        return await asyncio.wait_for(asyncio.shield(task), seconds)
-    except asyncio.TimeoutError:
+        return call_brief(await asyncio.shield(task), meta)
+    except Exception:
         return None
 
 
@@ -320,13 +434,14 @@ def make_session(ctx: JobContext, language: CallLanguage, tts_voice, rec: CallRe
     ctx.proc.userdata["transcribe_credentials"] = transcribe_credentials(ctx.proc.userdata["aws"])
     return AgentSession(
         stt=aws.STT(region=REGION, language=language.transcribe, credentials=ctx.proc.userdata["transcribe_credentials"]),
-        llm=make_llm(rec),
+        llm=make_llm(rec, language),
         tts=make_tts(tts_voice, language, REGION),
         vad=ctx.proc.userdata["vad"],
         # Named rather than left to LiveKit's defaults, which follow the launch mode: `dev` (a Mac) picks LiveKit's
         # cloud turn detector and adaptive interruptions, `start` (the server) a local model and voice activity only.
-        # The wait before a turn counts as over learns how long this caller pauses mid-sentence (between 0.5 and
-        # 3 s): with LiveKit's fixed 0.3 s, the 2026-10-15 call cut one answer into five turns at pauses of 1-1.9 s.
+        # The wait before a turn counts as over learns how long this caller pauses mid-sentence (TURN_ENDPOINTING:
+        # 0.3-2.5 s): with LiveKit's fixed 0.3 s, the 2026-10-15 call cut one answer into five turns at pauses of
+        # 1-1.9 s.
         turn_handling={"turn_detection": inference.TurnDetector(version="v1"), "interruption": {"mode": "adaptive"},
                        "endpointing": TURN_ENDPOINTING},
     )
@@ -384,7 +499,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
     first_words = asyncio.Event()  # the AI's voice has started
     if meta.get("direction") == "outbound":
         # Prepared before the phone rang (voice/outbound.py). Bee is read again for the call's record meanwhile.
-        inputs_task = asyncio.create_task(fetch_call_inputs(inbox, conversation_ids))
+        inputs_task = asyncio.create_task(fetch_call_inputs(inbox, conversation_ids, ours=OurCalls.of(workspace)))
         answer = await wait_for_answer(ctx, workspace)
         if answer != "answered":
             log.info("the call in room %s was %s", ctx.room.name, answer)
@@ -400,8 +515,9 @@ async def run_call(ctx: JobContext, people: People) -> None:
             return
         prep = Prep.from_meta(meta.get("prep")) or Prep(error="the call was placed without a prep note")
         preparation = ringing = left = None
-        # This read is for the call record, and for the plain Bee context only when the call has no prep note.
-        inputs = await read_by(inputs_task, OUTBOUND_INPUTS_WAIT_S if prep.note else INBOUND_READ_TIMEOUT_S)
+        # The AI speaks as soon as the phone answers (BC-022). This read is for the call record, and for the plain
+        # Bee context when the call has no prep note, which then reaches the AI once the read lands.
+        inputs = read_already(inputs_task)
     else:
         # The user called: they hear ringing while the AI reads Bee and starts its prep. It picks up as soon as
         # its opening is written; the note usually follows during the opening (voice/prep.py).
@@ -424,20 +540,29 @@ async def run_call(ctx: JobContext, people: People) -> None:
 
         ctx.room.on("participant_disconnected", caller_left)
         ctx.room.on("participant_connected", lambda participant: the_caller(participant) and left.clear())
+        never_came = None  # why the caller is gone without having been seen, for the log
         try:
             await asyncio.wait_for(ctx.wait_for_participant(), CALLER_WAIT_S)
+            seen = time.monotonic()  # the opening's 6 s and the ringing's 8 s count from here (BC-025)
         except asyncio.TimeoutError:
-            # The app's join made this room, so a caller not in it has hung up already, and no disconnect will
-            # come. (LiveKit's console mode has no caller in a room.)
+            seen = time.monotonic()
+            # The app's join made this room, so a caller not in it by now left before the voice server came, and no
+            # disconnect will be seen. (LiveKit's console mode has no caller in a room.)
             if not ctx.is_fake_job():
+                never_came = f"no caller came into the room within {CALLER_WAIT_S:g} s"
                 left.set()
+        except Exception as exc:  # LiveKit's wait raises when the room goes away meanwhile
+            seen = time.monotonic()
+            never_came = f"the room closed before the caller came into it ({exc})"
+            left.set()
 
         async def get_ready() -> CallInputs:
             nonlocal preparation
-            got = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S)
+            ours = OurCalls.of(workspace)  # what Bee made of earlier calls is not new context (BC-060)
+            got = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S, ours=ours)
             preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM), spend=SpendLog(workspace), bee=uses_bee,
-                                      now=someone.now(), language=language).start()
-            await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - started))
+                                      now=someone.now(), language=language, ours=ours).start()
+            await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - seen))
             return got
 
         ready = None
@@ -446,7 +571,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
             await asyncio.wait({ready, hung_up}, return_when=asyncio.FIRST_COMPLETED)
             hung_up.cancel()
         if left.is_set():  # also when the prep was ready at the same moment
-            log.info("the caller hung up while it rang, in room %s", ctx.room.name)
+            why = never_came or "the caller hung up while it rang"
+            log.info("%s, in room %s", why, ctx.room.name)
             for task in (ready, ringing, keep_warm):
                 if task:
                     task.cancel()
@@ -454,7 +580,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
                 preparation.cancel()
                 await asyncio.gather(preparation.done, return_exceptions=True)  # its cost is recorded by then
             await asyncio.gather(*[task for task in (ready, ringing) if task], return_exceptions=True)
-            ctx.shutdown(reason="the caller hung up while it rang")
+            ctx.shutdown(reason=why)
             return
         inputs = ready.result()
         prep = preparation.prep
@@ -518,9 +644,11 @@ async def run_call(ctx: JobContext, people: People) -> None:
     # Until (or without) a prep note, the plain Bee context. A note still being written replaces it when it
     # arrives, up to the first reply.
     pending = preparation.done if preparation is not None and not preparation.done.done() else None
+    if pending is None and not prep.note and inputs_saver is not None:  # an AI call answered before Bee was read
+        pending = asyncio.ensure_future(brief_once_read(inputs_task, meta))
     agent = (BeeCoordinator if uses_bee else Coordinator)(
         rec, jobs, workspace, clock=someone.now, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
-        language=language, earlier_call=meta.get("earlier_call"))
+        language=language, earlier_call=meta.get("earlier_call"), direction=meta.get("direction", "inbound"))
 
     def abandoned() -> bool:
         """The caller hung up before the AI's first words: the call leaves no record."""
@@ -550,11 +678,12 @@ async def run_call(ctx: JobContext, people: People) -> None:
             rec.close()
             shutil.rmtree(rec.dir, ignore_errors=True)
             return
-        if isinstance(session.llm, ClaudeBedrockLLM):
-            session.llm.settle()  # a last reply may still be waiting to be committed
+        claude = getattr(session.llm, "active", session.llm)  # behind GLM 5 standing by, the model that answered
+        if isinstance(claude, ClaudeBedrockLLM):
+            claude.settle()  # a last reply may still be waiting to be committed
             # Exactly what Claude was sent, for checking a call afterwards.
             (rec.dir / "claude-history.json").write_text(json.dumps(
-                {"system": session.llm.system_prompt, "messages": session.llm.history}, ensure_ascii=False, indent=1))
+                {"system": claude.system_prompt, "messages": claude.history}, ensure_ascii=False, indent=1))
         write_usage(rec, session)
         rec.close()
         # The meta agent looks at every call once it is over (meta/agent.py).
@@ -579,10 +708,11 @@ async def run_call(ctx: JobContext, people: People) -> None:
         session.say(prep.opening or greeting(meta, language))
         if ringing is not None:  # ring on through the session start and the voice's first syllable
             spoke, gone = asyncio.create_task(first_words.wait()), asyncio.create_task(left.wait())
-            done, _ = await asyncio.wait({spoke, gone}, timeout=FIRST_WORDS_WAIT_S, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait({spoke, gone}, timeout=max(0.0, RINGING_AT_MOST_S - (time.monotonic() - seen)),
+                                         return_when=asyncio.FIRST_COMPLETED)
             spoke.cancel(), gone.cancel()
             if not done:
-                log.warning("no first words within %ss in room %s", FIRST_WORDS_WAIT_S, ctx.room.name)
+                log.warning("no first words %ss after the caller came, in room %s", RINGING_AT_MOST_S, ctx.room.name)
     finally:
         if ringing is not None:
             ringing.cancel()

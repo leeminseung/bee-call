@@ -98,6 +98,20 @@ def made_todo(response: Any) -> dict[str, Any]:
     return response if shaped else {}
 
 
+def the_fact(response: Any) -> dict[str, Any]:
+    """The fact from Bee's answer: {"fact": {...}} or the fact itself, which the Bee CLI's own parser
+    (parseFactResponse in bee 0.7.3) takes only with a numeric id and created_at, a text, a confirmed flag and tags.
+    Anything else is no fact ({})."""
+    if not isinstance(response, dict):
+        return {}
+    if isinstance(response.get("fact"), dict):
+        return response["fact"]
+    shaped = (isinstance(response.get("id"), int) and isinstance(response.get("text"), str)
+              and isinstance(response.get("created_at"), (int, float)) and isinstance(response.get("confirmed"), bool)
+              and isinstance(response.get("tags"), list))
+    return response if shaped else {}
+
+
 async def take_back(write: BeeWrite) -> dict[str, Any]:
     """Undoes a write that went in."""
     if write.kind in ("todo_create", "todo_accept"):
@@ -162,7 +176,7 @@ class BeeWrites:
         before = None
         if item.get("kind") == "fact_update":  # kept so the user can take the fix back
             try:
-                before = (await cli.fact(item["fact_id"], timeout=cli.CALL_WAIT_S)).get("fact")
+                before = the_fact(await cli.fact(item["fact_id"], timeout=cli.CALL_WAIT_S)) or None
             except Exception:
                 before = None
         # The key is taken and recorded with nothing awaited in between, so writes made at the same time (one

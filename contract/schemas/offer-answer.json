@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract.bee-call.invalid/schemas/offer-answer.json",
+  "title": "POST /offers/{offer_id}: the offer after the answer",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["offer"],
+  "properties": {
+    "offer": {
+      "$ref": "defs.json#/$defs/offer",
+      "properties": {"state": {"enum": ["booked", "calling", "declined"]}}
+    }
+  }
+}

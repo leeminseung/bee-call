@@ -137,7 +137,9 @@ def test_the_call_ai_keeps_a_quiet_transcript_out_and_notes_it_in_the_call_recor
 
 def test_the_wait_before_a_turn_ends_learns_the_caller_s_pauses(monkeypatch):
     # LiveKit fills unset keys from defaults that depend on the turn detector: for the cloud detector the server uses
-    # (a streaming one) a fixed 0.3 s, which is what the 2026-10-15 call had. Ours: learned, from 0.5 s up to 3 s.
+    # (a streaming one) a fixed 0.3 s, which is what the 01:23 call of 2026-10-15 had. Ours: learned, from 0.3 s up to
+    # 2.5 s (the user's choice, 2026-10-15, after the 14:22 call with 0.5-3.0 s: a median of 2.7 s from the end of
+    # speech to the AI's voice, and 11 of 18 turns waiting at the cap, against 1.2 s with the fixed 0.3/2.5).
     from livekit.agents import inference
     from livekit.agents.voice.endpointing import DynamicEndpointing, create_endpointing
     from livekit.agents.voice.turn import _resolve_endpointing
@@ -150,4 +152,4 @@ def test_the_wait_before_a_turn_ends_learns_the_caller_s_pauses(monkeypatch):
     assert _resolve_endpointing(None, turn_detection=detector)["min_delay"] == 0.3  # LiveKit's own, before
     timer = create_endpointing(_resolve_endpointing(TURN_ENDPOINTING, turn_detection=detector))
     assert isinstance(timer, DynamicEndpointing)
-    assert timer.min_delay == 0.5 and timer.max_delay == 3.0
+    assert timer.min_delay == 0.3 and timer.max_delay == 2.5

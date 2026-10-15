@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract.bee-call.invalid/schemas/me.json",
+  "title": "GET /me: who is signed in, their settings and Bee's state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["person", "settings", "spent_today_usd", "bee_connecting"],
+  "properties": {
+    "person": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"},
+    "settings": {"$ref": "defs.json#/$defs/settings"},
+    "spent_today_usd": {"type": "number", "minimum": 0, "description": "Today's estimated spend. The app does not read it."},
+    "bee_connecting": {"type": "boolean", "description": "A Bee approval is pending in the Bee app."}
+  }
+}

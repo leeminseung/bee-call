@@ -115,8 +115,13 @@ class FakeStream:
 
     async def get_final_message(self) -> SimpleNamespace:
         usage = SimpleNamespace(input_tokens=100, output_tokens=20, cache_read_input_tokens=0, cache_creation_input_tokens=0)
-        stop = "tool_use" if any(b["type"] == "tool_use" for b in self.blocks) else "end_turn"
-        return SimpleNamespace(content=[FakeBlock(b) for b in self.blocks], stop_reason=stop, usage=usage)
+        if any(b["type"] == "refusal" for b in self.blocks):  # a scripted decline: {"type": "refusal"}
+            stop = "refusal"
+        else:
+            stop = "tool_use" if any(b["type"] == "tool_use" for b in self.blocks) else "end_turn"
+        content = [FakeBlock(b) for b in self.blocks if b["type"] != "refusal"]
+        return SimpleNamespace(content=content, stop_reason=stop, usage=usage,
+                               stop_details=SimpleNamespace(category="general_harms") if stop == "refusal" else None)
 
 
 class FakeAnthropic:
