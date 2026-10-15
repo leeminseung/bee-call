@@ -149,7 +149,7 @@ struct HomeView: View {
     @AppStorage("language") private var language = "en"
 
     private var words: ConversationWords { ConversationWords(korean: language == "ko") }
-    private var booked: [OfferCenter.Offer] { offers.open.filter { $0.state == "booked" } }
+    private var booked: [Offer] { offers.open.filter { $0.state == .booked || $0.state == .calling } }
 
     var body: some View {
         ZStack {
@@ -190,6 +190,9 @@ struct HomeView: View {
             }
             .padding(.horizontal, 12)
         }
+        // "전화 취소" on the pinned row asks first, with the system's alert naming the time (review of 2026-10-15,
+        // finding 4: in design D the tap showed nothing).
+        .modifier(CancelBookedCallAlert(offers: offers, language: language))
     }
 
     private var topBar: some View {

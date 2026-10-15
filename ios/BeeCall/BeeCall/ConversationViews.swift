@@ -402,9 +402,9 @@ struct Stamp: View {
 }
 
 /// The booked call pinned at the top (design D, frame 1): when, about what, and "전화 취소", which asks first
-/// (OfferCenter's alert).
+/// (CancelBookedCallAlert). A call being placed now says so, and can no longer be called off.
 struct BookedPin: View {
-    let offer: OfferCenter.Offer
+    let offer: Offer
     let language: String
     let cancel: () -> Void
 
@@ -412,26 +412,29 @@ struct BookedPin: View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 TimelineView(.everyMinute) { clock in
-                    Label(offer.bookedLine(language: language, now: clock.date), systemImage: "clock")
+                    Label(offer.state == .calling ? Offer.callingLine(language: language)
+                          : offer.bookedLine(language: language, now: clock.date), systemImage: "clock")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(BeeStyle.ink)
                         .lineLimit(1)
                 }
-                Text(offer.about(language: language))
+                Text(offer.topic)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
-            Button(action: cancel) {
-                Text(OfferCenter.Offer.cancelButton(language: language))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(BeeStyle.red)
-                    .padding(.horizontal, 13)
-                    .frame(height: 36)
-                    .background(Color(.tertiarySystemFill), in: .capsule)
+            if offer.state == .booked {
+                Button(action: cancel) {
+                    Text(Offer.cancelButton(language: language))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BeeStyle.red)
+                        .padding(.horizontal, 13)
+                        .frame(height: 36)
+                        .background(Color(.tertiarySystemFill), in: .capsule)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.leading, 14)
         .padding(.trailing, 9)

@@ -4,7 +4,7 @@ import SwiftUI
 /// Debug builds only: launched with `-designD <frame>`, the app shows one frame of design D
 /// (scratch/2026-10-15-ui-mockups/d-chat-and-call.html) with the design's own content (brief-common.md), to compare
 /// with the mockup and take screenshots before the server's call view exists. Nothing goes to a server or to
-/// CallKit: the offers come from OfferDemo's stand-in, the calls from DemoConversation.
+/// CallKit: the offers come from the contract's examples (ContractExamples), the calls from DemoConversation.
 enum DesignDemo: String {
     case home // frame 1
     case call // frame 2: the call screen
@@ -163,8 +163,7 @@ struct DemoVoices: VoiceCatalog, VoiceSamples {
 struct DesignDemoView: View {
     let demo: DesignDemo
     let calls: CallManager
-    @State private var offers = OfferCenter(server: ServerClient(transport: OfferDemo.StandIn(
-        language: "ko", topic: "도서관에서 정리한 할 일 다시 보기")))
+    @State private var offers = OfferCenter(server: ServerClient(transport: ContractExamples()))
     @State private var jump: String?
     @State private var liveDemo = DemoConversation(live: true)
     @State private var presentation = CallPresentation()
