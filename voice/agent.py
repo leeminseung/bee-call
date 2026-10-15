@@ -74,6 +74,7 @@ from voice.language import CallLanguage, call_language
 from voice.people import People, Person, Settings, dev_person
 from voice.prep import GLM_5, INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_model
 from voice.recorder import CallRecorder
+from voice.titles import title_call
 from voice.ringback import STATE_ATTRIBUTE, ring_back
 from voice.voices import make_tts, voice_choice
 from worker.fake import FakeWorker
@@ -696,7 +697,8 @@ async def tell_about_job(call: Call, news: JobNotification) -> None:
 
 
 async def end_call(call: Call) -> None:
-    """The call's end (the job's shutdown): what it cost, its record closed, the meta agent told, Bee writes retried."""
+    """The call's end (the job's shutdown): what it cost, its record closed, the meta agent told, then its title
+    written (voice/titles.py) while its failed Bee writes are tried again."""
     caller, rec, session = call.caller, call.rec, call.session
     # LiveKit runs this in a task of its own, which does not carry the Bee login chosen for the call: choose it
     # again, so the writes retried after the call go to this person's Bee and no one else's.
@@ -734,8 +736,11 @@ async def end_call(call: Call) -> None:
     # The meta agent looks at every call once it is over (meta/agent.py).
     add_event(caller.workspace, "call_ended", now=caller.someone.now(), call=f"{rec.dir.parent.name}/{rec.dir.name}",
               direction=call.meta.get("direction", "inbound"))
-    if caller.uses_bee:  # last, so a slow Bee never keeps the call's record open
+    # The title (at most 5 s) runs beside the Bee retry, after the record is closed, so neither keeps it open.
+    titled = asyncio.create_task(title_call(rec.dir, caller.language, workspace=caller.workspace))
+    if caller.uses_bee:
         await after_bee_writes(rec, caller.someone, caller.language)
+    await asyncio.gather(titled, return_exceptions=True)
 
 
 async def run_call(ctx: JobContext, people: People) -> None:

@@ -295,8 +295,9 @@ def read_call(record: Record, zone: tzinfo) -> Call:
     t = 0.0
     for n, e in lines:
         t = _number(e.get("t")) if _number(e.get("t")) is not None else t
-        call.last_t = max(call.last_t, t)
         kind = e.get("type")
+        if kind != "call_titled":  # written after the call, at its last time: never what the call lasted
+            call.last_t = max(call.last_t, t)
         if kind == "call":
             call.has_call_event = True
             call.direction = e.get("direction") if isinstance(e.get("direction"), str) else None

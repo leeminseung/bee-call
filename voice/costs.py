@@ -14,8 +14,9 @@ It is an estimate from what the processes write down, not AWS's bill:
   state/spend.jsonl                use recorded where it happens, outside a call's own record (SpendLog): every
                                    call prep (voice/prep.py, in voice/outbound.py before the AI's call rings and in
                                    the voice server while the user's call rings), also for calls nobody answered
-                                   and calls hung up while they rang, and every worker warm-up; and what a
-                                   call left before the AI spoke used, since its folder goes (voice/agent.py)
+                                   and calls hung up while they rang, every worker warm-up, and each call's
+                                   title written after it (voice/titles.py); and what a call left before the AI
+                                   spoke used, since its folder goes (voice/agent.py)
 A call still going on has no usage.json yet; it counts by its minutes so far at CALL_USD_PER_MINUTE. A call's
 call_prep event only shows the prep on the call's record; its cost is in state/spend.jsonl.
 

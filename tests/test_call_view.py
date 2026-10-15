@@ -235,7 +235,8 @@ def test_a_record_without_an_end_is_live_while_it_shows_life_and_dropped_after_t
     record(tmp_path, [INBOUND, say(2, "Hi."), hear(40.6, "Hello?")], age_s=119)
     assert (view(tmp_path)["call"]["state"], view(tmp_path)["call"]["duration_s"]) == ("live", None)
     shutil.rmtree(tmp_path / "2026-10-15")
-    record(tmp_path, [INBOUND, say(2, "Hi."), hear(40.6, "Hello?")], age_s=121)
+    record(tmp_path, [INBOUND, say(2, "Hi."), hear(40.6, "Hello?"),
+                      {"t": 99, "type": "call_titled", "title": "Hello"}], age_s=121)
     assert (view(tmp_path)["call"]["state"], view(tmp_path)["call"]["duration_s"]) == ("dropped", 41)
 
 

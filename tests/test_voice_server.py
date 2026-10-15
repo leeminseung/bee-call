@@ -520,6 +520,35 @@ def test_a_quiet_call_s_record_shows_life_while_the_call_runs(tmp_path, monkeypa
     assert while_running > long_ago + 1000 and after_the_end == long_ago
 
 
+def test_after_the_call_its_title_is_asked_for_once_the_record_is_closed(tmp_path, monkeypatch, quick):
+    """Decision 7 of the contract: the title is written after the call, beside the Bee retry, and never keeps the
+    record open (voice/titles.py)."""
+    from voice.call_folders import call_folders
+
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"language": "ko"})
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+    asked = []
+
+    async def title_call(folder, language, *, workspace, client="default"):
+        asked.append((folder, language.code, workspace, json.loads(
+            (folder / "events.jsonl").read_text().splitlines()[-1])["type"]))
+        return "제목"
+
+    monkeypatch.setattr(agent, "title_call", title_call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    (folder,) = call_folders(me.workspace)
+    assert asked == [(folder, "ko", me.workspace, "call_ended")]
+
+
 def test_claude_s_history_is_kept_when_it_answers_with_glm_5_standing_by(tmp_path, monkeypatch, quick):
     """COORDINATOR_LLM=anthropic: the session's model is the stand-by wrapper, and Claude's history (exactly what
     Claude was sent) is still kept for checking the call afterwards."""
