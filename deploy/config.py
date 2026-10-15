@@ -53,6 +53,7 @@ NOT_FOR_THE_SERVER = {
     "BEE_BIN": "the server's Bee CLI is set in its units",
     "TZ": "the units set the server's clock zone",
     "TOKEN_SERVER_PORT": "Caddy expects the token server on 8787",
+    "BEE_CALL_CLOCK_FILE": "a test clock (voice/people.py clock_now); a server keeps the real one",
 }
 REFUSED = set(NOT_FOR_THE_SERVER)
 

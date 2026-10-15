@@ -31,6 +31,7 @@ import re
 import secrets
 import shutil
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields
@@ -52,6 +53,23 @@ LEGACY_DEVICE_FILES = {"voip": Path("state") / "voip_token.json", "alert": Path(
 
 def data_root() -> Path:
     return Path(os.environ.get("BEE_CALL_DATA") or "data")
+
+
+def clock_now(zone: ZoneInfo) -> datetime:
+    """Now, in `zone`. For tests from outside (never on a server: deploy/config.py NOT_FOR_THE_SERVER),
+    BEE_CALL_CLOCK_FILE names a file holding one ISO 8601 time with its zone, such as 2026-10-15T20:55:00+09:00:
+    from the moment the file was written it is that time, and the clock runs on from there. A file that is missing
+    or holds anything else leaves the real clock."""
+    path = os.environ.get("BEE_CALL_CLOCK_FILE", "").strip()
+    if path:
+        try:
+            clock = Path(path)
+            given = datetime.fromisoformat(clock.read_text().strip())
+            if given.tzinfo is not None:
+                return (given + timedelta(seconds=time.time() - clock.stat().st_mtime)).astimezone(zone)
+        except (OSError, ValueError):
+            pass
+    return datetime.now(zone)
 
 
 def on_a_server() -> bool:
@@ -183,7 +201,7 @@ class Person:
         """The one clock for the person's time: now, in their time zone (aware). Every "the user's time" comes from
         here: the suggested call time, quiet hours, the day's notifications and budget, the 30 minutes after a
         call, call folder dates, booked times, and the "It is now" lines the models read."""
-        return datetime.now(self.settings().zone())
+        return clock_now(self.settings().zone())
 
     def device(self, kind: str) -> dict[str, Any] | None:
         """This person's phone for one kind of push: {"token", "environment"}, or None."""

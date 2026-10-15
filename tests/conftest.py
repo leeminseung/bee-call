@@ -12,7 +12,7 @@ FAKE_BEE = Path(__file__).parent / "fakebee" / "bee"
 @pytest.fixture(autouse=True)
 def plain_environment(monkeypatch, tmp_path):
     # The modules load .env.local when imported; these would change who a request is and where data lives.
-    for name in ("BEE_CALL_DEV_PERSON", "BEE_CALL_PUBLIC_HOST", "BEE_CALL_DATA"):
+    for name in ("BEE_CALL_DEV_PERSON", "BEE_CALL_PUBLIC_HOST", "BEE_CALL_DATA", "BEE_CALL_CLOCK_FILE"):
         monkeypatch.delenv(name, raising=False)
     # Bee calls fail unless someone's login is chosen; tests that do not choose use the fake CLI as this machine.
     cli.use_machine_bee()
