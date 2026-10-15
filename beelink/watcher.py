@@ -82,7 +82,10 @@ class BeeWatcher:
         if not cursor:
             return
         self._cursor_file.parent.mkdir(parents=True, exist_ok=True)
-        self._cursor_file.write_text(json.dumps({"cursor": cursor, "saved_at": datetime.now().isoformat()}))
+        # A new file put in place, as meta/session.py saves its cursor: a save cut off halfway leaves the last one.
+        tmp = self._cursor_file.with_name(f".{self._cursor_file.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"cursor": cursor, "saved_at": datetime.now().isoformat()}))
+        tmp.replace(self._cursor_file)
 
     # ---------- catching up ----------
 

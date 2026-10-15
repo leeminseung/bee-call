@@ -180,6 +180,25 @@ def test_our_call_windows_survive_a_line_still_being_written(tmp_path):
     assert window[1] - window[0] == 60
 
 
+def test_a_cursor_save_cut_off_halfway_keeps_the_last_cursor(tmp_path, monkeypatch):
+    """Server review 19: the meta session saved its cursor in one step (a new file put in place), the watcher wrote
+    over its cursor file directly, so a save cut off halfway (a full disk, a kill) left half a file, and the next
+    catch-up could not read where it was."""
+    watcher = BeeWatcher(tmp_path / "workspace", lambda trigger: None)
+    watcher._save_cursor("cursor-1")
+    real_write = Path.write_text
+
+    def cut_off(self, text, *args, **kwargs):
+        real_write(self, text[: len(text) // 2], *args, **kwargs)
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(Path, "write_text", cut_off)
+    with pytest.raises(OSError):
+        watcher._save_cursor("cursor-2")
+    monkeypatch.setattr(Path, "write_text", real_write)
+    assert watcher._load_cursor() == "cursor-1"
+
+
 def test_watcher_ignores_empty_batches(tmp_path, fake_bee, monkeypatch):
     changed_file = tmp_path / "changed.json"
     changed_file.write_text(json.dumps({"meta": {"next_cursor": "c"}, "conversations": [], "facts": [],
