@@ -54,6 +54,7 @@ NOT_FOR_THE_SERVER = {
     "TZ": "the units set the server's clock zone",
     "TOKEN_SERVER_PORT": "Caddy expects the token server on 8787",
     "BEE_CALL_CLOCK_FILE": "a test clock (voice/people.py clock_now); a server keeps the real one",
+    "APNS_URL": "a test receiver for pushes (voice/voip_push.py); a server pushes to Apple",
 }
 REFUSED = set(NOT_FOR_THE_SERVER)
 
