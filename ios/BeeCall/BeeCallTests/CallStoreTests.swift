@@ -133,4 +133,55 @@ final class CallStoreTests: XCTestCase {
         XCTAssertEqual(CallStore.ownCall(room: "call-minseung-20261015-012301", in: again.calls)?.call.callID,
                        "call-minseung-20261015-012301.2", "the newest record of the room")
     }
+
+    // MARK: - Second review of the D wiring, finding 6
+
+    /// A new call pushes the first page's last call down to where the older pages begin: it stays in the thread.
+    @MainActor func testACallPushedOffTheFirstPageStays() async throws {
+        let server = FakeServer()
+        var first = try XCTUnwrap(JSONSerialization.jsonObject(with: ContractTests.example("calls")) as? [String: Any])
+        server.replies["GET /calls"] = .json(200, first)
+        let store = CallStore(server: server.client())
+        await store.refreshList()
+        let pushedOff = try XCTUnwrap(store.calls.last?.call.callID)
+        var calls = try XCTUnwrap(first["calls"] as? [[String: Any]])
+        var newest = calls[0]
+        newest["call_id"] = "call-minseung-20261015-180000"
+        newest["started_at"] = "2026-10-15T18:00:00+09:00"
+        calls = [newest] + calls.dropLast() // a page of the same size: the last call moves to the next page
+        first["calls"] = calls
+        first["version"] = "0123456789abcdef"
+        server.replies["GET /calls"] = .json(200, first)
+        await store.refreshList()
+        XCTAssertEqual(store.calls.first?.call.callID, "call-minseung-20261015-180000")
+        XCTAssertTrue(store.calls.contains { $0.call.callID == pushedOff }, "not lost between the pages")
+        XCTAssertEqual(Set(store.calls.map(\.call.callID)).count, store.calls.count, "no call twice")
+    }
+
+    @MainActor func testTwoTapsLoadAnOlderPageOnce() async throws {
+        let server = FakeServer()
+        server.replies["GET /calls"] = .status(200, try text("calls"))
+        let store = CallStore(server: server.client())
+        await store.refreshList()
+        server.replies["GET /calls"] = .slow(.milliseconds(200), "{\"calls\": [], \"more\": false, \"before\": null, \"version\": \"0000000000000001\"}")
+        async let one: Void = store.loadOlder()
+        async let two: Void = store.loadOlder()
+        _ = await (one, two)
+        XCTAssertEqual(server.requests.filter { $0.url?.query?.contains("before=") == true }.count, 1)
+    }
+
+    /// One fetch of a view at a time; a change announced during it fetches again after it, so the newer body is the
+    /// one kept, never an older answer that lands last.
+    @MainActor func testAViewIsFetchedOnceAtATimeAndAgainAfterAChange() async throws {
+        let server = FakeServer(), id = "call-minseung-20261015-012301"
+        server.replies["GET /calls/\(id)"] = .slow(.milliseconds(200), try text("call-view-live"))
+        let store = CallStore(server: server.client())
+        let first = Task { await store.refreshView(id) }
+        try await Task.sleep(for: .milliseconds(50))
+        server.replies["GET /calls/\(id)"] = .status(200, try text("call-view"))
+        await store.refreshView(id) // while the first is out: it waits for it, then asks again
+        await first.value
+        await waitUntil("the newer view is kept") { store.views[id]?.call.state == .ended }
+        XCTAssertEqual(server.requests.count, 2)
+    }
 }

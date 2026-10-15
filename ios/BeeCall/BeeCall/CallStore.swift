@@ -8,12 +8,17 @@ import Observation
 @Observable
 final class CallStore {
     private(set) var list: CallList? // the first page
-    private(set) var older: [CallEntry] = [] // the older pages loaded, newest first
+    /// Every call a page gave, by id, the newest word on each: a call a new one pushes off the first page stays,
+    /// and none shows twice (second review of the D wiring, finding 6).
+    private var known: [String: CallEntry] = [:]
     private(set) var views: [String: CallView] = [:]
     private(set) var missing: Set<String> = [] // views the server has no record for (404), until it does
     private(set) var problem: String? // the last fetch that did not come through, in words
     private var olderLoaded = false // an older page has come
     private var olderCursor: String? // the next older page after the last one loaded
+    @ObservationIgnored private var loadingOlder = false // a second tap waits for the page on its way
+    @ObservationIgnored private var fetching: Set<String> = [] // views on their way: one fetch per view at a time
+    @ObservationIgnored private var fetchAgain: Set<String> = [] // asked for while on their way
     @ObservationIgnored private var announced: [String: String] = [:] // path → the version /changes said
     @ObservationIgnored private let server: ServerClient
 
@@ -23,7 +28,7 @@ final class CallStore {
 
     /// The calls, newest first.
     var calls: [CallEntry] {
-        (list?.calls ?? []) + older
+        known.values.sorted { ($0.call.startedAt.date, $0.call.callID) > ($1.call.startedAt.date, $1.call.callID) }
     }
 
     /// Older calls exist that are not loaded.
@@ -36,29 +41,42 @@ final class CallStore {
     func refreshList() async {
         guard let body: CallList = await fetch("/calls", holding: list?.version) else { return }
         list = body
-        announced["/calls"] = body.version
+        for entry in body.calls { known[entry.id] = entry }
     }
 
     func loadOlder() async {
-        guard let before = olderLoaded ? olderCursor : list?.before else { return }
+        guard !loadingOlder, let before = olderLoaded ? olderCursor : list?.before else { return }
+        loadingOlder = true
+        defer { loadingOlder = false }
         var query = URLComponents()
         query.queryItems = [URLQueryItem(name: "before", value: before)]
         guard let page: CallList = await fetch("/calls?" + (query.percentEncodedQuery ?? ""), holding: nil) else {
             return
         }
-        older += page.calls
+        for entry in page.calls where known[entry.id] == nil { known[entry.id] = entry } // the first page is newer
         olderCursor = page.more ? page.before : nil
         olderLoaded = true
     }
 
+    /// Fetches a call's view. One fetch per view at a time: one asked for while another is on its way waits for
+    /// it and then asks again, so an older answer never lands after a newer one.
     func refreshView(_ callID: String) async {
+        guard fetching.insert(callID).inserted else {
+            fetchAgain.insert(callID)
+            return
+        }
+        await fetchView(callID)
+        fetching.remove(callID)
+        if fetchAgain.remove(callID) != nil { await refreshView(callID) }
+    }
+
+    private func fetchView(_ callID: String) async {
         let path = Self.viewPath(callID)
         switch await answer(path, holding: views[callID]?.version) {
         case .body(let data):
             guard let view = read(CallView.self, data) else { return }
             views[callID] = view
             missing.remove(callID)
-            announced[path] = view.version
         case .notFound:
             missing.insert(callID)
         case .unchanged, .failed:
