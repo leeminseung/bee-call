@@ -630,3 +630,27 @@ def test_a_line_still_being_written_is_left_out(tmp_path):
     with (path / "events.jsonl").open("a") as f:
         f.write('{"t": 3, "type": "user_transcript", "text": "Hel')
     assert speech(view(tmp_path)) == [("ai", "Hi.")]
+
+
+def test_one_changes_rebuild_reads_the_records_and_ring_logs_once_however_many_calls_it_watches(tmp_path, monkeypatch):
+    """The coordinator's review of 2026-10-15 (queued): each watched call's view scanned every record again and
+    re-read state/outbound.jsonl and meta/events.jsonl, so a rebuild of 200 calls touched in the last ten minutes
+    (the title backfill) took about 4 s on the token server's event loop. One rebuild now takes one look."""
+    for n in range(30):
+        record(tmp_path, [INBOUND, say(2, f"Call {n}."), CLOSED, ENDED], folder=f"2026-10-15/20{n:02d}",
+               room=f"call-matt-{n}", started=f"2026-10-15T20:{n:02d}:00+09:00", age_s=5)
+    looked = {"call_ids": 0, "_rings": 0}
+    for name in looked:
+        real = getattr(call_view, name)
+
+        def counted(*args, _real=real, _name=name, **kwargs):
+            looked[_name] += 1
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(call_view, name, counted)
+    versions, folders = call_view.changes(tmp_path, zone=SEOUL, language="en", now=EVENING, wall=WALL)
+    assert len(folders) == 30 and len(versions) == 31 and looked == {"call_ids": 1, "_rings": 1}
+    one = call_view.call_view(tmp_path, "call-matt-7", zone=SEOUL, language="en", now=EVENING, wall=WALL)
+    assert versions["/calls/call-matt-7"] == one["version"]  # the same answer GET gives
+    assert versions["/calls"] == call_view.call_list(tmp_path, zone=SEOUL, language="en", now=EVENING,
+                                                      wall=WALL)["version"]

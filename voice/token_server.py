@@ -481,17 +481,10 @@ def versions_now(request: web.Request) -> tuple[dict[str, str], list[Path]]:
     """The version of each path /changes watches (the list's first page, the offers, each watched call), and the
     folders of the watched calls."""
     settings = request.app[PEOPLE].settings(person(request))
-    zone, now, cache = settings.zone(), someone(request).now(), call_records(request)
-    found = {"/calls": call_view.call_list(workspace(request), zone=zone, language=settings.language, now=now,
-                                           cache=cache)["version"],
-             "/offers": offers_body(request)["version"]}
-    watched = call_view.watched_calls(workspace(request), zone=zone, now=now, cache=cache)
-    for call_id, _ in watched:
-        body = call_view.call_view(workspace(request), call_id, zone=zone, language=settings.language, now=now,
-                                   cache=cache)
-        if body is not None:
-            found[f"/calls/{call_id}"] = body["version"]
-    return found, [folder for _, folder in watched]
+    found, folders = call_view.changes(workspace(request), zone=settings.zone(), language=settings.language,
+                                       now=someone(request).now(), cache=call_records(request))
+    found["/offers"] = offers_body(request)["version"]
+    return found, folders
 
 
 async def changes(request: web.Request) -> web.StreamResponse:
