@@ -340,7 +340,8 @@ async def serve_person(people: People, person_id: str, settings: Settings) -> No
     async def on_trigger(trigger: Trigger) -> None:
         add_event(workspace, "bee_change", now=person.now(), **bee_event(trigger, workspace))
 
-    thinker = Thinker(workspace, send=send, call_time=settings.call_time, bee=settings.bee)
+    thinker = Thinker(workspace, send=send, call_time=settings.call_time, bee=settings.bee,
+                      language=settings.language)
     # A TaskGroup: if one loop fails, the others stop too, so serve_people() never starts a second set beside
     # survivors of the first.
     async with asyncio.TaskGroup() as group:
@@ -414,7 +415,8 @@ async def main() -> None:
     async def send(offer: Offer, ws: Path, now: datetime) -> str:
         return await send_offer(offer, person, now, language)
 
-    thinker = Thinker(workspace, send=send, call_time=settings.call_time, bee=settings.bee)
+    thinker = Thinker(workspace, send=send, call_time=settings.call_time, bee=settings.bee,
+                      language=settings.language)
     if args.once:
         if args.rules:
             made = await handle(saved_trigger(args.once), planner, args.dry_run, person)

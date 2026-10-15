@@ -315,11 +315,12 @@ class OfferStore:
                 raise QuestionWaiting(waiting[0])
             return self._save(offer)
 
-    def book(self, topic: str, call_at: datetime, now: datetime, continue_from: str | None = None) -> Offer:
-        """A call the user asked for out loud, such as "call me tomorrow at 8"."""
+    def book(self, topic: str, call_at: datetime, now: datetime, continue_from: str | None = None,
+             language: CallLanguage | None = None) -> Offer:
+        """A call the user asked for out loud, such as "call me tomorrow at 8". Its reason is said to the person, in
+        the call's `language`, as the call's card shows it (app contract, decision 2)."""
         offer = Offer(id=self._new_id(now), state="booked", source="call", topic=topic,
-                      reason=f"In a call at {now:%H:%M}, the user asked to be called back: {topic}",
-                      call_at=_iso(call_at), continue_from=continue_from,
+                      reason=booked_reason(now, language), call_at=_iso(call_at), continue_from=continue_from,
                       history=[{"at": _iso(now), "state": "booked"}])
         with self._lock():
             return self._save(offer)
@@ -396,6 +397,13 @@ class OfferStore:
         self.expire(now)
         until = now + ahead
         return [o for o in self.all() if o.state in ("now", "booked") and o.at("call_at") and o.at("call_at") <= until]
+
+
+def booked_reason(now: datetime, language: CallLanguage | None) -> str:
+    """Why the AI calls at a time the person booked out loud, said to them in their language."""
+    if language is not None and language.code == "ko":
+        return f"{clock_label(now, language)} 통화에서 이 시간에 다시 전화해 달라고 하셨어요."
+    return f"In our call at {now:%-I:%M %p}, you asked me to call you back at this time."
 
 
 def booked_call(offer: Offer) -> bool:

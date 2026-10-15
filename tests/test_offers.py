@@ -5,6 +5,7 @@ No network: APNs, the prep and placing a call are fakes here.
 
 import asyncio
 import json
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -296,6 +297,8 @@ def test_a_call_back_the_user_asks_for_is_booked_and_continues_this_call(tmp_pat
     assert (offer.state, offer.source, offer.topic) == ("booked", "call", "how the interview went")
     assert offer.call_at == tomorrow.isoformat(timespec="seconds")
     assert offer.continue_from == f"{rec.dir.parent.name}/{rec.dir.name}"
+    assert offer.reason.startswith("In our call at ") and offer.reason.endswith(", you asked me to call you back at "
+                                                                                 "this time.")
     assert "Ask the user for a later time" in asyncio.run(agent.book_call(None, topic="x", at="2020-01-01T08:00"))
     assert "ISO 8601" in asyncio.run(agent.book_call(None, topic="x", at="tomorrow at 8"))
     assert len(OfferStore(workspace).all()) == 1
@@ -850,3 +853,12 @@ def test_an_unknown_offer_is_404_whatever_the_request_body(tmp_path):
             return statuses
 
     assert asyncio.run(main()) == [404] * 5
+
+
+def test_a_call_booked_in_a_korean_call_says_why_in_korean():
+    """Decision 2 of the app contract: the reason shows on the call's card, in the person's language."""
+    store_dir = Path(tempfile.mkdtemp(prefix="book-"))
+    now = datetime(2026, 10, 15, 14, 27, tzinfo=SEOUL)
+    offer = OfferStore(store_dir).book("도서관에서 정리한 할 일 다시 보기", now + timedelta(hours=4), now,
+                                       language=call_language("ko"))
+    assert offer.reason == "오후 2시 27분 통화에서 이 시간에 다시 전화해 달라고 하셨어요."

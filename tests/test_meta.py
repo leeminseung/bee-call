@@ -126,6 +126,24 @@ def test_one_think_looks_things_up_offers_a_call_and_logs_its_own_words(tmp_path
     assert entry["events"][0]["kind"] == "bee_change"
 
 
+def test_the_meta_agent_writes_an_offer_s_topic_and_why_in_the_person_s_language(tmp_path):
+    """Decision 2 of the app contract: the topic and the reason show on the person's screen (the question, the call's
+    card), so the meta agent writes them in the person's language, the reason said to the person."""
+    ws = workspace_with_a_call(tmp_path)
+    model = ScriptedModel([{"role": "assistant", "content": [{"text": "Nothing to do."}]}])
+    asyncio.run(Thinker(ws, ("m", "r"), client=model, bee=True, language="ko").think([{"kind": "bee_change",
+                                                                                        "at": "x"}], NOW))
+    system = model.sent[0]["system"][0]["text"]
+    assert "The user's language is Korean: write offer_call's topic and why in Korean" in system
+    (offer_call,) = [t for t in model.sent[0]["toolConfig"]["tools"] if t["toolSpec"]["name"] == "offer_call"]
+    properties = offer_call["toolSpec"]["inputSchema"]["json"]["properties"]
+    assert "the user's language" in properties["topic"]["description"]
+    assert "said to the user" in properties["why"]["description"]
+    english = ScriptedModel([{"role": "assistant", "content": [{"text": "Nothing."}]}])
+    asyncio.run(Thinker(ws, ("m", "r"), client=english, bee=False).think([{"kind": "bee_change", "at": "x"}], NOW))
+    assert "The user's language is English" in english.sent[0]["system"][0]["text"]
+
+
 def test_doing_nothing_is_logged_too_and_a_failure_proposes_nothing(tmp_path):
     ws = workspace_with_a_call(tmp_path)
     quiet_model = ScriptedModel([{"role": "assistant", "content": [{"text": "A two-line hello. Nothing to do."}]}])

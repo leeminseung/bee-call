@@ -404,7 +404,7 @@ class Coordinator(Agent):
         store = OfferStore(self._workspace)
         moved = self._booked is not None and store.call_off(self._booked, now, "moved to a new time") is not None
         session = f"{self._recorder.dir.parent.name}/{self._recorder.dir.name}"  # the booked call continues this one
-        offer = store.book(topic.strip() or "a call back", when, now, continue_from=session)
+        offer = store.book(topic.strip() or "a call back", when, now, continue_from=session, language=self._language)
         self._booked = offer.id  # one call back per call: booking again moves it
         self._recorder.event("call_booked", offer=offer.id, at=offer.call_at, topic=offer.topic)
         verb = "Moved the call back" if moved else "Booked"
