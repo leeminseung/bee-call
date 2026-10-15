@@ -43,6 +43,21 @@ final class CallLifecycleTests: XCTestCase {
         XCTAssertEqual(room.leaves, 1)
     }
 
+    /// Review finding 15: a hang-up while the call joins must not start the recording on this iPhone, which would
+    /// then run on into the next call's file.
+    @MainActor func testACallEndedWhileItJoinsIsNotRecorded() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room)
+        room.holdsJoin = true
+        let id = try await start(calls, callKit)
+        await waitUntil("the join has begun") { room.joins.count == 1 }
+        calls.perform(CXEndCallAction(call: id))
+        await waitUntil("the call has ended") { !calls.isInCall }
+        room.releaseJoin()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(room.recordingStarts, 0)
+        XCTAssertEqual(calls.status, "Call ended")
+    }
+
     // MARK: - The AI's call, answered
 
     /// The AI's call rings, and the person answers it on CallKit's screen.

@@ -58,6 +58,8 @@ final class LiveKitClient: NSObject {
         try Task.checkCancellation() // the call ended while we got the room ready
         try await room.connect(url: access.url, token: access.token)
         try await room.localParticipant.setMicrophone(enabled: microphoneOn)
+        // The call may have ended during those waits; then its voice levels must not start (review finding 15).
+        guard room === self.room else { throw CancellationError() }
         voices.microphoneOn = microphoneOn
         voices.start()
         if room.remoteParticipants.values.contains(where: { $0.attributes[Self.stateAttribute] == "answered" }) {
