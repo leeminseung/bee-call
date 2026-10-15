@@ -4,16 +4,32 @@
   "title": "GET /voices?language=: the voices of one call language",
   "type": "object",
   "additionalProperties": false,
-  "required": ["language", "voices"],
+  "required": [
+    "language",
+    "voices"
+  ],
   "properties": {
-    "language": {"enum": ["en", "ko"]},
+    "language": {
+      "enum": [
+        "en",
+        "ko"
+      ]
+    },
     "voices": {
-      "description": "Five voices, in the order to list them. Exactly one is the default.",
+      "description": "The language's voices, from 1 to 12, in the order to list them (the default first). Exactly one is the default.",
       "type": "array",
-      "minItems": 5,
-      "maxItems": 5,
-      "items": {"$ref": "defs.json#/$defs/voice"},
-      "contains": {"properties": {"default": {"const": true}}},
+      "minItems": 1,
+      "maxItems": 12,
+      "items": {
+        "$ref": "defs.json#/$defs/voice"
+      },
+      "contains": {
+        "properties": {
+          "default": {
+            "const": true
+          }
+        }
+      },
       "minContains": 1,
       "maxContains": 1
     }
