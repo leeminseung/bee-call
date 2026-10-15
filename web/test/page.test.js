@@ -385,3 +385,48 @@ test("an error reads in plain words, and the raw error is not one tap away outsi
   debug.feed([error]);
   assert.match(debug.visibleText(debug.one("error")), /HTTP 502/);
 });
+
+/** A fetch that answers every request with this JSON body. */
+const answering = (body, status = 200) => async () => ({
+  ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body),
+});
+
+const metaRun = {
+  entries: [{
+    at: "2026-10-15T19:02:00", events: [{ kind: "bee_change", inbox: "inbox/1902" }],
+    decision: "Dana's hike plan changed; worth a short call tonight.",
+    error: "ThrottlingException: Rate exceeded (Bedrock)",
+    actions: [
+      { tool: "offer_call", topic: "Saturday hike", result: "notification sent: About “Saturday hike”: free for a quick call?" },
+      { tool: "search_bee", result: "[{\"id\": 5121, \"score\": 0.82}]" },
+      { tool: "write_state", result: "notes updated" },
+    ],
+    tools: [{ name: "bee_today", input: {}, result: "{\"todos\": []}" }],
+    model: "claude-sonnet-5-5", seconds: 12.3,
+  }],
+  state: "Dana: easy trails only.",
+};
+
+test("between calls, a normal page shows what Bee Call noticed and did, not its raw tool calls or model", async () => {
+  const page = loadPage({ hash: "#/meta", fetch: answering(metaRun) });
+  await page.settle();
+  const shown = page.visibleText(page.byId("view"));
+  assert.match(shown, /Dana's hike plan changed; worth a short call tonight\./);
+  assert.match(shown, /Asked you about a call: “Saturday hike”\./);
+  assert.match(shown, /Updated what it keeps track of/);
+  assert.match(shown, /It could not finish this time\./);
+  for (const internal of [/ThrottlingException/, /claude-sonnet-5-5/, /What it looked at/, /search_bee/, /bee_today/,
+    /notification sent/, /12\.3 s/]) {
+    assert.doesNotMatch(shown, internal);
+  }
+});
+
+test("between calls, the debug view still shows the raw tool calls, the model and the error", async () => {
+  const page = loadPage({ hash: "#/meta", search: "?debug=1", prefs: { debug: "1" }, fetch: answering(metaRun) });
+  await page.settle();
+  const shown = page.visibleText(page.byId("view"));
+  for (const internal of [/ThrottlingException/, /claude-sonnet-5-5/, /What it looked at \(1\)/, /search_bee/,
+    /notification sent/]) {
+    assert.match(shown, internal);
+  }
+});

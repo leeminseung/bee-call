@@ -19,6 +19,8 @@
   // The debug toggle, and the debug events behind it, exist only with ?debug=1 in the address, which the iPhone
   // app adds in its Debug builds. A call record otherwise shows the conversation, why the AI called, and its jobs.
   const DEBUG_ALLOWED = /(?:^\?|&)debug=1(?:&|$)/.test(location.search);
+  // The debug view: in such a page, once switched on with the toggle (the choice is kept).
+  const debugViewOn = () => DEBUG_ALLOWED && readPref("debug") === "1";
 
   const $ = (id) => document.getElementById(id);
   const view = $("view");
@@ -378,16 +380,23 @@
         }
         card.append(list);
       }
-      if (entry.error) card.append(el("p", "job-error", `It could not finish: ${entry.error}`));
+      // What it noticed, decided and did, in words; its tool calls, raw results, model and raw errors only in the
+      // debug view.
+      const debug = debugViewOn();
+      if (entry.error) {
+        card.append(el("p", "job-error", debug ? `It could not finish: ${entry.error}` : "It could not finish this time."));
+      }
       if (entry.decision) card.append(el("p", "meta-decision", entry.decision));
       const actions = Array.isArray(entry.actions) ? entry.actions : [];
       for (const a of actions) {
-        const text = a.tool === "offer_call" ? `Asked you about a call: “${a.topic}”. ${a.result || ""}`
-          : a.tool === "write_state" ? "Updated what it keeps track of" : `${a.tool}: ${a.result || ""}`;
-        card.append(el("p", "card-note", text));
+        let text = null;
+        if (a.tool === "offer_call") text = `Asked you about a call: “${a.topic}”.${debug && a.result ? ` ${a.result}` : ""}`;
+        else if (a.tool === "write_state") text = "Updated what it keeps track of";
+        else if (debug) text = `${a.tool}: ${a.result || ""}`;
+        if (text) card.append(el("p", "card-note", text));
       }
       const tools = Array.isArray(entry.tools) ? entry.tools : [];
-      if (tools.length) {
+      if (debug && tools.length) {
         const details = el("details", "meta-tools");
         details.append(el("summary", null, `What it looked at (${tools.length})`));
         for (const t of tools) {
@@ -399,7 +408,7 @@
         card.append(details);
       }
       const foot = [entry.model, typeof entry.seconds === "number" ? `${entry.seconds.toFixed(1)} s` : null].filter(Boolean);
-      if (foot.length) card.append(el("p", "card-note", foot.join(", ")));
+      if (debug && foot.length) card.append(el("p", "card-note", foot.join(", ")));
       return card;
     }
 
@@ -445,7 +454,7 @@
   class SessionPage {
     constructor(id) {
       this.id = id;
-      this.debug = DEBUG_ALLOWED && readPref("debug") === "1";
+      this.debug = debugViewOn();
       this.events = [];
       this.ready = false; // the backlog has arrived
       this.reconnecting = false;
