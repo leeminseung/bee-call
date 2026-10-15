@@ -10,7 +10,10 @@ struct ConversationRoot: View {
     let source: any ConversationSource
     let offers: OfferCenter
     let status: String
+    let voices: any VoiceCatalog & VoiceSamples
     @State private var presentation: CallPresentation
+    @State private var preview: VoicePreview
+    @State private var settingsOpen = false // the gear's sheet (frame 8)
     @State private var notice = ResultNotice()
     @State private var jump: String?
     @State private var opened: ConversationCall? // a call that is over, open as a sheet
@@ -18,22 +21,28 @@ struct ConversationRoot: View {
     @Namespace private var zoom
 
     init(calls: CallManager, source: any ConversationSource, offers: OfferCenter, status: String,
-         presentation: CallPresentation = CallPresentation()) {
+         voices: any VoiceCatalog & VoiceSamples, presentation: CallPresentation = CallPresentation()) {
         self.calls = calls
         self.source = source
         self.offers = offers
         self.status = status
+        self.voices = voices
         _presentation = State(initialValue: presentation)
+        _preview = State(initialValue: VoicePreview(samples: voices))
     }
 
     var body: some View {
         HomeView(source: source, calls: calls, offers: offers, status: status, glowing: notice.glowing, jump: $jump,
-                 showCallScreen: { presentation.show(.callScreen) }, openSettings: {}, openCall: { opened = $0 },
+                 showCallScreen: { presentation.show(.callScreen) }, openSettings: { settingsOpen = true },
+                 openCall: { opened = $0 },
                  startCall: { Task { await calls.startCall() } }, zoom: zoom)
             .fullScreenCover(isPresented: Binding(get: { presentation.showsCallScreen(inCall: calls.isInCall) },
                                                   set: { if !$0 { presentation.show(.conversation) } })) {
                 CallModeView(calls: calls, job: pill, showConversation: { presentation.show(.conversation) })
                     .zoomTransition("call", in: zoom)
+            }
+            .sheet(isPresented: $settingsOpen) {
+                SettingsSheet(catalog: voices, preview: preview)
             }
             .sheet(item: $opened, onDismiss: continueOpenedCall) { call in
                 CallSheet(call: call) {

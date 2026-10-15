@@ -16,6 +16,7 @@ enum DesignDemo: String {
     case recordEnd // frame 6, right: the same sheet at its end
     case firstRun // frame 7, left: the first run's language step
     case firstRunVoice // frame 7, right: the voice step, with a sample playing
+    case settings // frame 8: the gear's settings sheet
 
     static func requested(in store: UserDefaults = .standard) -> DesignDemo? {
         store.string(forKey: "designD").flatMap(DesignDemo.init(rawValue:))
@@ -195,6 +196,14 @@ struct DesignDemoView: View {
                               continueCall: {}, startAtEnd: demo == .recordEnd)
                 }
                 .task { await offers.refresh() }
+        case .settings:
+            HomeView(source: DemoConversation(live: false), calls: calls, offers: offers,
+                     status: "준비됨 · 앱을 닫아도 전화가 와요", jump: $jump, showCallScreen: {}, openSettings: {},
+                     openCall: { _ in }, startCall: {})
+                .sheet(isPresented: .constant(true)) {
+                    SettingsSheet(catalog: DemoVoices(), preview: preview)
+                }
+                .task { await offers.refresh() }
         case .firstRun, .firstRunVoice:
             FirstRunView(catalog: DemoVoices(), preview: preview, startOn: demo == .firstRunVoice ? .voice : nil) {}
                 .task {
@@ -203,10 +212,11 @@ struct DesignDemoView: View {
                     if let daon = DemoVoices().voices(for: .ko).first(where: { $0.id == "daon" }) { preview.toggle(daon) }
                 }
         case .live:
-            ConversationRoot(calls: calls, source: liveDemo, offers: offers, status: "")
+            ConversationRoot(calls: calls, source: liveDemo, offers: offers, status: "", voices: DemoVoices())
                 .task { calls.playDesignDemo(lines: DesignDemo.callLines, voice: .both, connectedAgo: 218) }
         case .result, .resultConversation:
-            ConversationRoot(calls: calls, source: liveDemo, offers: offers, status: "", presentation: presentation)
+            ConversationRoot(calls: calls, source: liveDemo, offers: offers, status: "", voices: DemoVoices(),
+                             presentation: presentation)
                 .task {
                     calls.playDesignDemo(lines: DesignDemo.callLines + [(true, "주로 파이썬이고 머신러닝도 조금 해요. 도서관이나 카페에서 일할 때가 많아요.")],
                                          voice: .ai, connectedAgo: 236)
