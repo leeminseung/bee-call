@@ -51,7 +51,13 @@ OLD_STATE_FILE = Path("workspace") / "state" / "harness.json"  # where it was be
 # stands in (Matt, 2026-10-13): steps take 1-5 s and it runs the code interpreter. Kimi K3 checked
 # sources more carefully but thought for up to a minute or more per step and cannot use the code
 # interpreter in the harness.
-DEFAULT_MODEL = os.environ.get("WORKER_MODEL", "zai.glm-5")
+def default_model() -> str:
+    """The model the harness runs: the model catalog's (GLM_5_WORKER), or a machine's WORKER_MODEL to try another
+    (then the catalog's run settings for GLM 5 do not apply to it)."""
+    return os.environ.get("WORKER_MODEL") or model_catalog.GLM_5_WORKER.model
+
+
+DEFAULT_MODEL = default_model()  # as this process started (also scripts/deploy_worker.py --model's default)
 # Kimi K3 in the harness fails on its first model call ("The task request was rejected by the
 # target") when the built-in code interpreter is attached, and works without it (2026-10-12).
 # Nova 2 Lite (2026-10-12) and GLM 5 (2026-10-13) work with it. Claude is untested (blocked).

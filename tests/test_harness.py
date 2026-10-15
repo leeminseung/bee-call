@@ -115,6 +115,20 @@ def test_the_harness_runs_glm_5_as_the_model_catalog_says(monkeypatch):
         "additionalModelRequestFields": {"reasoning_effort": "medium"}}
 
 
+def test_the_harness_s_model_is_the_catalog_s_unless_a_machine_sets_another(monkeypatch):
+    """Review of the Claude worker, finding 6: the harness's model id came from its own default, not the catalog's;
+    WORKER_MODEL stays a machine's override for trying another model (then the catalog's settings do not apply)."""
+    import worker.harness as harness
+    from voice import costs, model_catalog
+
+    monkeypatch.delenv("WORKER_MODEL", raising=False)
+    monkeypatch.setattr(model_catalog, "GLM_5_WORKER", model_catalog.Offering("agentcore", "zai.glm-6", 1e-6, 3e-6))
+    assert harness.default_model() == "zai.glm-6"
+    assert costs.job_model({}) == "zai.glm-6"  # a harness job's usage.json from before it named its model
+    monkeypatch.setenv("WORKER_MODEL", "moonshotai.kimi-k3")
+    assert harness.default_model() == costs.job_model({}) == "moonshotai.kimi-k3"
+
+
 def test_the_worker_s_reasoning_is_counted_in_its_usage(tmp_path):
     """How the reasoning switch shows in a job: the harness streams GLM 5's reasoning, and the job's usage.json
     counts its characters."""

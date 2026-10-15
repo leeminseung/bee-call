@@ -38,6 +38,7 @@ from typing import Any
 
 from beelink.clock import parse_time
 from voice.call_folders import EVENTS, read_events
+from voice import model_catalog
 from voice.model_catalog import SERVER_TOOL_USD, price
 from voice.people import Person
 
@@ -95,12 +96,17 @@ def _call_minutes(folder: Path) -> float:
     return max((_number(event.get("t")) for event in read_events(folder / EVENTS)), default=0.0) / 60
 
 
+def job_model(usage: dict[str, Any]) -> str:
+    """The model a job's usage.json names; an AgentCore harness job's from before it named one ran the harness's
+    model (worker/harness.py default_model: WORKER_MODEL, or the catalog's GLM 5)."""
+    return usage.get("model") or os.environ.get("WORKER_MODEL") or model_catalog.GLM_5_WORKER.model
+
+
 def job_cost(usage: dict[str, Any]) -> float:
     """A background job's usage.json: its model's tokens (cache reads and writes too), the server tools its provider
     charges for (the Claude worker's web searches, worker/claude.py), and the web_search calls this Mac ran for it
     (Nova Web Grounding, for the harness and the search stand-in)."""
-    # An AgentCore harness job's usage.json from before it named its model: it is WORKER_MODEL.
-    model = usage.get("model") or os.environ.get("WORKER_MODEL", "zai.glm-5")
+    model = job_model(usage)
     tokens = llm_cost(model, usage.get("input_tokens"), usage.get("output_tokens"), usage.get("cache_read"),
                       usage.get("cache_write"))
     server = usage.get("server_tools") if isinstance(usage.get("server_tools"), dict) else {}
