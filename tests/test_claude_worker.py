@@ -716,3 +716,41 @@ def test_a_claude_refusal_is_a_decline_the_standby_never_takes(tmp_path):
 
     declined, _, _ = run(job_in(tmp_path, None), api([reply([text("I can't help with that.")], "refusal")]))
     assert isinstance(declined, JobDeclined)
+
+
+def test_a_call_that_ends_while_a_failed_job_clears_its_files_does_not_hand_the_job_over(tmp_path):
+    """Review of the last stretch, finding 6: the end of the call was swallowed while a failed job deleted its code
+    execution files, so the failure went on to the standby, which ran after the call was over and held its end."""
+    import anthropic
+    import httpx
+
+    from worker.runner import JobRunner, StandingBy
+
+    held = asyncio.Event()
+
+    class SlowFiles(Files):
+        async def delete(self, file_id):
+            await held.wait()  # never set: the deletion is still running when the call ends
+
+    files = SlowFiles({"f1": ("huge.bin", b"0" * (claude.MAX_FILE_BYTES + 1))})
+    refused = anthropic.BadRequestError("bad", body=None, response=httpx.Response(
+        400, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")))
+    client = SimpleNamespace(messages=Messages([reply([*ran_code("srvtoolu_1", "f1"), tool("toolu_1", "progress",
+                                                                                            text="x")]), refused]),
+                             files=files)
+    standby = Standby()
+
+    async def main():
+        backend = StandingBy(ClaudeWorker(SONNET, client=client), lambda: standby, "Claude Sonnet 5.5", "GLM 5")
+
+        async def notify(news):
+            pass
+
+        runner = JobRunner(tmp_path, lambda name, **f: None, backend, notify, clock=lambda: datetime.now(SEOUL))
+        job = runner.start("Compare the trails")
+        await asyncio.sleep(0.3)  # the job failed and is deleting its files
+        await asyncio.wait_for(runner.cancel_all(), 2)  # the call ends
+        return job
+
+    job = asyncio.run(main())
+    assert job.status == "cancelled" and standby.ran == 0

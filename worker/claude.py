@@ -53,6 +53,7 @@ REQUEST_DEADLINE_S = 900.0
 REQUEST_IDLE_S = 300.0
 RETRY_WAITS_S = (15, 60)  # before each new try of a request that failed midway
 FORGET_ON_CANCEL_S = 5.0  # a job cut off by the end of its call deletes its code execution files within this
+FORGET_S = 60.0  # and any other job within this
 # Past a limit, a turn that also left a server tool waiting is continued without the note this many times, then cut.
 LATE_LIMIT_REQUESTS = 1
 
@@ -212,9 +213,10 @@ class ClaudeWorker:
             write_usage(job, usage)
             try:  # a call that ended waits for this a few seconds at most
                 await asyncio.wait_for(self._forget_outputs(outputs, job),
-                                       FORGET_ON_CANCEL_S if usage["status"] == "cancelled" else None)
-            except (TimeoutError, asyncio.CancelledError):
+                                       FORGET_ON_CANCEL_S if usage["status"] == "cancelled" else FORGET_S)
+            except TimeoutError:
                 log.warning("job %s: its files from code execution may be left in the Files API", job.job_id)
+            # The end of the call meanwhile is not swallowed: it ends the job as cancelled, never handed to the standby.
         summary = "".join(b.get("text", "") for b in content if b.get("type") == "text").strip() \
             or "The worker finished without a summary."
         if not (job.dir / "report.md").exists():
