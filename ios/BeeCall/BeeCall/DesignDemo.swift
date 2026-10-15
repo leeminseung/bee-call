@@ -64,7 +64,7 @@ struct DesignDemoView: View {
                                                offers: OfferCenter(server: server),
                                                person: PersonStore(server: server, store: DesignDemo.store)))
         _catalog = State(initialValue: VoiceCatalog(server: server))
-        _preview = State(initialValue: VoicePreview(samples: SamplePlayer(callIsOn: { calls.callIsOn })))
+        _preview = State(initialValue: VoicePreview(samples: SamplePlayer(inCall: { calls.isInCall })))
     }
 
     var body: some View {
@@ -98,7 +98,7 @@ struct DesignDemoView: View {
                 }
         case .call, .conversation, .live, .result, .resultConversation:
             ConversationRoot(calls: calls, source: data, offers: data.offers, status: "", person: data.person,
-                             catalog: catalog, samples: SamplePlayer(callIsOn: { calls.callIsOn }),
+                             catalog: catalog, samples: SamplePlayer(inCall: { calls.isInCall }),
                              presentation: presentation)
                 .task { await playLiveCall() }
         }

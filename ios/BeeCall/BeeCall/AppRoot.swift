@@ -17,15 +17,16 @@ struct AppRoot: View {
     init(calls: CallManager) {
         self.calls = calls
         _data = State(initialValue: ThreadData(calls: calls))
-        _preview = State(initialValue: VoicePreview(samples: SamplePlayer(callIsOn: { calls.callIsOn })))
+        _preview = State(initialValue: VoicePreview(samples: SamplePlayer(inCall: { calls.isInCall })))
     }
 
     var body: some View {
         Group {
-            if firstRunDone {
+            // A call that comes during the first run gets the home and its call screen; the first run comes back after.
+            if firstRunDone || calls.isInCall {
                 ConversationRoot(calls: calls, source: data, offers: data.offers, status: status, problem: problem,
                                  person: data.person, catalog: catalog,
-                                 samples: SamplePlayer(callIsOn: { calls.callIsOn }))
+                                 samples: SamplePlayer(inCall: { calls.isInCall }))
             } else {
                 FirstRunView(person: data.person, catalog: catalog, preview: preview) {}
             }
@@ -37,6 +38,7 @@ struct AppRoot: View {
             await calls.listenForRings()
         }
         .task { await calls.askForMicrophone() }
+        .onChange(of: calls.isInCall) { _, inCall in if inCall { preview.stop() } } // the first run's sample
         .task(id: scenePhase == .active) {
             guard scenePhase == .active else { return }
             await data.person.refresh() // the first run starts on the server's language

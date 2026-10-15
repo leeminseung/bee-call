@@ -52,4 +52,19 @@ final class VoicesTests: XCTestCase {
         let voice = try XCTUnwrap(try Contract.decode(VoiceList.self, from: ContractTests.example("voices")).voices.first)
         XCTAssertEqual(SamplePlayer.url(of: voice)?.absoluteString, Server.api + "/voices/samples/ko-harin-3f9c2a1b.mp3")
     }
+
+    /// Second review of the D wiring, finding 3: a sample must not take the audio session while Bee Call's call rings
+    /// either, just before CallKit activates it for the call.
+    @MainActor func testNoSampleWhileACallIsOnOrRinging() throws {
+        let voice = try XCTUnwrap(try Contract.decode(VoiceList.self, from: ContractTests.example("voices")).voices.first)
+        var inCall = true
+        let player = SamplePlayer(inCall: { inCall })
+        player.play(voice)
+        XCTAssertFalse(player.isPlaying)
+        inCall = false
+        player.play(voice)
+        XCTAssertTrue(player.isPlaying)
+        player.stop()
+        XCTAssertFalse(player.isPlaying)
+    }
 }

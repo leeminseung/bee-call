@@ -41,21 +41,24 @@ protocol VoiceSamples {
 }
 
 /// The samples in the app: AVPlayer streams `sample_url` from the token server, which serves samples without the
-/// sign-in. A sample plays as media, never while a call is on, when CallKit owns the audio session.
+/// sign-in. A sample plays as media, never while a call is on or rings, when CallKit owns the audio session or is
+/// about to (second review of the D wiring, finding 3).
 final class SamplePlayer: VoiceSamples {
     private var player: AVPlayer?
-    private let callIsOn: () -> Bool
+    private let inCall: () -> Bool
 
-    init(callIsOn: @escaping () -> Bool) {
-        self.callIsOn = callIsOn
+    init(inCall: @escaping () -> Bool) {
+        self.inCall = inCall
     }
+
+    var isPlaying: Bool { player != nil }
 
     static func url(of voice: Voice) -> URL? {
         URL(string: Server.api + voice.sampleURL)
     }
 
     func play(_ voice: Voice) {
-        guard !callIsOn(), let url = Self.url(of: voice) else { return }
+        guard !inCall(), let url = Self.url(of: voice) else { return }
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .spokenAudio)
         try? session.setActive(true)
@@ -66,7 +69,7 @@ final class SamplePlayer: VoiceSamples {
     func stop() {
         player?.pause()
         player = nil
-        guard !callIsOn() else { return }
+        guard !inCall() else { return }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }
