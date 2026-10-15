@@ -120,12 +120,52 @@ def test_the_server_never_takes_a_profile_static_keys_the_dev_person_or_what_its
 
 # ---------- Caddy ----------
 
+def caddy_sites(text: str) -> dict[str, str]:
+    """Each site block of a Caddyfile by its address, with its body."""
+    return {m.group(1): m.group(2) for m in re.finditer(r"^(\S+) \{\n(.*?)^\}", text, re.MULTILINE | re.DOTALL)}
+
+
 def test_caddy_serves_the_token_server_on_443_and_the_session_screen_on_8443():
     text = caddyfile(" Bee.Example.com. ", TEMPLATE.read_text())
     assert "__HOSTNAME__" not in text
-    sites = re.findall(r"^(\S+) \{\n\treverse_proxy (\S+) \{\n\t\tflush_interval -1 ", text, re.MULTILINE)
-    assert sites == [("bee.example.com", "127.0.0.1:8787"), ("bee.example.com:8443", "127.0.0.1:8788")]
+    sites = caddy_sites(text)
+    for address, upstream in (("bee.example.com", "127.0.0.1:8787"), ("bee.example.com:8443", "127.0.0.1:8788")):
+        assert re.search(rf"\treverse_proxy {re.escape(upstream)} \{{\n\t\tflush_interval -1 ", sites[address])
     assert "protocols h1 h2" in text  # HTTP/3 needs UDP, which the security group does not open
+
+
+def test_caddy_answers_only_for_its_own_name_and_keeps_browsers_on_https():
+    """Black-box probe 1, 2 and 7 (2026-10-15): port 80 redirected to whatever Host the request named; a Host that
+    is not the server's own got Caddy's empty 200 over HTTPS; neither site sent HSTS."""
+    text = caddyfile("bee.example.com", TEMPLATE.read_text())
+    sites = caddy_sites(text)
+    assert "auto_https disable_redirects" in text  # Caddy's own redirect copies the request's Host
+    assert sites["http://"].strip() == "redir https://bee.example.com{uri} permanent"  # every name to this one
+    assert "strict_sni_host on" in text  # a Host other than the TLS name gets 421 Misdirected Request
+    for address in ("bee.example.com", "bee.example.com:8443"):
+        assert 'header Strict-Transport-Security "max-age=31536000"' in sites[address], address
+
+
+def test_a_caddyfile_that_caddy_refuses_never_replaces_the_working_one(tmp_path, monkeypatch, capsys):
+    """The new config is checked with Caddy itself before it takes the old one's place, so a mistake in it stops
+    the deploy with Caddy's words and leaves the server on the config that works."""
+    from deploy import config
+
+    working = tmp_path / "Caddyfile"
+    working.write_text("the config that works\n")
+    caddy = tmp_path / "caddy"
+    monkeypatch.setattr(config, "CADDYFILE", working)
+    monkeypatch.setattr(config, "CADDY_BIN", caddy)
+    monkeypatch.setattr(config, "public_host", lambda: "bee.example.com")
+    monkeypatch.setattr(config, "write", lambda path, text, mode, group=None: path.write_text(text))
+    caddy.write_text("#!/bin/sh\necho 'Error: adapting config using caddyfile: unrecognized directive' >&2\nexit 1\n")
+    caddy.chmod(0o755)
+    with pytest.raises(RuntimeError, match="unrecognized directive"):
+        config.write_caddyfile()
+    assert working.read_text() == "the config that works\n" and list(tmp_path.glob("Caddyfile.*")) == []
+    caddy.write_text('#!/bin/sh\n[ "$1" = validate ] && [ "$5" = caddyfile ] && grep -q bee.example.com "$3"\n')
+    config.write_caddyfile()
+    assert "redir https://bee.example.com{uri}" in working.read_text()
 
 
 @pytest.mark.parametrize("name", ["", "localhost", "1.2.3.4", "bee.example.com:443", "*.example.com",

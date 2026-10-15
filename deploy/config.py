@@ -15,6 +15,7 @@ import argparse
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Mapping
@@ -26,6 +27,7 @@ RUN_DIR = Path("/run/bee-call")
 ENV_FILE = RUN_DIR / "env"
 APNS_KEY = RUN_DIR / "apns-key.p8"
 CADDYFILE = Path("/etc/caddy/Caddyfile")
+CADDY_BIN = Path("/opt/bee-call/bin/caddy")  # where deploy/install.sh puts it
 TEMPLATE = Path(__file__).with_name("Caddyfile.template")
 HOST_PARAMETER = "BEE_CALL_PUBLIC_HOST"
 SERVICE_GROUP = "bee-call"
@@ -145,7 +147,17 @@ def write_caddyfile() -> None:
         print(f"no {HOST_PARAMETER} yet: Caddy stays off until scripts/deploy_server.py dns sets one")
         return
     CADDYFILE.parent.mkdir(exist_ok=True)
-    write(CADDYFILE, caddyfile(hostname, TEMPLATE.read_text()), 0o644)
+    candidate = CADDYFILE.with_name(CADDYFILE.name + ".new")
+    write(candidate, caddyfile(hostname, TEMPLATE.read_text()), 0o644)
+    # Caddy checks the new config before it takes the working one's place: a mistake in it stops the deploy with
+    # Caddy's own words, and the server keeps the config that works.
+    checked = subprocess.run([str(CADDY_BIN), "validate", "--config", str(candidate), "--adapter", "caddyfile"],
+                             capture_output=True, text=True, timeout=120)
+    if checked.returncode != 0:
+        candidate.unlink(missing_ok=True)
+        why = (checked.stderr or checked.stdout).strip()[-2000:]
+        raise RuntimeError(f"Caddy refused the new config, so {CADDYFILE} stays as it was: {why}")
+    candidate.replace(CADDYFILE)
     print(f"wrote {CADDYFILE} for {hostname}")
 
 

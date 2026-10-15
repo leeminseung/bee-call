@@ -1,21 +1,32 @@
 # Bee Call: HTTPS in front of the two web servers, for one hostname, with a Let's Encrypt certificate.
-# deploy/config.py writes it to /etc/caddy/Caddyfile with the hostname that scripts/deploy_server.py dns set.
+# deploy/config.py writes it to /etc/caddy/Caddyfile with the hostname that scripts/deploy_server.py dns set, once
+# Caddy itself has checked it (caddy validate).
 #   https://__HOSTNAME__/       the token server (127.0.0.1:8787): call tokens, the ring stream, push tokens, offers
 #   https://__HOSTNAME__:8443/  the session screen (127.0.0.1:8788): call records and their live event streams
-# Port 80 answers Let's Encrypt's HTTP challenge and sends everything else to https://__HOSTNAME__/.
+# Port 80 answers Let's Encrypt's HTTP challenge and sends everything else to https://__HOSTNAME__/, whatever name
+# the request used. Over HTTPS, a request whose Host is not the name its TLS connection was made for gets 421.
 {
+	# Caddy's own redirect copies the request's Host into the new address (black-box probe 1, 2026-10-15).
+	auto_https disable_redirects
 	servers {
 		protocols h1 h2 # no HTTP/3: the security group opens TCP only
+		strict_sni_host on # another Host than the TLS name: 421, not Caddy's empty 200 (black-box probe 2)
 	}
 }
 
+http:// {
+	redir https://__HOSTNAME__{uri} permanent
+}
+
 __HOSTNAME__ {
+	header Strict-Transport-Security "max-age=31536000" # browsers keep to HTTPS (black-box probe 7)
 	reverse_proxy 127.0.0.1:8787 {
 		flush_interval -1 # every write at once, so the ring stream's events are not held back
 	}
 }
 
 __HOSTNAME__:8443 {
+	header Strict-Transport-Security "max-age=31536000"
 	reverse_proxy 127.0.0.1:8788 {
 		flush_interval -1 # a call's live events, as they happen
 	}
