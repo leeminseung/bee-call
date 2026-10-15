@@ -108,11 +108,15 @@ final class Server {
 
     private static let unreachable = "The server cannot be reached right now."
 
-    /// While the sign-in screen shows and no one-time value is ready for the button (none yet, or the last one
-    /// went to Apple), fetches one, every 5 s while the server cannot be reached.
+    /// While the sign-in screen shows, keeps a one-time value ready for the button: fetches one whenever none is
+    /// ready (none yet, the last one went to Apple, or it was kept too long), every 5 s while the server cannot
+    /// be reached.
     func prepareSignIn() async {
-        while !signIn.isReady, !Task.isCancelled {
-            if await signIn.prepare() {
+        while !Task.isCancelled {
+            signIn.dropIfOld()
+            if signIn.isReady {
+                try? await Task.sleep(for: .seconds(15))
+            } else if await signIn.prepare() {
                 if problem == Self.unreachable { problem = nil }
             } else {
                 problem = Self.unreachable

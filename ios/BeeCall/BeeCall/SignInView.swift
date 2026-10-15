@@ -45,7 +45,7 @@ struct SignInView: View {
             .disabled(!server.signIn.isReady) // until the server has given a one-time value
         }
         .padding()
-        // Whenever no value is ready (at first, and after each tap), a new one is fetched.
-        .task(id: server.signIn.isReady) { await server.prepareSignIn() }
+        // A value is kept ready for the button as long as this screen shows (Server.prepareSignIn).
+        .task { await server.prepareSignIn() }
     }
 }

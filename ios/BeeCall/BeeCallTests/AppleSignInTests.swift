@@ -34,6 +34,24 @@ final class AppleSignInTests: XCTestCase {
         XCTAssertFalse(signIn.isReady, "the value went to Apple: the button waits for the next one")
     }
 
+    /// Round 2's review: the server forgets a value after 10 minutes (voice/apple_signin.py), and the app kept
+    /// one for as long as the screen stayed, so after a long wait for approval the first tap always failed. A
+    /// value kept 8 minutes is let go, and the button waits for a new one.
+    @MainActor func testAValueKeptTooLongIsLetGo() async {
+        let server = FakeServer()
+        server.replies["GET /auth/nonce"] = .json(200, ["nonce": "n1"])
+        var now = Date(timeIntervalSince1970: 1_792_056_600)
+        let signIn = AppleSignIn(server: server.client(token: nil), clock: { now })
+        _ = await signIn.prepare()
+        now += 7 * 60 + 59
+        signIn.dropIfOld()
+        XCTAssertTrue(signIn.isReady, "still good")
+        now += 1
+        signIn.dropIfOld()
+        XCTAssertFalse(signIn.isReady, "let go: a new one is fetched")
+        XCTAssertNil(signIn.takeForRequest())
+    }
+
     @MainActor func testAValueIsTakenOnce() async {
         let signIn = await signIn(FakeServer())
         XCTAssertNotNil(signIn.takeForRequest())
