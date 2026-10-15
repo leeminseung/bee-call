@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import jwt
 
 from beelink.context import CallInputs
+from tests.contract import check_body
 from voice.continuation import earlier_call, session_dir
 from voice.coordinator import Coordinator
 from voice.language import call_language
@@ -102,6 +103,8 @@ def test_the_app_asks_for_a_continued_call_with_the_record_id(tmp_path):
                     unknown.status)
 
     good, by_id, plain, missing, sneaky, unknown = asyncio.run(main())
+    for body in (good, by_id, plain):
+        check_body("token", body)
     meta = lambda body: json.loads(  # noqa: E731
         jwt.decode(body["token"], options={"verify_signature": False})["roomConfig"]["agents"][0]["metadata"])
     assert meta(good) == {"direction": "inbound", "continue_from": EARLIER, "person": "matt"}

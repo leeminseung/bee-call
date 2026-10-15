@@ -13,6 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from beelink import cli
+from tests.contract import check_body
 from tests.helpers import SEOUL, signed_in
 from voice import apple_signin, costs, session_server, token_server, voip_push
 from voice.people import People, Settings, waiting_code
@@ -188,13 +189,16 @@ def test_signing_in_from_the_app(tmp_path):
     people = People(tmp_path / "data")
 
     async def sign_in(client):
-        nonce = (await (await client.get("/auth/nonce")).json())["nonce"]
+        given = await (await client.get("/auth/nonce")).json()
+        check_body("auth-nonce", given)
+        nonce = given["nonce"]
         return await client.post("/auth/apple", json={"identity_token": apple_token(nonce), "nonce": nonce})
 
     async def main():
         async with TestClient(TestServer(app_for(people))) as client:
             assert (await client.get("/me")).status == 401
             first = await sign_in(client)
+            check_body("auth-waiting", await first.json())
             code = (await first.json())["waiting"]
             assert first.status == 403 and code == waiting_code("001234.abcd")
             people.approve(code, "jiwoo")
@@ -207,6 +211,8 @@ def test_signing_in_from_the_app(tmp_path):
             return second.status, body, replayed.status, me, out.status, after.status
 
     status, body, replayed, me, out, after = asyncio.run(main())
+    check_body("auth-apple", body)
+    check_body("me", me)
     assert status == 200 and body["person"] == "jiwoo"
     assert replayed == 400  # a nonce the server never gave out
     assert me["person"] == "jiwoo" and me["settings"]["language"] == "en" and me["spent_today_usd"] == 0
@@ -523,6 +529,7 @@ def test_connecting_and_disconnecting_bee_from_the_app(tmp_path, fake_bee, monke
     async def main():
         async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
             started = await (await client.post("/bee/connect")).json()
+            check_body("bee-connect", started)
             connecting = (await (await client.get("/me")).json())["bee_connecting"]
             (folder / "approve").write_text("")  # the person taps the approval link on their phone
             for _ in range(100):
