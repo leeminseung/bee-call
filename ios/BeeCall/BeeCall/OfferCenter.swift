@@ -118,6 +118,9 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         struct Listing: Decodable { let offers: [Offer] }
         guard let listing = try? JSONDecoder().decode(Listing.self, from: data) else { return }
         if listing.offers != open { open = listing.offers }
+        if let asked = cancelling, !listing.offers.contains(where: { $0.id == asked.id && $0.state == "booked" }) {
+            cancelling = nil // its room is being made, or it is gone: there is nothing left to cancel
+        }
         Self.clearClosed(keeping: Set(listing.offers.map(\.id)))
     }
 
@@ -145,6 +148,29 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         notice = result.notice
         await refresh()
         return result
+    }
+
+    // MARK: - Cancelling a booked call
+
+    /// The booked call whose cancel question is on screen. A tap on "Cancel call" only asks: the system alert names
+    /// the time, and nothing goes to the server before the person confirms (the user's report of 2026-10-15, a
+    /// booked call called off by a tap on a button that did not say what it did).
+    private(set) var cancelling: Offer?
+
+    func askToCancel(_ offer: Offer) {
+        cancelling = offer
+    }
+
+    /// The person kept the call: nothing is sent.
+    func keepBooked() {
+        cancelling = nil
+    }
+
+    /// The person confirmed: the server calls the booked call off ("decline", until its room exists, contract
+    /// section 4). The offer comes from the alert itself, since the alert may let go of `cancelling` first.
+    func confirmCancel(_ offer: Offer) async {
+        cancelling = nil
+        await answer(offer.id, .decline)
     }
 
     /// After a button on a notification did not go through: say so, since the notification itself is gone.
@@ -205,20 +231,32 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 /// The offers on the first screen: what the AI would like to call about, and when.
 struct OfferList: View {
     let offers: OfferCenter
+    @AppStorage("language") private var language = "en" // the person's call language (Settings: Language)
 
     var body: some View {
         if !offers.open.isEmpty || offers.notice != nil {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(offers.open) { offer in
-                    OfferRow(offer: offer, isAnswering: offers.answering.contains(offer.id)) { choice in
-                        Task { await offers.answer(offer.id, choice) }
-                    }
+                    OfferRow(offer: offer, isAnswering: offers.answering.contains(offer.id),
+                             answer: { choice in Task { await offers.answer(offer.id, choice) } },
+                             cancel: { offers.askToCancel(offer) })
                 }
                 if let notice = offers.notice {
                     Text(notice)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+            }
+            // A booked call is called off only after the system's alert, which names the time (BookedCall.swift).
+            .alert(offers.cancelling?.cancelQuestion(language: language) ?? "",
+                   isPresented: Binding(get: { offers.cancelling != nil }, set: { if !$0 { offers.keepBooked() } }),
+                   presenting: offers.cancelling) { offer in
+                Button(OfferCenter.Offer.cancelButton(language: language), role: .destructive) {
+                    Task { await offers.confirmCancel(offer) }
+                }
+                Button(OfferCenter.Offer.keepButton(language: language), role: .cancel) { offers.keepBooked() }
+            } message: { offer in
+                Text(offer.about(language: language))
             }
         }
     }
@@ -228,6 +266,7 @@ private struct OfferRow: View {
     let offer: OfferCenter.Offer
     let isAnswering: Bool // the answer is on its way: the buttons wait for it
     let answer: (OfferCenter.Choice) -> Void
+    let cancel: () -> Void // a booked call: asks first (OfferCenter.askToCancel)
     @AppStorage("language") private var language = "en" // the person's call language (Settings: Language)
 
     var body: some View {
@@ -257,7 +296,8 @@ private struct OfferRow: View {
                     Button("Now") { answer(.now) }.buttonStyle(.bordered)
                     Button("Not now", role: .destructive) { answer(.decline) }.buttonStyle(.bordered)
                 case "booked":
-                    Button("Call off", role: .destructive) { answer(.decline) }.buttonStyle(.bordered)
+                    Button(OfferCenter.Offer.cancelButton(language: language), role: .destructive) { cancel() }
+                        .buttonStyle(.bordered)
                 default:
                     EmptyView()
                 }

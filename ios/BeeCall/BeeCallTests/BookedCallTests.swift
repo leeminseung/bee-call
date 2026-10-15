@@ -98,4 +98,56 @@ final class BookedCallTests: XCTestCase {
         XCTAssertEqual(day.about(language: "ko"), "오늘 하루 이야기")
         XCTAssertEqual(day.about(language: "en"), "About your day")
     }
+
+    // MARK: - Cancelling it
+
+    /// The row's action says what it cancels, and the system alert names the time before anything is sent.
+    @MainActor func testTheCancelActionAndItsQuestionNameTheCall() {
+        let call = booked("2026-10-15T19:00:00+09:00", 1792058400)
+        XCTAssertEqual(OfferCenter.Offer.cancelButton(language: "ko"), "전화 취소")
+        XCTAssertEqual(OfferCenter.Offer.cancelButton(language: "en"), "Cancel call")
+        XCTAssertEqual(call.cancelQuestion(language: "ko", now: now), "오늘 저녁 7:00 전화를 취소할까요?")
+        XCTAssertEqual(call.cancelQuestion(language: "en", now: now), "Cancel the call for today, 7:00 PM?")
+        XCTAssertEqual(OfferCenter.Offer.keepButton(language: "ko"), "그대로 두기")
+        XCTAssertEqual(OfferCenter.Offer.keepButton(language: "en"), "Keep the call")
+        XCTAssertEqual(booked(nil, nil).cancelQuestion(language: "ko", now: now), "예약된 전화를 취소할까요?")
+        XCTAssertEqual(booked(nil, nil).cancelQuestion(language: "en", now: now), "Cancel the booked call?")
+    }
+
+    /// A tap on "Cancel call" only asks; the call is called off ("decline", contract section 4) once the person
+    /// confirms, and keeping it sends nothing.
+    @MainActor func testCancellingAsksFirstAndSendsNothingUntilConfirmed() async throws {
+        let server = FakeServer()
+        let offers = OfferCenter(transport: server, noteStatus: { _ in })
+        let call = booked("2026-10-15T19:00:00+09:00", 1792058400)
+        offers.askToCancel(call)
+        XCTAssertEqual(offers.cancelling, call)
+        offers.keepBooked()
+        XCTAssertNil(offers.cancelling)
+        XCTAssertEqual(server.sent, [])
+
+        offers.askToCancel(call)
+        XCTAssertEqual(server.sent, [])
+        await offers.confirmCancel(call)
+        XCTAssertNil(offers.cancelling)
+        XCTAssertEqual(server.sent.first, "POST /offers/\(call.id)")
+        XCTAssertEqual(try server.body(of: "POST /offers/\(call.id)") as NSDictionary,
+                       ["choice": "decline"] as NSDictionary)
+    }
+
+    /// The question goes away once the call can no longer be called off: its room is being made ("calling"), or
+    /// the offer is gone, such as called off in a call. While it is still booked, the question stays.
+    @MainActor func testTheQuestionGoesAwayWhenTheCallCanNoLongerBeCancelled() async throws {
+        let call = booked("2026-10-15T19:00:00+09:00", 1792058400)
+        var entry = try XCTUnwrap((listing["offers"] as? [[String: Any]])?.first)
+        for (state, staysAsked) in [("booked", true), ("calling", false), (nil, false)] {
+            let server = FakeServer()
+            entry["state"] = state
+            server.replies["GET /offers"] = .json(200, ["offers": state == nil ? [] : [entry]])
+            let offers = OfferCenter(transport: server, noteStatus: { _ in })
+            offers.askToCancel(call)
+            await offers.refresh()
+            XCTAssertEqual(offers.cancelling != nil, staysAsked, String(describing: state))
+        }
+    }
 }

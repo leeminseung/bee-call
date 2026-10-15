@@ -19,6 +19,25 @@ extension OfferCenter.Offer {
         return korean ? "\(when) 전화 예정" : "Call booked for \(when)"
     }
 
+    /// The row's action, and the alert's button that confirms it: it says what it cancels.
+    static func cancelButton(language: String) -> String {
+        language == "ko" ? "전화 취소" : "Cancel call"
+    }
+
+    /// The system alert's question before anything is sent: "오늘 저녁 7:00 전화를 취소할까요?".
+    func cancelQuestion(language: String, now: Date = .now, phoneZone: TimeZone = .current) -> String {
+        let korean = language == "ko"
+        guard let when = when(korean: korean, now: now, phoneZone: phoneZone) else {
+            return korean ? "예약된 전화를 취소할까요?" : "Cancel the booked call?"
+        }
+        return korean ? "\(when) 전화를 취소할까요?" : "Cancel the call for \(when)?"
+    }
+
+    /// The alert's other button, which sends nothing.
+    static func keepButton(language: String) -> String {
+        language == "ko" ? "그대로 두기" : "Keep the call"
+    }
+
     /// What the call is about: the topic as the server gives it, or else what kind of call it is.
     func about(language: String) -> String {
         let korean = language == "ko"
