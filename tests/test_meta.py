@@ -64,7 +64,9 @@ def test_quiet_time_runs_from_eleven_to_eight():
 def test_the_file_tools_read_the_workspace_and_nothing_else(tmp_path):
     ws = workspace_with_a_call(tmp_path)
     listing = files.list_files(ws, "2026-10-14/1200")
-    assert "transcript.md" in listing and "user.wav" not in files.list_files(ws, "2026-10-14/1200/audio")
+    assert "transcript.md" in listing and "audio" not in listing  # a call's private parts are not listed
+    with pytest.raises(files.FileError):
+        files.list_files(ws, "2026-10-14/1200/audio")
     assert "2: " in files.read_file(ws, "2026-10-14/1200/transcript.md")
     assert "ten percent" in files.grep(ws, "bonus", ".", "transcript.md")
     assert "secret" not in files.grep(ws, "secret")  # tokens are never read
@@ -303,7 +305,26 @@ def test_file_tools_hide_secrets_and_audio_whatever_the_case_of_their_names(tmp_
         with pytest.raises(files.FileError):
             files.read_file(ws, private)
     assert "zebra" not in files.grep(ws, "zebra")
-    assert "VOIP_TOKEN" not in files.list_files(ws, "state") and "USER.WAV" not in files.list_files(ws, "2026-10-14/1200/AUDIO")
+    assert "VOIP_TOKEN" not in files.list_files(ws, "state")
+    with pytest.raises(files.FileError):
+        files.list_files(ws, "2026-10-14/1200/AUDIO")
+
+
+def test_one_list_says_which_parts_of_a_call_are_private(tmp_path):
+    """Server review 19: the record server's private folder names and the meta agent's hidden file names were two
+    lists. voice/call_folders.py owns the call folder's private parts; the record server never serves them and the
+    meta agent never reads them (its reads show on the timeline), the raw Bee inputs included."""
+    from voice import call_folders, session_server
+
+    assert session_server.PRIVATE is call_folders.PRIVATE
+    assert set(call_folders.PRIVATE) <= set(files.HIDDEN)
+    ws = workspace_with_a_call(tmp_path)
+    inputs = ws / "2026-10-14" / "1200" / "inputs"
+    inputs.mkdir(exist_ok=True)
+    (inputs / "today.json").write_text('{"raw": "zebra bee data"}')
+    with pytest.raises(files.FileError):
+        files.read_file(ws, "2026-10-14/1200/inputs/today.json")
+    assert "zebra" not in files.grep(ws, "zebra")
 
 
 def test_file_tools_leave_out_the_model_log_and_claude_s_history(tmp_path):

@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any
 
 EVENTS = "events.jsonl"
+# A call's private parts: raw call audio, raw Bee data, and everything the call AI's model was given (which holds Bee
+# data): the model log of every call and the Claude adapter's history (BC-095). The record server never serves them
+# (voice/session_server.py) and the meta agent never reads them (meta/files.py). The one list (server review 19).
+PRIVATE = ("audio", "inputs", "model-log.jsonl", "claude-history.json")
 
 
 def call_folders(workspace: Path) -> list[Path]:

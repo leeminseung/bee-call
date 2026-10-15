@@ -39,7 +39,7 @@ from typing import Any
 
 from aiohttp import web
 
-from voice.call_folders import read_events
+from voice.call_folders import PRIVATE, read_events
 from voice.people import People, dev_fallback
 from voice.web_headers import plain_server_name
 
@@ -64,9 +64,7 @@ FILE_HEADERS = {"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"
 # Host names a request may use. Anything else is refused, so a web page cannot point its own
 # domain at this Mac (DNS rebinding) and read calls from a browser on the same network.
 LOCAL_SUFFIXES = (".local", ".localhost", ".lan", ".home.arpa", ".internal")
-# Never served: raw call audio, raw Bee data, and everything the call AI's model was given (which holds Bee data):
-# the model log of every call and the Claude adapter's history (BC-095).
-PRIVATE = ("audio", "inputs", "model-log.jsonl", "claude-history.json")
+# Never served: a call's private parts (voice/call_folders.py PRIVATE, BC-095).
 
 
 def parse_event(raw: bytes) -> dict[str, Any] | None:
