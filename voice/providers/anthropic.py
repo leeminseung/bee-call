@@ -51,6 +51,12 @@ class Anthropic:
                                         timeout=anthropic.Timeout(TIMEOUT_S, connect=5.0))
         return self._client
 
+    def worker(self, choice: Choice) -> Any:
+        """Background jobs on Claude, with Anthropic's server tools (worker/claude.py)."""
+        from worker.claude import ClaudeWorker
+
+        return ClaudeWorker(choice)
+
     def call_llm(self, choice: Choice, *, on_event: Callable[..., None], refusal_line: str) -> Any:
         """The call AI on Claude: voice/claude_llm.py's adapter for LiveKit, its conversation cached as it grows,
         and `refusal_line` said when Claude declines a turn."""

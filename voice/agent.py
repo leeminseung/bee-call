@@ -24,7 +24,10 @@ by (the model catalog, voice/model_catalog.py); the other modes run them on one 
 WORKER picks what runs delegated jobs:
   fake     pretends to work for a few seconds (test stand-in, the default)
   search   one Nova Web Grounding search per job, with sources (test stand-in, costs about 0.03 USD a job)
-  harness  the AgentCore Harness worker in Sydney (deploy it first: scripts/deploy_worker.py)
+  harness  the person's worker_model (the server's): sonnet is Claude Sonnet 5.5 on Anthropic's API with its web
+           search, page reading and code execution (worker/claude.py), glm is GLM 5 on the AgentCore Harness worker
+           in Sydney (deploy it first: scripts/deploy_worker.py); one not set up on this machine hands the jobs to
+           the other (job_worker)
 
 The server joins only rooms it is dispatched to, as the agent named AGENT_NAME:
 the app's token dispatches it for a call the user starts, and voice/dispatch.py
@@ -80,8 +83,7 @@ from voice.titles import title_call
 from voice.ringback import STATE_ATTRIBUTE, ring_back
 from voice.voices import make_tts, voice_choice
 from worker.fake import FakeWorker
-from worker.harness import HarnessWorker
-from worker.runner import JobNotification, JobRunner
+from worker.runner import JobNotification, JobRunner, NoWorker
 from worker.search import SearchWorker
 
 load_dotenv(".env.local")
@@ -487,6 +489,30 @@ class Caller:
     uses_bee: bool  # Use Bee on: the call reads only this person's Bee; off, nothing of Bee at all (BC-057)
 
 
+def job_worker(worker_model: str, mode: str | None = None) -> Any:
+    """What runs a call's background jobs (WORKER, or `mode`): a test stand-in, or with harness the person's
+    worker_model through its provider's adapter (voice/model_catalog.py). A choice whose provider is not set up on
+    this machine hands the jobs to the role's next one that is; with none, each job fails saying why."""
+    mode = WORKER if mode is None else mode
+    if mode == "search":
+        return SearchWorker()
+    if mode != "harness":
+        return FakeWorker()
+    first = model_catalog.choice("worker", worker_model)
+    problems = []
+    for choice in (first, *(c for c in model_catalog.role("worker").choices if c is not first)):
+        adapter = providers.adapter(choice.offering.provider)
+        problem = adapter.setup_problem()
+        if problem is None:
+            if problems:
+                log.warning("the worker %s cannot run here (%s); %s runs this call's jobs", first.id,
+                            "; ".join(problems), choice.id)
+            return adapter.worker(choice)
+        problems.append(f"{choice.id}: {problem}")
+    log.error("no background worker can run here: %s", "; ".join(problems))
+    return NoWorker("; ".join(problems))
+
+
 def caller_for(meta: dict, people: People) -> Caller | None:
     """The person a call is for and their settings; None when that is no approved person (the call is not
     answered)."""
@@ -775,9 +801,9 @@ async def run_call(ctx: JobContext, people: People) -> None:
     if inbox is not None and not inbox.resolve().is_relative_to(workspace.resolve()):
         inbox = None  # only the person's own Bee batches
     conversation_ids = meta.get("conversation_ids") or []
-    backend = {"search": SearchWorker, "harness": HarnessWorker}.get(WORKER, FakeWorker)()
-    # Wake a cloud worker session now, so the first job does not wait for one to start.
-    keep_warm = asyncio.create_task(backend.keep_warm(SpendLog(workspace))) if isinstance(backend, HarnessWorker) \
+    backend = job_worker(caller.settings.worker_model)
+    # Wake a cloud worker session now, so the first job does not wait for one to start (the AgentCore harness).
+    keep_warm = asyncio.create_task(backend.keep_warm(SpendLog(workspace))) if hasattr(backend, "keep_warm") \
         else None
     # Join the room at once: an AI call waits here for the phone, and a caller hears ringing from here.
     await ctx.connect()

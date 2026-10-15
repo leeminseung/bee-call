@@ -73,6 +73,18 @@ class Backend(Protocol):
                   relay: Callable[[str], Awaitable[None]]) -> str: ...
 
 
+class NoWorker:
+    """Runs no job, as no background worker is set up on this server: each job fails saying why, so the user
+    hears it."""
+
+    def __init__(self, why: str) -> None:
+        self.why = why
+
+    async def run(self, job: Job, progress: Callable[[str], None],
+                  relay: Callable[[str], Awaitable[None]]) -> str:
+        raise RuntimeError(f"no background worker is set up on this server ({self.why})")
+
+
 def short(text: str, limit: int = 200) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else text[:limit].rstrip() + " (cut short)"

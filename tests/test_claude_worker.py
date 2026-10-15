@@ -282,3 +282,55 @@ def test_a_request_that_fails_midway_is_tried_again(tmp_path, monkeypatch):
     client = api([refused])
     failed, _, _ = run(job_in(tmp_path, None), client)
     assert isinstance(failed, anthropic.BadRequestError) and len(client.messages.sent) == 1  # not tried again
+
+
+# ---------- which worker runs a person's jobs ----------
+
+@pytest.fixture
+def both_workers(monkeypatch):
+    """The worker role with Claude Sonnet 5.5 (the default) and GLM 5 on the AgentCore harness, both set up here: an
+    Anthropic key, and a harness (its AWS client a stand-in)."""
+    from dataclasses import replace
+
+    import worker.harness as harness
+    from voice import providers
+    from voice.model_catalog import Role
+    from voice.providers.anthropic import Anthropic
+
+    glm = replace(model_catalog.choice("worker", "glm"), default=False)
+    monkeypatch.setitem(model_catalog.ROLES, "worker", Role("worker", person=True, choices=(SONNET, glm)))
+    monkeypatch.setitem(providers._ADAPTERS, "anthropic", Anthropic())  # no client left over from another test
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setattr(harness, "load_harness_arn", lambda: "arn:aws:bedrock-agentcore:ap-southeast-2:1:harness/h")
+    monkeypatch.setattr(harness, "aws_session", lambda **_: SimpleNamespace(client=lambda *a, **k: "agentcore"))
+    return harness
+
+
+def test_the_person_s_worker_model_picks_what_runs_their_jobs(both_workers):
+    """WORKER=harness (the server's): each person's worker_model, through its provider's adapter; the stand-ins
+    (fake, search) whatever the person picked."""
+    from voice.agent import job_worker
+    from worker.fake import FakeWorker
+    from worker.search import SearchWorker
+
+    picked = job_worker("sonnet", "harness")
+    assert isinstance(picked, ClaudeWorker) and picked.choice.offering.model == "claude-sonnet-5-5"
+    assert isinstance(job_worker("glm", "harness"), both_workers.HarnessWorker)
+    assert isinstance(job_worker("gpt-9", "harness"), ClaudeWorker)  # an id the catalog no longer has: the default
+    assert isinstance(job_worker("sonnet", "fake"), FakeWorker) and isinstance(job_worker("glm", "search"), SearchWorker)
+
+
+def test_a_worker_not_set_up_here_hands_the_jobs_to_one_that_is(both_workers, monkeypatch, tmp_path):
+    """Without the Anthropic key the harness runs a person's jobs, and with neither, each job fails saying why."""
+    from voice.agent import job_worker
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    assert isinstance(job_worker("sonnet", "harness"), both_workers.HarnessWorker)
+    monkeypatch.setattr(both_workers, "load_harness_arn", lambda: None)
+    nothing = job_worker("sonnet", "harness")
+
+    async def relay(words):
+        pass
+
+    with pytest.raises(RuntimeError, match="no background worker is set up.*ANTHROPIC_API_KEY.*deploy_worker"):
+        asyncio.run(nothing.run(job_in(tmp_path), lambda line: None, relay))
