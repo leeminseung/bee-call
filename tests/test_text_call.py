@@ -88,3 +88,67 @@ def test_a_call_in_text_leaves_the_voice_server_as_it_found_it(tmp_path, monkeyp
     before = (agent.make_session, agent.ring_back)
     asyncio.run(text_call.text_call(me.people, "matt", ["Hello"], say=lambda line: None))
     assert (agent.make_session, agent.ring_back) == before
+
+
+# ---------- a call in text that the AI ends, or whose turn fails (review of 2026-10-15, finding 1) ----------
+
+def stand_in(reply):
+    """The echo call AI, answering each turn with reply(heard): ("say", text), ("end", goodbye) or ("fail",)."""
+    import uuid
+
+    from livekit.agents import APIStatusError, llm
+    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+
+    from voice.echo_llm import EchoLLM, EchoStream
+
+    class Stream(EchoStream):
+        async def _run(self) -> None:
+            items = self._chat_ctx.items
+            if items and getattr(items[-1], "type", None) == "function_call_output":
+                return
+            last = next((i for i in reversed(items) if getattr(i, "role", None) == "user"), None)
+            heard = (last.text_content or "").strip() if last else ""
+            kind, *text = reply(heard)
+            if kind == "fail":
+                raise APIStatusError("overloaded", status_code=529, retryable=False)
+            calls = [llm.FunctionToolCall(name="end_call", arguments="{}", call_id=f"call_{uuid.uuid4().hex[:8]}")] \
+                if kind == "end" else None
+            self._event_ch.send_nowait(llm.ChatChunk(id=uuid.uuid4().hex, delta=llm.ChoiceDelta(
+                role="assistant", content=text[0], tool_calls=calls or [])))
+
+    class Model(EchoLLM):
+        def chat(self, *, chat_ctx, tools=None, conn_options=None, **kwargs):
+            return Stream(self, chat_ctx=chat_ctx, tools=tools or [],
+                          conn_options=conn_options or DEFAULT_API_CONNECT_OPTIONS)
+
+    return Model()
+
+
+def ended_properly(me, found) -> list[str]:
+    kinds = [json.loads(line)["type"] for line in (Path(found["record"]) / "events.jsonl").read_text().splitlines()]
+    assert "session_closed" in kinds and kinds[-1] == "call_ended" or "call_titled" in kinds[-2:], kinds
+    assert MetaSession(me.workspace).take_events()[-1]["kind"] == "call_ended"
+    return kinds
+
+
+def test_a_call_in_text_the_ai_ends_while_lines_remain_ends_as_a_call_does(tmp_path, monkeypatch):
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(agent, "WORKER", "fake")
+    monkeypatch.setattr(agent, "make_llm", lambda rec, language, call_model: stand_in(
+        lambda heard: ("end", "Goodbye!") if heard.lower() == "bye" else ("say", f"You said {heard}.")))
+    said: list[str] = []
+    found = asyncio.run(text_call.text_call(me.people, "matt", ["Hello", "bye", "Are you still there?"],
+                                            say=said.append))
+    ended_properly(me, found)
+    assert "matt: Are you still there?" not in said  # the call was over
+
+
+def test_a_call_in_text_goes_on_after_a_turn_that_fails_as_a_call_does(tmp_path, monkeypatch):
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(agent, "WORKER", "fake")
+    monkeypatch.setattr(agent, "make_llm", lambda rec, language, call_model: stand_in(
+        lambda heard: ("fail",) if heard == "boom" else ("say", f"You said {heard}.")))
+    said: list[str] = []
+    found = asyncio.run(text_call.text_call(me.people, "matt", ["Hello", "boom", "Still there?"], say=said.append))
+    ended_properly(me, found)
+    assert "AI: You said Still there?." in said

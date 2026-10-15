@@ -37,6 +37,7 @@ from voice.people import People
 
 
 FIRST_WORDS_S = 15.0  # the longest the person waits for the AI's first words before speaking anyway
+CLOSING_S = 10.0  # the longest the person waits for a call the AI ended to close
 
 
 class TextRoom:
@@ -161,24 +162,48 @@ async def text_call(people: People, person: str, lines: list[str], *, answer: st
     finally:
         agent.make_session, agent.ring_back = voice_server
     session = job.session
-    if session is not None and not closed.is_set():
-        try:  # the person speaks after the AI's first words, as they would after hearing them
-            await asyncio.wait_for(spoke.wait(), FIRST_WORDS_S)
-        except TimeoutError:
-            pass
-        for line in lines:
-            if closed.is_set():  # the AI ended the call
-                break
-            say(f"{person}: {line}")
-            await session.run(user_input=line)
-        if wait_s:
-            await asyncio.sleep(wait_s)
-        if not closed.is_set():
+    try:
+        if session is not None and not closed.is_set():
+            await converse(session, person, lines, spoke, closed, say)
+            if wait_s and not closed.is_set():
+                await asyncio.sleep(wait_s)
+    finally:  # however the conversation went, the call ends as a call does
+        if session is not None and not closed.is_set():
             job.caller.disconnect_reason = rtc.DisconnectReason.CLIENT_INITIATED
             await session.aclose()  # the person hangs up
-    await job.end()
+        await job.end()
     folder = find_call(people.workspace(person), room)
     return {"call_id": room, "record": str(folder) if folder else None}
+
+
+async def converse(session: AgentSession, person: str, lines: list[str], spoke: asyncio.Event, closed: asyncio.Event,
+                   say: Callable[[str], None]) -> None:
+    """The person's lines, one turn each, until they run out or the AI ends the call. A turn whose answer fails is a
+    failed turn, as in a call: the next line goes on."""
+    try:  # the person speaks after the AI's first words, as they would after hearing them
+        await asyncio.wait_for(spoke.wait(), FIRST_WORDS_S)
+    except TimeoutError:
+        pass
+    for line in lines:
+        if closed.is_set() or ending(session):  # the AI ended the call
+            break
+        say(f"{person}: {line}")
+        try:
+            await session.run(user_input=line)
+        except Exception as exc:
+            if closed.is_set() or ending(session):
+                break
+            say(f"(the AI's answer failed: {type(exc).__name__}: {exc})")
+    if ending(session):  # its goodbye is being said
+        try:
+            await asyncio.wait_for(closed.wait(), CLOSING_S)
+        except TimeoutError:
+            pass
+
+
+def ending(session: AgentSession) -> bool:
+    """Whether the session is closing: the AI ended the call (end_call), or LiveKit is ending it."""
+    return bool(getattr(session, "_closing", False))
 
 
 def main(argv: list[str] | None = None) -> None:
