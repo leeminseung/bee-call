@@ -8,9 +8,14 @@ final class LiveKitClient: NSObject {
     /// The voice server sets this attribute to "answered" when the AI picks up. Until then a call the user
     /// started hears ringing from the voice server while the AI reads the user's Bee data.
     nonisolated static let stateAttribute = "bee_call.state"
+    /// The voice server changes this attribute after its own room reconnects (contract section 3, rule 6).
+    nonisolated static let captionsAttribute = "bee_call.captions"
 
     private(set) var captionList = CaptionList()
     var captions: [Caption] { captionList.captions }
+    /// Whether the caption numbers still line up with the server's counts, so the thread may draw caption lines.
+    private(set) var numbering = CaptionNumbering()
+    @ObservationIgnored private var voiceServers: Set<String> = [] // the voice servers in the room, by identity
     /// The room's connection dropped, came back, or ended without the app asking.
     @ObservationIgnored var onLinkChange: ((CallLink) -> Void)?
     @ObservationIgnored var onAgentAnswered: (() -> Void)?
@@ -34,6 +39,8 @@ final class LiveKitClient: NSObject {
     /// starts; with `answering`, the room of the AI's call. Only the pass from the token server differs.
     func connect(answering roomName: String? = nil, continuing earlierCall: String? = nil) async throws -> String {
         captionList = CaptionList()
+        numbering = CaptionNumbering()
+        voiceServers = []
         voices.aiHasAnswered = roomName != nil // the AI's own call has no ringing: the first sound is its voice
         let access = try await fetchAccess(answering: roomName, continuing: earlierCall)
         try Task.checkCancellation() // the call ended while we fetched the token
@@ -62,6 +69,7 @@ final class LiveKitClient: NSObject {
         guard room === self.room else { throw CancellationError() }
         voices.microphoneOn = microphoneOn
         voices.start()
+        for participant in room.remoteParticipants.values { voiceServerJoined(participant) } // there before us
         if room.remoteParticipants.values.contains(where: { $0.attributes[Self.stateAttribute] == "answered" }) {
             agentAnswered() // the AI picked up before we finished joining (its own call, already answered)
         }
@@ -93,6 +101,13 @@ final class LiveKitClient: NSObject {
         guard let room else { return }
         self.room = nil
         await room.disconnect()
+    }
+
+    /// A voice server in the room, met once per identity: when the phone joins, or when it arrives later.
+    private func voiceServerJoined(_ participant: Participant) {
+        guard participant.kind == .agent, voiceServers.insert(participant.identity?.stringValue ?? "").inserted
+        else { return }
+        numbering.voiceServerJoined(captions: participant.attributes[Self.captionsAttribute])
     }
 
     private func show(_ text: String, segment: String, from sender: Participant.Identity, sentAt: Date, in room: Room) {
@@ -155,7 +170,23 @@ extension LiveKitClient: RoomDelegate {
     nonisolated func room(_ room: Room, didStartReconnectWithMode reconnectMode: ReconnectMode) {
         Task { @MainActor in
             guard room === self.room else { return } // an earlier call's room
+            self.numbering.roomReconnecting() // lines sent meanwhile are lost to the phone
             self.onLinkChange?(.reconnecting)
+        }
+    }
+
+    nonisolated func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
+        Task { @MainActor in
+            guard room === self.room else { return }
+            self.voiceServerJoined(participant)
+        }
+    }
+
+    nonisolated func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
+        Task { @MainActor in
+            guard room === self.room, participant.kind == .agent,
+                  self.voiceServers.remove(participant.identity?.stringValue ?? "") != nil else { return }
+            self.numbering.voiceServerLeft()
         }
     }
 
@@ -177,10 +208,13 @@ extension LiveKitClient: RoomDelegate {
     }
 
     nonisolated func room(_ room: Room, participant: Participant, didUpdateAttributes attributes: [String: String]) {
-        guard participant is RemoteParticipant, participant.attributes[Self.stateAttribute] == "answered" else { return }
+        guard participant is RemoteParticipant else { return }
+        let answered = participant.attributes[Self.stateAttribute] == "answered"
+        let captions = participant.attributes[Self.captionsAttribute], isVoiceServer = participant.kind == .agent
         Task { @MainActor in
             guard room === self.room else { return } // a late update from an earlier call
-            self.agentAnswered()
+            if isVoiceServer { self.numbering.captionsMark(captions) }
+            if answered { self.agentAnswered() }
         }
     }
 }
