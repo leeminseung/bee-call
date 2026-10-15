@@ -36,8 +36,8 @@ from typing import Any
 from beelink.clock import parse_time
 from beelink.planner import OFFERS_DIR, Plan
 from voice.language import CallLanguage
+from voice.people import DEFAULT_CALL_TIME
 
-CALL_TIME = "21:00"  # the time an offer suggests when CALL_TIME is unset (arbitrary default; a setting later)
 MIN_LEAD = timedelta(minutes=10)  # closer than this to today's call time, an offer suggests tomorrow (arbitrary)
 LATE_BY = timedelta(minutes=10)  # a booked call this late is not placed any more (arbitrary)
 STUCK = timedelta(minutes=5)  # "calling" or "placing" this long means the placing process died (arbitrary)
@@ -118,8 +118,8 @@ class Offer:
 
 def call_time(now: datetime, at: str | None = None) -> datetime:
     """Today's call time, or tomorrow's when today's is past or too close, on the person's clock (`now` is their
-    time). CALL_TIME is read here, after the processes have loaded .env.local."""
-    hour, minute = (int(x) for x in (at or os.environ.get("CALL_TIME") or CALL_TIME).split(":"))
+    time). `at`: the person's call_time setting; voice/people.py owns its default."""
+    hour, minute = (int(x) for x in (at or DEFAULT_CALL_TIME).split(":"))
     today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     return today if today - now >= MIN_LEAD else today + timedelta(days=1)
 

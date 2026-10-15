@@ -41,6 +41,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 PERSON_ID = re.compile(r"[a-z][a-z0-9-]{0,31}")
 CALL_TIME = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+DEFAULT_CALL_TIME = "21:00"  # the evening time an offer suggests until the person sets theirs (the one default)
 SESSION_DAYS = 180  # a sign-in lasts this long; then the app signs in with Apple again (arbitrary)
 DEFAULT_BUDGET_USD = 3.0  # estimated spend a day before calls stop (arbitrary until per-minute costs are measured)
 DEFAULT_TIME_ZONE = "Asia/Seoul"  # until the person's phone sends its own (Matt, 2026-10-15: the friend is in Korea too)
@@ -83,7 +84,7 @@ def dev_fallback(people: "People", remote: str | None, proxied: bool, asked: boo
 @dataclass
 class Settings:
     language: str = "en"  # the call language, en or ko (voice/language.py)
-    call_time: str = "21:00"  # the evening time an offer suggests (voice/offers.py)
+    call_time: str = DEFAULT_CALL_TIME  # the evening time an offer suggests (voice/offers.py)
     record_on_server: bool = True  # keep each call's raw audio in its folder (Matt, 2026-10-14)
     record_on_phone: bool = False  # the app records the call on the iPhone itself; the server only notes it
     daily_budget_usd: float = DEFAULT_BUDGET_USD

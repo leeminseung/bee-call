@@ -31,7 +31,8 @@ from beelink.planner import Plan
 from meta import files
 from meta.session import DAILY_NOTIFICATIONS, MetaSession, quiet, quiet_ends
 from voice.aws_session import aws_session
-from voice.offers import CALL_TIME, AlreadyOffered, Offer, OfferStore, QuestionWaiting
+from voice.offers import AlreadyOffered, Offer, OfferStore, QuestionWaiting
+from voice.people import DEFAULT_CALL_TIME
 from voice.call_models import coordinator_llm
 from voice.prep import prep_model
 
@@ -171,7 +172,7 @@ def context(workspace: Path, events: list[dict[str, Any]], now: datetime, call_t
     offers = [f"- {o.id} {o.state}: \"{o.topic}\"" + (f", call at {o.call_at}" if o.call_at else "")
               + (f", suggested {o.suggested_at}" if o.state == "asked" else "") for o in store.open(now)]
     return "\n\n".join([
-        f"It is now {now_text(now)}. The evening call time is {call_time or os.environ.get('CALL_TIME') or CALL_TIME}. {limits}",
+        f"It is now {now_text(now)}. The evening call time is {call_time or DEFAULT_CALL_TIME}. {limits}",
         "Open offers:\n" + ("\n".join(offers) if offers else "none"),
         "Your notes (state.md):\n" + session.state(),
         "Your recent entries (meta session):\n" + session.recent_text(),
@@ -194,7 +195,7 @@ class Thinker:
             ("zai.glm-5", os.environ.get("BEDROCK_REGION", "ap-southeast-2"))
         self.client = client
         self.send = send
-        self.call_time = call_time  # the evening time an offer suggests (the person's setting; CALL_TIME when None)
+        self.call_time = call_time  # the evening time an offer suggests (the person's setting; the default when None)
 
     async def _tool(self, name: str, args: dict[str, Any], now: datetime, actions: list[dict[str, Any]]) -> str:
         ws = self.workspace
