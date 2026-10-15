@@ -103,7 +103,9 @@ def test_the_env_file_gives_the_services_exactly_the_values_in_ssm():
     text, skipped = env_file(params, Path("/run/bee-call/apns-key.p8"))
     assert systemd_env(text) == {"CALL_TIME": "  21:00 # evening", "ELEVENLABS_API_KEY": 'sk_a"b\\c$HOME`id`',
                                  "LIVEKIT_URL": "wss://bee-call.livekit.cloud", "NOTE": "it's é",
-                                 "APNS_KEY_PATH": "/run/bee-call/apns-key.p8"}
+                                 "APNS_KEY_PATH": "/run/bee-call/apns-key.p8",
+                                 # BC-154: the signed APNs token lives in memory (tmpfs), never on the disk
+                                 "APNS_TOKEN_CACHE": "/run/bee-call/apns/provider-token.json"}
     assert "PRIVATE KEY" not in text and skipped == {}  # the keys are files, never environment variables
     assert quoted("$x") == '"\\$x"'
 

@@ -26,6 +26,10 @@ REGION = "ap-southeast-2"
 RUN_DIR = Path("/run/bee-call")
 ENV_FILE = RUN_DIR / "env"
 APNS_KEY = RUN_DIR / "apns-key.p8"
+# The signed APNs provider token the services share (voice/voip_push.py): a credential for up to an hour, so it is
+# kept on tmpfs, never on the disk (BC-154), in a folder only the services' user can open.
+APNS_TOKEN_DIR = RUN_DIR / "apns"
+APNS_TOKEN_CACHE = APNS_TOKEN_DIR / "provider-token.json"
 CADDYFILE = Path("/etc/caddy/Caddyfile")
 CADDY_BIN = Path("/opt/bee-call/bin/caddy")  # where deploy/install.sh puts it
 TEMPLATE = Path(__file__).with_name("Caddyfile.template")
@@ -34,11 +38,12 @@ SERVICE_GROUP = "bee-call"
 
 ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 HOSTNAME = re.compile(r"(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])")
-# Never taken from SSM: a profile or static keys would replace the instance role, the APNs key path is this
-# server's own file, BEE_CALL_DEV_PERSON lets requests in without signing in, which only a Mac may allow, and the
+# Never taken from SSM: a profile or static keys would replace the instance role, the APNs key path and the APNs token
+# cache are this server's own files, BEE_CALL_DEV_PERSON lets requests in without signing in, which only a Mac may allow, and the
 # units set the rest themselves; this file would override them (a Mac's agent name would share its calls).
 REFUSED = {"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "APNS_KEY_PATH",
-           "BEE_CALL_DEV_PERSON", "LIVEKIT_AGENT_NAME", "BEE_CALL_DATA", "BEE_BIN", "TZ", "TOKEN_SERVER_PORT"}
+           "APNS_TOKEN_CACHE", "BEE_CALL_DEV_PERSON", "LIVEKIT_AGENT_NAME", "BEE_CALL_DATA", "BEE_BIN", "TZ",
+           "TOKEN_SERVER_PORT"}
 
 
 def quoted(value: str) -> str:
@@ -61,6 +66,7 @@ def env_file(params: Mapping[str, str], apns_key: Path | None = None) -> tuple[s
             lines.append(f"{name}={quoted(value)}")
     if apns_key is not None:
         lines.append(f"APNS_KEY_PATH={quoted(str(apns_key))}")
+        lines.append(f"APNS_TOKEN_CACHE={quoted(str(APNS_TOKEN_CACHE))}")
     return "\n".join(lines) + "\n", skipped
 
 
@@ -130,6 +136,9 @@ def write_env() -> None:
     key = params.get("apns-key", "").strip()
     if key:
         write(APNS_KEY, key + "\n", 0o640, SERVICE_GROUP)
+        APNS_TOKEN_DIR.mkdir(mode=0o700, exist_ok=True)
+        shutil.chown(APNS_TOKEN_DIR, SERVICE_GROUP, SERVICE_GROUP)  # the services' user, who signs the token
+        APNS_TOKEN_DIR.chmod(0o700)
     else:
         APNS_KEY.unlink(missing_ok=True)
     text, skipped = env_file(params, APNS_KEY if key else None)

@@ -118,6 +118,24 @@ def test_the_provider_token_is_kept_with_the_people_it_serves(person, config, tm
     assert (person.people.root / "apns_provider_token.json").exists() and not (elsewhere / "data").exists()
 
 
+def test_on_a_server_the_provider_token_is_kept_in_memory_and_only_its_owner_reads_it(person, config, tmp_path,
+                                                                                      monkeypatch):
+    """BC-154: the signed provider token (a credential for up to an hour) was cached under the data root, on the
+    server's disk. On a server it goes where deploy/config.py points APNS_TOKEN_CACHE (tmpfs under /run), and the
+    file is replaced whole, readable by its owner only, also when an older one was readable by others."""
+    import stat
+
+    cache = tmp_path / "run" / "apns" / "provider-token.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("{}")
+    cache.chmod(0o644)
+    monkeypatch.setenv("APNS_TOKEN_CACHE", str(cache))
+    save_device_token(person, DEVICE, "development")
+    push(person, config)
+    assert json.loads(cache.read_text())["token"] and stat.S_IMODE(cache.stat().st_mode) == 0o600
+    assert not (person.people.root / "apns_provider_token.json").exists()
+
+
 def test_a_token_apple_no_longer_knows_is_dropped(person, config):
     save_device_token(person, DEVICE, "production")
     with pytest.raises(PushError, match="410 Unregistered"):

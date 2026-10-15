@@ -29,6 +29,7 @@ On the instance:
 | `/var/lib/bee-call` | the data root (`BEE_CALL_DATA`), also `bee-call`'s home |
 | `/var/lib/caddy` | Caddy's certificates |
 | `/run/bee-call/env`, `/run/bee-call/apns-key.p8` | settings and the APNs key, rewritten at every boot |
+| `/run/bee-call/apns/` | the signed APNs token the services share (good for up to an hour), only in memory, readable by `bee-call` only |
 | `/swapfile` | 2 GB of swap |
 
 ## Before the first deployment

@@ -80,9 +80,21 @@ def provider_token(config: ApnsConfig, now: float | None = None, cache: Path | N
                        headers={"kid": config.key_id})
     if cache:
         cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.touch(mode=0o600)
-        cache.write_text(json.dumps({"kid": config.key_id, "iss": config.team_id, "iat": int(now), "token": token}))
+        # Replaced whole, readable by its owner only, whatever mode an older file had: it is a credential.
+        tmp = cache.with_name(f".{cache.name}.{os.getpid()}.tmp")
+        tmp.unlink(missing_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps({"kid": config.key_id, "iss": config.team_id, "iat": int(now), "token": token}))
+        tmp.replace(cache)
     return token
+
+
+def token_cache(person: Person) -> Path:
+    """Where the provider token is shared: APNS_TOKEN_CACHE on a server (tmpfs under /run, deploy/config.py), so the
+    credential never reaches the disk (BC-154); on a Mac, one file for every person under their data root."""
+    configured = os.environ.get("APNS_TOKEN_CACHE", "").strip()
+    return Path(configured) if configured else person.people.root / PROVIDER_TOKEN_FILE.name
 
 
 def save_device_token(person: Person, token: str, environment: str, kind: str = "voip",
@@ -132,8 +144,8 @@ async def _send(kind: str, payload: dict[str, Any], person: Person, config: Apns
     device = load_device_token(person, kind)
     if config is None or device is None:
         return None
-    # One cache for every person, under their data root: APNs counts token renewals per signing key, not per person.
-    token = provider_token(config, cache=person.people.root / PROVIDER_TOKEN_FILE.name)
+    # One cache for every person: APNs counts token renewals per signing key, not per person.
+    token = provider_token(config, cache=token_cache(person))
     topic = f"{config.bundle_id}.voip" if kind == "voip" else config.bundle_id
     headers = {"authorization": f"bearer {token}", "apns-topic": topic, "apns-push-type": kind,
                "apns-priority": "10"}
