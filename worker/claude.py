@@ -9,7 +9,8 @@ and the job's own tools (worker/tools.py: progress, relay_to_user, save_file, sa
 between requests. A file Claude leaves in $OUTPUT_DIR in code execution comes back as a file id: this Mac saves it
 into the job folder under a free, safe name at once, and deletes it from Anthropic's Files API once the job is over
 (the job's conversation names the file until then, and a request naming a deleted file is refused), also when the
-end of its call cuts the job off (then within FORGET_ON_CANCEL_S).
+end of its call cuts the job off (then within FORGET_ON_CANCEL_S, as long as deletions still going get when the call
+ends; a job that was done keeps its result).
 
 Background jobs need not be quick (the user, 2026-10-15): every request may write up to the role's max_tokens with
 thinking at effort high, and a job may make MAX_REQUESTS requests, JOB_WEB_SEARCHES web searches and JOB_WEB_FETCHES
@@ -205,18 +206,18 @@ class ClaudeWorker:
             usage["status"] = "completed"
         except asyncio.CancelledError:
             usage["status"] = "cancelled"
+            write_usage(job, usage)
+            await self._clear_outputs(outputs, job, cut_off=True)
             raise
         except BaseException:
             usage["status"] = "failed"
-            raise
-        finally:
             write_usage(job, usage)
-            try:  # a call that ended waits for this a few seconds at most
-                await asyncio.wait_for(self._forget_outputs(outputs, job),
-                                       FORGET_ON_CANCEL_S if usage["status"] == "cancelled" else FORGET_S)
-            except TimeoutError:
-                log.warning("job %s: its files from code execution may be left in the Files API", job.job_id)
-            # The end of the call meanwhile is not swallowed: it ends the job as cancelled, never handed to the standby.
+            if await self._clear_outputs(outputs, job, cut_off=False):
+                raise asyncio.CancelledError  # the call ended meanwhile: the job ends, never handed to the standby
+            raise
+        write_usage(job, usage)
+        if await self._clear_outputs(outputs, job, cut_off=False):
+            asyncio.current_task().uncancel()  # the call ended meanwhile, but the job was done: its result stands
         summary = "".join(b.get("text", "") for b in content if b.get("type") == "text").strip() \
             or "The worker finished without a summary."
         if not (job.dir / "report.md").exists():
@@ -294,6 +295,30 @@ class ClaudeWorker:
                         outputs[file_id] = name
             except Exception:  # left in the Files API: it may come down later by hand
                 log.warning("job %s: could not save %s from code execution", job.job_id, file_id, exc_info=True)
+
+    async def _clear_outputs(self, outputs: dict[str, str], job: Job, *, cut_off: bool) -> bool:
+        """Deletes the job's code execution files from the Files API once its conversation is over, within FORGET_S,
+        or FORGET_ON_CANCEL_S for a job the end of its call cut off (a call that ended waits for this). The end of
+        the call while they are being deleted does not stop them: they get FORGET_ON_CANCEL_S more. Returns
+        whether the call ended meanwhile."""
+        if all(became == "failed" for became in outputs.values()):
+            return False
+        deleting = asyncio.create_task(self._forget_outputs(outputs, job))
+        ended = False
+        try:
+            await asyncio.wait_for(asyncio.shield(deleting), FORGET_ON_CANCEL_S if cut_off else FORGET_S)
+        except TimeoutError:
+            pass
+        except asyncio.CancelledError:
+            ended = True
+            try:
+                await asyncio.wait_for(asyncio.shield(deleting), FORGET_ON_CANCEL_S)
+            except (TimeoutError, asyncio.CancelledError):
+                pass
+        if not deleting.done():
+            deleting.cancel()
+            log.warning("job %s: its files from code execution may be left in the Files API", job.job_id)
+        return ended
 
     async def _forget_outputs(self, outputs: dict[str, str], job: Job) -> None:
         """Deletes from the Files API the files the job saved (or found too large), once its conversation is over."""

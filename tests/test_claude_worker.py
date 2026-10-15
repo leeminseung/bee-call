@@ -4,6 +4,7 @@ web search, web fetch and code execution and the job's own tools, against a scri
 import asyncio
 import json
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -718,14 +719,16 @@ def test_a_claude_refusal_is_a_decline_the_standby_never_takes(tmp_path):
     assert isinstance(declined, JobDeclined)
 
 
-def test_a_call_that_ends_while_a_failed_job_clears_its_files_does_not_hand_the_job_over(tmp_path):
+def test_a_call_that_ends_while_a_failed_job_clears_its_files_does_not_hand_the_job_over(tmp_path, monkeypatch):
     """Review of the last stretch, finding 6: the end of the call was swallowed while a failed job deleted its code
-    execution files, so the failure went on to the standby, which ran after the call was over and held its end."""
+    execution files, so the failure went on to the standby, which ran after the call was over and held its end. A
+    deletion that never finishes holds the call's end FORGET_ON_CANCEL_S at most (shortened here)."""
     import anthropic
     import httpx
 
     from worker.runner import JobRunner, StandingBy
 
+    monkeypatch.setattr(claude, "FORGET_ON_CANCEL_S", 0.2)
     held = asyncio.Event()
 
     class SlowFiles(Files):
@@ -754,3 +757,59 @@ def test_a_call_that_ends_while_a_failed_job_clears_its_files_does_not_hand_the_
 
     job = asyncio.run(main())
     assert job.status == "cancelled" and standby.ran == 0
+
+
+@pytest.mark.parametrize("ending", ["finished", "failed"])
+def test_the_end_of_the_call_while_a_job_clears_its_files_lets_the_deletions_finish(tmp_path, ending):
+    """Review of the final fixes, finding 3: since a8efc5b the end of the call while a job deleted its code execution
+    files from the Files API ended the job as cancelled even when it had finished (its summary lost, its files not
+    listed in the app), and in every case the deletions still to come were dropped. A finished job's result stands;
+    a failed one still ends as cancelled, never handed to the standby; and the deletions go on for
+    FORGET_ON_CANCEL_S after the call's end."""
+    import anthropic
+    import httpx
+
+    from worker.runner import JobRunner, StandingBy
+
+    release = asyncio.Event()  # the deletion finishes a moment after the call ends
+
+    class SlowFiles(Files):
+        async def delete(self, file_id):
+            await release.wait()
+            self.deleted.append(file_id)
+
+    if ending == "finished":
+        files = SlowFiles({"f1": ("prices.csv", b"a,b\n")})  # saved into the job folder
+        last = reply([text("Done.")], "end_turn")
+    else:
+        files = SlowFiles({"f1": ("huge.bin", b"0" * (claude.MAX_FILE_BYTES + 1))})  # too large: nothing produced
+        last = anthropic.BadRequestError("bad", body=None, response=httpx.Response(
+            400, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")))
+    client = SimpleNamespace(messages=Messages([reply([*ran_code("srvtoolu_1", "f1"),
+                                                       tool("toolu_1", "progress", text="x")]), last], files=files),
+                             files=files)
+    standby = Standby()
+    events: list = []
+
+    async def main():
+        backend = StandingBy(ClaudeWorker(SONNET, client=client), lambda: standby, "Claude Sonnet 5.5", "GLM 5")
+
+        async def notify(news):
+            pass
+
+        runner = JobRunner(tmp_path, lambda name, **f: events.append((name, f)), backend, notify,
+                           clock=lambda: datetime.now(SEOUL))
+        job = runner.start("Compare the trails")
+        await asyncio.sleep(0.3)  # the job's conversation is over and it is deleting its files
+        asyncio.get_running_loop().call_later(0.2, release.set)
+        await asyncio.wait_for(runner.cancel_all(), 2)  # the call ends
+        return job
+
+    job = asyncio.run(main())
+    assert files.deleted == ["f1"]
+    if ending == "finished":
+        (done,) = [f for name, f in events if name == "job_done"]
+        assert job.status == "completed" and done["summary"] == "Done."
+        assert [Path(f).name for f in done["files"]] == ["prices.csv", "report.md", "usage.json"]
+    else:
+        assert job.status == "cancelled" and standby.ran == 0
