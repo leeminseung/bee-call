@@ -431,6 +431,67 @@ test("between calls, the debug view still shows the raw tool calls, the model an
   }
 });
 
+/** One time the meta agent looked, with only what a normal page shows. */
+const looked = (at, decision) => ({ at, events: [{ kind: "bee_change", inbox: "inbox/x" }], decision });
+
+/** A fetch for Between calls: the newest page, and pages before a given time (BC-054). */
+function metaPages(pages) {
+  const asked = [];
+  const fetch = async (url) => {
+    asked.push(url);
+    const before = /[?&]before=([^&]+)/.exec(url);
+    return answering(pages[before ? decodeURIComponent(before[1]) : ""])();
+  };
+  return { fetch, asked };
+}
+
+test("between calls, earlier times it looked load below when the server says there are more (BC-054)", async () => {
+  const pages = {
+    "": { entries: [looked("2026-10-15T21:05:00+09:00", "Newest look.")], state: "", more: true },
+    "2026-10-15T21:05:00+09:00": { entries: [looked("2026-10-14T08:00:00+09:00", "An older look.")], more: false },
+  };
+  const server = metaPages(pages);
+  const page = loadPage({ hash: "#/meta", fetch: server.fetch });
+  await page.settle();
+  assert.doesNotMatch(page.visibleText(page.byId("view")), /An older look\./);
+  page.one("meta-older").click();
+  await page.settle();
+  const shown = page.visibleText(page.byId("view"));
+  assert.match(shown, /Newest look\.[\s\S]*An older look\./);
+  assert.equal(page.has("meta-older"), false, "nothing older is left");
+  assert.deepEqual(server.asked.slice(-1), ["api/meta?before=2026-10-15T21%3A05%3A00%2B09%3A00"]);
+
+  // The next poll brings a new look; the older ones stay below it.
+  pages[""] = { entries: [looked("2026-10-15T22:00:00+09:00", "A new look."), looked("2026-10-15T21:05:00+09:00", "Newest look.")],
+    state: "", more: true };
+  page.tick();
+  await page.settle();
+  assert.match(page.visibleText(page.byId("view")), /A new look\.[\s\S]*Newest look\.[\s\S]*An older look\./);
+});
+
+test("between calls, a server that does not say there are more shows no button (BC-054)", async () => {
+  const page = loadPage({ hash: "#/meta", fetch: answering({ entries: [looked("2026-10-15T21:05:00+09:00", "A look.")] }) });
+  await page.settle();
+  assert.equal(page.has("meta-older"), false);
+});
+
+test("between calls, earlier times that cannot be loaded say so and can be tried again (BC-054)", async () => {
+  let failing = true;
+  const fetch = async (url) => (url.includes("before=") && failing
+    ? answering("Bad Gateway", 502)()
+    : answering(url.includes("before=") ? { entries: [looked("2026-10-14T08:00:00+09:00", "An older look.")] }
+      : { entries: [looked("2026-10-15T21:05:00+09:00", "A look.")], more: true })());
+  const page = loadPage({ hash: "#/meta", fetch });
+  await page.settle();
+  page.one("meta-older").click();
+  await page.settle();
+  assert.match(page.text(page.one("meta-older")), /Couldn't load earlier ones\. Try again\./);
+  failing = false;
+  page.one("meta-older").click();
+  await page.settle();
+  assert.match(page.visibleText(page.byId("view")), /An older look\./);
+});
+
 // ---------- when the records cannot be read (review finding 7) ----------
 
 test("a 401 says the sign-in ended, on every page that reads the records", async () => {

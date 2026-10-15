@@ -340,23 +340,55 @@
     call_declined: (e) => `You declined an AI call about “${e.topic || ""}”`,
   };
 
+  // The meta agent's times it looked, newest first. The server lists the newest page; with "more", it has older
+  // ones, which ?before=<at of the oldest shown> lists the same way (BC-054).
+  const META = API.replace(/\/sessions$/, "/meta");
+
   class MetaPage {
     constructor() {
       setHeader("Between calls", true);
       setStatus(null);
       this.shown = "";
+      this.latest = null; // the newest page, as last listed
+      this.older = []; // pages loaded with "Show earlier", oldest last
+      this.olderMore = false; // the server has some older than these
       this.load();
       this.timer = setInterval(() => this.load(), LIST_POLL_MS);
     }
 
     async load() {
-      const answer = await getJSON(`${API.replace(/\/sessions$/, "")}/meta`);
+      const answer = await getJSON(META);
       if (this.closed) return;
       const key = JSON.stringify(answer);
       if (key === this.shown) return;
       this.shown = key;
       if (answer.problem) showNote(problemText(answer));
-      else this.render(answer.data || {});
+      else {
+        this.latest = answer.data || {};
+        this.render(this.latest);
+      }
+    }
+
+    /** The newest page, then the older ones loaded, each look once. */
+    entries(data) {
+      const newest = Array.isArray(data.entries) ? data.entries : [];
+      const seen = new Set(newest.map((entry) => entry.at));
+      return newest.concat(this.older.filter((entry) => !seen.has(entry.at)));
+    }
+
+    async loadOlder(button, oldest) {
+      button.disabled = true;
+      const answer = await getJSON(`${META}?before=${encodeURIComponent(oldest)}`);
+      if (this.closed) return;
+      if (answer.problem) {
+        button.disabled = false;
+        button.textContent = "Couldn't load earlier ones. Try again.";
+        return;
+      }
+      const data = answer.data || {};
+      this.older.push(...(Array.isArray(data.entries) ? data.entries : []));
+      this.olderMore = Boolean(data.more);
+      this.render(this.latest || {});
     }
 
     render(data) {
@@ -370,9 +402,14 @@
         card.append(head, el("p", "meta-state-text", data.state));
         frag.append(card);
       }
-      const entries = Array.isArray(data.entries) ? data.entries : [];
+      const entries = this.entries(data);
       if (!entries.length) frag.append(el("p", "empty", "Nothing yet. Bee Call looks when Bee saves something new or a call ends."));
       for (const entry of entries) frag.append(this.entry(entry));
+      if (entries.length && (this.older.length ? this.olderMore : Boolean(data.more))) {
+        const button = el("button", "link-button meta-older", "Show earlier");
+        button.addEventListener("click", () => this.loadOlder(button, entries[entries.length - 1].at));
+        frag.append(button);
+      }
       view.replaceChildren(frag);
     }
 
