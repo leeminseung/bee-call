@@ -26,6 +26,8 @@ from voice.aws_session import aws_session
 load_dotenv(".env.local")
 MODEL = "us.amazon.nova-2-lite-v1:0"
 REGION = "us-east-1"
+READ_TIMEOUT_S = 300  # the longest one search may take to answer
+
 PRICE_PER_REQUEST = 0.03
 PRICE_IN_PER_TOKEN = 0.33 / 1_000_000
 PRICE_OUT_PER_TOKEN = 2.75 / 1_000_000
@@ -116,7 +118,7 @@ def parse_response(question: str, response: dict[str, Any]) -> SearchResult:
 
 
 def make_client() -> Any:
-    return aws_session().client("bedrock-runtime", region_name=REGION, config=Config(read_timeout=300))
+    return aws_session().client("bedrock-runtime", region_name=REGION, config=Config(read_timeout=READ_TIMEOUT_S))
 
 
 async def web_search(question: str, client: Any | None = None, max_tokens: int = 2048) -> SearchResult:

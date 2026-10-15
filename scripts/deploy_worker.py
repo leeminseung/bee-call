@@ -125,6 +125,10 @@ async def smoke(arn: str) -> None:
         print("\n".join(steps))
         print(f"{time.perf_counter() - started:5.1f}s done: {summary[:200]}")
         print("report.md:", (job.dir / "report.md").read_text()[:300])
+        usage_file = job.dir / "usage.json"
+        usage = json.loads(usage_file.read_text()) if usage_file.exists() else {}
+        # reasoning_chars above 0: the model reasoned (worker/harness.py REASONING reached it through the harness).
+        print("usage:", {k: usage.get(k) for k in ("input_tokens", "output_tokens", "reasoning_chars", "stop_reason")})
 
 
 def main() -> None:

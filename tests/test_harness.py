@@ -71,6 +71,53 @@ def test_models_that_fail_with_the_code_interpreter_get_no_code_interpreter():
         assert other["tools"][-1]["name"] == "code_interpreter", model
 
 
+def test_the_worker_has_room_for_long_research_and_reports():
+    """The user (2026-10-15): background jobs need not be quick; only the call AI is held to short waits. A report
+    fits in one model call, a job gets twice the steps and time, and GLM 5 reasons before it acts."""
+    from worker.harness import (HARNESS_TIMEOUT_S, INVOKE_READ_TIMEOUT_S, KEEP_WARM_S, MAX_ROUNDS,
+                                WEB_SEARCH_LONGEST_S)
+
+    d = harness_definition("arn:aws:iam::123456789012:role/bee-call-worker", "zai.glm-5")
+    model = d["model"]["bedrockModelConfig"]
+    # GLM 5 on Bedrock takes a prompt and maxTokens of 202,752 tokens together (probed 2026-10-15), so a long
+    # job's conversation keeps about 170K tokens of room next to a 32K-token answer.
+    assert model["maxTokens"] == 32768
+    assert model["additionalParams"] == {"reasoning_effort": "high"}  # probed: GLM 5 reasons only when asked
+    assert (d["maxIterations"], d["timeoutSeconds"], MAX_ROUNDS) == (120, 1800, 80) == (120, HARNESS_TIMEOUT_S, 80)
+    lifecycle = d["environment"]["agentCoreRuntimeEnvironment"]["lifecycleConfiguration"]
+    # A session outlives the longest wait between a job's rounds (a web search), and a long call with a full-length
+    # job at its end; the warm-up keeps it from idling out between jobs.
+    assert lifecycle["idleRuntimeSessionTimeout"] > WEB_SEARCH_LONGEST_S and KEEP_WARM_S < lifecycle["idleRuntimeSessionTimeout"]
+    assert lifecycle["maxLifetime"] >= 3600 + 2 * HARNESS_TIMEOUT_S
+    assert INVOKE_READ_TIMEOUT_S > HARNESS_TIMEOUT_S  # this Mac never gives up on a round the harness still runs
+    other = harness_definition("arn:aws:iam::123456789012:role/bee-call-worker", "global.amazon.nova-2-lite-v1:0")
+    assert "additionalParams" not in other["model"]["bedrockModelConfig"]  # the switch is GLM 5's own
+
+
+def test_the_worker_s_reasoning_is_counted_in_its_usage(tmp_path):
+    """How the reasoning switch shows in a job: the harness streams GLM 5's reasoning, and the job's usage.json
+    counts its characters."""
+    reasoning = [{"contentBlockStart": {"contentBlockIndex": 0, "start": {}}},
+                 {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"reasoningContent": {"text": "The user "}}}},
+                 {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"reasoningContent": {"text": "wants trails."}}}},
+                 {"contentBlockStop": {"contentBlockIndex": 0}}]
+    finished = assistant(("text", "Gwanaksan is gentler."), stop="end_turn")
+    events = finished[:1] + reasoning + finished[1:]
+    assert read_round(events).reasoning_chars == len("The user wants trails.")
+    assert read_round(events).text == "Gwanaksan is gentler."
+
+    async def main():
+        job = Job(job_id="01", dir=tmp_path, now=datetime.now(SEOUL), task="Compare the trails")
+
+        async def relay(text):
+            pass
+
+        await HarnessWorker("arn:harness", client=FakeHarness([events]), search=fake_search).run(job, lambda t: None, relay)
+
+    asyncio.run(main())
+    assert json.loads((tmp_path / "usage.json").read_text())["reasoning_chars"] == len("The user wants trails.")
+
+
 def test_read_round_keeps_only_inline_calls_still_waiting():
     events = (assistant(("tool", "t_ci", "code_interpreter", ['{"code": "6*7"}'])) + server_tool_result("t_ci")
               + assistant(("text", "Now searching. "), ("tool", "t_ws", "web_search", ['{"quest', 'ion": "trails"}'])))
@@ -163,10 +210,11 @@ def test_requests_match_the_api_model():
     from worker.harness import update_request
 
     model = botocore.session.get_session().get_service_model("bedrock-agentcore-control")
-    definition = harness_definition("arn:aws:iam::123456789012:role/bee-call-worker", "global.amazon.nova-2-lite-v1:0")
-    for operation, params in (("CreateHarness", definition), ("UpdateHarness", update_request(definition, "h-123"))):
-        report = ParamValidator().validate(params, model.operation_model(operation).input_shape)
-        assert not report.has_errors(), report.generate_report()
+    for model_id in ("global.amazon.nova-2-lite-v1:0", "zai.glm-5"):
+        definition = harness_definition("arn:aws:iam::123456789012:role/bee-call-worker", model_id)
+        for operation, params in (("CreateHarness", definition), ("UpdateHarness", update_request(definition, "h-123"))):
+            report = ParamValidator().validate(params, model.operation_model(operation).input_shape)
+            assert not report.has_errors(), report.generate_report()
 
 
 def test_save_chart_draws_svg_and_file_names_are_checked(tmp_path):
@@ -434,8 +482,10 @@ def test_the_worker_smoke_test_builds_its_job(monkeypatch, capsys):
 
         async def run(self, job, progress, relay):
             (job.dir / "report.md").write_text("ok")
+            (job.dir / "usage.json").write_text('{"output_tokens": 90, "reasoning_chars": 412}')
             return f"ran at {job.now.tzinfo}"
 
     monkeypatch.setattr(deploy_worker, "HarnessWorker", Worker)
     asyncio.run(deploy_worker.smoke("arn:harness"))
-    assert "ran at Asia/Seoul" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "ran at Asia/Seoul" in out and "'reasoning_chars': 412" in out  # how a deploy shows the model reasoned

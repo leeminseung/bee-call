@@ -39,6 +39,7 @@ from voice.aws_session import aws_session
 from voice.costs import SpendLog
 from worker.chart import render_svg
 from worker.runner import Job
+from worker.web_search import READ_TIMEOUT_S as WEB_SEARCH_LONGEST_S
 from worker.web_search import SearchResult, web_search
 
 log = logging.getLogger("bee-call.worker")
@@ -58,7 +59,23 @@ DEFAULT_MODEL = os.environ.get("WORKER_MODEL", "zai.glm-5")
 # Nova 2 Lite (2026-10-12) and GLM 5 (2026-10-13) work with it. Claude is untested (blocked).
 NO_CODE_INTERPRETER = ("moonshotai.kimi-k3",)
 REGION_PREFIXES = ("global.", "us.", "eu.", "au.", "apac.", "jp.")
-MAX_ROUNDS = 40  # inline-function round trips per job (arbitrary)
+# Background jobs need not be quick (the user, 2026-10-15); only the call AI is held to short waits. So a job may
+# take long research and write its report in one model call:
+MAX_ROUNDS = 80  # inline-function round trips per job (40 until 2026-10-15)
+HARNESS_TIMEOUT_S = 1800  # one round (invocation); AgentCore's default is 3600 and a stream lasts at most 60 min
+MAX_ITERATIONS = 120  # model and code interpreter steps in one round (AgentCore's default is 75)
+# Per model call. GLM 5 on Bedrock takes a prompt and maxTokens of at most 202,752 tokens together (probed
+# 2026-10-15: "This model's maximum context length is 202752 tokens"), so the largest answer it accepts shrinks as
+# a job's conversation grows. 32K tokens holds any report in one call and leaves about 170K for the conversation.
+MODEL_MAX_TOKENS = 32768
+# GLM 5 on Bedrock reasons only when the request asks it to (probed 2026-10-15: no reasoning by default;
+# reasoning_effort takes none, minimal, low, medium, high, xhigh or max). The harness passes these on unchanged.
+REASONING = {"zai.glm-5": {"reasoning_effort": "high"}}
+# A session outlives the longest wait between a job's rounds (a web search, run on this Mac) and a long call with a
+# full-length job at its end; AgentCore ends an idle one after IDLE_SESSION_S.
+IDLE_SESSION_S = 900
+SESSION_LIFETIME_S = 7200
+INVOKE_READ_TIMEOUT_S = HARNESS_TIMEOUT_S + 60  # this Mac never gives up on a round the harness still runs
 MAX_FILE_BYTES = 5_000_000
 MAX_TOOL_TEXT = 8000
 
@@ -152,20 +169,23 @@ def harness_tools(code_interpreter: bool = True) -> list[dict[str, Any]]:
 def harness_definition(role_arn: str, model_id: str = DEFAULT_MODEL) -> dict[str, Any]:
     """The CreateHarness / UpdateHarness parameters for the worker."""
     code_interpreter = uses_code_interpreter(model_id)
+    model = {"modelId": model_id, "maxTokens": MODEL_MAX_TOKENS}
+    if model_id in REASONING:
+        model["additionalParams"] = REASONING[model_id]
     return {
         "harnessName": HARNESS_NAME,
         "executionRoleArn": role_arn,
-        "model": {"bedrockModelConfig": {"modelId": model_id, "maxTokens": 4096}},
+        "model": {"bedrockModelConfig": model},
         "systemPrompt": [{"text": system_prompt(code_interpreter)}],
         "tools": harness_tools(code_interpreter),
         "memory": {"disabled": {}},
         "truncation": {"strategy": "sliding_window", "config": {"slidingWindow": {"messagesCount": 60}}},
         "environment": {"agentCoreRuntimeEnvironment": {
             "networkConfiguration": {"networkMode": "PUBLIC"},
-            "lifecycleConfiguration": {"idleRuntimeSessionTimeout": 300, "maxLifetime": 3600},
+            "lifecycleConfiguration": {"idleRuntimeSessionTimeout": IDLE_SESSION_S, "maxLifetime": SESSION_LIFETIME_S},
         }},
-        "maxIterations": 60,
-        "timeoutSeconds": 900,
+        "maxIterations": MAX_ITERATIONS,
+        "timeoutSeconds": HARNESS_TIMEOUT_S,
     }
 
 
@@ -195,6 +215,7 @@ class Round:
     stop_reason: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    reasoning_chars: int = 0  # the model's reasoning, streamed when it is asked to reason (REASONING)
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -236,6 +257,8 @@ def _read_events(events: Iterable[dict[str, Any]], out: Round) -> None:
             delta = delta_event.get("delta", {})
             if "text" in delta and role == "assistant":
                 out.text += delta["text"]
+            elif "reasoningContent" in delta:
+                out.reasoning_chars += len(delta["reasoningContent"].get("text") or "")
             elif "toolUse" in delta:
                 use = blocks.get(delta_event.get("contentBlockIndex"))
                 if use is not None:
@@ -259,7 +282,7 @@ FINISHED = {"end_turn", "stop_sequence"}
 # server warms one at call start and keeps it from idling out until a job takes it.
 WARM_TEXT = ("Warm-up before a phone call, not a job. Reply with the single word ready and call no tools. "
              "Jobs come in later messages.")
-KEEP_WARM_S = 240  # under the session idle timeout (idleRuntimeSessionTimeout 300 in harness_definition)
+KEEP_WARM_S = 240  # well under the session idle timeout (IDLE_SESSION_S)
 BUILT_IN_TOOLS = {"code_interpreter"}  # run by the harness itself
 
 
@@ -297,7 +320,7 @@ class HarnessWorker:
         if not self.harness_arn:
             raise RuntimeError("no harness ARN: run scripts/deploy_worker.py first")
         self.client = client or aws_session().client(
-            "bedrock-agentcore", region_name=REGION, config=Config(read_timeout=900))
+            "bedrock-agentcore", region_name=REGION, config=Config(read_timeout=INVOKE_READ_TIMEOUT_S))
         self.search = search
         self._ready: str | None = None  # a warm session no job is using
         self._warm_lock = asyncio.Lock()  # one invocation at a time on the warm session
@@ -424,7 +447,8 @@ class HarnessWorker:
                                                          f"tomorrow and weekdays against this): {job.task}"}]}]
         # What the job used so far, in usage.json after every round, so the daily budget counts a job that fails or
         # is cancelled when the call ends as well as one that finishes (voice/costs.py).
-        usage: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0, "stop_reason": None, "status": "running",
+        usage: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0, "reasoning_chars": 0, "stop_reason": None,
+                                 "status": "running",
                                  "steps": []}  # seconds per model round (AWS side, built-in tools included) and call
         steps = usage["steps"]
         # A round still running when the job is cancelled runs on and is paid for. It counts at once as a guess, the
@@ -436,10 +460,11 @@ class HarnessWorker:
             with lock:
                 write_usage(job, usage)
 
-        def add(input_tokens: int, output_tokens: int, estimated: bool | None) -> None:
+        def add(input_tokens: int, output_tokens: int, estimated: bool | None, reasoning_chars: int = 0) -> None:
             with lock:
                 usage["input_tokens"] += input_tokens
                 usage["output_tokens"] += output_tokens
+                usage["reasoning_chars"] += reasoning_chars
                 if estimated:
                     usage["estimated"] = True
                 elif estimated is False:
@@ -453,10 +478,11 @@ class HarnessWorker:
                 found = await self._paid_round(
                     session_id, messages, cancelled=lambda guess=guess: add(*guess, estimated=True),
                     late=lambda found, guess=guess: add(found.input_tokens - guess[0],
-                                                        found.output_tokens - guess[1], estimated=False))
+                                                        found.output_tokens - guess[1], estimated=False,
+                                                        reasoning_chars=found.reasoning_chars))
                 steps.append({"round_s": round(time.monotonic() - started, 1), "calls": []})
                 usage["stop_reason"] = found.stop_reason
-                add(found.input_tokens, found.output_tokens, estimated=None)
+                add(found.input_tokens, found.output_tokens, estimated=None, reasoning_chars=found.reasoning_chars)
                 guess = (found.input_tokens, found.output_tokens)
                 if found.errors:
                     raise RuntimeError("; ".join(found.errors))

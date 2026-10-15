@@ -178,12 +178,12 @@ def test_the_fifth_offer_of_a_day_shows_only_in_the_app_list(tmp_path, monkeypat
     assert fifth.id not in sent and len(sent) == 4
 
 
-def test_a_background_job_fails_after_forty_rounds(tmp_path):
+def test_a_background_job_fails_after_eighty_rounds(tmp_path):
     from tests.test_harness import FakeHarness, assistant, fake_search
     from worker.harness import MAX_ROUNDS, HarnessWorker
     from worker.runner import JobRunner
 
-    assert MAX_ROUNDS == 40
+    assert MAX_ROUNDS == 80  # 40 until 2026-10-15: background jobs need not be quick
     rounds = [assistant(("tool", f"t{i}", "progress", ['{"text": "still working"}'])) for i in range(MAX_ROUNDS)]
     news = []
 
@@ -199,4 +199,4 @@ def test_a_background_job_fails_after_forty_rounds(tmp_path):
         return runner.jobs["01"].status
 
     assert asyncio.run(main()) == "failed"
-    assert news == [("failed", "the worker did not finish within 40 rounds")]
+    assert news == [("failed", "the worker did not finish within 80 rounds")]
