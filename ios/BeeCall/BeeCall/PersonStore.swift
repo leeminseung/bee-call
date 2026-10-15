@@ -8,10 +8,14 @@ import Observation
 @Observable
 final class PersonStore {
     private(set) var me: Me?
+    /// The settings as the server last said them: from GET /me, or from its answer to a pick, which is kept even
+    /// before GET /me has come (second review of the D wiring, finding 4).
+    private(set) var settings: PersonSettings?
     /// The last pick the server did not take, in words.
     private(set) var problem: String?
     @ObservationIgnored private let server: ServerClient
     @ObservationIgnored private let store: UserDefaults
+    @ObservationIgnored private var picks = 0 // picks sent so far: a read begun before one does not undo it
 
     init(server: ServerClient = ContractServer.client, store: UserDefaults = .standard) {
         self.server = server
@@ -19,9 +23,12 @@ final class PersonStore {
     }
 
     func refresh() async {
+        let picksBefore = picks
         guard case .ok(200, let data) = await server.send("/me"),
               let me = try? Contract.decode(Me.self, from: data) else { return }
         self.me = me
+        guard picks == picksBefore else { return } // a pick went out meanwhile: its answer is newer
+        settings = me.settings
         follow(me.settings.language)
     }
 
@@ -49,16 +56,14 @@ final class PersonStore {
     }
 
     private func change(_ fields: [String: Any]) async -> Bool {
+        picks += 1
         switch await server.send("/settings", method: "PUT", json: fields) {
         case .ok(200, let data):
             guard let answer = try? Contract.decode(SettingsAnswer.self, from: data) else {
                 problem = "Bee Call's server sent something this app cannot read."
                 return false
             }
-            if let me {
-                self.me = Me(person: me.person, settings: answer.settings, spentTodayUSD: me.spentTodayUSD,
-                             beeConnecting: me.beeConnecting)
-            }
+            settings = answer.settings
             follow(answer.settings.language)
             problem = nil
             return true

@@ -39,9 +39,9 @@ final class FirstRunTests: XCTestCase {
     /// phone's own.
     @MainActor func testTheFirstRunStartsOnTheServersLanguageElseThePhones() throws {
         let me = try Contract.decode(Me.self, from: ContractTests.example("me"))
-        XCTAssertEqual(FirstRun.language(me: me, preferred: ["en-US"]), .ko)
-        XCTAssertEqual(FirstRun.language(me: nil, preferred: ["en-US"]), .en)
-        XCTAssertEqual(FirstRun.language(me: nil, preferred: ["ko-KR"]), .ko)
+        XCTAssertEqual(FirstRun.language(settings: me.settings, preferred: ["en-US"]), .ko)
+        XCTAssertEqual(FirstRun.language(settings: nil, preferred: ["en-US"]), .en)
+        XCTAssertEqual(FirstRun.language(settings: nil, preferred: ["ko-KR"]), .ko)
     }
 
     // MARK: - Voice

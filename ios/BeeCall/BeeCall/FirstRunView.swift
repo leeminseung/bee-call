@@ -27,7 +27,7 @@ struct FirstRunView: View {
     }
 
     private var language: CallLanguage {
-        picked ?? FirstRun.language(me: person.me, preferred: Locale.preferredLanguages)
+        picked ?? FirstRun.language(settings: person.settings, preferred: Locale.preferredLanguages)
     }
 
     private var words: FirstRunWords { FirstRunWords(korean: language == .ko) }
@@ -54,11 +54,10 @@ struct FirstRunView: View {
         .navigationTitle(words.languageBack) // the back button's name on step 2
         .safeAreaInset(edge: .bottom) {
             StepFooter(page: 0, button: words.next) {
-                let shown = language
-                Task { // a language shown but never sent (GET /me had not come) goes out now
-                    if person.me?.settings.language != shown { _ = await person.choose(language: shown) }
+                Task {
+                    guard await languageSaved() else { return } // stays, with the reason under the list
+                    path = [.voice]
                 }
-                path = [.voice]
             }
         }
     }
@@ -66,7 +65,7 @@ struct FirstRunView: View {
     private var voiceStep: some View {
         List {
             Section {
-                VoicesSection(language: language, catalog: catalog, picked: pickedVoice ?? person.me?.settings.voice,
+                VoicesSection(language: language, catalog: catalog, picked: pickedVoice ?? person.settings?.voice,
                           preview: preview, words: words, pick: pick)
             } header: {
                 StepHeader(orb: false, step: words.step(2), title: words.voiceTitle, lead: words.voiceLead,
@@ -78,12 +77,23 @@ struct FirstRunView: View {
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) {
             StepFooter(page: 1, button: words.start) {
-                preview.stop()
-                finished = true
-                done()
+                Task {
+                    guard await languageSaved() else { return }
+                    preview.stop()
+                    finished = true
+                    done()
+                }
             }
         }
         .onDisappear { preview.stop() }
+    }
+
+    /// The language shown is the server's: sent now if it never was (GET /me had not come, or a pick failed), so the
+    /// first run never ends with the server on another language (second review of the D wiring, finding 4).
+    private func languageSaved() async -> Bool {
+        let shown = language
+        guard person.settings?.language != shown else { return true }
+        return await person.choose(language: shown)
     }
 
     private func pick(_ language: CallLanguage) {

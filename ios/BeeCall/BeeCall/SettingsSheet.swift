@@ -21,14 +21,14 @@ struct SettingsSheet: View {
     #endif
 
     private var language: CallLanguage {
-        picked ?? person.me?.settings.language ?? CallLanguage(rawValue: appLanguage) ?? .en
+        picked ?? person.settings?.language ?? CallLanguage(rawValue: appLanguage) ?? .en
     }
 
     private var korean: Bool { language == .ko }
     private var words: SettingsWords { SettingsWords(korean: korean) }
     private var listWords: FirstRunWords { FirstRunWords(korean: korean) }
     private var voice: Voice? {
-        VoiceChoice.effective(stored: pickedVoice ?? person.me?.settings.voice, in: catalog.voices[language] ?? [])
+        VoiceChoice.effective(stored: pickedVoice ?? person.settings?.voice, in: catalog.voices[language] ?? [])
     }
 
     var body: some View {
@@ -111,7 +111,7 @@ struct SettingsSheet: View {
 
     /// The model shown as chosen for a role: the pick, the server's, or the role's default.
     private func chosen(_ role: ModelRole) -> CatalogModel? {
-        let stored = pickedModels[role] ?? (role == .worker ? person.me?.settings.workerModel : person.me?.settings.callModel)
+        let stored = pickedModels[role] ?? (role == .worker ? person.settings?.workerModel : person.settings?.callModel)
         return ModelChoice.effective(stored: stored, in: models.models[role] ?? [])
     }
 
@@ -170,7 +170,7 @@ struct SettingsSheet: View {
     private var voiceList: some View {
         List {
             Section {
-                VoicesSection(language: language, catalog: catalog, picked: pickedVoice ?? person.me?.settings.voice,
+                VoicesSection(language: language, catalog: catalog, picked: pickedVoice ?? person.settings?.voice,
                           preview: preview, words: listWords) { voice in
                     pickedVoice = voice.id
                     Task { if await !person.choose(voice: voice.id) { pickedVoice = nil } }

@@ -14,8 +14,8 @@ enum FirstRun {
 
     /// The language the first run starts on: the one the server holds for the person; before GET /me has come, the
     /// phone's own.
-    static func language(me: Me?, preferred: [String]) -> CallLanguage {
-        if let language = me?.settings.language, language != .unrecognized { return language }
+    static func language(settings: PersonSettings?, preferred: [String]) -> CallLanguage {
+        if let language = settings?.language, language != .unrecognized { return language }
         return CallLanguage.initial(written: nil, preferred: preferred)
     }
 

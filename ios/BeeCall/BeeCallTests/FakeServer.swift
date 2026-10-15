@@ -14,6 +14,8 @@ final class FakeServer: HTTPTransport {
         case hang
         /// Answers with this status code after a while, like a slow network.
         case after(Duration, Int)
+        /// Answers 200 with this body after a while.
+        case slow(Duration, String)
     }
 
     private(set) var requests: [URLRequest] = []
@@ -43,6 +45,9 @@ final class FakeServer: HTTPTransport {
         case .after(let delay, let code):
             try await Task.sleep(for: delay)
             return (Data(), response(code))
+        case .slow(let delay, let body):
+            try await Task.sleep(for: delay)
+            return (Data(body.utf8), response(200))
         }
     }
 

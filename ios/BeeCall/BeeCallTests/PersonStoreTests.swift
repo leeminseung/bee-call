@@ -13,7 +13,7 @@ final class PersonStoreTests: XCTestCase {
         server.replies["GET /me"] = .status(200, try text("me"))
         let person = PersonStore(server: server.client(), store: store)
         await person.refresh()
-        XCTAssertEqual(person.me?.settings.voice, "ko-harin")
+        XCTAssertEqual(person.settings?.voice, "ko-harin")
         XCTAssertEqual(store.string(forKey: "language"), "ko", "the screens' words follow the call language")
         XCTAssertEqual(person.beeLine(korean: true), "Bee 연결됨")
     }
@@ -31,8 +31,8 @@ final class PersonStoreTests: XCTestCase {
         let saved = await person.choose(language: .en)
         XCTAssertTrue(saved)
         XCTAssertEqual(try server.body(of: "PUT /settings") as NSDictionary, ["language": "en"] as NSDictionary)
-        XCTAssertEqual(person.me?.settings.language, .en)
-        XCTAssertNil(person.me?.settings.voice)
+        XCTAssertEqual(person.settings?.language, .en)
+        XCTAssertNil(person.settings?.voice)
         XCTAssertEqual(store.string(forKey: "language"), "en")
     }
 
@@ -45,7 +45,7 @@ final class PersonStoreTests: XCTestCase {
         let saved = await person.choose(voice: "ko-daon")
         XCTAssertTrue(saved)
         XCTAssertEqual(try server.body(of: "PUT /settings") as NSDictionary, ["voice": "ko-daon"] as NSDictionary)
-        XCTAssertEqual(person.me?.settings.voice, "ko-daon")
+        XCTAssertEqual(person.settings?.voice, "ko-daon")
     }
 
     /// The call and worker models, picked in the settings sheet from GET /models (section 6).
@@ -59,7 +59,7 @@ final class PersonStoreTests: XCTestCase {
         let saved = await person.choose(model: "sonnet", for: .call)
         XCTAssertTrue(saved)
         XCTAssertEqual(try server.body(of: "PUT /settings") as NSDictionary, ["call_model": "sonnet"] as NSDictionary)
-        XCTAssertEqual(person.me?.settings.callModel, "sonnet")
+        XCTAssertEqual(person.settings?.callModel, "sonnet")
         _ = await person.choose(model: "glm", for: .worker)
         XCTAssertEqual(try server.body(of: "PUT /settings") as NSDictionary, ["worker_model": "glm"] as NSDictionary)
     }
@@ -73,8 +73,39 @@ final class PersonStoreTests: XCTestCase {
         await person.refresh()
         let saved = await person.choose(language: .en)
         XCTAssertFalse(saved)
-        XCTAssertEqual(person.me?.settings.language, .ko)
+        XCTAssertEqual(person.settings?.language, .ko)
         XCTAssertEqual(store.string(forKey: "language"), "ko")
         XCTAssertNotNil(person.problem)
+    }
+
+    // MARK: - Second review of the D wiring, finding 4
+
+    /// The server's answer to a pick is kept even when GET /me has not come yet.
+    @MainActor func testAPickIsKeptBeforeThePersonIsRead() async throws {
+        let server = FakeServer(), store = freshDefaults(self)
+        server.replies["PUT /settings"] = .status(200, try text("settings")
+            .replacingOccurrences(of: "\"language\": \"ko\"", with: "\"language\": \"en\""))
+        let person = PersonStore(server: server.client(), store: store)
+        let saved = await person.choose(language: .en)
+        XCTAssertTrue(saved)
+        XCTAssertEqual(person.settings?.language, .en)
+        XCTAssertEqual(store.string(forKey: "language"), "en")
+    }
+
+    /// A GET /me answered after a pick, but read before it, does not undo the pick.
+    @MainActor func testAnOlderReadDoesNotUndoAPick() async throws {
+        let server = FakeServer(), store = freshDefaults(self)
+        server.replies["GET /me"] = .slow(.milliseconds(300), try text("me")) // language ko
+        server.replies["PUT /settings"] = .status(200, try text("settings")
+            .replacingOccurrences(of: "\"language\": \"ko\"", with: "\"language\": \"en\""))
+        let person = PersonStore(server: server.client(), store: store)
+        let reading = Task { await person.refresh() }
+        try await Task.sleep(for: .milliseconds(50))
+        let saved = await person.choose(language: .en)
+        XCTAssertTrue(saved)
+        await reading.value
+        XCTAssertEqual(person.settings?.language, .en)
+        XCTAssertEqual(store.string(forKey: "language"), "en")
+        XCTAssertEqual(person.me?.person, "minseung", "the rest of the read is kept")
     }
 }
