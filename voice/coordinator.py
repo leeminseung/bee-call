@@ -186,14 +186,32 @@ def keep_reply(reply: dict[str, Any], chunk: Any) -> None:
             reply["usage"] = chunk.usage.model_dump(mode="json")
 
 
-USER_TURNS_CHECKED = 12  # book_call's `asked` must be in one of the user's last this many turns
-SENTENCE_END = re.compile(r"[.!?。？！…\n]+")
-SENTENCES_JOINED = 3  # an answer split at pauses: up to this many of the user's sentences in a row
+# What ends a sentence or a clause in what the user said, for book_call's `asked` (a turn's end does too). A dot
+# ends one only before a space or the end, so "7 a.m." and "U.S." stay whole.
+CLAUSE_END = re.compile(r"(?:[!?。？！…,，、;\n]|\.(?=\s|$))+")
+# Words that turn around the words beside them: "Don't call me back", "No need to call", "전화 안 해도 돼요".
+NEGATION = re.compile(r"\b(?:no|not|never|nope|dont)\b|n['’]t\b|(?<!\S)(?:안|못)(?!\S)", re.IGNORECASE)
+HANGUL = re.compile(r"[\uac00-\ud7a3\u3131-\u318e]")
 
 
 def _letters(text: str) -> str:
     """Text as it is compared for book_call: letters and digits only, in lower case."""
     return "".join(c for c in text.casefold() if c.isalnum())
+
+
+def _lead(text: str, letters: int) -> str:
+    """The start of `text` that holds its first `letters` letters and digits, as _letters counts them."""
+    count = 0
+    for i, c in enumerate(text):
+        if count >= letters:
+            return text[:i]
+        count += len(_letters(c))
+    return text
+
+
+def _tail(text: str, letters: int) -> str:
+    """The end of `text` that holds its last `letters` letters and digits."""
+    return _lead(text[::-1], letters)[::-1]
 
 
 def job_notification(news: JobNotification) -> str:
@@ -430,14 +448,16 @@ class Coordinator(Agent):
 
         Args:
             topic: What the call is for, in a few words.
-            asked: The user's own sentence asking for the call or agreeing to it, whole, exactly as they said it.
+            asked: The user's own words asking for the call or agreeing to it, copied word for word from the
+                conversation: their sentence, or most of it.
             at: For a clock time: the local date and time to call, in ISO 8601, like 2026-10-15T08:00.
             in_minutes: For a time from now, like "in ten minutes" (10) or "in an hour" (60): minutes from now.
         """
         if not self._user_said(asked):  # checked in code, not only asked of the model (coordinator's review)
             self._recorder.event("call_booking_refused", asked=str(asked or "")[:200], topic=topic)
-            return ("Not booked: asked must be the user's own sentence asking for the call or agreeing to it, whole "
-                    "and exactly as they said it in this call. Book a call only when they asked for it or agreed to it.")
+            return ("Not booked: asked must be the user's own words asking for the call or agreeing to it, copied "
+                    "word for word from this call's conversation: their whole sentence, or most of it with nothing "
+                    "left out that changes it. Book a call only when they asked for it or agreed to it.")
         now = self._clock()  # the person's clock now, not the time this call started
         if (at is None) == (in_minutes is None):
             return "Give the time one way: in_minutes for a time from now, or at for a clock time."
@@ -467,21 +487,33 @@ class Coordinator(Agent):
                 "Read this time back to the user in a few words.")
 
     def _user_said(self, words: Any) -> bool:
-        """Whether `words` are most of a sentence the user said in this call, or of sentences in a row (an answer
-        split at a pause): within it, and at least half its letters, punctuation, spacing and case aside. So a word
-        out of a refusal ("전화" in "아니요, 전화는 안 해도 돼요.") is not taken for a request."""
+        """Whether `words` are what the user said in this call (punctuation, spacing and case aside): most of a
+        sentence or a clause between commas, or of several in a row (an answer split at pauses, over turns too).
+        What they leave out of the first may be a lead-in such as "so" or "그럼", and of the last an English tail
+        such as "about the dentist", but never a "not", a "don't" or a "안", and never the end of Korean words, where
+        Korean says no: "call me back" out of "Don't call me back." is refused, and so are "내일은 전화하지" out of
+        "내일은 전화하지 마세요." and "전화" out of "아니요, 전화는 안 해도 돼요.". Whether the words ask for a
+        call stays the call AI's reading."""
         wanted = _letters(words) if isinstance(words, str) else ""
         if not wanted:
             return False
         turns = [item.text_content or "" for item in self.chat_ctx.items
-                 if getattr(item, "type", None) == "message" and item.role == "user"][-USER_TURNS_CHECKED:]
-        sentences = [_letters(part) for turn in turns for part in SENTENCE_END.split(turn) if _letters(part)]
-        for start in range(len(sentences)):
-            span = ""
-            for sentence in sentences[start:start + SENTENCES_JOINED]:
-                span += sentence
-                if wanted in span and 2 * len(wanted) >= len(span):
-                    return True
+                 if getattr(item, "type", None) == "message" and item.role == "user"]
+        pieces = [(part, _letters(part)) for turn in turns for part in CLAUSE_END.split(turn) if _letters(part)]
+        for start, (first_text, first) in enumerate(pieces):
+            run = ""
+            for last_text, last in pieces[start:]:
+                run += last
+                if len(run) > 2 * len(wanted):  # the words would be less than half of what the user said
+                    break
+                at = run.find(wanted)
+                while at != -1:
+                    after = len(run) - at - len(wanted)
+                    if at < len(first) and after < len(last):  # within the first piece and the last one
+                        lead, tail = _lead(first_text, at), _tail(last_text, after)  # what the words leave out
+                        if not NEGATION.search(f"{lead} {tail}") and not HANGUL.search(tail):
+                            return True
+                    at = run.find(wanted, at + 1)
         return False
 
     @function_tool

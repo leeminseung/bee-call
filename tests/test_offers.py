@@ -314,19 +314,48 @@ def test_a_call_back_is_booked_only_with_the_user_s_own_words_asking_for_it(tmp_
 
 
 @pytest.mark.parametrize("said, asked, booked", [
-    (["아니요, 전화는 안 해도 돼요."], "전화", False),  # a word out of a refusal
+    # A part out of a sentence or a clause between commas is refused when what is left out could decide it: a
+    # "not", a "don't" or a "안" beside it, the end of Korean words, or most of it.
+    (["아니요, 전화는 안 해도 돼요."], "전화", False),
     (["No thanks, don't call me back."], "call me back", False),
+    (["Don't call me back."], "call me back", False),
+    (["No thanks. Don't call me back."], "call me back", False),
+    (["Please don't call me tomorrow."], "call me tomorrow", False),
+    (["I'm not free now so call me back tomorrow."], "call me back tomorrow", False),
+    (["내일은 전화하지 마세요."], "내일은 전화하지", False),
+    (["아니요. 전화하지 마세요."], "전화하지", False),
+    (["다시 전화 안 해 줘도 돼요."], "해 줘도 돼요", False),
+    (["Then my friend said she'd call me back."], "call me back", False),
+    (["Call me back tomorrow — actually no."], "Call me back tomorrow", False),
     (["I went hiking yesterday."], "yes", False),
     (["Hmm."], "m", False),
-    (["내일 아침", "여덟 시에 다시 전화해 줘"], "내일 아침 여덟 시에 다시 전화해 줘", True),  # an answer split at a pause
+    # Whole sentences or clauses, one or several in a row (an answer split at pauses, over turns too), or most of
+    # one without its lead-in: the call AI left out a lead-in such as "so" or "그럼" in 19 of its 24 first tries
+    # (Haiku 5.5, 2026-10-16), and each of those cost the call a second try while only whole clauses passed.
     (["오늘 회의 정말 길었어요 아무튼 내일 아침 여덟 시에 다시 전화해 줄래요"], "내일 아침 여덟 시에 다시 전화해 줄래요", True),
+    (["오늘 회의가 정말 길었어요. 그럼 내일 오후 세 시에 다시 전화해 줄 수 있어요?"], "내일 오후 세 시에 다시 전화해 줄 수 있어요?", True),
+    (["The meeting ran long today. Okay, so could you call me back tomorrow at nine?"],
+     "could you call me back tomorrow at nine?", True),
+    (["음, 내일 아침 여덟 시에 다시 전화해 줄래요?"], "내일 아침 여덟 시에 다시 전화해 줄래요", True),
+    (["Call me tomorrow at 8 about the dentist."], "Call me tomorrow at 8", True),  # an English tail left out
+    (["내일 아침", "여덟 시에 다시 전화해 줘"], "내일 아침 여덟 시에 다시 전화해 줘", True),
+    (["네.", "내일.", "아침 8시에.", "전화 주세요."], "네, 내일 아침 8시에 전화 주세요", True),
     (["Can you call me back at nine?", "Yes, nine works."], "Yes, nine works", True),
     (["네."], "네", True),
+    # Dots inside a.m. or U.S. end nothing; a request early in a long call still counts.
+    (["Call me at 7 a.m. or 8 a.m. tomorrow."], "Call me at 7 a.m. or 8 a.m. tomorrow.", True),
+    (["Call me when the U.S. market opens at 9:30 a.m. tomorrow."],
+     "Call me when the U.S. market opens at 9:30 a.m. tomorrow.", True),
+    (["Call me tomorrow at nine about the interview."] + ["Okay."] * 12,
+     "Call me tomorrow at nine about the interview.", True),
 ])
 def test_the_words_given_for_a_call_back_must_be_most_of_what_the_user_said(tmp_path, said, asked, booked):
     """Review of the last stretch, finding 3: any fragment of anything the user said passed, a word out of a refusal
-    too. The words must now be most of a sentence the user said (or of sentences in a row, as an answer split at a
-    pause): at least half its letters. Whether those words ask for the call stays the call AI's reading."""
+    too. Review of the final fixes, finding 2: "most of a sentence" still passed "call me back" out of "Don't call me
+    back.", split "7 a.m." into sentences no quote could match, joined at most three and looked back only twelve
+    turns. The words must now be most of a sentence or clause the user said in this call (or of several in a row);
+    they may leave out a lead-in, or an English tail, but no "not" or "don't" and never the end of Korean words.
+    Whether they ask for the call stays the call AI's reading."""
     from types import SimpleNamespace
     from voice.coordinator import Coordinator
     from voice.recorder import CallRecorder
