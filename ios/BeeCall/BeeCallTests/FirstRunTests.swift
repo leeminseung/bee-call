@@ -4,12 +4,15 @@ import XCTest
 /// Design D, frame 7: the first run picks the call language, then the voice, each from a list in the iOS Settings
 /// look; a yellow button plays a voice's sample for 5 seconds (contract sections 5 and 6).
 final class FirstRunTests: XCTestCase {
+    /// The Korean voices of the examples, whose ids, names and counts the server's tests regenerate.
     @MainActor private func voices() throws -> [Voice] {
-        try Contract.decode(VoiceList.self, from: ContractTests.example("voices")).voices
+        try Examples.decode(VoiceList.self, "voices").voices
     }
 
-    @MainActor private var harin: Voice { get throws { try voices()[0] } }
-    @MainActor private var daon: Voice { get throws { try voices()[2] } }
+    /// The language's default voice, as the file marks it.
+    @MainActor private var standard: Voice { get throws { try XCTUnwrap(try voices().first(where: \.isDefault)) } }
+    /// A voice that is not the default (the last one listed).
+    @MainActor private var other: Voice { get throws { try XCTUnwrap(try voices().last { !$0.isDefault }) } }
 
     // MARK: - Language
 
@@ -38,8 +41,8 @@ final class FirstRunTests: XCTestCase {
     /// The first run starts on the language the server holds for the person; before GET /me has come, on the
     /// phone's own.
     @MainActor func testTheFirstRunStartsOnTheServersLanguageElseThePhones() throws {
-        let me = try Contract.decode(Me.self, from: ContractTests.example("me"))
-        XCTAssertEqual(FirstRun.language(settings: me.settings, preferred: ["en-US"]), .ko)
+        let me = try Examples.decode(Me.self, "me")
+        XCTAssertEqual(FirstRun.language(settings: me.settings, preferred: ["fr-FR"]), me.settings.language)
         XCTAssertEqual(FirstRun.language(settings: nil, preferred: ["en-US"]), .en)
         XCTAssertEqual(FirstRun.language(settings: nil, preferred: ["ko-KR"]), .ko)
     }
@@ -49,11 +52,18 @@ final class FirstRunTests: XCTestCase {
     /// The voice shown as picked: the server's when it is in the list; null, or a voice of the other language,
     /// is the language's default (contract section 6).
     @MainActor func testThePickedVoiceIsTheServersElseTheDefault() throws {
-        let voices = try voices()
-        XCTAssertEqual(VoiceChoice.effective(stored: "ko-daon", in: voices), try daon)
-        XCTAssertEqual(VoiceChoice.effective(stored: nil, in: voices), try harin, "the entry marked default")
-        XCTAssertEqual(VoiceChoice.effective(stored: "en-zara", in: voices), try harin)
-        XCTAssertNil(VoiceChoice.effective(stored: "ko-daon", in: []))
+        let voices = try voices(), other = try other, standard = try standard
+        let english = try XCTUnwrap(try Examples.decode(VoiceList.self, "voices-en").voices.first?.id)
+        XCTAssertEqual(VoiceChoice.effective(stored: other.id, in: voices), other)
+        XCTAssertEqual(VoiceChoice.effective(stored: nil, in: voices), standard, "the entry marked default")
+        XCTAssertEqual(VoiceChoice.effective(stored: english, in: voices), standard, "another language's voice")
+        XCTAssertNil(VoiceChoice.effective(stored: other.id, in: []))
+        let me = try Examples.decode(Me.self, "me").settings
+        let theirs = try [Examples.decode(VoiceList.self, "voices"), Examples.decode(VoiceList.self, "voices-en")]
+            .first { $0.language == me.language }?.voices ?? []
+        let shown = me.voice == nil ? theirs.first(where: \.isDefault) : theirs.first { $0.id == me.voice }
+        XCTAssertNotNil(shown, "me.json's voice is one of its language's voices")
+        XCTAssertEqual(VoiceChoice.effective(stored: me.voice, in: theirs), shown, "the person's stored voice is shown")
     }
 
     /// "시작하기" ends the first run for good; the language and the voice went to the server when picked.
@@ -68,21 +78,21 @@ final class FirstRunTests: XCTestCase {
 
     @MainActor func testOneSamplePlaysAtATimeAndASecondTapStopsIt() throws {
         let samples = FakeSamples(), preview = VoicePreview(samples: samples)
-        let harin = try harin, daon = try daon
-        preview.toggle(harin)
-        XCTAssertEqual(preview.playing, "ko-harin")
-        preview.toggle(daon)
-        XCTAssertEqual(preview.playing, "ko-daon", "the yellow button of another voice switches to it")
-        XCTAssertEqual(samples.played, ["ko-harin", "ko-daon"])
+        let first = try standard, second = try other
+        preview.toggle(first)
+        XCTAssertEqual(preview.playing, first.id)
+        preview.toggle(second)
+        XCTAssertEqual(preview.playing, second.id, "the yellow button of another voice switches to it")
+        XCTAssertEqual(samples.played, [first.id, second.id])
         XCTAssertEqual(samples.stops, 1)
-        preview.toggle(daon)
+        preview.toggle(second)
         XCTAssertNil(preview.playing, "the stop button stops it")
         XCTAssertEqual(samples.stops, 2)
     }
 
     @MainActor func testASampleStopsByItselfAtItsEnd() async throws {
         let samples = FakeSamples(), preview = VoicePreview(samples: samples, length: .milliseconds(100))
-        preview.toggle(try daon)
+        preview.toggle(try other)
         await waitUntil("the sample ends") { preview.playing == nil }
         XCTAssertEqual(samples.stops, 1)
     }
@@ -92,7 +102,7 @@ final class FirstRunTests: XCTestCase {
         let preview = VoicePreview(samples: FakeSamples())
         let start = Date(timeIntervalSince1970: 1_000)
         XCTAssertEqual(preview.progress(at: start), 0)
-        preview.toggle(try daon, now: start)
+        preview.toggle(try other, now: start)
         XCTAssertEqual(preview.progress(at: start.addingTimeInterval(2)), 0.4, accuracy: 0.001)
         XCTAssertEqual(preview.progress(at: start.addingTimeInterval(9)), 1)
     }
@@ -100,7 +110,7 @@ final class FirstRunTests: XCTestCase {
     /// Leaving the list stops the sample, and stopping twice stops the sound once.
     @MainActor func testLeavingTheListStopsTheSample() throws {
         let samples = FakeSamples(), preview = VoicePreview(samples: samples)
-        preview.toggle(try harin)
+        preview.toggle(try standard)
         preview.stop()
         preview.stop()
         XCTAssertNil(preview.playing)
@@ -112,18 +122,18 @@ final class FirstRunTests: XCTestCase {
 
     /// The words in the app's language; a voice's character in both, so it reads in the app's language too.
     @MainActor func testTheFirstRunReadsInBothLanguages() throws {
-        let ko = FirstRunWords(korean: true), en = FirstRunWords(korean: false), daon = try daon
+        let ko = FirstRunWords(korean: true), en = FirstRunWords(korean: false), voice = try other
         XCTAssertEqual(ko.step(1), "1단계 / 2단계")
         XCTAssertEqual(en.step(2), "Step 2 of 2")
         XCTAssertEqual(ko.voices(.ko), "한국어 목소리")
         XCTAssertEqual(en.voices(.en), "English voices")
-        XCTAssertEqual(ko.manner(daon, playing: true), "또렷함 · 듣는 중")
-        XCTAssertEqual(ko.manner(daon, playing: false), "또렷함")
-        XCTAssertEqual(en.manner(daon, playing: true), "Clear · playing")
-        XCTAssertEqual(ko.play(daon), "다온 5초 들어 보기")
-        XCTAssertEqual(ko.stop(daon), "다온 멈추기")
-        XCTAssertEqual(en.play(daon), "Hear 다온 for 5 seconds")
-        XCTAssertEqual(en.stop(daon), "Stop 다온")
+        XCTAssertEqual(ko.manner(voice, playing: true), "\(voice.character.ko) · 듣는 중")
+        XCTAssertEqual(ko.manner(voice, playing: false), voice.character.ko)
+        XCTAssertEqual(en.manner(voice, playing: true), "\(voice.character.en) · playing")
+        XCTAssertEqual(ko.play(voice), "\(voice.name) 5초 들어 보기")
+        XCTAssertEqual(ko.stop(voice), "\(voice.name) 멈추기")
+        XCTAssertEqual(en.play(voice), "Hear \(voice.name) for 5 seconds")
+        XCTAssertEqual(en.stop(voice), "Stop \(voice.name)")
         XCTAssertEqual(ko.next, "다음")
         XCTAssertEqual(en.start, "Get started")
     }

@@ -7,9 +7,10 @@ import XCTest
 final class ThreadDataTests: XCTestCase {
     private let room = "call-matt-20261015-183000" // the room FakeRoom joins
 
+    /// An example file, with the live example's call moved to `room` when one is given.
     @MainActor private func text(_ name: String, room: String? = nil) throws -> String {
-        let text = String(decoding: try ContractTests.example(name), as: UTF8.self)
-        return room.map { text.replacingOccurrences(of: "call-minseung-20261015-012301", with: $0) } ?? text
+        let text = try Examples.text(name), live = try Examples.decode(CallView.self, "call-view-live").call.callID
+        return room.map { text.replacingOccurrences(of: live, with: $0) } ?? text
     }
 
     /// A call the person starts, joined: the thread's own call is its room.
@@ -49,10 +50,14 @@ final class ThreadDataTests: XCTestCase {
         guard case .call(let entry) = data.sections.last else { return XCTFail("the call that is on, last") }
         XCTAssertEqual(entry.call.callID, room)
         XCTAssertEqual(entry.call.state, .live)
-        XCTAssertEqual(data.ownEntries.last?.id, "job-01", "its running job docked last")
+        let running = try Examples.decode(CallView.self, "call-view-live").items.last {
+            if case .job(let job) = $0 { job.state == .running } else { false }
+        }
+        XCTAssertEqual(data.ownEntries.last?.id, try XCTUnwrap(running).id, "its running job docked last")
 
         server.replies["GET /calls"] = .status(200, try text("calls", room: room))
-        await data.store.changed(Change(path: "/calls", version: "0123456789abcdef"))
+        let version = try Examples.decode(CallList.self, "calls").version
+        await data.store.changed(Change(path: "/calls", version: Examples.otherVersion(than: version)))
         XCTAssertEqual(data.sections.filter { $0.id == "call/\(room)" }.count, 1, "listed once, where the list has it")
         XCTAssertEqual(data.ownCall, room)
     }

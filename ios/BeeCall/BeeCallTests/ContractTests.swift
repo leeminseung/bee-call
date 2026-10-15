@@ -5,14 +5,6 @@ import XCTest
 /// example file the contract keeps. The server's tests regenerate those files from real code, so these tests break
 /// when the two sides drift apart.
 final class ContractTests: XCTestCase {
-    /// contract/examples in this repository, read straight from the source tree.
-    static let examples = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        .deletingLastPathComponent().deletingLastPathComponent().appending(path: "contract/examples")
-
-    static func example(_ name: String) throws -> Data {
-        try Data(contentsOf: examples.appending(path: "\(name).json"))
-    }
-
     /// Every example decodes with the type of its schema: the schema whose name is the longest prefix of the
     /// example's name, as contract/check.py pairs them. A new example without a type here fails.
     @MainActor func testEveryExampleDecodes() throws {
@@ -33,9 +25,12 @@ final class ContractTests: XCTestCase {
             "auth-waiting": { try Contract.decode(Waiting.self, from: $0) },
             "bee-connect": { try Contract.decode(BeeConnectLink.self, from: $0) },
         ]
-        let files = try FileManager.default.contentsOfDirectory(at: Self.examples, includingPropertiesForKeys: nil)
+        let files = try FileManager.default.contentsOfDirectory(at: Examples.folder, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }
-        XCTAssertGreaterThanOrEqual(files.count, 18) // one per schema, three call views and two model lists
+        let names = files.map { $0.deletingPathExtension().lastPathComponent }
+        for schema in types.keys {
+            XCTAssertTrue(names.contains { $0 == schema || $0.hasPrefix(schema + "-") }, "\(schema) has an example")
+        }
         for file in files {
             let name = file.deletingPathExtension().lastPathComponent
             let schema = types.keys.filter { name == $0 || name.hasPrefix($0 + "-") }.max { $0.count < $1.count }
@@ -47,27 +42,43 @@ final class ContractTests: XCTestCase {
         }
     }
 
-    // MARK: - What the types read
+    // MARK: - What the types read, against the files themselves
 
-    @MainActor func testTheCallListReadsEveryKindOfCall() throws {
-        let list = try Contract.decode(CallList.self, from: Self.example("calls"))
-        XCTAssertEqual(list.calls.count, 6)
-        XCTAssertTrue(list.more)
-        XCTAssertNotNil(list.before)
-        XCTAssertEqual(list.version, "f46f5990ebfadcab")
-        let macbook = list.calls[1]
-        XCTAssertEqual(macbook.call.callID, "call-minseung-20261015-012301")
-        XCTAssertEqual(macbook.call.startedBy, .person)
-        XCTAssertEqual(macbook.call.titleSource, .summary)
-        XCTAssertEqual(macbook.call.state, .ended)
-        XCTAssertEqual(macbook.call.durationS, 460)
-        XCTAssertEqual(macbook.call.marks, Marks(report: true, table: true, chart: true, beeWrites: 1))
-        XCTAssertEqual(macbook.results.map(\.id), ["write-w1", "job-01"])
-        XCTAssertEqual(list.calls[2].call.titleSource, .none)
-        XCTAssertNil(list.calls[2].call.title)
-        XCTAssertEqual(list.calls[5].call.state, .missed)
-        XCTAssertNil(list.calls[5].call.durationS)
-        XCTAssertEqual(list.calls[3].call.topic, "성현이와 토요일 촬영 이야기")
+    /// Every field of every call in the list, as the file has it (the server regenerates the file, so the values
+    /// come from it), and the kinds of calls D draws differently are all there.
+    @MainActor func testTheCallListReadsWhatTheFileSays() throws {
+        let raw = try Examples.object("calls"), list = try Examples.decode(CallList.self, "calls")
+        let entries = try XCTUnwrap(raw["calls"] as? [[String: Any]])
+        XCTAssertEqual(list.calls.count, entries.count)
+        XCTAssertEqual(list.more, raw["more"] as? Bool)
+        XCTAssertEqual(list.before, raw["before"] as? String)
+        XCTAssertEqual(list.version, raw["version"] as? String)
+        for (entry, file) in zip(list.calls, entries) {
+            try assertCall(entry.call, readsAs: file)
+            XCTAssertEqual(entry.results.map(\.id), (file["results"] as? [[String: Any]])?.compactMap { $0["id"] as? String })
+        }
+        XCTAssertTrue(list.calls.contains { $0.call.titleSource == .none && $0.call.title == nil }, "a call with no conversation")
+        XCTAssertTrue(list.calls.contains { $0.call.state == .missed && $0.call.durationS == nil }, "a missed call")
+        XCTAssertTrue(list.calls.contains { $0.call.startedBy == .ai && $0.call.topic != nil }, "Bee Call's own call")
+        XCTAssertTrue(list.calls.contains { $0.results.contains { if case .job = $0 { true } else { false } } }, "a job")
+    }
+
+    /// A call summary, field by field, as its file has it.
+    @MainActor private func assertCall(_ call: CallSummary, readsAs file: [String: Any],
+                                       file path: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertEqual(call.callID, file["call_id"] as? String, file: path, line: line)
+        XCTAssertEqual(call.startedAt, (file["started_at"] as? String).flatMap(ZonedTime.init), file: path, line: line)
+        XCTAssertEqual(call.startedBy.rawValue, file["started_by"] as? String, file: path, line: line)
+        XCTAssertEqual(call.titleSource.rawValue, file["title_source"] as? String, file: path, line: line)
+        XCTAssertEqual(call.state.rawValue, file["state"] as? String, file: path, line: line)
+        XCTAssertEqual(call.title, file["title"] as? String, file: path, line: line)
+        XCTAssertEqual(call.topic, file["topic"] as? String, file: path, line: line)
+        XCTAssertEqual(call.durationS, file["duration_s"] as? Int, file: path, line: line)
+        XCTAssertEqual(call.continues, file["continues"] as? String, file: path, line: line)
+        let marks = try XCTUnwrap(file["marks"] as? [String: Any], file: path, line: line)
+        XCTAssertEqual(call.marks, Marks(report: marks["report"] as? Bool ?? false, table: marks["table"] as? Bool ?? false,
+                                         chart: marks["chart"] as? Bool ?? false, beeWrites: marks["bee_writes"] as? Int ?? -1),
+                       file: path, line: line)
     }
 
     /// Times keep the person's UTC offset, so the app shows them on the person's clock.
@@ -83,104 +94,154 @@ final class ContractTests: XCTestCase {
         XCTAssertNil(CalendarDay("2026-10-15T00:00:00+09:00"))
     }
 
-    @MainActor func testTheCallViewReadsItsItemsInOrder() throws {
-        let view = try Contract.decode(CallView.self, from: Self.example("call-view"))
-        XCTAssertEqual(view.call.title, "맥북 에어와 프로, 코딩용으로 뭐가 나을까")
-        XCTAssertNil(view.whyCalling)
-        XCTAssertEqual(view.captionsIncluded, CaptionCounts(person: 12, ai: 11))
-        let prep = try XCTUnwrap(view.prep)
-        XCTAssertTrue(prep.fromBee)
-        XCTAssertEqual(prep.lookedUp, [.conversation(summary: "성현 님과의 대화", at: ZonedTime("2026-10-13T18:40:00+09:00")),
-                                       .day(CalendarDay(year: 2026, month: 10, day: 15))])
-        XCTAssertEqual(view.items.count, 23)
-        guard case .speech(let first) = view.items[0] else { return XCTFail("the first item is speech") }
-        XCTAssertEqual(first.speaker, .ai)
-        XCTAssertFalse(first.interrupted)
-        guard case .beeWrite(let write) = view.items[4] else { return XCTFail("the fifth item is the Bee write") }
-        XCTAssertEqual(write.kind, .todoCreate)
-        XCTAssertEqual(write.state, .written)
-        guard case .job(let job) = view.items[15] else { return XCTFail("the job sits where it finished") }
-        XCTAssertEqual(job.state, .done)
-        XCTAssertEqual(job.durationS, 87)
-        XCTAssertEqual(job.files.map(\.kind), [.chart, .report, .table])
-        XCTAssertEqual(job.files[0].imageURL, "/calls/call-minseung-20261015-012301/files/jobs/01/price-chart.png")
-        XCTAssertNil(job.failure)
+    /// Every item of the three views, in the file's order, field by field; and what the contract says of each view:
+    /// the live call's running job comes last, only Bee Call's own call says why it called.
+    @MainActor func testTheCallViewsReadTheirItemsInTheFilesOrder() throws {
+        for name in ["call-view", "call-view-live", "call-view-ai"] {
+            let raw = try Examples.object(name), view = try Examples.decode(CallView.self, name)
+            let items = try XCTUnwrap(raw["items"] as? [[String: Any]])
+            XCTAssertEqual(view.items.map(\.id), items.compactMap { $0["id"] as? String }, name)
+            XCTAssertEqual(view.drawnItems.count, items.count, "every item of \(name) is one this build draws")
+            XCTAssertEqual(view.version, raw["version"] as? String)
+            let counts = try XCTUnwrap(raw["captions_included"] as? [String: Any])
+            XCTAssertEqual(view.captionsIncluded, CaptionCounts(person: counts["person"] as? Int ?? -1, ai: counts["ai"] as? Int ?? -1))
+            try assertCall(view.call, readsAs: try XCTUnwrap(raw["call"] as? [String: Any]))
+            XCTAssertEqual(view.whyCalling == nil, raw["why_calling"] is NSNull, name)
+            XCTAssertEqual(view.whyCalling != nil, view.call.startedBy == .ai, "only Bee Call's own call says why")
+            if let why = view.whyCalling, let rawWhy = raw["why_calling"] as? [String: Any] {
+                XCTAssertEqual(why.reason, rawWhy["reason"] as? String)
+                let conversation = rawWhy["conversation"] as? [String: Any]
+                let quotes = conversation?["quotes"] as? [[String: Any]] ?? []
+                XCTAssertEqual(why.conversation?.summary, conversation?["summary"] as? String)
+                XCTAssertEqual(why.conversation?.quotes.map(\.speaker.rawValue) ?? [], quotes.compactMap { $0["speaker"] as? String })
+                XCTAssertEqual(why.conversation?.quotes.map(\.text) ?? [], quotes.compactMap { $0["text"] as? String })
+                XCTAssertEqual(why.conversation?.quotes.map(\.at) ?? [], quotes.map { ($0["at"] as? String).flatMap(ZonedTime.init) })
+            }
+            XCTAssertEqual(view.prep == nil, raw["prep"] is NSNull, name)
+            if let prep = view.prep, let rawPrep = raw["prep"] as? [String: Any] {
+                XCTAssertEqual(prep.note, rawPrep["note"] as? String)
+                XCTAssertEqual(prep.fromBee, rawPrep["from_bee"] as? Bool)
+                let looked = rawPrep["looked_up"] as? [[String: Any]] ?? []
+                XCTAssertEqual(prep.lookedUp, looked.map { entry -> LookedUp in
+                    let type = entry["type"] as? String ?? ""
+                    return switch type {
+                    case "conversation": .conversation(summary: entry["summary"] as? String,
+                                                       at: (entry["at"] as? String).flatMap(ZonedTime.init))
+                    case "day": (entry["date"] as? String).flatMap(CalendarDay.init).map(LookedUp.day) ?? .unrecognized(type: type)
+                    case "search": .search(query: entry["query"] as? String ?? "")
+                    default: .unrecognized(type: type)
+                    }
+                }, name)
+            }
+            for (item, file) in zip(view.items, items) {
+                switch item {
+                case .speech(let speech):
+                    XCTAssertEqual(file["type"] as? String, "speech")
+                    XCTAssertEqual(speech.speaker.rawValue, file["speaker"] as? String)
+                    XCTAssertEqual(speech.text, file["text"] as? String)
+                    XCTAssertEqual(speech.interrupted, file["interrupted"] as? Bool)
+                case .job(let job):
+                    XCTAssertEqual(file["type"] as? String, "job")
+                    XCTAssertEqual(job.state.rawValue, file["state"] as? String)
+                    XCTAssertEqual(job.title, file["title"] as? String)
+                    XCTAssertEqual(job.durationS, file["duration_s"] as? Int)
+                    XCTAssertEqual(job.step, file["step"] as? String)
+                    XCTAssertEqual(job.summary, file["summary"] as? String)
+                    XCTAssertEqual(job.failure?.rawValue, file["failure"] as? String)
+                    let files = file["files"] as? [[String: Any]] ?? []
+                    XCTAssertEqual(job.files.map(\.url), files.compactMap { $0["url"] as? String })
+                    XCTAssertEqual(job.files.map(\.kind.rawValue), files.compactMap { $0["kind"] as? String })
+                    XCTAssertEqual(job.files.map(\.imageURL), files.map { $0["image_url"] as? String })
+                case .beeWrite(let write):
+                    XCTAssertEqual(file["type"] as? String, "bee_write")
+                    XCTAssertEqual(write.kind.rawValue, file["kind"] as? String)
+                    XCTAssertEqual(write.state.rawValue, file["state"] as? String)
+                    XCTAssertEqual(write.text, file["text"] as? String)
+                    XCTAssertEqual(write.undoable, file["undoable"] as? Bool)
+                    XCTAssertEqual(write.willRetry, file["will_retry"] as? Bool)
+                case .unrecognized(let type, _):
+                    XCTFail("\(name) has an item of a type this build does not know: \(type)")
+                }
+            }
+            let running = view.items.filter { if case .job(let job) = $0 { job.state == .running } else { false } }
+            if let last = running.last { XCTAssertEqual(view.items.last, last, "a running job comes last (2.5)") }
+            XCTAssertEqual(!running.isEmpty, view.call.state == .live, "\(name): a running job only while the call is on")
+        }
     }
 
-    @MainActor func testTheLiveViewHasARunningJobAndUndoableWrite() throws {
-        let view = try Contract.decode(CallView.self, from: Self.example("call-view-live"))
-        XCTAssertEqual(view.call.state, .live)
-        XCTAssertEqual(view.call.titleSource, .firstSentence)
-        guard case .job(let job) = view.items.last else { return XCTFail("the running job comes last") }
-        XCTAssertEqual(job.state, .running)
-        XCTAssertEqual(job.step, "애플 한국 가격표 읽는 중")
-        XCTAssertNil(job.durationS)
-        guard case .beeWrite(let write) = view.items[4] else { return XCTFail("the Bee write") }
-        XCTAssertTrue(write.undoable)
+    /// The offers, the voices, the person and a ring, as their files say; and what the contract says of them: one
+    /// default voice and it comes first, an asked offer has a suggested time and no call time yet.
+    @MainActor func testOffersVoicesPersonAndRingReadWhatTheFilesSay() throws {
+        let rawOffers = try XCTUnwrap(Examples.object("offers")["offers"] as? [[String: Any]])
+        let offers = try Examples.decode(OpenOffers.self, "offers").offers
+        XCTAssertEqual(offers.map(\.id), rawOffers.compactMap { $0["id"] as? String })
+        XCTAssertEqual(offers.map(\.state.rawValue), rawOffers.compactMap { $0["state"] as? String })
+        XCTAssertEqual(offers.map(\.topic), rawOffers.compactMap { $0["topic"] as? String })
+        XCTAssertEqual(offers.map(\.callAt), rawOffers.map { ($0["call_at"] as? String).flatMap(ZonedTime.init) })
+        XCTAssertEqual(offers.map(\.suggestedAt), rawOffers.map { ($0["suggested_at"] as? String).flatMap(ZonedTime.init) })
+        for offer in offers where offer.state == .asked {
+            XCTAssertNotNil(offer.suggestedAt)
+            XCTAssertNil(offer.callAt)
+        }
+        for name in ["voices", "voices-en"] {
+            let raw = try Examples.object(name), list = try Examples.decode(VoiceList.self, name)
+            let rawVoices = try XCTUnwrap(raw["voices"] as? [[String: Any]])
+            XCTAssertEqual(list.language.rawValue, raw["language"] as? String)
+            XCTAssertEqual(list.voices.map(\.id), rawVoices.compactMap { $0["id"] as? String })
+            XCTAssertEqual(list.voices.map(\.sampleURL), rawVoices.compactMap { $0["sample_url"] as? String })
+            XCTAssertEqual(list.voices.map(\.character.ko), rawVoices.compactMap { ($0["character"] as? [String: Any])?["ko"] as? String })
+            XCTAssertEqual(list.voices.filter(\.isDefault).count, 1, "\(name): exactly one default")
+            XCTAssertEqual(list.voices.first?.isDefault, true, "\(name): the default first")
+            XCTAssertTrue((1...12).contains(list.voices.count))
+        }
+        let rawSettings = try XCTUnwrap(Examples.object("me")["settings"] as? [String: Any])
+        let me = try Examples.decode(Me.self, "me")
+        XCTAssertEqual(me.settings.language.rawValue, rawSettings["language"] as? String)
+        XCTAssertEqual(me.settings.voice, rawSettings["voice"] as? String)
+        XCTAssertEqual(me.settings.callModel, rawSettings["call_model"] as? String)
+        XCTAssertEqual(me.settings.workerModel, rawSettings["worker_model"] as? String)
+        XCTAssertEqual(me.settings.bee, rawSettings["bee"] as? Bool)
+        XCTAssertEqual(me.beeConnecting, try Examples.object("me")["bee_connecting"] as? Bool)
+        let ring = try Examples.decode(RingEvent.self, "ring"), rawRing = try Examples.object("ring")
+        XCTAssertEqual(ring.expiresAt, (rawRing["expires_at"] as? String).flatMap(ZonedTime.init))
+        XCTAssertEqual(ring.room, rawRing["room"] as? String)
     }
 
-    @MainActor func testAnAICallsViewSaysWhyItCalled() throws {
-        let view = try Contract.decode(CallView.self, from: Self.example("call-view-ai"))
-        let why = try XCTUnwrap(view.whyCalling)
-        XCTAssertNotNil(why.reason)
-        XCTAssertEqual(why.conversation?.quotes.map(\.speaker), [.other, .person])
-        XCTAssertEqual(view.prep?.lookedUp.last, .search(query: "토요일 촬영 장소"))
-        guard case .speech(let cut) = view.items[2] else { return XCTFail("speech") }
-        XCTAssertTrue(cut.interrupted)
-    }
-
-    @MainActor func testOffersVoicesAndSettingsRead() throws {
-        let offers = try Contract.decode(OpenOffers.self, from: Self.example("offers"))
-        XCTAssertEqual(offers.offers.map(\.state), [.booked, .asked])
-        XCTAssertEqual(offers.offers[0].callAt, ZonedTime("2026-10-15T19:00:00+09:00"))
-        XCTAssertNil(offers.offers[0].suggestedAt)
-        XCTAssertEqual(offers.offers[1].suggestedAt, ZonedTime("2026-10-15T20:30:00+09:00"))
-        let voices = try Contract.decode(VoiceList.self, from: Self.example("voices"))
-        XCTAssertEqual(voices.language, .ko)
-        XCTAssertEqual(voices.voices.first?.isDefault, true)
-        XCTAssertEqual(voices.voices.first?.character, VoiceCharacter(ko: "친근함", en: "Friendly"))
-        let me = try Contract.decode(Me.self, from: Self.example("me"))
-        XCTAssertEqual(me.settings.callModel, "haiku")
-        XCTAssertEqual(me.settings.workerModel, "sonnet")
-        XCTAssertEqual(me.settings.language, .ko)
-        XCTAssertEqual(me.settings.voice, "ko-harin")
-        XCTAssertTrue(me.settings.bee)
-        XCTAssertFalse(me.beeConnecting)
-        let ring = try Contract.decode(RingEvent.self, from: Self.example("ring"))
-        XCTAssertEqual(ring.expiresAt, ZonedTime("2026-10-15T20:31:02+09:00"))
-    }
-
-    /// GET /models (section 5b): each role's choices, the default first, named and described by the server.
-    @MainActor func testTheModelListsRead() throws {
-        let call = try Contract.decode(ModelList.self, from: Self.example("models-call"))
-        XCTAssertEqual(call.role, .call)
-        XCTAssertEqual(call.models.map(\.id), ["haiku", "sonnet"])
-        XCTAssertEqual(call.models.first?.isDefault, true)
-        XCTAssertEqual(call.models.first?.name, "Claude Haiku 5.5")
-        XCTAssertEqual(call.models.first?.maker, "Anthropic")
-        XCTAssertEqual(call.models.first?.description, ModelDescription(ko: "가장 빠르게 대답해요", en: "Answers fastest"))
-        let worker = try Contract.decode(ModelList.self, from: Self.example("models-worker"))
-        XCTAssertEqual(worker.role, .worker)
-        XCTAssertEqual(worker.models.map(\.id), ["sonnet", "glm"])
+    /// GET /models (section 5b): each role's choices as the file has them, one default, first; a role may list one.
+    @MainActor func testTheModelListsReadWhatTheFilesSay() throws {
+        for (name, role) in [("models-call", ModelRole.call), ("models-worker", .worker)] {
+            let raw = try Examples.object(name), list = try Examples.decode(ModelList.self, name)
+            let models = try XCTUnwrap(raw["models"] as? [[String: Any]])
+            XCTAssertEqual(list.role, role)
+            XCTAssertEqual(list.models.map(\.id), models.compactMap { $0["id"] as? String })
+            XCTAssertEqual(list.models.map(\.name), models.compactMap { $0["name"] as? String })
+            XCTAssertEqual(list.models.map(\.maker), models.compactMap { $0["maker"] as? String })
+            XCTAssertEqual(list.models.map(\.description.en),
+                           models.compactMap { ($0["description"] as? [String: Any])?["en"] as? String })
+            XCTAssertEqual(list.models.filter(\.isDefault).count, 1, "\(name): exactly one default")
+            XCTAssertEqual(list.models.first?.isDefault, true, "\(name): the default first")
+        }
     }
 
     // MARK: - A later server
 
     /// A value a later server adds to a closed list decodes instead of failing, and the item it marks is skipped.
     @MainActor func testUnknownValuesDecodeAndUnknownItemsAreSkipped() throws {
-        var body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.example("call-view")) as? [String: Any])
+        var body = try Examples.object("call-view")
         var items = try XCTUnwrap(body["items"] as? [[String: Any]])
         items.append(["type": "photo", "id": "photo-1", "at": "2026-10-15T01:31:00+09:00", "url": "/x"])
-        items[0]["speaker"] = "narrator"
+        let speech = try XCTUnwrap(items.firstIndex { $0["type"] as? String == "speech" })
+        items[speech]["speaker"] = "narrator"
         body["items"] = items
         var call = try XCTUnwrap(body["call"] as? [String: Any])
         call["state"] = "paused"
         body["call"] = call
         let view = try Contract.decode(CallView.self, from: JSONSerialization.data(withJSONObject: body))
         XCTAssertEqual(view.call.state, .unrecognized)
-        XCTAssertEqual(view.items.count, 24)
+        XCTAssertEqual(view.items.count, items.count)
         XCTAssertEqual(view.items.last, .unrecognized(type: "photo", id: "photo-1"))
-        XCTAssertEqual(view.drawnItems.count, 22, "the unknown item and the speech of an unknown speaker are not drawn")
+        XCTAssertEqual(view.drawnItems.count, items.count - 2,
+                       "the unknown item and the speech of an unknown speaker are not drawn")
     }
 
     /// Section 0: every key a schema requires is always present, null when it does not apply. A required key that
@@ -188,7 +249,7 @@ final class ContractTests: XCTestCase {
     /// the D wiring, finding 8).
     @MainActor func testAMissingNullableKeyFails() throws {
         func without(_ name: String, _ remove: (inout [String: Any]) -> Void) throws -> Data {
-            var body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.example(name)) as? [String: Any])
+            var body = try Examples.object(name)
             remove(&body)
             return try JSONSerialization.data(withJSONObject: body)
         }
@@ -199,7 +260,7 @@ final class ContractTests: XCTestCase {
         }))
         XCTAssertThrowsError(try Contract.decode(CallView.self, from: without("call-view") { body in
             var items = body["items"] as? [[String: Any]] ?? []
-            items[15].removeValue(forKey: "failure")
+            if let job = items.firstIndex(where: { $0["type"] as? String == "job" }) { items[job].removeValue(forKey: "failure") }
             body["items"] = items
         }))
         XCTAssertThrowsError(try Contract.decode(CallView.self, from: without("call-view") { $0.removeValue(forKey: "why_calling") }))
@@ -217,7 +278,7 @@ final class ContractTests: XCTestCase {
     }
 
     @MainActor func testABodyThatBreaksTheContractFails() throws {
-        var body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.example("calls")) as? [String: Any])
+        var body = try Examples.object("calls")
         var calls = try XCTUnwrap(body["calls"] as? [[String: Any]])
         calls[0]["started_at"] = "2026-10-15T14:22:13" // no offset
         body["calls"] = calls

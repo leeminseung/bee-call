@@ -18,29 +18,29 @@ final class BookedCallTests: XCTestCase {
     }
 
     @MainActor func testTheOffersAreReadFromTheContractsListing() async throws {
-        let server = FakeServer()
-        server.replies["GET /offers"] = .status(200, String(decoding: try ContractTests.example("offers"), as: UTF8.self))
+        let server = FakeServer(), listing = try Examples.decode(OpenOffers.self, "offers")
+        server.replies["GET /offers"] = .status(200, try Examples.text("offers"))
         let offers = OfferCenter(server: server.client())
         await offers.refresh()
-        XCTAssertEqual(offers.open.map(\.state), [.booked, .asked])
-        XCTAssertEqual(offers.open[0].topic, "도서관에서 정리한 할 일 다시 보기")
-        XCTAssertEqual(offers.open[0].bookedLine(language: "ko", now: now), "오늘 저녁 7:00 전화 예정")
+        XCTAssertEqual(offers.open, listing.offers)
+        XCTAssertTrue(offers.open.contains { $0.state == .booked } && offers.open.contains { $0.state == .asked },
+                      "the examples have a booked call and a question")
     }
 
     /// The offers carry a version: asked again with If-None-Match, and a 304 keeps them; /changes moves them on.
     @MainActor func testTheOffersAreAskedAgainWithTheirVersion() async throws {
-        let server = FakeServer()
-        server.replies["GET /offers"] = .status(200, String(decoding: try ContractTests.example("offers"), as: UTF8.self))
+        let server = FakeServer(), listing = try Examples.decode(OpenOffers.self, "offers")
+        server.replies["GET /offers"] = .status(200, try Examples.text("offers"))
         let offers = OfferCenter(server: server.client())
         await offers.refresh()
         server.replies["GET /offers"] = .status(304)
         await offers.refresh()
-        XCTAssertEqual(server.requests.last?.value(forHTTPHeaderField: "If-None-Match"), "\"92ab364e8f439e2d\"")
-        XCTAssertEqual(offers.open.count, 2)
+        XCTAssertEqual(server.requests.last?.value(forHTTPHeaderField: "If-None-Match"), "\"\(listing.version)\"")
+        XCTAssertEqual(offers.open, listing.offers, "304: kept")
         let asked = server.requests.count
-        await offers.changed(to: "92ab364e8f439e2d")
+        await offers.changed(to: listing.version)
         XCTAssertEqual(server.requests.count, asked, "the version held already")
-        await offers.changed(to: "0123456789abcdef")
+        await offers.changed(to: Examples.otherVersion(than: listing.version))
         XCTAssertEqual(server.requests.count, asked + 1)
     }
 

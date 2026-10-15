@@ -21,13 +21,13 @@ final class RingStreamTests: XCTestCase {
         XCTAssertNil(ring.topic)
     }
 
-    /// The contract's own ring example.
+    /// The contract's own ring example rings for its room and topic until its expires_at.
     @MainActor func testTheContractsRingExampleRings() throws {
-        let line = String(decoding: try ContractTests.example("ring"), as: UTF8.self)
-        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        let payload = try Examples.object("ring")
         let ring = try XCTUnwrap(RingStream.ring(fromPush: payload))
-        XCTAssertEqual(ring.room, "call-minseung-20261015-203002")
-        XCTAssertEqual(ring.topic, "오늘 회의에서 정한 데모 촬영 일정")
+        XCTAssertEqual(ring.room, payload["room"] as? String)
+        XCTAssertEqual(ring.topic, (payload["topic"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertEqual(ring.expiresAt, ZonedTime(try XCTUnwrap(payload["expires_at"] as? String))?.date)
     }
 
     /// A time with no offset says nothing certain about when the ring ends, and an epoch alone is the pre-D form:
