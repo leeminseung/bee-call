@@ -1,8 +1,9 @@
 """A call that continues an earlier one.
 
 The user opens an earlier call's record in the app and taps "Continue this call". The app asks the token server
-for a pass with that record's id (continue=<date>/<time>), and the voice server starts the new call knowing what
-was said in the earlier one, what its background jobs found, and which jobs stopped unfinished when it ended.
+for a pass with that call's id (continue=<call_id>, its LiveKit room; app builds from before design D send the
+record's folder, continue=<date>/<time>), and the voice server starts the new call knowing what was said in the
+earlier one, what its background jobs found, and which jobs stopped unfinished when it ended.
 Nothing restarts by itself: a stopped job is only mentioned, and the user decides whether to run it again. The AI
 never calls back on its own to continue; a continued call is always one the user starts.
 """
@@ -12,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from voice.call_folders import EVENTS, read_events
+from voice.call_folders import CALL_ID, EVENTS, find_call, read_events
 
 SESSION_ID = re.compile(r"\d{4}-\d{2}-\d{2}/\d{4}(?:-\d+)?")  # workspace/<date>/<time>, see voice/recorder.py
 MAX_TALK_CHARS = 6000  # arbitrary: about ten minutes of talk; an older start is left out
@@ -20,12 +21,14 @@ MAX_RESULT_CHARS = 1200  # arbitrary: one job's summary
 
 
 def session_dir(workspace: Path, session_id: Any) -> Path | None:
-    """The folder of an earlier call, or None when the id is not one (only ids of the recorder's shape, so a
-    request cannot name any other folder)."""
-    if not isinstance(session_id, str) or not SESSION_ID.fullmatch(session_id):
+    """The folder of an earlier call named by its call id or by its folder (<date>/<time>), or None when it names no
+    recorded call (only ids of those shapes, so a request cannot name any other folder)."""
+    if not isinstance(session_id, str):
         return None
-    folder = workspace / session_id
-    return folder if (folder / "events.jsonl").is_file() else None
+    if SESSION_ID.fullmatch(session_id):
+        folder = workspace / session_id
+        return folder if (folder / "events.jsonl").is_file() else None
+    return find_call(workspace, session_id) if CALL_ID.fullmatch(session_id) else None
 
 
 def _events(folder: Path) -> list[dict[str, Any]]:

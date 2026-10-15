@@ -24,7 +24,8 @@ GET  /token                              a token for a new call the user starts;
                                          into the room when the app joins. 429 once today's budget is spent
 GET  /token?room=R&answer=1              a token to answer the AI's call in room R (already dispatched); 410 if
                                          the room is gone (the voice server gave up after RING_SECONDS)
-GET  /token?continue=D/T                 a new call that continues the earlier call D/T (voice/continuation.py)
+GET  /token?continue=CALL_ID             a new call that continues an earlier call (voice/continuation.py); the
+                                         pre-D form continue=<date>/<time> is still taken
 GET  /ring                               Server-Sent Events: one "ring" event per call the AI places for this
                                          person (calls placed in the last RING_SECONDS and not declined, then new
                                          ones): how an open app learns the AI is calling without VoIP push
@@ -269,7 +270,7 @@ async def token(request: web.Request) -> web.Response:
         room = room_name(who)
     continue_from = request.query.get("continue")  # "Continue this call" in an earlier call's record
     if continue_from is not None and (answer or session_dir(workspace(request), continue_from) is None):
-        raise web.HTTPBadRequest(text="continue= needs the id of an earlier call, like 2026-10-14/0055\n")
+        raise web.HTTPBadRequest(text="continue= needs the id of an earlier call of yours\n")
     if not answer:
         budget = day_budget(someone(request), someone(request).now())
         if budget.used_up:
