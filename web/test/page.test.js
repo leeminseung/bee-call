@@ -372,6 +372,22 @@ test("the LiveKit room's name shows only in the debug view, and a normal record 
   assert.match(debug.visibleText(debug.one("session-foot")), /Room call-matt-20261015-210002/);
 });
 
+test("a failed background job says so in plain words; its raw error only in the debug view", () => {
+  const raw = "no harness ARN: run scripts/deploy_worker.py first";
+  const events = [
+    { t: 1, type: "job_started", job_id: 1, task: "Compare Bukhansan and Gwanaksan" },
+    { t: 9, type: "job_failed", job_id: 1, error: raw },
+  ];
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(events);
+  const job = page.text(page.one("job"));
+  assert.match(job, /The job could not finish\./);
+  assert.doesNotMatch(page.visibleText(), /harness ARN/);
+  const debug = debugView("#/s/2026-10-15/2100");
+  debug.feed(events);
+  assert.match(debug.text(debug.one("job")), /no harness ARN: run scripts\/deploy_worker\.py first/);
+});
+
 test("an error reads in plain words, and the raw error is not one tap away outside the debug view", () => {
   const raw = "bee_conversation: HTTP 502 from https://api.bee.computer";
   const error = { t: 2, type: "error", source: "bee_context", error: raw };

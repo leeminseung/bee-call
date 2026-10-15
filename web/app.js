@@ -1063,8 +1063,8 @@
       } else if (ev.type === "job_failed") {
         const cancelled = ev.error === "cancelled";
         this.finishJob(job, "failed", cancelled ? "Cancelled" : "Failed", t);
-        if (!cancelled) {
-          job.error.textContent = String(ev.error || "The job failed.");
+        if (!cancelled) { // the worker's raw error only in the debug view, as for every other error
+          job.error.textContent = this.debug && ev.error ? String(ev.error) : "The job could not finish.";
           job.error.hidden = false;
         }
       }
