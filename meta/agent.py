@@ -31,7 +31,7 @@ from beelink.planner import Plan
 from meta import files
 from meta.session import DAILY_NOTIFICATIONS, MetaSession, quiet, quiet_ends
 from voice.aws_session import aws_session
-from voice.offers import CALL_TIME, AlreadyOffered, Offer, OfferStore
+from voice.offers import CALL_TIME, AlreadyOffered, Offer, OfferStore, QuestionWaiting
 from voice.prep import prep_model
 
 log = logging.getLogger("bee-call.meta")
@@ -246,10 +246,6 @@ class Thinker:
         if not topic or not why:
             return "Error: offer_call needs a topic and a why."
         store = OfferStore(self.workspace)
-        waiting = [o for o in store.open(now) if o.state == "asked"]
-        if waiting:
-            return (f"Not asked: the user has not answered the offer about \"{waiting[0].topic}\" ({waiting[0].id}) yet. "
-                    "Put this on the agenda instead, or offer it after they answer.")
         if any(o.topic == topic for o in store.open(now)):
             return f"An offer about \"{topic}\" is already open; not asked again."
         inbox = str(args.get("inbox") or "").strip() if self.bee else ""  # without Bee there is no Bee change
@@ -259,6 +255,8 @@ class Thinker:
                     kind="conversation" if ids else None)
         try:
             offer = store.ask(plan, now, at=self.call_time)
+        except QuestionWaiting as exc:
+            return f"Not asked: {exc}. Put this on the agenda instead, or offer it after they answer."
         except AlreadyOffered as exc:
             return (f"Not asked: {exc}; one Bee conversation leads to at most one offer. Put it on the agenda for the "
                     "next call instead.")

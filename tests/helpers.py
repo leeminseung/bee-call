@@ -51,6 +51,14 @@ def another_conversation(plan, n: int = 1):
     return dataclasses.replace(plan, conversation_ids=[1000 + n])
 
 
+def next_question(store, plan, n: int, now):
+    """Another question later the same day, about another conversation. One question at a time: the user has
+    said no to the one still waiting."""
+    for waiting in [o for o in store.open(now) if o.state == "asked"]:
+        store.answer(waiting.id, "decline", now)
+    return store.ask(another_conversation(plan, n), now)
+
+
 class ScriptedLLM(llm.LLM):
     """A model that streams scripted replies as plain text, the way LiveKit's Converse plugin does for GLM 5 on
     Bedrock (no tags): each reply is a list of text pieces. It keeps the chat contexts it was given."""

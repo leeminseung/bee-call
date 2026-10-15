@@ -45,8 +45,8 @@ from voice.dispatch import DECLINES, RING_SECONDS, place_call
 from voice.costs import SpendLog, day_budget
 from voice.language import CallLanguage, call_language
 from voice.people import People, Person, Settings, dev_person
-from voice.offers import (OPEN, AlreadyOffered, Offer, OfferStore, agreed, not_placed_notification, notification,
-                          plan_of)
+from voice.offers import (OPEN, AlreadyOffered, Offer, OfferStore, QuestionWaiting, agreed, not_placed_notification,
+                          notification, plan_of)
 from voice.prep import NOTE_SECONDS, OPENING_BY_S, prepare_outbound
 from meta.agent import Thinker
 from meta.session import DAILY_NOTIFICATIONS, MetaSession, add_event, meta_notes, quiet, quiet_ends
@@ -78,6 +78,9 @@ async def handle(trigger: Trigger, planner: RulePlanner, dry_run: bool, person: 
     now = planner.now()
     try:
         offer = OfferStore(planner.workspace).ask(plan, now)
+    except QuestionWaiting as exc:
+        print(f"not asked: {exc} (one question at a time)", flush=True)
+        return None
     except AlreadyOffered as exc:
         print(f"not asked: {exc} (one Bee conversation, at most one offer)", flush=True)
         return None

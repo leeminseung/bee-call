@@ -13,10 +13,10 @@ import pytest
 from beelink.planner import OUTBOUND_LOG, RulePlanner
 from voice import outbound, voip_push
 from voice.language import call_language
-from voice.offers import LATE_BY, OfferStore, agreed, call_time, notification, plan_of
+from voice.offers import LATE_BY, OfferStore, QuestionWaiting, agreed, call_time, notification, plan_of
 from voice.outbound import call_due, handle, saved_trigger
 from voice.prep import Prep
-from tests.helpers import SEOUL, another_conversation, fake_livekit, placing, seoul_now, signed_in
+from tests.helpers import SEOUL, another_conversation, fake_livekit, next_question, placing, seoul_now, signed_in
 from tests.test_outbound import inbox
 
 NOW = datetime(2026, 10, 14, 18, 30, tzinfo=SEOUL)
@@ -293,7 +293,7 @@ def test_only_one_runner_places_a_call_and_a_call_off_wins(tmp_path):
     assert store.get(other.id).history[-1]["state"] == "declined"
 
 
-def test_no_call_while_another_rings_and_a_new_question_replaces_the_old(tmp_path):
+def test_no_call_while_another_rings_and_a_new_question_waits_for_the_old(tmp_path):
     from beelink.planner import OUTBOUND_LOG
 
     me = signed_in(tmp_path)
@@ -310,8 +310,9 @@ def test_no_call_while_another_rings_and_a_new_question_replaces_the_old(tmp_pat
 
     assert asyncio.run(call_due(me.person, place=place)) == [] and store.get(offer.id).state == "now"
     older = store.ask(another_conversation(plan, 1), NOW)
-    newer = store.ask(another_conversation(plan, 2), NOW + timedelta(minutes=40))
-    assert store.get(older.id).state == "expired" and store.get(newer.id).state == "asked"
+    with pytest.raises(QuestionWaiting, match=older.id):  # one question at a time: the older one keeps working
+        store.ask(another_conversation(plan, 2), NOW + timedelta(minutes=40))
+    assert store.get(older.id).state == "asked" and len(store.all()) == 2
 
 
 def test_moving_or_calling_off_a_call_back_in_the_same_call(tmp_path):
@@ -361,9 +362,9 @@ def test_notifications_wait_for_morning_and_for_tomorrow_after_four(tmp_path, mo
     asyncio.run(send_held(me.person, morning))
     assert sent == [offer.id] and store.get(offer.id).notified_at == "2026-10-15T08:00:00+09:00"
     for i in range(3):  # three more today, each 30 minutes after the last (2026-10-15): four in all
-        o = store.ask(another_conversation(plan, i), morning + timedelta(minutes=40 * (i + 1)))
+        o = next_question(store, plan, i, morning + timedelta(minutes=40 * (i + 1)))
         asyncio.run(send_offer(o, me.person, morning + timedelta(minutes=40 * (i + 1))))
-    fifth = store.ask(another_conversation(plan, 9), morning + timedelta(hours=3))
+    fifth = next_question(store, plan, 9, morning + timedelta(hours=3))
     assert asyncio.run(send_offer(fifth, me.person, morning + timedelta(hours=3))).startswith("held: 4 notifications")
 
 
@@ -534,10 +535,10 @@ def test_two_senders_at_once_keep_to_the_daily_limit(tmp_path, monkeypatch):
     monkeypatch.setattr(voip_push, "alert", slow)
     _, plan = asked(tmp_path, now=now, workspace=me.workspace)
     for i in range(3):
-        sent = store.ask(another_conversation(plan, i), now - timedelta(hours=3 - i))
+        sent = next_question(store, plan, i, now - timedelta(hours=3 - i))
         asyncio.run(send_offer(sent, me.person, now - timedelta(hours=3 - i)))
     pushed.clear()
-    last = store.ask(another_conversation(plan, 9), now)
+    last = next_question(store, plan, 9, now)
 
     async def both():
         return await asyncio.gather(send_offer(last, me.person, now), send_offer(last, me.person, now))
@@ -749,10 +750,10 @@ def test_the_fifth_offer_of_a_day_is_never_notified_even_when_it_suggests_tomorr
     morning = datetime(2026, 10, 15, 8, 0, tzinfo=SEOUL)
     _, plan = asked(tmp_path, now=morning, workspace=me.workspace)
     for i in range(4):  # four sent, 40 minutes apart
-        o = store.ask(another_conversation(plan, i), morning + timedelta(minutes=40 * i))
+        o = next_question(store, plan, i, morning + timedelta(minutes=40 * i))
         assert asyncio.run(send_offer(o, me.person, morning + timedelta(minutes=40 * i))).startswith("notification")
     late = datetime(2026, 10, 15, 20, 55, tzinfo=SEOUL)  # suggests 21:00 tomorrow
-    fifth = store.ask(another_conversation(plan, 9), late)
+    fifth = next_question(store, plan, 9, late)
     assert asyncio.run(send_offer(fifth, me.person, late)).startswith("held: 4 notifications")
     asyncio.run(send_held(me.person, datetime(2026, 10, 16, 8, 0, tzinfo=SEOUL)))  # a new day, with the offer still open
     assert fifth.id not in sent and [o.id for o in store.open(datetime(2026, 10, 16, 8, 0, tzinfo=SEOUL))] == [fifth.id]

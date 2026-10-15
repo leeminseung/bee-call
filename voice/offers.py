@@ -54,6 +54,14 @@ class OfferClosed(ValueError):
     """The offer no longer takes this answer: answered, closed, or its call is being placed (409)."""
 
 
+class QuestionWaiting(ValueError):
+    """A question the user has not answered yet: no new one is asked meanwhile."""
+
+    def __init__(self, waiting: "Offer") -> None:
+        super().__init__(f'the user has not answered the offer about "{waiting.topic}" ({waiting.id}) yet')
+        self.waiting = waiting
+
+
 class AlreadyOffered(ValueError):
     """A Bee conversation that already had an offer, whatever became of it: one conversation leads to at most one
     offer (BC-014)."""
@@ -276,9 +284,10 @@ class OfferStore:
         return [o for o in self.open(now) if o.state == "asked" and not o.notified_at and o.notice != "app only"]
 
     def ask(self, plan: Plan, now: datetime, at: str | None = None) -> Offer:
-        """A plan the planner wants to call about becomes a question. An older question still unanswered is
-        closed: the newer one is about the user's latest day, and two would ring at the same suggested time.
-        AlreadyOffered: a Bee conversation of the plan already had an offer (BC-014)."""
+        """A plan the meta agent (or the rule-based planner) wants to call about becomes a question. One question at
+        a time: while one is still waiting for the user's answer, a new one is not asked (QuestionWaiting), so a
+        notification the user has not answered yet never stops working under them. AlreadyOffered: a Bee
+        conversation of the plan already had an offer (BC-014). The one place for both rules (server review 14)."""
         suggested = call_time(now, at)
         offer = Offer(id=self._new_id(now), state="asked", reason=plan.reason, topic=plan.topic, kind=plan.kind,
                       suggested_at=_iso(suggested), expires_at=_iso(suggested),
@@ -286,14 +295,15 @@ class OfferStore:
                       plan=str(plan.path) if plan.path else None, conversation_ids=list(plan.conversation_ids),
                       history=[{"at": _iso(now), "state": "asked"}])
         with self._lock():
+            self._expire(now)  # a question past its time no longer waits
             for earlier in self.all():
                 shared = sorted(set(plan.conversation_ids) & set(earlier.conversation_ids))
                 if shared:
                     raise AlreadyOffered(f"Bee conversation {', '.join(map(str, shared))} already had an offer "
                                          f"({earlier.id}, {earlier.state})")
-            for older in self.all():
-                if older.state == "asked":
-                    self._save(self._set(older, "expired", now, error="replaced by a newer question"))
+            waiting = [o for o in self.all() if o.state == "asked"]
+            if waiting:
+                raise QuestionWaiting(waiting[0])
             return self._save(offer)
 
     def book(self, topic: str, call_at: datetime, now: datetime, continue_from: str | None = None) -> Offer:
