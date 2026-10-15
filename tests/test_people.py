@@ -424,6 +424,100 @@ def test_connecting_and_disconnecting_bee_from_the_app(tmp_path, fake_bee, monke
     assert not (folder / "token-prod").exists()
 
 
+async def until(check, seconds: float = 5.0) -> bool:
+    for _ in range(int(seconds / 0.05)):
+        if check():
+            return True
+        await asyncio.sleep(0.05)
+    return check()
+
+
+def test_disconnecting_bee_takes_the_login_off_the_server_even_when_bee_logout_fails(tmp_path, fake_bee, monkeypatch):
+    """Server review finding 11: a failing `bee logout` still answered 204 and left the login on the server, while
+    the app (since b9f96c7) clears its status on that 204."""
+    me = signed_in(tmp_path)
+    folder = me.people.bee_dir("matt")
+    folder.mkdir(parents=True)
+    (folder / "token-prod").write_text("fake")
+    me.people.change_settings("matt", {"bee": True}, allowed=("bee",))
+    monkeypatch.setenv("FAKE_BEE_DOWN", "logout")
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            return (await client.post("/bee/disconnect")).status
+
+    assert asyncio.run(main()) == 204
+    assert not folder.exists() and me.people.settings("matt").bee is False
+
+
+def test_disconnecting_bee_says_so_when_the_login_cannot_be_removed(tmp_path, fake_bee, monkeypatch):
+    from voice import token_server as server
+
+    me = signed_in(tmp_path)
+    folder = me.people.bee_dir("matt")
+    folder.mkdir(parents=True)
+    (folder / "token-prod").write_text("fake")
+
+    def stuck(path, *a, **kw):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(server.shutil, "rmtree", stuck)
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            answer = await client.post("/bee/disconnect")
+            return answer.status, await answer.text()
+
+    status, text = asyncio.run(main())
+    assert status == 502 and "could not remove" in text and me.people.settings("matt").bee is False
+
+
+def test_a_bee_connect_waiting_for_approval_survives_a_restart(tmp_path, fake_bee):
+    """Server review finding 11: the wait for the person's approval lived only in memory."""
+    me = signed_in(tmp_path)
+    folder = me.people.bee_dir("matt")
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            await client.post("/bee/connect")
+        # the token server restarts while the person has not approved yet
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            connecting = (await (await client.get("/me")).json())["bee_connecting"]
+            (folder / "approve").write_text("")
+            return connecting, await until(lambda: me.people.settings("matt").bee)
+
+    connecting, connected = asyncio.run(main())
+    assert connecting is True and connected is True
+    assert not (folder / "pending.json").exists()
+
+
+def test_a_second_bee_connect_stops_the_first_before_it_starts(tmp_path, fake_bee, monkeypatch):
+    """Server review finding 11: two `bee login` runs on one login folder at once."""
+    from beelink import cli
+    from voice import token_server as server
+
+    me = signed_in(tmp_path)
+    app = app_for(me.people)
+    first_done = []
+    real_start = cli.start_login
+
+    async def start_login(folder, *a, **kw):
+        waiting = app[server.BEE_LOGINS].get("matt")
+        first_done.append(waiting is None or waiting.done())
+        return await real_start(folder, *a, **kw)
+
+    monkeypatch.setattr(server.bee, "start_login", start_login)
+
+    async def main():
+        async with TestClient(TestServer(app), headers=me.headers) as client:
+            await client.post("/bee/connect")
+            await asyncio.sleep(0.2)  # the first login waits for the approval
+            await client.post("/bee/connect")
+
+    asyncio.run(main())
+    assert first_done == [True, True]
+
+
 # ---------- the daily budget ----------
 
 def test_spend_counts_calls_prep_jobs_searches_and_meta_thinks_of_today(tmp_path):
