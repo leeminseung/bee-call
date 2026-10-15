@@ -316,3 +316,28 @@ def test_a_new_event_never_cancels_a_call_being_placed(tmp_path, fake_bee, monke
 
     asyncio.run(main())
     assert finished == ["update-conversation-summary", "journal-created"]
+
+
+def test_the_bee_login_link_is_read_as_the_readme_documents(tmp_path, monkeypatch):
+    """Outside test seam 8 (README, "A Bee login"): `bee login --no-wait` must exit 0 and print, on its output or
+    error stream, `Authentication link: https://...`; the first such link is the one the app opens. Without one, the
+    login fails (POST /bee/connect answers 502). The login runs in the person's own Bee folder (BEE_CONFIG_DIR)."""
+    from beelink import cli
+
+    script = tmp_path / "bee"
+    monkeypatch.setenv("BEE_BIN", str(script))
+    folder = tmp_path / "bee-login"
+    for body, expected in (
+            ('echo "Open this link on your phone." >&2\necho "Authentication link: https://bee.example/a" >&2\n'
+             'echo "Authentication link: https://bee.example/b"\necho "$BEE_CONFIG_DIR" > "$BEE_CONFIG_DIR/where"',
+             "https://bee.example/a"),
+            ('echo "Waiting for approval..."', None),
+            ('echo "Authentication link: https://bee.example/c"\nexit 3', None)):
+        script.write_text("#!/bin/sh\n" + body + "\n")
+        script.chmod(0o755)
+        if expected:
+            assert asyncio.run(cli.start_login(folder)) == expected
+            assert (folder / "where").read_text().strip() == str(folder)
+        else:
+            with pytest.raises(cli.BeeError):
+                asyncio.run(cli.start_login(folder))
