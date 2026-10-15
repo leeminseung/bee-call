@@ -14,10 +14,12 @@ at the end of the reply drops the rest of the reply.
 
 Stage directions too (AsideFilter): in the user's call of 2026-10-15 14:22, after they said only "어", GLM 5 wrote
 its whole reply as "(사용자가 잠시 멈춤)" and the voice read it out. Every word the AI writes is spoken, so an aside
-that stands as its own sentence, wrapped in (), [] or *...* (or their full-width forms), is dropped: one at the
-start of the reply or of a sentence, followed by a space, a line break or the end. A parenthesis inside a
-sentence, as in "AWS(아마존 웹 서비스)", stays. A reply that is only an aside says nothing at all: no space or
-line break comes out before the first word.
+that stands as its own sentence, wrapped in () or [] (or their full-width forms), is dropped: one at the start of
+the reply or of a sentence, followed by a space, a line break or the end, and only a few plain words long (no
+digits, no commas or sentence marks inside). A parenthesis inside a sentence, as in "AWS(아마존 웹 서비스)",
+stays, and so do "(02) 1234-5678" and a parenthetical sentence of real words. Asterisks are never taken for an
+aside: "**Saturday**" and "* item" are markdown, which LiveKit's own filter turns into plain words. A reply that is
+only an aside says nothing at all: no space or line break comes out before the first word.
 """
 
 import re
@@ -27,9 +29,10 @@ PARTIAL = re.compile(r"<\s*[/|｜!?]?\s*$")  # could still become a tag when mor
 TAG_NAME = re.compile(r"<\s*(/?)\s*([^\s>/]+)")
 MAX_DROPPED = 500  # characters of dropped text kept for the call log
 MAX_TAG = 200  # a "tag" longer than this without ">" is cut off as markup anyway
-ASIDE_CLOSERS = {"(": ")）", "（": ")）", "[": "]］", "［": "]］", "*": "*"}  # an aside's opener, and what closes it
+ASIDE_CLOSERS = {"(": ")）", "（": ")）", "[": "]］", "［": "]］"}  # an aside's opener, and what closes it
 SENTENCE_ENDS = ".!?。！？…"
-MAX_ASIDE = 200  # an "aside" longer than this is speech
+NOT_IN_ASIDES = re.compile(r"[\d,.!?…，、。！？]")  # brackets around a number or a sentence hold speech
+MAX_ASIDE = 40  # an "aside" longer than this is speech: a stage direction is a few words
 
 
 class AsideFilter:
@@ -98,13 +101,12 @@ class AsideFilter:
         """For text that starts with an opener: (its length, whether it stands alone as an aside), or None while
         more text is needed to tell."""
         closers = ASIDE_CLOSERS[text[0]]
-        first = 2 if text.startswith("**") else 1
-        end = next((k for k in range(first, min(len(text), MAX_ASIDE)) if text[k] in closers), None)
+        end = next((k for k in range(1, min(len(text), MAX_ASIDE)) if text[k] in closers), None)
         if end is None:
             return (1, False) if len(text) >= MAX_ASIDE else None
+        if NOT_IN_ASIDES.search(text[1:end]):
+            return end + 1, False
         stop = end + 1
-        if text[0] == "*" and text[stop:stop + 1] == "*":
-            stop += 1
         while stop < len(text) and text[stop] in SENTENCE_ENDS:
             stop += 1
         if stop == len(text):

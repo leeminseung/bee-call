@@ -62,9 +62,20 @@ def test_an_english_pause_in_brackets_is_not_read_out():
 
 
 def test_only_the_aside_sentence_goes_from_a_mixed_reply():
-    said, f = speak(["Sure. ", "[pause", "] What would you like ", "to do next? *thinks* Maybe a walk."])
+    said, f = speak(["Sure. ", "[pause", "] What would you like ", "to do next? (thinks) Maybe a walk."])
     assert said == "Sure. What would you like to do next? Maybe a walk."
-    assert "[pause]" in f.dropped and "*thinks*" in f.dropped
+    assert "[pause]" in f.dropped and "(thinks)" in f.dropped
+
+
+def test_markdown_numbers_and_parenthetical_sentences_are_spoken():
+    """Only a short aside of plain words is a stage direction. Bold names, bullets, a number in brackets and a
+    parenthetical sentence of real words are speech (LiveKit's own filter takes the asterisks out later)."""
+    for text in ("**Saturday** is free, so let's go.", "1. **Gwanaksan** takes 2.5 hours.",
+                 "* Gwanaksan, the easy one\n* Bukhansan, the hard one", "네. **관악산** 코스가 좋아요.",
+                 "(02) 1234-5678로 전화하시면 돼요.", "Okay. (If you like, I can also check Sunday's weather.)",
+                 "Sure. *Gwanaksan* it is."):
+        said, f = speak([text])
+        assert said == text and f.dropped == "", text
 
 
 def test_a_parenthesis_inside_a_sentence_stays():
