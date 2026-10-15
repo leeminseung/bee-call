@@ -105,8 +105,8 @@ final class Server {
         if case .signedIn = state { true } else { false }
     }
 
-    /// The token server answered 401 (ServerClient, which every request goes through): the sign-in has ended,
-    /// because it expired or the person was removed.
+    /// The token server answered 401 to a request that carried the sign-in (ServerClient, which every request
+    /// goes through): the sign-in has ended, because it expired or the person was removed.
     func signInEnded() {
         guard case .signedIn = state else { return }
         forget()

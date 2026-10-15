@@ -3,14 +3,17 @@ import Foundation
 /// What the token server answered a request, read once by ServerClient. Each caller turns it into its own words.
 enum ServerAnswer: Equatable {
     case ok(Int, Data) // a 2xx, with its body
-    case signedOut // a 401: the sign-in has ended, and the person is signed out already
-    case refused(Int, Data) // any other answer, such as 400, 404, 409, 410, 429 or a proxy's 502, with its body
+    case signedOut // a 401 to a request that carried the sign-in: it has ended, and the person is signed out
+    case refused(Int, Data) // any other answer, such as 400, 404, 409, 410, 429 or a proxy's 502, with its body;
+                            // also a 401 to a request that went without the token
     case unreachable // no answer at all, or no server address in this build
 }
 
 /// The one way to the token server (voice/token_server.py). Every request is built from the build's address and
-/// carries the sign-in token when there is one, and every answer is read here, once: a 401 means the sign-in has
-/// ended (it expired, or the person was removed), so the person is signed out (review finding 5).
+/// carries the sign-in token when there is one, and every answer is read here, once (review finding 5): a 401 to a
+/// request that carried the token means the sign-in has ended (it expired, or the person was removed), so the
+/// person is signed out. A request goes without the token when the Keychain could not give it, locked until the
+/// first unlock after a restart; a 401 to that says nothing about the sign-in (review finding 17).
 struct ServerClient {
     var transport: any HTTPTransport = URLSession.shared
     /// The sign-in token, when the Keychain gives one.
@@ -54,7 +57,7 @@ struct ServerClient {
         switch status {
         case 200..<300:
             return .ok(status, body)
-        case 401:
+        case 401 where request.value(forHTTPHeaderField: "Authorization") != nil:
             signInEnded()
             return .signedOut
         default:
