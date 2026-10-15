@@ -1,7 +1,6 @@
 import AuthenticationServices
 import Foundation
 import Observation
-import Security
 import UIKit
 
 /// The Bee Call server this build talks to, and who is signed in to it (voice/token_server.py).
@@ -27,9 +26,18 @@ final class Server {
     @ObservationIgnored let signIn = AppleSignIn()
     @ObservationIgnored let bee = BeeSync()
     @ObservationIgnored let settings = SettingsSync(tokenReadable: { Server.savedToken() != nil })
+    @ObservationIgnored private let keychain: SignInKeychain
+    @ObservationIgnored private let store: UserDefaults // keeps who is signed in ("person")
 
-    private init() {
-        state = Self.savedToken() == nil ? .signedOut : .signedIn(person: UserDefaults.standard.string(forKey: "person") ?? "")
+    /// The system Keychain and defaults, unless a test passes stand-ins.
+    init(keychain: SignInKeychain = .system, store: UserDefaults = .standard) {
+        self.keychain = keychain
+        self.store = store
+        if case .token = keychain.read() {
+            state = .signedIn(person: store.string(forKey: "person") ?? "")
+        } else {
+            state = .signedOut
+        }
     }
 
     // MARK: - Address
@@ -124,10 +132,15 @@ final class Server {
         case .failure(let error):
             cancelled = (error as? ASAuthorizationError)?.code == .canceled
         }
-        switch await signIn.finish(identityToken: identityToken, cancelled: cancelled) {
+        await complete(signIn.finish(identityToken: identityToken, cancelled: cancelled))
+    }
+
+    /// What the sign-in came to.
+    func complete(_ outcome: AppleSignIn.Outcome) async {
+        switch outcome {
         case .signedIn(let token, let person):
-            Self.save(token: token)
-            UserDefaults.standard.set(person, forKey: "person")
+            _ = keychain.save(token)
+            store.set(person, forKey: "person")
             state = .signedIn(person: person)
             problem = nil
             await afterSignIn()
@@ -147,8 +160,8 @@ final class Server {
     }
 
     private func forget() {
-        Self.deleteToken()
-        UserDefaults.standard.removeObject(forKey: "person")
+        keychain.delete()
+        store.removeObject(forKey: "person")
         state = .signedOut
         bee.clearStatus()
     }
@@ -171,27 +184,8 @@ final class Server {
 
     // MARK: - Keychain
 
-    nonisolated private static let account = "bee-call-sign-in"
-
+    /// The sign-in token every request carries, when the Keychain gives one (SignInKeychain.swift).
     nonisolated static func savedToken() -> String? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: account,
-                                    kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    nonisolated private static func save(token: String) {
-        deleteToken()
-        let item: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: account,
-                                   kSecValueData as String: Data(token.utf8),
-                                   // Readable after the first unlock, so a VoIP push can answer a call on a locked phone.
-                                   kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
-        SecItemAdd(item as CFDictionary, nil)
-    }
-
-    nonisolated private static func deleteToken() {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: account]
-        SecItemDelete(query as CFDictionary)
+        if case .token(let token) = SystemKeychain.read() { token } else { nil }
     }
 }
