@@ -380,6 +380,22 @@ def test_take_it_out_never_deletes_by_an_id_that_is_not_a_todo_s(tmp_path, fake_
         ["todos", "accept-suggestion"]]
 
 
+def test_undoing_a_fact_fix_works_when_bee_answers_with_the_bare_fact(tmp_path, fake_bee, monkeypatch):
+    """Round 2 (pre-deploy review): the fact's earlier text was read only from {"fact": ...}; the Bee CLI 0.7.3's own
+    parser also takes the bare fact, and then the undo said the earlier text was not known."""
+    monkeypatch.setenv("FAKE_BEE_BARE_FACT", "1")
+
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        await saved(agent, "Shall I fix it in Bee to 'Bonus is 10%'?", "Yes.",
+                    kind="fact_update", fact_id=7, text="Bonus is 10%")
+        return await agent.undo_bee_write(None)
+
+    assert asyncio.run(main()).startswith("Took it out of Bee")
+    updates = [c for c in calls(fake_bee) if c[:2] == ["facts", "update"]]
+    assert updates[1][3:7] == ["--text", "Bonus is 15%", "--confirmed", "false"]
+
+
 def test_undoing_a_fact_fix_puts_the_fact_back_as_it_was(tmp_path, fake_bee):
     async def main():
         agent, _ = await in_a_call(tmp_path)
