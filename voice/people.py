@@ -523,12 +523,17 @@ def main(argv: list[str] | None = None) -> None:
         people.remove(args.person)
         print(f"removed {args.person}; their folder is still at {people.folder(args.person)}")
     elif args.command == "set":
+        if not people.known(args.person):  # a typo in the id would make a folder for nobody
+            sys.exit(f"{args.person} is not approved")
         try:
             value = json.loads(args.value)
         except ValueError:
             value = args.value
-        settings = people.change_settings(args.person, {args.name: value},
-                                          allowed=tuple(f.name for f in fields(Settings)))
+        try:
+            settings = people.change_settings(args.person, {args.name: value},
+                                              allowed=tuple(f.name for f in fields(Settings)))
+        except ValueError as exc:
+            sys.exit(str(exc))
         print(json.dumps(asdict(settings), ensure_ascii=False))
     elif args.command == "session":
         if not people.known(args.person):

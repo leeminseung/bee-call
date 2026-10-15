@@ -897,6 +897,22 @@ def test_the_operator_can_mint_a_sign_in_for_an_approved_person_only(tmp_path, c
         people_module.main(["--data", str(data), "session", "stranger"])
 
 
+def test_the_operator_changes_settings_only_for_an_approved_person(tmp_path, capsys):
+    """`voice.people set` on an id nobody approved made that person's folder and a settings file; a typo in the id
+    went unnoticed. It now stops and says so, and leaves nothing behind; a bad value names the problem."""
+    from voice import people as people_module
+
+    data = tmp_path / "data"
+    people_module.main(["--data", str(data), "add", "jiwoo"])
+    people_module.main(["--data", str(data), "set", "jiwoo", "daily_budget_usd", "2"])
+    assert People(data).settings("jiwoo").daily_budget_usd == 2.0
+    with pytest.raises(SystemExit, match="not approved"):
+        people_module.main(["--data", str(data), "set", "jiwo", "daily_budget_usd", "2"])
+    assert not (data / "people" / "jiwo").exists()
+    with pytest.raises(SystemExit, match="daily_budget_usd must be"):
+        people_module.main(["--data", str(data), "set", "jiwoo", "daily_budget_usd", "500"])
+
+
 def test_the_prep_of_an_ai_call_counts_where_it_runs_even_if_nobody_answers(tmp_path, monkeypatch):
     """Server review finding 4, BC-102: the prep's model use was counted only once the phone answered."""
     from tests.helpers import placing
