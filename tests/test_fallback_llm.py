@@ -207,7 +207,7 @@ def test_with_a_key_the_call_ai_is_claude_haiku_5_5_on_anthropic_s_api(tmp_path,
     (kwargs,) = clients
     assert kwargs["api_key"] == "test-key" and kwargs["max_retries"] == 0  # a failed first request falls back at once
     assert model.model == "claude-haiku-5-5" and second == korean.refusal  # a later decline: one line, in Korean
-    assert client.calls[0]["thinking"] == {"type": "disabled"} and client.calls[0]["output_config"] == {"effort": "low"}
+    assert client.calls[0]["thinking"] == {"type": "adaptive"} and client.calls[0]["output_config"] == {"effort": "low"}
     assert recorded(rec, "coordinator_model")[0]["model"] == "claude-haiku-5-5"
 
 
@@ -238,6 +238,28 @@ def test_a_person_who_picked_sonnet_talks_to_claude_sonnet_5_5_with_glm_5_standi
     assert asyncio.run(again()) == GLM_LINE
     (choice,) = recorded(rec, "coordinator_model")
     assert choice["model"] == "zai.glm-5" and choice["instead_of"] == "claude-sonnet-5-5" and "credit" in choice["reason"]
+
+
+def test_coordinator_settings_in_the_environment_never_change_the_call_model(tmp_path, monkeypatch):
+    """voice/call_models.py is the one place for the call model's settings with COORDINATOR_LLM=anthropic. The
+    variables the other modes read are not used here: a call says so in its log and its record, never silently."""
+    from voice import agent
+    from voice.language import call_language
+
+    client = FakeAnthropic([say("안녕하세요!")])
+    rec, _ = anthropic_mode(monkeypatch, tmp_path, key="test-key", client=client)
+    for name, value in (("COORDINATOR_THINKING", "disabled"), ("COORDINATOR_EFFORT", "high"),
+                        ("COORDINATOR_MODEL", "claude-opus-5-5")):
+        monkeypatch.setenv(name, value)
+
+    async def main():
+        return await turn(agent.make_llm(rec, call_language("ko"), CALL_MODELS["haiku"]), "안녕하세요", new_ctx())
+
+    asyncio.run(main())
+    sent = client.calls[0]
+    assert (sent["model"], sent["thinking"], sent["output_config"]) == (
+        "claude-haiku-5-5", {"type": "adaptive"}, {"effort": "low"})
+    assert agent.ignored_settings() == ["COORDINATOR_EFFORT", "COORDINATOR_MODEL", "COORDINATOR_THINKING"]
 
 
 def test_the_prep_and_the_meta_agent_stay_on_glm_5_with_anthropic(tmp_path, monkeypatch):

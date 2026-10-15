@@ -966,7 +966,9 @@ def test_each_call_model_has_its_claude_settings_and_a_price():
     from voice.costs import llm_cost
 
     haiku, sonnet = CALL_MODELS["haiku"], CALL_MODELS["sonnet"]
-    assert (haiku.model, haiku.thinking, haiku.effort) == ("claude-haiku-5-5", "disabled", "low")
+    # Adaptive, the user's choice (2026-10-15) after the probe: with thinking disabled Haiku said it booked a call
+    # back and never called book_call in 3 of 6 calls; adaptive booked 6 of 6.
+    assert (haiku.model, haiku.thinking, haiku.effort) == ("claude-haiku-5-5", "adaptive", "low")
     assert (sonnet.model, sonnet.thinking, sonnet.effort) == ("claude-sonnet-5-5", "between_tools", "low")
     assert call_model_for(Settings(call_model="sonnet")) is sonnet and call_model_for(Settings()) is haiku
     million = 1_000_000

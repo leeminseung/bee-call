@@ -130,6 +130,15 @@ def transcribe_credentials(session: boto3.Session | None) -> Credentials | None:
                        session_token=creds.token)
 
 
+def ignored_settings() -> list[str]:
+    """The environment settings of the other modes that are set but change nothing with COORDINATOR_LLM=anthropic,
+    where voice/call_models.py alone decides the call model's settings."""
+    if COORDINATOR_LLM != "anthropic":
+        return []
+    return sorted(name for name in ("COORDINATOR_MODEL", "COORDINATOR_THINKING", "COORDINATOR_EFFORT")
+                  if os.environ.get(name, "").strip())
+
+
 def coordinator_model(call_model: CallModel) -> str:
     """The model a call's AI starts with in this COORDINATOR_LLM mode, for the record (with anthropic, GLM 5 can
     still take the call: voice/fallback_llm.py)."""
@@ -598,9 +607,14 @@ async def run_call(ctx: JobContext, people: People) -> None:
     # The phone sends the person's settings as it answers (contract section 1): whether audio is kept is read now.
     settings = people.settings(person)
     rec = CallRecorder(workspace, ctx.job.room.name, keep_audio=settings.record_on_server, now=someone.now())
+    unused = ignored_settings()
+    if unused:
+        log.warning("%s set but not used with COORDINATOR_LLM=anthropic: the call model's settings come from "
+                    "voice/call_models.py", ", ".join(unused))
     rec.event("coordinator", llm=COORDINATOR_LLM, model=coordinator_model(call_model), call_model=call_model.name,
               language=language.code, voice=tts_voice.describe(), person=person,
-              audio_on_server=settings.record_on_server, audio_on_phone=settings.record_on_phone)
+              audio_on_server=settings.record_on_server, audio_on_phone=settings.record_on_phone,
+              **({"settings_not_used": unused} if unused else {}))
     rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"),
               continue_from=meta.get("continue_from") if meta.get("earlier_call") else None)
 

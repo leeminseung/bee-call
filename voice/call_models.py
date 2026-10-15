@@ -1,6 +1,8 @@
 """The call AI's model, the person's choice (Settings.call_model, set in the app): the one place that maps the choice
 to Claude's model and settings for COORDINATOR_LLM=anthropic (voice/agent.py). GLM 5 on Bedrock stands by for both
-(voice/fallback_llm.py); the daily budget prices whichever model answered (voice/costs.py).
+(voice/fallback_llm.py); the daily budget prices whichever model answered (voice/costs.py). The environment settings
+the other modes read (COORDINATOR_MODEL, COORDINATOR_THINKING, COORDINATOR_EFFORT) change nothing here; a call that
+finds one set says so in its log and its record (voice/agent.py ignored_settings).
 """
 
 from dataclasses import dataclass
@@ -16,8 +18,10 @@ class CallModel:
 
 
 CALL_MODELS = {
-    # Thinking off for speed; Claude Haiku 5.5 takes "disabled" at effort high or below.
-    "haiku": CallModel("haiku", "claude-haiku-5-5", thinking="disabled", effort="low"),
+    # Adaptive, the user's choice (2026-10-15): with thinking disabled for speed, Haiku said it booked a call back and
+    # never called book_call in 3 of 6 probe calls, and once spoke its plan in English in a Korean call; adaptive
+    # at effort low booked 6 of 6 and spoke no notes (first words median 1.45 s against 1.23 s; probes/haiku_probe.py).
+    "haiku": CallModel("haiku", "claude-haiku-5-5", thinking="adaptive", effort="low"),
     # Claude Sonnet 5.5 refuses "disabled"; "between_tools" skips thinking before the first words.
     "sonnet": CallModel("sonnet", "claude-sonnet-5-5", thinking="between_tools", effort="low"),
 }

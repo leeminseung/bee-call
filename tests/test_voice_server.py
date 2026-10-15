@@ -492,12 +492,13 @@ def test_the_call_ai_is_the_person_s_call_model_and_the_record_names_it(tmp_path
         call.hang_up()
         await call.end()
 
+    monkeypatch.setenv("COORDINATOR_THINKING", "disabled")  # left over from before call_model: not used, and said
     asyncio.run(main())
-    assert (call.call_model.model, call.call_model.thinking) == ("claude-sonnet-5-5", "between_tools")
+    assert call.call_model.model == "claude-sonnet-5-5"
     (folder,) = call_folders(me.workspace)
     (coordinator,) = [e for e in events_of(folder) if e["type"] == "coordinator"]
     assert coordinator["llm"] == "anthropic" and coordinator["model"] == "claude-sonnet-5-5"
-    assert coordinator["call_model"] == "sonnet"
+    assert coordinator["call_model"] == "sonnet" and coordinator["settings_not_used"] == ["COORDINATOR_THINKING"]
 
 
 def test_a_caller_whose_phone_drops_and_comes_back_before_the_ai_speaks_keeps_the_call(tmp_path, monkeypatch, quick):
