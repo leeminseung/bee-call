@@ -20,7 +20,7 @@ final class PushTokens {
     @ObservationIgnored private let server: ServerClient
     @ObservationIgnored private let environment: String
 
-    init(server: ServerClient = ServerClient(), environment: String = Server.pushEnvironment) {
+    init(server: ServerClient = ServerClient(), environment: String = PushEnvironment.current) {
         self.server = server
         self.environment = environment
     }

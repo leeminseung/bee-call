@@ -76,16 +76,6 @@ final class Server {
         return URL(string: Bundle.main.object(forInfoDictionaryKey: "BeeCallRecords") as? String ?? "")
     }
 
-    /// Apple's push service this build gets pushes from: Xcode builds the development one, TestFlight and
-    /// App Store builds the production one.
-    nonisolated static var pushEnvironment: String {
-        #if DEBUG
-        "development"
-        #else
-        "production"
-        #endif
-    }
-
     nonisolated private static func origin(of address: String) -> String? {
         guard let parts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = parts.scheme, scheme == "http" || scheme == "https",
