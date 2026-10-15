@@ -194,6 +194,17 @@ def test_secrets_copy_this_macs_settings_except_its_own():
                             "ELEVENLABS_VOICE"}
 
 
+def test_one_list_says_what_never_goes_to_the_server():
+    """Server review 19: the Mac's list of settings kept back (MAC_ONLY) and the server's list of settings it never
+    takes from SSM (REFUSED) were two lists that disagreed: TZ went to SSM and the server then left it out."""
+    from deploy.config import HOST_PARAMETER, REFUSED
+    from scripts.deploy_server import MAC_ONLY
+
+    assert set(MAC_ONLY) == REFUSED | {HOST_PARAMETER} and all(MAC_ONLY.values())
+    chosen, skipped = server_settings({"TZ": "UTC", "APNS_TOKEN_CACHE": "/tmp/x", "TTS": "polly"})
+    assert set(chosen) == {"TTS", "COORDINATOR_LLM"} and {"TZ", "APNS_TOKEN_CACHE"} <= set(skipped)
+
+
 def test_without_the_workers_arn_the_server_keeps_the_fake_worker():
     chosen, _ = server_settings({})
     assert {name: value for name, (value, _) in chosen.items()} == {"COORDINATOR_LLM": "anthropic"}

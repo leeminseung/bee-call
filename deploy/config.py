@@ -38,12 +38,23 @@ SERVICE_GROUP = "bee-call"
 
 ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 HOSTNAME = re.compile(r"(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])")
-# Never taken from SSM: a profile or static keys would replace the instance role, the APNs key path and the APNs token
-# cache are this server's own files, BEE_CALL_DEV_PERSON lets requests in without signing in, which only a Mac may allow, and the
-# units set the rest themselves; this file would override them (a Mac's agent name would share its calls).
-REFUSED = {"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "APNS_KEY_PATH",
-           "APNS_TOKEN_CACHE", "BEE_CALL_DEV_PERSON", "LIVEKIT_AGENT_NAME", "BEE_CALL_DATA", "BEE_BIN", "TZ",
-           "TOKEN_SERVER_PORT"}
+# Settings that never go to the server, with why: scripts/deploy_server.py keeps them on the Mac, and the server never
+# takes them from SSM (one list, server review 19).
+NOT_FOR_THE_SERVER = {
+    "AWS_PROFILE": "this Mac's AWS profile; the server uses its instance role",
+    "AWS_ACCESS_KEY_ID": "static AWS keys; the server uses its instance role",
+    "AWS_SECRET_ACCESS_KEY": "static AWS keys; the server uses its instance role",
+    "AWS_SESSION_TOKEN": "static AWS keys; the server uses its instance role",
+    "APNS_KEY_PATH": "a path on this Mac; the key itself goes to /bee-call/apns-key",
+    "APNS_TOKEN_CACHE": "the server's own place for it, set when its environment is written",
+    "LIVEKIT_AGENT_NAME": "each machine registers its own; the server keeps bee-call",
+    "BEE_CALL_DEV_PERSON": "lets requests in without signing in; never on a server",
+    "BEE_CALL_DATA": "the server's data root is set in its units",
+    "BEE_BIN": "the server's Bee CLI is set in its units",
+    "TZ": "the units set the server's clock zone",
+    "TOKEN_SERVER_PORT": "Caddy expects the token server on 8787",
+}
+REFUSED = set(NOT_FOR_THE_SERVER)
 
 
 def quoted(value: str) -> str:

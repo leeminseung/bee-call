@@ -32,7 +32,7 @@ from dotenv import dotenv_values
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-from deploy.config import ENV_NAME, HOST_PARAMETER, HOSTNAME, PREFIX, REFUSED  # noqa: E402
+from deploy.config import ENV_NAME, HOST_PARAMETER, HOSTNAME, NOT_FOR_THE_SERVER, PREFIX  # noqa: E402
 
 PROFILE = "bee-call"  # always this one, even with another AWS_PROFILE exported in the shell
 REGION = "ap-southeast-2"
@@ -53,20 +53,9 @@ BOOTSTRAP = REPO / "deploy" / "bootstrap.sh"
 UNITS = {"token": "bee-call-token", "session": "bee-call-session", "agent": "bee-call-agent",
          "outbound": "bee-call-outbound", "caddy": "caddy", "env": "bee-call-env"}
 
-# .env.local settings that stay on this Mac, with why.
-MAC_ONLY = {
-    "AWS_PROFILE": "this Mac's AWS profile; the server uses its instance role",
-    "AWS_ACCESS_KEY_ID": "static AWS keys; the server uses its instance role",
-    "AWS_SECRET_ACCESS_KEY": "static AWS keys; the server uses its instance role",
-    "AWS_SESSION_TOKEN": "static AWS keys; the server uses its instance role",
-    "APNS_KEY_PATH": "a path on this Mac; the key itself goes to /bee-call/apns-key",
-    "LIVEKIT_AGENT_NAME": "each machine registers its own; the server keeps bee-call",
-    "BEE_CALL_DEV_PERSON": "lets requests in without signing in; never on a server",
-    "BEE_CALL_DATA": "the server's data root is set in its units",
-    "BEE_BIN": "the server's Bee CLI is set in its units",
-    "TOKEN_SERVER_PORT": "Caddy expects the token server on 8787",
-    HOST_PARAMETER: "set by dns",
-}
+# .env.local settings that stay on this Mac, with why: the server's list (deploy/config.py), and the public name,
+# which dns sets.
+MAC_ONLY = {**NOT_FOR_THE_SERVER, HOST_PARAMETER: "set by dns"}
 # Settings this Mac passes on the command line rather than in .env.local, as the server should run them:
 # Claude Haiku 5.5 on Anthropic's own API in the coordinator slot, with GLM 5 on Bedrock standing by (voice/agent.py;
 # the key is .env.local's ANTHROPIC_API_KEY), and the AgentCore worker (only when its ARN is known).
@@ -154,7 +143,7 @@ def parse_sets(pairs: list[str]) -> dict[str, str]:
         name, sep, value = pair.partition("=")
         if not sep or not ENV_NAME.fullmatch(name):
             raise SystemExit(f"--set wants NAME=VALUE with an upper-case NAME, not {name!r}")
-        if name in REFUSED or name in MAC_ONLY:
+        if name in MAC_ONLY:
             raise SystemExit(f"{name} is not set on the server through SSM")
         found[name] = value
     return found
