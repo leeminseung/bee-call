@@ -55,10 +55,17 @@ struct CallModeView: View {
                 Text("Bee Call")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(BeeStyle.ink)
-                TimelineView(.periodic(from: .now, by: 1)) { clock in
-                    Text(CallClock.text(since: calls.connectedAt, now: clock.date))
-                        .font(.footnote.monospacedDigit())
+                if let state = words.state(reconnecting: calls.isReconnecting, aiIsThere: calls.aiIsThere,
+                                           answered: calls.ownRoom != nil && calls.connectedAt != nil) {
+                    Text(state) // until the AI is there, and while the line comes back
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
+                } else {
+                    TimelineView(.periodic(from: .now, by: 1)) { clock in
+                        Text(CallClock.text(since: calls.connectedAt, now: clock.date))
+                            .font(.footnote.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             HStack {
@@ -238,6 +245,15 @@ struct CallWords {
     var speaker: String { korean ? "스피커" : "Speaker" }
     var end: String { korean ? "끝내기" : "End" }
     var resultArrived: String { korean ? "결과 도착 · 대화에서 보기" : "Result ready · See it" }
+
+    /// Under the name until the AI is there, and while LiveKit gets a dropped line back; nil once the clock runs.
+    /// `answered`: Bee Call's own call, answered, whose AI is already in the room.
+    func state(reconnecting: Bool, aiIsThere: Bool, answered: Bool) -> String? {
+        if reconnecting { return korean ? "다시 연결하는 중…" : "Reconnecting…" }
+        if aiIsThere { return nil }
+        if answered { return korean ? "연결하는 중…" : "Connecting…" }
+        return korean ? "전화 거는 중…" : "Calling…"
+    }
 
     /// After a running job's title on the pill: " 중 · 1:07".
     func runningFor(_ clock: String) -> String {

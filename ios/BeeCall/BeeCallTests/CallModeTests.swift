@@ -76,4 +76,15 @@ final class CallModeTests: XCTestCase {
         XCTAssertFalse(still.animates)
         XCTAssertEqual(OrbLook(.rest, lastSide: nil, reduceMotion: false).side, .ai) // before anyone spoke: the AI
     }
+
+    /// Review of 2026-10-15, finding 8: the call screen says what the call is doing until the AI is there.
+    @MainActor func testTheCallScreenSaysWhatTheCallIsDoing() {
+        let ko = CallWords(korean: true), en = CallWords(korean: false)
+        XCTAssertEqual(ko.state(reconnecting: false, aiIsThere: false, answered: false), "전화 거는 중…")
+        XCTAssertEqual(ko.state(reconnecting: false, aiIsThere: false, answered: true), "연결하는 중…")
+        XCTAssertNil(ko.state(reconnecting: false, aiIsThere: true, answered: false), "the clock runs")
+        XCTAssertEqual(ko.state(reconnecting: true, aiIsThere: true, answered: false), "다시 연결하는 중…")
+        XCTAssertEqual(en.state(reconnecting: true, aiIsThere: true, answered: false), "Reconnecting…")
+        XCTAssertEqual(en.state(reconnecting: false, aiIsThere: false, answered: false), "Calling…")
+    }
 }

@@ -300,6 +300,19 @@ final class CallLifecycleTests: XCTestCase {
         XCTAssertEqual(calls.ownRoom, "call-matt-20261015-210000")
     }
 
+    /// Review of 2026-10-15, finding 8: design D's call screen says it is connecting until the AI is there.
+    @MainActor func testTheCallScreenKnowsWhenTheAIIsThere() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room)
+        let id = try await start(calls, callKit)
+        await waitUntil("the room is joined") { calls.status == "Ringing…" }
+        XCTAssertFalse(calls.aiIsThere)
+        room.aiAnswers()
+        XCTAssertTrue(calls.aiIsThere)
+        calls.perform(CXEndCallAction(call: id))
+        await waitUntil("the call has ended") { !calls.isInCall }
+        XCTAssertFalse(calls.aiIsThere)
+    }
+
     /// The call screen's clock runs from the moment the AI is there.
     @MainActor func testTheCallsClockStartsWhenTheAIIsThereAndStopsWithTheCall() async throws {
         let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room)

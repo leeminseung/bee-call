@@ -28,6 +28,9 @@ final class CallManager: NSObject {
     /// The room of the call that is on, once known: from the answer for Bee Call's own call, from the pass for a
     /// call the person starts. The thread shows that call live (contract section 3).
     private(set) var ownRoom: String?
+    /// The AI is in the call: until then design D's call screen says it is connecting (review of 2026-10-15,
+    /// finding 8).
+    private(set) var aiIsThere = false
     let liveKit: LiveKitClient // the call screen shows its captions and voice levels
 
     /// The call's room: `liveKit` in the app, a stand-in in tests.
@@ -409,6 +412,7 @@ final class CallManager: NSObject {
     private func agentPickedUp(_ id: UUID) {
         guard callID == id, !pickedUp, !isEnding else { return }
         pickedUp = true
+        aiIsThere = true
         pickUpTimeout?.cancel()
         pickUpTimeout = nil
         if connectedAt == nil { connectedAt = .now } // Bee Call's own call counts from its answer
@@ -450,6 +454,7 @@ final class CallManager: NSObject {
         pickUpTimeout = nil
         room.onAgentAnswered = nil
         pickedUp = false
+        aiIsThere = false
         callID = nil
         earlierCall = nil
         isInCall = false
@@ -586,6 +591,8 @@ extension CallManager {
     func playVoiceDemo(_ demo: VoiceDemo) {
         isInCall = true
         status = "Connected"
+        connectedAt = .now
+        aiIsThere = true
         liveKit.playVoiceDemo(demo)
     }
 
@@ -597,6 +604,7 @@ extension CallManager {
         status = "Connected"
         connectedAt = Date.now.addingTimeInterval(-connectedAgo)
         ownRoom = room
+        aiIsThere = true
         liveKit.playDemo(lines: lines, voice: voice)
     }
 }
