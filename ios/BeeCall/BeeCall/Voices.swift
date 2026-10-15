@@ -57,20 +57,30 @@ final class SamplePlayer: VoiceSamples {
         URL(string: Server.api + voice.sampleURL)
     }
 
+    /// The audio session's changes, in order and off the main thread, where they can block the screen.
+    private static let session = DispatchQueue(label: "Bee Call voice samples' audio session")
+
     func play(_ voice: Voice) {
         guard !inCall(), let url = Self.url(of: voice) else { return }
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .spokenAudio)
-        try? session.setActive(true)
-        player = AVPlayer(url: url)
-        player?.play()
+        let player = AVPlayer(url: url)
+        self.player = player
+        Self.session.async { [weak self] in
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playback, mode: .spokenAudio)
+            try? session.setActive(true)
+            Task { @MainActor in
+                if self?.player === player { player.play() } // not stopped meanwhile
+            }
+        }
     }
 
     func stop() {
         player?.pause()
         player = nil
         guard !inCall() else { return }
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        Self.session.async {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 }
 
