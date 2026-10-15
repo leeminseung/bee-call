@@ -8,7 +8,8 @@ A job is one conversation. Claude has Anthropic's server tools, which Anthropic 
 and the job's own tools (worker/tools.py: progress, relay_to_user, save_file, save_chart), which this Mac runs
 between requests. A file Claude leaves in $OUTPUT_DIR in code execution comes back as a file id: this Mac saves it
 into the job folder under a free, safe name at once, and deletes it from Anthropic's Files API once the job is over
-(the job's conversation names the file until then, and a request naming a deleted file is refused).
+(the job's conversation names the file until then, and a request naming a deleted file is refused), also when the
+end of its call cuts the job off (then within FORGET_ON_CANCEL_S).
 
 Background jobs need not be quick (the user, 2026-10-15): every request may write up to the role's max_tokens with
 thinking at effort high, a job may make MAX_REQUESTS requests and JOB_WEB_SEARCHES web searches, and at either limit,
@@ -45,6 +46,7 @@ FETCHED_TOKENS = 30_000  # at most this much of one fetched page or PDF reaches 
 REQUEST_DEADLINE_S = 900.0
 REQUEST_IDLE_S = 300.0
 RETRY_WAITS_S = (15, 60)  # before each new try of a request that failed midway
+FORGET_ON_CANCEL_S = 5.0  # a job cut off by the end of its call deletes its code execution files within this
 # Past a limit, a turn that also left a server tool waiting is continued without the note this many times, then cut.
 LATE_LIMIT_REQUESTS = 1
 
@@ -203,8 +205,11 @@ class ClaudeWorker:
             raise
         finally:
             write_usage(job, usage)
-            if usage["status"] != "cancelled":  # a call that ended is not held up for this
-                await self._forget_outputs(outputs, job)
+            try:  # a call that ended waits for this a few seconds at most
+                await asyncio.wait_for(self._forget_outputs(outputs, job),
+                                       FORGET_ON_CANCEL_S if usage["status"] == "cancelled" else None)
+            except (TimeoutError, asyncio.CancelledError):
+                log.warning("job %s: its files from code execution may be left in the Files API", job.job_id)
         summary = "".join(b.get("text", "") for b in content if b.get("type") == "text").strip() \
             or "The worker finished without a summary."
         if not (job.dir / "report.md").exists():

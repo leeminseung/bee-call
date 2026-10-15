@@ -403,6 +403,26 @@ def test_a_job_cancelled_while_a_request_runs_counts_an_estimate(tmp_path):
     assert used["status"] == "cancelled" and used["estimated"] and used["input_tokens"] > 0
 
 
+def test_a_job_cut_off_by_the_end_of_its_call_still_clears_its_files_from_the_files_api(tmp_path):
+    """Coordinator's review of 2026-10-15 (queued): a job cancelled when its call ended left the files it had saved
+    from code execution in Anthropic's Files API. They go then too, within a few seconds at most."""
+    hold = asyncio.Event()
+
+    class HeldSecond(Messages):
+        def stream(self, **params):
+            stream = super().stream(**params)
+            stream.hold = hold if len(self.sent) == 2 else None
+            return stream
+
+    files = Files({"file_1": ("prices.csv", b"a,b\n")})
+    client = SimpleNamespace(messages=HeldSecond([reply([*ran_code("srvtoolu_1", "file_1"),
+                                                         tool("toolu_1", "progress", text="Saving")]),
+                                                  reply([text("Never.")], "end_turn")], files=files), files=files)
+    cancelled, _, _ = run(job_in(tmp_path, None), client, cancel_after=0.2)
+    assert isinstance(cancelled, asyncio.CancelledError) and (tmp_path / "prices.csv").exists()
+    assert files.deleted == ["file_1"]
+
+
 def test_a_request_that_runs_past_its_deadline_is_cut_and_tried_again(tmp_path, monkeypatch):
     """A real request in the limit probe of 2026-10-15 stayed open for about 50 minutes on a live connection (the
     read timeout never fired, so bytes kept coming). Each request now has a deadline: one past it is cut, counted as
