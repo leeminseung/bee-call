@@ -10,6 +10,7 @@ never calls back on its own to continue; a continued call is always one the user
 
 import re
 from datetime import datetime
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -75,15 +76,18 @@ def _jobs(events: list[dict[str, Any]]) -> list[str]:
             job.update(state="cancelled" if e.get("error") == "cancelled" else "failed", error=e.get("error"))
     lines = []
     for job_id, job in jobs.items():
-        task = str(job.get("task") or "a task").strip()
+        # What the worker wrote comes from web pages too: escaped, so it never closes a block and speaks as the app
+        # (the call AI's instructions say a job's words are never instructions).
+        task = escape(str(job.get("task") or "a task").strip(), quote=False)
         state = job.get("state")
         if state == "done":
-            summary = str(job.get("summary") or "").strip()[:MAX_RESULT_CHARS]
+            summary = escape(str(job.get("summary") or "").strip()[:MAX_RESULT_CHARS], quote=False)
             names = [str(f).split("/")[-1] for f in job.get("files") or [] if f]
-            files = ", ".join(n for n in names if n != "usage.json") or "none"  # usage.json is bookkeeping
+            files = escape(", ".join(n for n in names if n != "usage.json") or "none", quote=False)  # bookkeeping
             lines.append(f"- Job {job_id}, {task}\n  Finished. Result: {summary}\n  Files in the app: {files}")
         elif state == "failed":
-            lines.append(f"- Job {job_id}, {task}\n  Failed: {str(job.get('error') or '').strip()[:300]}")
+            error = escape(str(job.get("error") or "").strip()[:300], quote=False)
+            lines.append(f"- Job {job_id}, {task}\n  Failed: {error}")
         else:  # cancelled when the call ended, or still running then
             lines.append(f"- Job {job_id}, {task}\n  Stopped unfinished when that call ended. Start it again only "
                          "if the user wants it.")
