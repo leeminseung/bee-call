@@ -131,7 +131,7 @@ final class CallManager: NSObject {
                     delay = 1
                     Task { await PushTokens.shared.deliver(.voip) } // the address may be new
                 }, onRing: {
-                    ringPhone(for: $0, tokenServerURL: tokenServerURL)
+                    ringPhone(for: $0)
                 })
             } catch let error as RingStream.BadStatus {
                 Server.shared.noteStatus(error.code) // 401: the sign-in ended
@@ -146,18 +146,36 @@ final class CallManager: NSObject {
         }
     }
 
-    /// Rings the phone through CallKit for the AI's call, unless the ring has expired,
-    /// this room rang already, or another call is on.
-    func ringPhone(for ring: Ring, tokenServerURL: String) {
-        guard Self.answerBy(ring) > .now, rungRooms[ring.room] == nil, !isInCall else { return }
+    /// The ring stream's ring: rings the phone through CallKit, if the one gate lets it.
+    func ringPhone(for ring: Ring) {
+        guard let id = beginRinging(ring) else { return }
+        Task { await reportIncoming(id, ring) }
+    }
+
+    /// The one way into ringing, for the ring stream and a VoIP push alike: a ring that has not expired, for a
+    /// room that has not rung yet, while no other call is on and the app knows its server. Returns the new
+    /// call's id, or nil when the ring must not ring.
+    private func beginRinging(_ ring: Ring) -> UUID? {
+        guard Self.answerBy(ring) > .now, rungRooms[ring.room] == nil, !isInCall, !Server.tokenURL.isEmpty else {
+            return nil
+        }
         let id = UUID()
         rungRooms[ring.room] = id
         callID = id
-        self.tokenServerURL = tokenServerURL
+        tokenServerURL = Server.tokenURL
         isInCall = true
         isRinging = true
         status = ring.topic.map { "Bee Call is calling about: \($0)" } ?? "Bee Call is calling…"
-        Task { await reportIncoming(id, ring) }
+        return id
+    }
+
+    /// What CallKit shows for the AI's call: Bee Call, and what it is about.
+    private func callUpdate(topic: String?) -> CXCallUpdate {
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: "Bee Call")
+        update.localizedCallerName = callerName(topic: topic)
+        update.hasVideo = false
+        return update
     }
 
     private func reportIncoming(_ id: UUID, _ ring: Ring) async {
@@ -172,10 +190,7 @@ final class CallManager: NSObject {
             finish("Missed a call from Bee Call")
             return
         }
-        let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: "Bee Call")
-        update.localizedCallerName = callerName(topic: ring.topic)
-        update.hasVideo = false
+        let update = callUpdate(topic: ring.topic)
         do {
             try await withCheckedThrowingContinuation { (reported: CheckedContinuation<Void, Error>) in
                 callKit.reportIncoming(id, update) { error in
@@ -221,18 +236,14 @@ final class CallManager: NSObject {
     /// this reports one at once, before anything else: also for a ring that expired, rang already, or cannot ring.
     func reportPushedCall(_ ring: Ring?, completion: @escaping () -> Void) {
         let done = Handed(completion)
-        let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: "Bee Call")
-        update.localizedCallerName = callerName(topic: ring?.topic)
-        update.hasVideo = false
+        let update = callUpdate(topic: ring?.topic)
         if let ring, let rung = rungRooms[ring.room], callID == rung {
             // The ring stream rang this call (or is about to): reporting it again changes nothing on screen,
             // and if this report wins the race the stream's own report gets callUUIDAlreadyExists.
             callKit.reportIncoming(rung, update) { _ in done.call() }
             return
         }
-        let address = Server.tokenURL
-        guard let ring, rungRooms[ring.room] == nil, Self.answerBy(ring) > .now, !isInCall, !address.isEmpty else {
+        guard let ring, let id = beginRinging(ring) else {
             // Unreadable, already rung and over, expired, during another call, or no token server set.
             let id = UUID()
             callKit.reportIncoming(id, update) { [weak self] _ in
@@ -241,13 +252,6 @@ final class CallManager: NSObject {
             }
             return
         }
-        let id = UUID()
-        rungRooms[ring.room] = id
-        callID = id
-        tokenServerURL = address
-        isInCall = true
-        isRinging = true
-        status = ring.topic.map { "Bee Call is calling about: \($0)" } ?? "Bee Call is calling…"
         callKit.reportIncoming(id, update) { [weak self] error in
             let failure = error.map(Self.ringFailure)
             Task { @MainActor in

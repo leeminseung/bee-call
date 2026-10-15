@@ -51,7 +51,7 @@ final class RingingTests: XCTestCase {
     /// The ring stream rang the call first; the push for it reports that same call, so the screen shows one.
     @MainActor func testThePushForACallTheRingStreamRangReportsThatSameCall() async {
         let callKit = FakeCallKit(), calls = calls(callKit)
-        calls.ringPhone(for: ring(), tokenServerURL: Server.tokenURL)
+        calls.ringPhone(for: ring())
         await waitUntil("the ring stream's call is reported") { callKit.incoming.count == 1 }
         var completions = 0
         calls.reportPushedCall(ring()) { completions += 1 }
@@ -65,8 +65,8 @@ final class RingingTests: XCTestCase {
 
     @MainActor func testTheRingStreamRingsARoomOnce() async throws {
         let callKit = FakeCallKit(), calls = calls(callKit)
-        calls.ringPhone(for: ring(), tokenServerURL: Server.tokenURL)
-        calls.ringPhone(for: ring(), tokenServerURL: Server.tokenURL) // the stream replays the last minute
+        calls.ringPhone(for: ring())
+        calls.ringPhone(for: ring()) // the stream replays the last minute
         await waitUntil("the call is reported") { callKit.incoming.count == 1 }
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(callKit.incoming.count, 1)
@@ -75,7 +75,7 @@ final class RingingTests: XCTestCase {
 
     @MainActor func testAnExpiredRingFromTheStreamDoesNotRing() async throws {
         let callKit = FakeCallKit(), calls = calls(callKit)
-        calls.ringPhone(for: ring(expiringIn: 3), tokenServerURL: Server.tokenURL)
+        calls.ringPhone(for: ring(expiringIn: 3))
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertTrue(callKit.incoming.isEmpty)
         XCTAssertFalse(calls.isRinging)
