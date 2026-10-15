@@ -6,7 +6,8 @@ provider-independent id (ko-sian), the voice's own name, one word for how it sou
 provider and that provider's voice, a sample of about five seconds in voice/voice_samples/ (named by its content's
 hash, so a new sample gets a new URL), and server-only speech tuning that the app never sees, tuned by ear:
   stability  0 to 1, lower is livelier and less steady (ElevenLabs voice settings)
-  (empty for every voice so far; how a voice laughs, a tag or written laughter, will go here too)
+  (empty for every voice so far; how a voice laughs, an audio tag such as [laughs] or written laughter such as
+  "하하", will go here too: round-2 samples showed Anna Kim reads "하하" as syllables and Jason skips it)
 A person's settings hold a catalog id or null (the language's default); voice/people.py keeps it one of the call
 language's.
 
@@ -46,6 +47,12 @@ class VoiceChoice:
 
     def describe(self) -> dict[str, Any]:
         return {k: v for k, v in asdict(self).items() if v is not None}
+
+    @property
+    def performs_tags(self) -> bool:
+        """Whether this voice makes the sound of an audio tag such as [laughs] (voice/audio_tags.py): ElevenLabs v4;
+        any other voice would read it out, so it never gets one."""
+        return self.provider == "elevenlabs" and self.model.startswith("eleven_v4")
 
 
 def elevenlabs_key(env: Mapping[str, str] = os.environ) -> str:

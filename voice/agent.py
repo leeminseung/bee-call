@@ -843,7 +843,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
     call.agent = (BeeCoordinator if caller.uses_bee else Coordinator)(
         rec, call.jobs, workspace, clock=caller.someone.now, prep_note=prep.note or call_brief(inputs, meta),
         pending_note=pending, language=caller.language, earlier_call=meta.get("earlier_call"),
-        direction=meta.get("direction", "inbound"))
+        direction=meta.get("direction", "inbound"), audio_tags=caller.tts_voice.performs_tags)
 
     async def shutdown() -> None:
         await end_call(call)

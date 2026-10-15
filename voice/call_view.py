@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from beelink.planner import OFFERS_DIR, OUTBOUND_LOG
+from voice.audio_tags import strip_tags
 from voice.call_folders import CALL_ID, EVENTS, call_ids, read_events, session_id
 from voice.offers import topic_line
 from worker.chart import svg_title
@@ -209,6 +210,11 @@ def _text(value: Any) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _said(value: Any) -> str | None:
+    """What the AI said as the person reads it: without audio tags such as [laughs] (voice/audio_tags.py)."""
+    return _text(strip_tags(value)) if isinstance(value, str) else None
+
+
 # ---------- what a record says ----------
 
 @dataclass
@@ -333,12 +339,12 @@ def read_call(record: Record, zone: tzinfo) -> Call:
             call.pieces.append(Piece("person", n, t, _text(e.get("text")), False, True))
         elif kind == "message" and e.get("role") == "user" and not has_transcripts and _text(e.get("text")):
             call.pieces.append(Piece("person", n, t, _text(e.get("text")), False, False))
-        elif kind == "message" and e.get("role") == "assistant" and _text(e.get("text")):
+        elif kind == "message" and e.get("role") == "assistant" and _said(e.get("text")):
             metrics = e.get("metrics") if isinstance(e.get("metrics"), dict) else {}
             began, stopped = _number(metrics.get("started_speaking_at")), _number(metrics.get("stopped_speaking_at"))
             spoke = stopped - began if began is not None and stopped is not None else None
             at = t - spoke if spoke is not None and 0 <= spoke <= t else t
-            call.pieces.append(Piece("ai", n, at, _text(e.get("text")), bool(e.get("interrupted")), True))
+            call.pieces.append(Piece("ai", n, at, _said(e.get("text")), bool(e.get("interrupted")), True))
         elif kind in ("job_started", "job_progress", "job_done", "job_failed") and \
                 ITEM_ID.fullmatch(f"job-{e.get('job_id')}"):
             job_id = str(e["job_id"])
