@@ -82,7 +82,8 @@ def test_the_worker_has_room_for_long_research_and_reports():
     # GLM 5 on Bedrock takes a prompt and maxTokens of 202,752 tokens together (probed 2026-10-15), so a long
     # job's conversation keeps about 170K tokens of room next to a 32K-token answer.
     assert model["maxTokens"] == 32768
-    assert model["additionalParams"] == {"reasoning_effort": "high"}  # probed: GLM 5 reasons only when asked
+    # Probed: GLM 5 reasons only when asked; the harness puts additionalParams into its Converse request as they are.
+    assert model["additionalParams"] == {"additionalModelRequestFields": {"reasoning_effort": "high"}}
     assert (d["maxIterations"], d["timeoutSeconds"], MAX_ROUNDS) == (120, 1800, 80) == (120, HARNESS_TIMEOUT_S, 80)
     lifecycle = d["environment"]["agentCoreRuntimeEnvironment"]["lifecycleConfiguration"]
     # A session outlives the longest wait between a job's rounds (a web search), and a long call with a full-length

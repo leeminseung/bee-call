@@ -69,8 +69,10 @@ MAX_ITERATIONS = 120  # model and code interpreter steps in one round (AgentCore
 # a job's conversation grows. 32K tokens holds any report in one call and leaves about 170K for the conversation.
 MODEL_MAX_TOKENS = 32768
 # GLM 5 on Bedrock reasons only when the request asks it to (probed 2026-10-15: no reasoning by default;
-# reasoning_effort takes none, minimal, low, medium, high, xhigh or max). The harness passes these on unchanged.
-REASONING = {"zai.glm-5": {"reasoning_effort": "high"}}
+# reasoning_effort takes none, minimal, low, medium, high, xhigh or max). The harness merges additionalParams into
+# its Converse request as they are, so the field goes inside additionalModelRequestFields (a bare reasoning_effort
+# failed every round: "Unknown parameter in input").
+REASONING = {"zai.glm-5": {"additionalModelRequestFields": {"reasoning_effort": "high"}}}
 # A session outlives the longest wait between a job's rounds (a web search, run on this Mac) and a long call with a
 # full-length job at its end; AgentCore ends an idle one after IDLE_SESSION_S.
 IDLE_SESSION_S = 900
