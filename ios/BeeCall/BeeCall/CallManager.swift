@@ -42,7 +42,7 @@ final class CallManager: NSObject {
     @ObservationIgnored private let calls: any CallKitRequests
     @ObservationIgnored private let microphone: () async -> Bool
     @ObservationIgnored private var callID: UUID?
-    @ObservationIgnored private var earlierCall: String? // the record id of the call a new call continues
+    @ObservationIgnored private var earlierCall: String? // the call id of the call a new call continues
     @ObservationIgnored private var connecting: Task<Void, Never>?
     // Room → CallKit call, for every AI call rung. The ring stream replays the last minute on each reconnect.
     @ObservationIgnored private var rungRooms: [String: UUID] = [:]
@@ -122,7 +122,8 @@ final class CallManager: NSObject {
         _ = await microphone()
     }
 
-    /// Calls Bee Call. With `continuing`, the new call picks up from that earlier call (its record id).
+    /// Calls Bee Call. With `continuing`, the new call picks up from that earlier call, by its call id ("이 통화
+    /// 이어서 하기", GET /token?continue=<call_id>, contract section 7).
     func startCall(continuing earlierCall: String? = nil) async {
         guard !isInCall else { return }
         isInCall = true

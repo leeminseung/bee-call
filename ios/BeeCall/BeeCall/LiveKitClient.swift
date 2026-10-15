@@ -47,7 +47,7 @@ final class LiveKitClient: NSObject {
         return try await connect(access: access)
     }
 
-    private func connect(access: Access) async throws -> String {
+    private func connect(access: CallPass) async throws -> String {
         let room = Room()
         room.add(delegate: self)
         self.room = room // set first, so disconnect() can stop this attempt at any point
@@ -119,12 +119,6 @@ final class LiveKitClient: NSObject {
 
     // MARK: - Token server
 
-    private struct Access: Decodable {
-        let url: String
-        let token: String
-        let room: String
-    }
-
     /// Where the pass comes from on the token server: GET /token, for a new call, an answer, or a continuation.
     static func passPath(answering roomName: String?, continuing earlierCall: String?) -> String {
         var query = URLComponents()
@@ -145,16 +139,16 @@ final class LiveKitClient: NSObject {
 
     /// A pass for a new call: the voice server is dispatched into the new room when the app joins.
     /// With `answering`, a pass into the room of the AI's call instead; the voice server is already there.
-    /// With `continuing`, the new call picks up from that earlier call (its record id, like 2026-10-14/0055).
+    /// With `continuing`, the new call picks up from that earlier call, by its call id (contract section 7).
     private func fetchAccess(answering roomName: String?, continuing earlierCall: String? = nil) async throws
-        -> Access {
+        -> CallPass {
         guard let request = server.request(Self.passPath(answering: roomName, continuing: earlierCall)) else {
             throw TokenServerError(errorDescription: "This build has no server address.")
         }
         let (data, response) = try await http.data(for: request)
         switch server.read(response.httpStatus, data, to: request) {
         case .ok(200, let body):
-            return try JSONDecoder().decode(Access.self, from: body)
+            return try Contract.decode(CallPass.self, from: body)
         case .refused(410, _) where roomName != nil:
             throw CallAlreadyEnded()
         case .refused(429, let body): // today's budget is used up; the server says how much
