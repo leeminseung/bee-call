@@ -316,9 +316,14 @@ def test_one_list_says_which_parts_of_a_call_are_private(tmp_path):
     meta agent never reads them (its reads show on the timeline), the raw Bee inputs included."""
     from voice import call_folders, session_server
 
-    assert session_server.PRIVATE is call_folders.PRIVATE
-    assert set(call_folders.PRIVATE) <= set(files.HIDDEN)
+    # Both web servers serve a call's files by call_folders' one rule, which refuses every private part.
+    assert not hasattr(session_server, "PRIVATE")
     ws = workspace_with_a_call(tmp_path)
+    for name in call_folders.PRIVATE:
+        (ws / "2026-10-14" / "1200" / name).mkdir(exist_ok=True)
+        with pytest.raises(call_folders.NotServed):
+            call_folders.resolve_inside(ws / "2026-10-14" / "1200", name)
+    assert set(call_folders.PRIVATE) <= set(files.HIDDEN)
     inputs = ws / "2026-10-14" / "1200" / "inputs"
     inputs.mkdir(exist_ok=True)
     (inputs / "today.json").write_text('{"raw": "zebra bee data"}')

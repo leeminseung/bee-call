@@ -39,7 +39,8 @@ from typing import Any
 
 from aiohttp import web
 
-from voice.call_folders import PRIVATE, read_events
+from voice import call_folders
+from voice.call_folders import read_events
 from voice.people import People, dev_fallback
 from voice.web_headers import plain_server_name
 
@@ -256,28 +257,14 @@ def session_folder(request: web.Request) -> Path:
 
 
 def resolve_inside(folder: Path, rel: str) -> Path:
-    """The real path of `rel` inside the session folder, or an HTTP error."""
-    parts = rel.split("/")
-    if (rel.startswith("/") or "\\" in rel or "\x00" in rel
-            or any(part in ("", ".", "..") for part in parts)):
-        raise web.HTTPForbidden(text="path not allowed\n")
-    if parts[0].casefold() in PRIVATE:  # a call's private parts are never served (voice/call_folders.py, BC-095)
-        raise web.HTTPForbidden(text=f"{parts[0]} is never served\n")
-    base = folder.resolve()
+    """The real path of `rel` inside the session folder, or an HTTP error: the one rule both servers serve call files
+    by (voice/call_folders.py)."""
     try:
-        target = (base / rel).resolve(strict=True)
-    except (OSError, RuntimeError):
+        return call_folders.resolve_inside(folder, rel)
+    except call_folders.NotServed as exc:
+        raise web.HTTPForbidden(text=f"{exc}\n") from None
+    except FileNotFoundError:
         raise web.HTTPNotFound() from None
-    if target == base or not target.is_relative_to(base):
-        raise web.HTTPForbidden(text="path leaves the session folder\n")
-    first = base / target.relative_to(base).parts[0]  # catches a symlink into audio/ and AUDIO/ on macOS
-    for name in PRIVATE:
-        private = base / name
-        if first.name.casefold() == name or (private.exists() and os.path.samefile(first, private)):
-            raise web.HTTPForbidden(text=f"{name} is never served\n")
-    if not target.is_file():
-        raise web.HTTPNotFound()
-    return target
 
 
 async def session_file(request: web.Request) -> web.FileResponse:
