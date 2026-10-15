@@ -64,7 +64,6 @@ FILE_HEADERS = {"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"
 # Host names a request may use. Anything else is refused, so a web page cannot point its own
 # domain at this Mac (DNS rebinding) and read calls from a browser on the same network.
 LOCAL_SUFFIXES = (".local", ".localhost", ".lan", ".home.arpa", ".internal")
-# Never served: a call's private parts (voice/call_folders.py PRIVATE, BC-095).
 
 
 def parse_event(raw: bytes) -> dict[str, Any] | None:
@@ -262,7 +261,7 @@ def resolve_inside(folder: Path, rel: str) -> Path:
     if (rel.startswith("/") or "\\" in rel or "\x00" in rel
             or any(part in ("", ".", "..") for part in parts)):
         raise web.HTTPForbidden(text="path not allowed\n")
-    if parts[0].casefold() in PRIVATE:
+    if parts[0].casefold() in PRIVATE:  # a call's private parts are never served (voice/call_folders.py, BC-095)
         raise web.HTTPForbidden(text=f"{parts[0]} is never served\n")
     base = folder.resolve()
     try:
