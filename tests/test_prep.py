@@ -185,12 +185,17 @@ def late_note_turn(tmp_path, arrives_after: float):
     async def main():
         loop = asyncio.get_running_loop()
         note: asyncio.Future = loop.create_future()
-        loop.call_later(arrives_after, note.set_result, "Matt is weighing a job offer.")
+        if not arrives_after:  # it landed before the first turn
+            note.set_result("Matt is weighing a job offer.")
         agent = Coordinator(CallRecorder(tmp_path, room="r", now=NOW), SimpleNamespace(), tmp_path, clock=lambda: NOW,
                             prep_note="The user called you from the app.", pending_note=note)
         async with AgentSession(llm=EchoLLM()) as session:
             await session.start(agent)
             turn_ctx = agent.chat_ctx.copy()
+            # The note's clock starts with the turn, as `waited` does: a session start slowed by a loaded machine
+            # (three suites and an Xcode build at once) cannot eat into the time the turn waits.
+            if arrives_after:
+                loop.call_later(arrives_after, note.set_result, "Matt is weighing a job offer.")
             started = time.monotonic()
             await agent.on_user_turn_completed(turn_ctx, turn_ctx.add_message(role="user", content="Hey."))
             waited = time.monotonic() - started
