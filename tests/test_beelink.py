@@ -165,6 +165,27 @@ def test_the_call_ai_the_prep_and_the_meta_agent_read_nothing_bee_made_of_our_ca
         assert "left out" in text and "Talked through a job offer" not in text
 
 
+def test_our_call_windows_read_each_finished_call_once(tmp_path, monkeypatch):
+    """Review of the user-noticed fixes, 4: every Bee read re-read every call record of the person, on the call's own
+    event loop (250 ms at 300 calls, and growing). A call's window is read again only when its record changed."""
+    from beelink import calls
+
+    workspace = tmp_path / "workspace"
+    for hours in (5, 4, 3):
+        make_session(workspace, datetime.fromtimestamp(time.time() - hours * 3600), 600)
+    reads = []
+    real_read = calls.read_events
+    monkeypatch.setattr(calls, "read_events", lambda path: reads.append(path) or real_read(path))
+    first = calls.our_call_windows(workspace)
+    second = calls.our_call_windows(workspace)
+    assert second == first and len(first) == 3 and len(reads) == 3  # the second time from what was read
+    latest = sorted(workspace.glob("*/*/events.jsonl"))[-1]
+    with latest.open("a") as f:
+        f.write(json.dumps({"t": 700.0, "type": "bee_write", "ok": True}) + "\n")  # a later line, as Bee writes add
+    calls.our_call_windows(workspace)
+    assert reads[3:] == [latest]
+
+
 def test_our_call_windows_survive_a_line_still_being_written(tmp_path):
     """The call AI's Bee reads now look at our calls' records, including the call in progress, whose last line
     may be half-written when it is read (server review finding 13)."""
