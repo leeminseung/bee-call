@@ -352,6 +352,9 @@
       this.latest = null; // the newest page, as last listed
       this.older = []; // pages loaded with "Show earlier", oldest last
       this.olderMore = false; // the server has some older than these
+      this.joinedAt = null; // the newest page's look the older ones follow on from
+      this.loadingOlder = false;
+      this.olderFailed = false;
       this.load();
       this.timer = setInterval(() => this.load(), LIST_POLL_MS);
     }
@@ -362,11 +365,26 @@
       const key = JSON.stringify(answer);
       if (key === this.shown) return;
       this.shown = key;
-      if (answer.problem) showNote(problemText(answer));
-      else {
-        this.latest = answer.data || {};
-        this.render(this.latest);
+      if (answer.problem) {
+        showNote(problemText(answer));
+        return;
       }
+      this.latest = answer.data || {};
+      await this.rejoin();
+      if (!this.closed) this.render(this.latest);
+    }
+
+    /** New looks push the newest page on: the looks that left it, between it and the older ones, come back. */
+    async rejoin() {
+      const newest = Array.isArray(this.latest.entries) ? this.latest.entries : [];
+      if (!this.older.length || !newest.length || newest.some((entry) => entry.at === this.joinedAt)) return;
+      const last = newest[newest.length - 1].at;
+      const answer = await getJSON(`${META}?before=${encodeURIComponent(last)}`);
+      if (answer.problem || this.closed) return;
+      const missed = Array.isArray(answer.data && answer.data.entries) ? answer.data.entries : [];
+      const known = new Set(this.older.map((entry) => entry.at));
+      this.older = missed.filter((entry) => !known.has(entry.at)).concat(this.older);
+      this.joinedAt = last;
     }
 
     /** The newest page, then the older ones loaded, each look once. */
@@ -376,18 +394,21 @@
       return newest.concat(this.older.filter((entry) => !seen.has(entry.at)));
     }
 
-    async loadOlder(button, oldest) {
-      button.disabled = true;
+    async loadOlder(oldest) {
+      if (this.loadingOlder) return; // one load at a time, also across a refresh that redraws the button
+      this.loadingOlder = true;
+      this.olderFailed = false;
+      this.render(this.latest || {});
       const answer = await getJSON(`${META}?before=${encodeURIComponent(oldest)}`);
+      this.loadingOlder = false;
       if (this.closed) return;
-      if (answer.problem) {
-        button.disabled = false;
-        button.textContent = "Couldn't load earlier ones. Try again.";
-        return;
+      if (answer.problem) this.olderFailed = true;
+      else {
+        const data = answer.data || {};
+        if (!this.older.length) this.joinedAt = oldest;
+        this.older.push(...(Array.isArray(data.entries) ? data.entries : []));
+        this.olderMore = Boolean(data.more);
       }
-      const data = answer.data || {};
-      this.older.push(...(Array.isArray(data.entries) ? data.entries : []));
-      this.olderMore = Boolean(data.more);
       this.render(this.latest || {});
     }
 
@@ -406,8 +427,10 @@
       if (!entries.length) frag.append(el("p", "empty", "Nothing yet. Bee Call looks when Bee saves something new or a call ends."));
       for (const entry of entries) frag.append(this.entry(entry));
       if (entries.length && (this.older.length ? this.olderMore : Boolean(data.more))) {
-        const button = el("button", "link-button meta-older", "Show earlier");
-        button.addEventListener("click", () => this.loadOlder(button, entries[entries.length - 1].at));
+        const button = el("button", "link-button meta-older",
+          this.olderFailed ? "Couldn't load earlier ones. Try again." : "Show earlier");
+        button.disabled = this.loadingOlder;
+        button.addEventListener("click", () => this.loadOlder(entries[entries.length - 1].at));
         frag.append(button);
       }
       view.replaceChildren(frag);

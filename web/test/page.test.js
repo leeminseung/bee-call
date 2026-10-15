@@ -485,6 +485,39 @@ test("between calls, earlier times it looked load below when the server says the
   assert.match(page.visibleText(page.byId("view")), /A new look\.[\s\S]*Newest look\.[\s\S]*An older look\./);
 });
 
+test("between calls, a refresh while earlier ones load does not load them twice (BC-054)", async () => {
+  const server = metaPages({
+    "": { entries: [looked("2026-10-15T21:05:00+09:00", "Newest look.")], more: true },
+    "2026-10-15T21:05:00+09:00": { entries: [looked("2026-10-14T08:00:00+09:00", "An older look.")], more: false },
+  });
+  const page = loadPage({ hash: "#/meta", fetch: server.fetch });
+  await page.settle();
+  page.one("meta-older").click();
+  page.tick(); // the 15-second refresh comes while the older page is on its way
+  page.one("meta-older").click();
+  await page.settle();
+  assert.equal(server.asked.filter((url) => url.includes("before=")).length, 1);
+  assert.equal(page.all("meta-entry").length, 2);
+});
+
+test("between calls, earlier ones stay joined to the newest when new looks push the newest page on (BC-054)", async () => {
+  const pages = {
+    "": { entries: [looked("2026-10-15T23:00:00+09:00", "Look A."), looked("2026-10-15T22:00:00+09:00", "Look B.")], more: true },
+    "2026-10-15T22:00:00+09:00": { entries: [looked("2026-10-15T21:00:00+09:00", "Look C.")], more: false },
+    "2026-10-15T23:00:00+09:00": { entries: [looked("2026-10-15T22:00:00+09:00", "Look B."), looked("2026-10-15T21:00:00+09:00", "Look C.")], more: false },
+  };
+  const page = loadPage({ hash: "#/meta", fetch: metaPages(pages).fetch });
+  await page.settle();
+  page.one("meta-older").click();
+  await page.settle();
+  // A new look arrives; the newest page (two looks here) no longer reaches Look B.
+  pages[""] = { entries: [looked("2026-10-15T23:30:00+09:00", "Look N."), looked("2026-10-15T23:00:00+09:00", "Look A.")], more: true };
+  page.tick();
+  await page.settle();
+  assert.match(page.visibleText(page.byId("view")), /Look N\.[\s\S]*Look A\.[\s\S]*Look B\.[\s\S]*Look C\./);
+  assert.equal(page.all("meta-entry").length, 4, "each look once");
+});
+
 test("between calls, a server that does not say there are more shows no button (BC-054)", async () => {
   const page = loadPage({ hash: "#/meta", fetch: answering({ entries: [looked("2026-10-15T21:05:00+09:00", "A look.")] }) });
   await page.settle();
