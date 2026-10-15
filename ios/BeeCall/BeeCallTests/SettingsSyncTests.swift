@@ -46,6 +46,39 @@ final class SettingsSyncTests: XCTestCase {
         XCTAssertNil(try server.body(of: "PUT /settings")["call_time"])
     }
 
+    /// The Settings app keeps showing a typed time the server would refuse, so the app says it was not saved
+    /// (review finding 10).
+    @MainActor func testATimeTheServerWouldRefuseIsShown() async {
+        let store = freshDefaults(self), server = FakeServer()
+        store.set("9pm", forKey: "call_time")
+        let sync = sync(store, server)
+        await sync.send().value
+        XCTAssertEqual(sync.problem, "The evening call time “9pm” was not saved: write it like 21:00 in Settings.")
+    }
+
+    @MainActor func testFixingTheTimeClearsTheProblem() async throws {
+        let store = freshDefaults(self), server = FakeServer()
+        store.set("9pm", forKey: "call_time")
+        let sync = sync(store, server)
+        await sync.send().value
+        store.set("21:30", forKey: "call_time") // fixed in the Settings app
+        await waitUntil("the fixed time is sent") { server.sent.count == 2 }
+        await waitUntil("the problem is gone") { sync.problem == nil }
+        XCTAssertEqual(try server.body(of: "PUT /settings")["call_time"] as? String, "21:30")
+    }
+
+    @MainActor func testSettingsTheServerRefusesSaySoWithItsReason() async {
+        let server = FakeServer()
+        server.replies["PUT /settings"] = .status(400, "time_zone must be an IANA time zone name, like Asia/Seoul\n")
+        let sync = sync(freshDefaults(self), server)
+        await sync.send().value
+        XCTAssertEqual(sync.problem,
+                       "Your settings were not saved: time_zone must be an IANA time zone name, like Asia/Seoul.")
+        server.replies["PUT /settings"] = nil
+        await sync.send().value
+        XCTAssertNil(sync.problem)
+    }
+
     @MainActor func testEverySendCarriesThePhonesTimeZone() async throws {
         let server = FakeServer()
         await sync(freshDefaults(self), server, timeZone: { TimeZone(identifier: "America/New_York")! }).send().value

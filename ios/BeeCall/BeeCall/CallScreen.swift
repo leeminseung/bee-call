@@ -22,6 +22,12 @@ struct CallScreen: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                if let problem = server.settings.problem { // a refused evening time, or settings the server refused
+                    Text(problem)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                }
                 if !calls.isInCall && !calls.ringStatus.isEmpty {
                     Text(PushTokens.shared.voipRegistered ? "\(calls.ringStatus), also while the app is closed"
                                                          : calls.ringStatus)
