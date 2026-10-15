@@ -106,10 +106,15 @@ final class CaptionsTests: XCTestCase {
             each.captionsMark("1")
             XCTAssertFalse(each.holds, "for the rest of the call")
         }
+        // The voice server joins before it picks up and sets its first mark with "answered" (fix-server 9a0cd79,
+        // voice/agent.py): the first mark is the start, not a reconnect (review of 2026-10-15, second round,
+        // finding 1: captions went off at every pick-up).
         var unmarked = CaptionNumbering()
         unmarked.voiceServerJoined(captions: nil)
         unmarked.captionsMark("1")
-        XCTAssertFalse(unmarked.holds, "a mark that appears later is a change too")
+        XCTAssertTrue(unmarked.holds, "the first mark, set at pick-up")
+        unmarked.captionsMark("2")
+        XCTAssertFalse(unmarked.holds, "a later change is its reconnect")
     }
 
     @MainActor func testOnlyTheNewestThirtyBubblesStay() {

@@ -76,12 +76,13 @@ struct CaptionLine: Hashable {
 /// Whether the caption numbers still line up with the server's counts (contract section 3, rule 6). They do while
 /// one connection lasts and one voice server is in the room. A reconnect of the phone's room loses the lines sent
 /// meanwhile; a voice server leaving, or a new one joining, is a restart, whose cut-off reply was captioned but
-/// never recorded; and the voice server marks its own reconnect by changing its bee_call.captions attribute. After
-/// any of these the thread draws the call view alone for the rest of the call.
+/// never recorded; and the voice server marks its own reconnect by changing its bee_call.captions attribute, which
+/// it first sets when it picks up (so the first value is the start, not a change). After any of these the thread
+/// draws the call view alone for the rest of the call.
 struct CaptionNumbering {
     private(set) var holds = true
     private var voiceServerSeen = false
-    private var mark: String?? = .none // the voice server's bee_call.captions as first seen
+    private var mark: String? // the voice server's first bee_call.captions value
 
     mutating func roomReconnecting() {
         holds = false
@@ -100,8 +101,9 @@ struct CaptionNumbering {
     }
 
     mutating func captionsMark(_ value: String?) {
+        guard let value else { return } // not set yet: the voice server has not picked up
         guard let first = mark else {
-            mark = .some(value)
+            mark = value
             return
         }
         if first != value { holds = false }
