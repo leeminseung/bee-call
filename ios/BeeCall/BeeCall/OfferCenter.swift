@@ -10,13 +10,13 @@ enum OfferAnswer: Equatable {
     case unreachable // no reply at all
     case failed(Int) // any other reply, such as a 502 while the server restarts
 
-    init(status: Int?) {
-        switch status {
-        case nil: self = .unreachable
-        case let code? where (200..<300).contains(code): self = .accepted
-        case 401?: self = .signedOut
-        case 404?, 409?: self = .closed
-        case let code?: self = .failed(code)
+    init(_ answer: ServerAnswer) {
+        switch answer {
+        case .ok: self = .accepted
+        case .signedOut: self = .signedOut
+        case .refused(404, _), .refused(409, _): self = .closed
+        case .refused(let code, _): self = .failed(code)
+        case .unreachable: self = .unreachable
         }
     }
 
@@ -41,7 +41,7 @@ enum OfferAnswer: Equatable {
 final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     static let shared: OfferCenter = {
         #if DEBUG
-        if OfferDemo.requested() { return OfferCenter(transport: OfferDemo.StandIn()) } // OfferDemo.swift
+        if OfferDemo.requested() { return OfferCenter(server: ServerClient(transport: OfferDemo.StandIn())) }
         #endif
         return OfferCenter()
     }()
@@ -77,13 +77,10 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     private(set) var notificationsOn = false
     private(set) var notice: String? // one line under the list when an answer did not go through
     private(set) var answering: Set<String> = [] // offers whose answer is on its way; their buttons are off
-    @ObservationIgnored private let transport: any HTTPTransport
-    @ObservationIgnored private let noteStatus: (Int) -> Void
+    @ObservationIgnored private let server: ServerClient
 
-    init(transport: any HTTPTransport = URLSession.shared,
-         noteStatus: @escaping (Int) -> Void = { Server.shared.noteStatus($0) }) {
-        self.transport = transport
-        self.noteStatus = noteStatus
+    init(server: ServerClient = ServerClient()) {
+        self.server = server
         super.init()
     }
 
@@ -116,10 +113,7 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
 
     func refresh() async {
         await PushTokens.shared.deliverIfNeeded(.alert) // the server may have been unreachable at launch
-        guard let request = Server.request("/offers"),
-              let (data, response) = try? await transport.send(request) else { return }
-        noteStatus(response.httpStatus)
-        guard response.httpStatus == 200 else { return }
+        guard case .ok(200, let data) = await server.send("/offers") else { return }
         struct Listing: Decodable { let offers: [Offer] }
         guard let listing = try? JSONDecoder().decode(Listing.self, from: data) else { return }
         if listing.offers != open { open = listing.offers }
@@ -145,11 +139,8 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     func answer(_ offerID: String, _ choice: Choice) async -> OfferAnswer? {
         guard answering.insert(offerID).inserted else { return nil }
         defer { answering.remove(offerID) } // after the refresh, so the row does not come back for a moment
-        guard let request = Server.request("/offers/\(offerID)", method: "POST", json: ["choice": choice.rawValue])
-        else { return .unreachable }
-        let response = try? await transport.send(request)
-        let result = OfferAnswer(status: response?.1.httpStatus)
-        if result == .signedOut { noteStatus(401) }
+        let result = OfferAnswer(await server.send("/offers/\(offerID)", method: "POST",
+                                                   json: ["choice": choice.rawValue]))
         notice = result.notice
         await refresh()
         return result

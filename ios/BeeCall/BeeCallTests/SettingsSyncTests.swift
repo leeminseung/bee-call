@@ -5,9 +5,9 @@ import XCTest
 /// The switches of the Settings app reach the server as PUT /settings (contract section 1, review finding 1).
 final class SettingsSyncTests: XCTestCase {
     @MainActor private func sync(_ store: UserDefaults, _ server: FakeServer, tokenReadable: @escaping () -> Bool = { true },
-                                 statuses: @escaping (Int) -> Void = { _ in },
+                                 signInEnded: @escaping () -> Void = {},
                                  timeZone: @escaping () -> TimeZone = { TimeZone(identifier: "Asia/Seoul")! }) -> SettingsSync {
-        SettingsSync(store: store, transport: server, tokenReadable: tokenReadable, noteStatus: statuses,
+        SettingsSync(store: store, server: server.client(signInEnded: signInEnded), tokenReadable: tokenReadable,
                      timeZone: timeZone)
     }
 
@@ -87,8 +87,7 @@ final class SettingsSyncTests: XCTestCase {
 
     @MainActor func testTheTimeZoneIsThePhonesOwnByDefault() async throws {
         let server = FakeServer()
-        await SettingsSync(store: freshDefaults(self), transport: server, tokenReadable: { true },
-                           noteStatus: { _ in }).send().value
+        await SettingsSync(store: freshDefaults(self), server: server.client(), tokenReadable: { true }).send().value
         XCTAssertEqual(try server.body(of: "PUT /settings")["time_zone"] as? String, TimeZone.current.identifier)
     }
 
@@ -189,8 +188,8 @@ final class SettingsSyncTests: XCTestCase {
     @MainActor func testTheAnswerGoesThroughTheSignInRule() async {
         let server = FakeServer()
         server.replies["PUT /settings"] = .status(401)
-        var noted: [Int] = []
-        await sync(freshDefaults(self), server, statuses: { noted.append($0) }).send().value
-        XCTAssertEqual(noted, [401])
+        var ended = 0
+        await sync(freshDefaults(self), server, signInEnded: { ended += 1 }).send().value
+        XCTAssertEqual(ended, 1)
     }
 }

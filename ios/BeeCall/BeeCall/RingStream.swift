@@ -40,14 +40,18 @@ enum RingStream {
     }
 
     /// Reads ring events until the stream ends. `onOpen` runs once the server has accepted the stream.
-    static func read(from url: URL, onOpen: () -> Void, onRing: (Ring) -> Void) async throws {
+    static func read(from url: URL, server: ServerClient = ServerClient(), onOpen: () -> Void,
+                     onRing: (Ring) -> Void) async throws {
         // The server sends a keepalive every 15 s, so 40 s of silence means the connection is gone.
         var request = URLRequest(url: url, timeoutInterval: 40)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        Server.authorize(&request)
+        server.authorize(&request)
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard code == 200 else { throw BadStatus(code: code) }
+        guard code == 200 else {
+            _ = server.read(code, Data(), to: request) // a 401: the sign-in ended
+            throw BadStatus(code: code)
+        }
         onOpen()
         var event = ""
         // `lines` drops the blank line that ends an event, so an event is handled at its data line

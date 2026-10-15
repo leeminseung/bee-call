@@ -16,8 +16,7 @@ final class OfferDemoTests: XCTestCase {
     /// One call booked for 19:00, listed as the server lists it, until a confirmed cancel takes it away.
     @MainActor func testTheDemoListsABookedCallUntilItIsCancelled() async throws {
         let now = Date(timeIntervalSince1970: 1792056600) // 18:30 in Seoul
-        let offers = OfferCenter(transport: OfferDemo.StandIn(language: "ko", now: now, zone: seoul),
-                                 noteStatus: { _ in })
+        let offers = OfferCenter(server: ServerClient(transport: OfferDemo.StandIn(language: "ko", now: now, zone: seoul)))
         await offers.refresh()
         let call = try XCTUnwrap(offers.open.first)
         XCTAssertEqual(call.bookedLine(language: "ko", now: now), "오늘 저녁 7:00 전화 예정")
@@ -29,8 +28,7 @@ final class OfferDemoTests: XCTestCase {
     /// Less than ten minutes before 19:00, the demo's call is tomorrow's, as a call booked then would be.
     @MainActor func testCloseToSevenTheDemoCallIsTomorrows() async throws {
         let now = Date(timeIntervalSince1970: 1792058100) // 18:55 in Seoul
-        let offers = OfferCenter(transport: OfferDemo.StandIn(language: "en", now: now, zone: seoul),
-                                 noteStatus: { _ in })
+        let offers = OfferCenter(server: ServerClient(transport: OfferDemo.StandIn(language: "en", now: now, zone: seoul)))
         await offers.refresh()
         let call = try XCTUnwrap(offers.open.first)
         XCTAssertEqual(call.bookedLine(language: "en", now: now), "Call booked for tomorrow, 7:00\u{00A0}PM")

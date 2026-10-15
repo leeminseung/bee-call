@@ -21,16 +21,15 @@ final class AppleSignIn {
         didSet { isReady = ready != nil }
     }
     @ObservationIgnored private var taken: String? // the value Apple was given, for the server
-    @ObservationIgnored private let transport: any HTTPTransport
+    @ObservationIgnored private let server: ServerClient
 
-    init(transport: any HTTPTransport = URLSession.shared) {
-        self.transport = transport
+    init(server: ServerClient = ServerClient()) {
+        self.server = server
     }
 
     /// Fetches a value for the next attempt; false when the server could not give one.
     func prepare() async -> Bool {
-        guard let request = Server.request("/auth/nonce"),
-              let (data, response) = try? await transport.send(request), response.httpStatus == 200,
+        guard case .ok(200, let data) = await server.send("/auth/nonce"),
               let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let value = body["nonce"] as? String else { return false }
         ready = value
@@ -53,18 +52,18 @@ final class AppleSignIn {
         guard let identityToken, let value else {
             return cancelled ? .cancelled : .failed("Sign in with Apple did not finish.")
         }
-        guard let request = Server.request("/auth/apple", method: "POST",
-                                           json: ["identity_token": identityToken, "nonce": value]),
-              let (data, response) = try? await transport.send(request) else {
+        let answer = await server.send("/auth/apple", method: "POST",
+                                       json: ["identity_token": identityToken, "nonce": value])
+        switch answer {
+        case .unreachable:
             return .failed("The server cannot be reached right now.")
-        }
-        let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-        switch response.httpStatus {
-        case 200:
+        case .ok(200, let data):
+            let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
             if let token = body["token"] as? String, let person = body["person"] as? String {
                 return .signedIn(token: token, person: person)
             }
-        case 403:
+        case .refused(403, let data):
+            let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
             if let code = body["waiting"] as? String { return .waiting(code: code) }
         default:
             break

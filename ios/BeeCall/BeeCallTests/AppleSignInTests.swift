@@ -11,7 +11,7 @@ final class AppleSignInTests: XCTestCase {
 
     @MainActor private func signIn(_ server: FakeServer, nonce: String = "n1") async -> AppleSignIn {
         server.replies["GET /auth/nonce"] = .json(200, ["nonce": nonce])
-        let signIn = AppleSignIn(transport: server)
+        let signIn = AppleSignIn(server: server.client(token: nil))
         _ = await signIn.prepare()
         return signIn
     }
@@ -26,7 +26,7 @@ final class AppleSignInTests: XCTestCase {
     @MainActor func testTheButtonWaitsForAValue() async {
         let server = FakeServer()
         server.replies["GET /auth/nonce"] = .json(200, ["nonce": "n1"])
-        let signIn = AppleSignIn(transport: server)
+        let signIn = AppleSignIn(server: server.client(token: nil))
         XCTAssertFalse(signIn.isReady, "no value yet")
         _ = await signIn.prepare()
         XCTAssertTrue(signIn.isReady)
@@ -61,7 +61,7 @@ final class AppleSignInTests: XCTestCase {
     @MainActor func testAServerThatCannotGiveAValueSaysSo() async {
         let server = FakeServer()
         server.replies["GET /auth/nonce"] = .unreachable
-        let ready = await AppleSignIn(transport: server).prepare()
+        let ready = await AppleSignIn(server: server.client(token: nil)).prepare()
         XCTAssertFalse(ready)
     }
 

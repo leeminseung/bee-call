@@ -80,9 +80,8 @@ final class SettingsSync {
     @ObservationIgnored private var refusal: String? // the server's reason for refusing the last send
 
     @ObservationIgnored private let store: UserDefaults
-    @ObservationIgnored private let transport: any HTTPTransport
+    @ObservationIgnored private let server: ServerClient
     @ObservationIgnored private let tokenReadable: () -> Bool
-    @ObservationIgnored private let noteStatus: (Int) -> Void
     @ObservationIgnored private let timeZone: () -> TimeZone
     @ObservationIgnored private var observers: [any NSObjectProtocol] = []
     /// The body of the last send asked for, or nil once a send failed: a change notice that finds the same body
@@ -91,13 +90,11 @@ final class SettingsSync {
     /// The last send in line. Sends go out one at a time, in order, so an older body never lands after a newer one.
     @ObservationIgnored private var tail: Task<Void, Never>?
 
-    init(store: UserDefaults = .standard, transport: any HTTPTransport = URLSession.shared,
-         tokenReadable: @escaping () -> Bool, noteStatus: @escaping (Int) -> Void,
+    init(store: UserDefaults = .standard, server: ServerClient = ServerClient(), tokenReadable: @escaping () -> Bool,
          timeZone: @escaping () -> TimeZone = { .current }) {
         self.store = store
-        self.transport = transport
+        self.server = server
         self.tokenReadable = tokenReadable
-        self.noteStatus = noteStatus
         self.timeZone = timeZone
         let center = NotificationCenter.default
         // Any defaults change posts this, the app's own too; the body comparison sorts them out.
@@ -161,25 +158,22 @@ final class SettingsSync {
     }
 
     private func put() async {
-        guard tokenReadable(),
-              let request = Server.request("/settings", method: "PUT", json: currentBody().json) else {
+        guard tokenReadable(), let request = server.request("/settings", method: "PUT", json: currentBody().json)
+        else {
             lastBody = nil
             return
         }
-        guard let (data, response) = try? await transport.send(request) else {
-            lastBody = nil // unreachable: the next change notice or launch sends again
-            showProblem()
-            return
-        }
-        if !(200..<300).contains(response.httpStatus) { lastBody = nil }
-        if (200..<300).contains(response.httpStatus) {
+        switch await server.send(request) {
+        case .ok:
             refusal = nil
-        } else if response.httpStatus == 400 {
+        case .refused(400, let data):
+            lastBody = nil
             let reason = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             refusal = "Your settings were not saved: \(reason.hasSuffix(".") ? String(reason.dropLast()) : reason)."
+        case .refused, .signedOut, .unreachable:
+            lastBody = nil // the next change notice or launch sends again
         }
         showProblem()
-        noteStatus(response.httpStatus)
     }
 }
 

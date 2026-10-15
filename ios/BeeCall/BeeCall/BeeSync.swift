@@ -36,9 +36,8 @@ enum BeeStep: Equatable {
 final class BeeSync {
     private(set) var status = "" // shown under the call status when the person uses Bee
     @ObservationIgnored private let store: UserDefaults
-    @ObservationIgnored private let transport: any HTTPTransport
+    @ObservationIgnored private let server: ServerClient
     @ObservationIgnored private let open: (URL) async -> Bool
-    @ObservationIgnored private let noteStatus: (Int) -> Void
     @ObservationIgnored private let signedIn: () -> Bool
     @ObservationIgnored private var observer: (any NSObjectProtocol)?
     @ObservationIgnored private var lastSeenSwitch: Bool // "Use Bee" as the last change notice found it
@@ -47,13 +46,12 @@ final class BeeSync {
     /// The value of "Use Bee" the app last acted on, kept across launches: the switch changed when it differs.
     private static let handledKey = "use_bee_handled"
 
-    init(store: UserDefaults = .standard, transport: any HTTPTransport = URLSession.shared,
+    init(store: UserDefaults = .standard, server: ServerClient = ServerClient(),
          open: @escaping (URL) async -> Bool = { await UIApplication.shared.open($0) },
-         noteStatus: @escaping (Int) -> Void, signedIn: @escaping () -> Bool = { Server.savedToken() != nil }) {
+         signedIn: @escaping () -> Bool = { Server.savedToken() != nil }) {
         self.store = store
-        self.transport = transport
+        self.server = server
         self.open = open
-        self.noteStatus = noteStatus
         self.signedIn = signedIn
         lastSeenSwitch = AppSettings(store).useBee
         observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil,
@@ -97,11 +95,8 @@ final class BeeSync {
 
     private func syncOnce(openingApprovalPage: Bool) async {
         let wanted = AppSettings(store).useBee
-        guard let request = Server.request("/me"), let (data, response) = try? await transport.send(request) else {
-            return // unreachable: the next foreground tries again
-        }
-        noteStatus(response.httpStatus)
-        guard response.httpStatus == 200,
+        // Unreachable or refused: the next foreground tries again.
+        guard case .ok(200, let data) = await server.send("/me"),
               let me = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let settings = me["settings"] as? [String: Any] else { return }
         let handled = store.object(forKey: Self.handledKey) as? Bool
@@ -138,10 +133,7 @@ final class BeeSync {
     }
 
     private func approvalLink() async -> URL? {
-        guard let request = Server.request("/bee/connect", method: "POST", timeout: 40),
-              let (body, response) = try? await transport.send(request) else { return nil }
-        noteStatus(response.httpStatus)
-        guard response.httpStatus == 200,
+        guard case .ok(200, let body) = await server.send("/bee/connect", method: "POST", timeout: 40),
               let link = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["link"] as? String
         else { return nil }
         return URL(string: link)
@@ -149,9 +141,7 @@ final class BeeSync {
 
     /// True once the server confirmed (204): Bee is logged out and any pending approval is cancelled.
     private func disconnect() async -> Bool {
-        guard let request = Server.request("/bee/disconnect", method: "POST"),
-              let (_, response) = try? await transport.send(request) else { return false }
-        noteStatus(response.httpStatus)
-        return response.httpStatus == 204
+        guard case .ok(204, _) = await server.send("/bee/disconnect", method: "POST") else { return false }
+        return true
     }
 }

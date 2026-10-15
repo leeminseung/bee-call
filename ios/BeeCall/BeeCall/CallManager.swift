@@ -43,8 +43,7 @@ final class CallManager: NSObject {
     @ObservationIgnored private var pickUpTimeout: Task<Void, Never>?
     @ObservationIgnored private var pickedUp = false
     @ObservationIgnored private let pickUpWait: Duration
-    @ObservationIgnored private let decline = CallDecline(transport: URLSession.shared,
-                                                          noteStatus: { Server.shared.noteStatus($0) })
+    @ObservationIgnored private let decline = CallDecline()
     /// The name of every call, both ways, on CallKit's call screen and in the Phone app's Recents.
     private static let handle = CXHandle(type: .generic, value: "Bee Call")
 
@@ -154,7 +153,6 @@ final class CallManager: NSObject {
                     ringPhone(for: $0)
                 })
             } catch let error as RingStream.BadStatus {
-                Server.shared.noteStatus(error.code) // 401: the sign-in ended
                 problem = "The token server answered \(error.code) to the ring stream."
             } catch {
                 problem = "Can't reach the token server for calls."

@@ -16,7 +16,7 @@ final class BookedCallTests: XCTestCase {
     @MainActor func testTheBookedTimeIsReadFromTheServersListing() async throws {
         let server = FakeServer()
         server.replies["GET /offers"] = .json(200, listing)
-        let offers = OfferCenter(transport: server, noteStatus: { _ in })
+        let offers = OfferCenter(server: server.client())
         await offers.refresh()
         let booked = try XCTUnwrap(offers.open.first)
         XCTAssertEqual(booked.state, "booked")
@@ -118,7 +118,7 @@ final class BookedCallTests: XCTestCase {
     /// confirms, and keeping it sends nothing.
     @MainActor func testCancellingAsksFirstAndSendsNothingUntilConfirmed() async throws {
         let server = FakeServer()
-        let offers = OfferCenter(transport: server, noteStatus: { _ in })
+        let offers = OfferCenter(server: server.client())
         let call = booked("2026-10-15T19:00:00+09:00", 1792058400)
         offers.askToCancel(call)
         XCTAssertEqual(offers.cancelling, call)
@@ -144,7 +144,7 @@ final class BookedCallTests: XCTestCase {
             let server = FakeServer()
             entry["state"] = state
             server.replies["GET /offers"] = .json(200, ["offers": state == nil ? [] : [entry]])
-            let offers = OfferCenter(transport: server, noteStatus: { _ in })
+            let offers = OfferCenter(server: server.client())
             offers.askToCancel(call)
             await offers.refresh()
             XCTAssertEqual(offers.cancelling != nil, staysAsked, String(describing: state))

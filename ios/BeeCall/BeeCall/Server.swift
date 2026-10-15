@@ -25,9 +25,8 @@ final class Server {
     private(set) var state: State
     private(set) var problem: String? // the last sign-in failure, in words
     @ObservationIgnored let signIn = AppleSignIn()
-    @ObservationIgnored let bee = BeeSync(noteStatus: { Server.shared.noteStatus($0) })
-    @ObservationIgnored let settings = SettingsSync(tokenReadable: { Server.savedToken() != nil },
-                                                    noteStatus: { Server.shared.noteStatus($0) })
+    @ObservationIgnored let bee = BeeSync()
+    @ObservationIgnored let settings = SettingsSync(tokenReadable: { Server.savedToken() != nil })
 
     private init() {
         state = Self.savedToken() == nil ? .signedOut : .signedIn(person: UserDefaults.standard.string(forKey: "person") ?? "")
@@ -76,28 +75,6 @@ final class Server {
         return "\(scheme)://\(host)" + (parts.port.map { ":\($0)" } ?? "")
     }
 
-    // MARK: - Requests
-
-    /// A request to `path` on the token server, signed in.
-    nonisolated static func request(_ path: String, method: String = "GET", json: Any? = nil,
-                                    timeout: TimeInterval = 10) -> URLRequest? {
-        guard !api.isEmpty, let url = URL(string: api + path) else { return nil }
-        var request = URLRequest(url: url, timeoutInterval: timeout)
-        request.httpMethod = method
-        authorize(&request)
-        if let json {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try? JSONSerialization.data(withJSONObject: json)
-        }
-        return request
-    }
-
-    nonisolated static func authorize(_ request: inout URLRequest) {
-        if let token = savedToken() {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-    }
-
     /// Every kind of launch, also one for a VoIP push or a notification button, which never reach the foreground:
     /// the switches go to the server, and "Use Bee" turned off is carried out (contract section 1).
     func appLaunched() {
@@ -110,12 +87,12 @@ final class Server {
         if case .signedIn = state { true } else { false }
     }
 
-    /// Every answer goes through here: a 401 means the sign-in is gone (expired, or the person was removed).
-    func noteStatus(_ code: Int) {
-        if code == 401, case .signedIn = state {
-            forget()
-            problem = "Your sign-in ended. Sign in again."
-        }
+    /// The token server answered 401 (ServerClient, which every request goes through): the sign-in has ended,
+    /// because it expired or the person was removed.
+    func signInEnded() {
+        guard case .signedIn = state else { return }
+        forget()
+        problem = "Your sign-in ended. Sign in again."
     }
 
     // MARK: - Signing in
@@ -165,9 +142,7 @@ final class Server {
     }
 
     func signOut() async {
-        if let request = Self.request("/auth/signout", method: "POST") {
-            _ = try? await URLSession.shared.data(for: request)
-        }
+        _ = await ServerClient().send("/auth/signout", method: "POST")
         forget()
     }
 

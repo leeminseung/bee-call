@@ -17,6 +17,7 @@ final class LiveKitClient: NSObject {
     @ObservationIgnored private var room: Room?
     @ObservationIgnored private var microphoneOn = true // a mute that arrives before the mic is published
     @ObservationIgnored private let phoneRecorder = PhoneRecorder() // "Save call audio on this iPhone"
+    @ObservationIgnored private let server = ServerClient()
     /// Both voices' live levels, for the indicator around the call screen's main button.
     let voices = VoiceActivity()
 
@@ -136,21 +137,19 @@ final class LiveKitClient: NSObject {
             throw TokenServerError(errorDescription: "The token server address is not a URL.")
         }
         var request = URLRequest(url: url, timeoutInterval: 10)
-        Server.authorize(&request)
+        server.authorize(&request)
         let (data, response) = try await http.data(for: request)
-        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        Server.shared.noteStatus(code)
-        if code == 410, roomName != nil {
+        switch server.read(response.httpStatus, data, to: request) {
+        case .ok(200, let body):
+            return try JSONDecoder().decode(Access.self, from: body)
+        case .refused(410, _) where roomName != nil:
             throw CallAlreadyEnded()
-        }
-        if code == 429 { // today's budget is used up; the server says how much
-            throw TokenServerError(errorDescription: String(decoding: data, as: UTF8.self)
+        case .refused(429, let body): // today's budget is used up; the server says how much
+            throw TokenServerError(errorDescription: String(decoding: body, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            throw TokenServerError(errorDescription: "The token server answered \(response.httpStatus).")
         }
-        guard code == 200 else {
-            throw TokenServerError(errorDescription: "The token server answered \(code).")
-        }
-        return try JSONDecoder().decode(Access.self, from: data)
     }
 }
 
