@@ -32,9 +32,9 @@ enum OfferAnswer: Equatable {
     }
 }
 
-/// The AI asks before it calls (voice/offers.py on the Mac): a notification such as "About “Planned a Saturday
+/// The AI asks before it calls (voice/offers.py on the server): a notification such as "About “Planned a Saturday
 /// hike”: free for a quick call at 9:00 PM today?" with three buttons, which also show on the lock screen and
-/// Apple Watch. A button sends the answer to the token server, even while the app is closed; the Mac then calls
+/// Apple Watch. A button sends the answer to the token server, even while the app is closed; the server then calls
 /// at once, at the accepted time, or not at all. Offers still open are listed on the app's first screen too, so
 /// a missed notification can still be answered there.
 @Observable
@@ -83,14 +83,14 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
         super.init()
     }
 
-    // The buttons. Two sets of titles, picked by the Mac's call language (CALL_LANGUAGE).
+    // The buttons. Two sets of titles: the server picks one by the person's call language.
     private static let categories: Set<UNNotificationCategory> = [
         category("CALL_OFFER", later: "At the suggested time", now: "Call me now", decline: "Not now"),
         category("CALL_OFFER_KO", later: "제안한 시간에", now: "지금 전화해 줘", decline: "괜찮아요"),
     ]
 
     private static func category(_ id: String, later: String, now: String, decline: String) -> UNNotificationCategory {
-        // No .foreground: an answer is a message to the Mac, so it works from the lock screen and the watch.
+        // No .foreground: an answer is a message to the server, so it works from the lock screen and the watch.
         UNNotificationCategory(identifier: id, actions: [
             UNNotificationAction(identifier: Choice.later.rawValue, title: later),
             UNNotificationAction(identifier: Choice.now.rawValue, title: now),
