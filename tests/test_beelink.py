@@ -24,6 +24,18 @@ def fake_bee(tmp_path, monkeypatch):
     return log
 
 
+def test_no_test_can_run_the_real_bee_cli():
+    """A test that reads Bee without setting up the fake still gets the fake: the real `bee` on this Mac is signed in
+    to the user's own Bee account (the review of 2026-10-15 found a prep test running five real reads)."""
+    import os
+
+    from beelink import cli
+
+    assert Path(cli.bee_bin()).resolve() == FAKE_BEE.resolve()
+    asyncio.run(context.fetch_call_inputs())
+    assert calls(Path(os.environ["FAKE_BEE_LOG"]))  # every read went to the fake
+
+
 def calls(log: Path) -> list[list[str]]:
     return [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
 
