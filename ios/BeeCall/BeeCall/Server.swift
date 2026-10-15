@@ -52,18 +52,19 @@ final class Server {
 
     // MARK: - Address
 
-    /// "<scheme>://<host>:<port>" of the token server.
+    /// "<scheme>://<host>:<port>" of the token server: the one address every request is built from
+    /// (ServerClient). Empty when the build has none.
     nonisolated static var api: String {
         #if DEBUG
-        if let typed = UserDefaults.standard.string(forKey: "tokenServerURL"), let base = origin(of: typed) {
+        if let typed = UserDefaults.standard.string(forKey: typedAddressKey), let base = origin(of: typed) {
             return base
         }
         #endif
         return origin(of: Bundle.main.object(forInfoDictionaryKey: "BeeCallServer") as? String ?? "") ?? ""
     }
 
-    /// What the rest of the app calls the token server address: its /token URL.
-    nonisolated static var tokenURL: String { api.isEmpty ? "" : api + "/token" }
+    /// Where a Debug build keeps the address typed on its first screen.
+    nonisolated static let typedAddressKey = "tokenServerURL"
 
     /// The call record page (voice/session_server.py). In a Debug build: the same host as the token server,
     /// port 8788, with ?debug=1, the only address on which the page offers its debug events (web/app.js).

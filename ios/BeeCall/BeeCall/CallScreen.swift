@@ -2,7 +2,7 @@ import SwiftUI
 
 struct CallScreen: View {
     let calls: CallManager
-    @AppStorage("tokenServerURL") private var typedServerURL = "" // development builds only
+    @AppStorage(Server.typedAddressKey) private var typedServerURL = "" // development builds only
     private let server = Server.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var showsCallRecord = false
@@ -79,7 +79,7 @@ struct CallScreen: View {
                         if calls.isInCall {
                             await calls.endCall()
                         } else {
-                            await calls.startCall(tokenServerURL: Server.tokenURL)
+                            await calls.startCall()
                         }
                     }
                 } label: {
@@ -102,13 +102,14 @@ struct CallScreen: View {
                 CallRecordSheet(url: callRecordURL) { earlierCall in
                     guard !calls.isInCall else { return } // one call at a time; the record stays open
                     showsCallRecord = false
-                    Task { await calls.startCall(tokenServerURL: Server.tokenURL, continuing: earlierCall) }
+                    Task { await calls.startCall(continuing: earlierCall) }
                 }
             }
         }
         // A new id cancels the running listener and starts the next one.
         .task(id: ringSource) {
-            await calls.listenForRings(tokenServerURL: ringSource)
+            guard !ringSource.isEmpty else { return }
+            await calls.listenForRings()
         }
         .task {
             await calls.askForMicrophone()
@@ -125,8 +126,9 @@ struct CallScreen: View {
 
     /// Where to listen for the AI's calls: the token server while the app is in the foreground, else
     /// nowhere. Inactive still counts as foreground; the incoming-call banner makes the app inactive.
+    /// A Debug build's typed address changing starts a new listener too.
     private var ringSource: String {
-        scenePhase == .background ? "" : Server.tokenURL
+        scenePhase == .background ? "" : Server.api
     }
 
     private var callRecordURL: URL? {

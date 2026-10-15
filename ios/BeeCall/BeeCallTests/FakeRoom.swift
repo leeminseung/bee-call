@@ -17,8 +17,7 @@ final class FakeRoom: CallRoom {
     private(set) var recordingStarts = 0 // asked to record on this iPhone
     var recordingProblem: String? // what the recording on this iPhone answers
 
-    func connect(tokenServerURL: String, answering roomName: String?, continuing earlierCall: String?) async throws
-        -> String {
+    func connect(answering roomName: String?, continuing earlierCall: String?) async throws -> String {
         joins.append(roomName)
         if holdsJoin { await withCheckedContinuation { held = $0 } }
         if let joinError { throw joinError }

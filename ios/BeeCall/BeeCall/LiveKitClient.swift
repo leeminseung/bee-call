@@ -32,11 +32,10 @@ final class LiveKitClient: NSObject {
 
     /// Joins a room and publishes the microphone. Returns the room name. A new room for a call the user
     /// starts; with `answering`, the room of the AI's call. Only the pass from the token server differs.
-    func connect(tokenServerURL: String, answering roomName: String? = nil,
-                 continuing earlierCall: String? = nil) async throws -> String {
+    func connect(answering roomName: String? = nil, continuing earlierCall: String? = nil) async throws -> String {
         captionList = CaptionList()
         voices.aiHasAnswered = roomName != nil // the AI's own call has no ringing: the first sound is its voice
-        let access = try await fetchAccess(from: tokenServerURL, answering: roomName, continuing: earlierCall)
+        let access = try await fetchAccess(answering: roomName, continuing: earlierCall)
         try Task.checkCancellation() // the call ended while we fetched the token
         return try await connect(access: access)
     }
@@ -110,6 +109,17 @@ final class LiveKitClient: NSObject {
         let room: String
     }
 
+    /// Where the pass comes from on the token server: GET /token, for a new call, an answer, or a continuation.
+    static func passPath(answering roomName: String?, continuing earlierCall: String?) -> String {
+        var query = URLComponents()
+        if let roomName {
+            query.queryItems = [URLQueryItem(name: "room", value: roomName), URLQueryItem(name: "answer", value: "1")]
+        } else if let earlierCall {
+            query.queryItems = [URLQueryItem(name: "continue", value: earlierCall)]
+        }
+        return "/token" + (query.percentEncodedQuery.map { "?" + $0 } ?? "")
+    }
+
     /// The token server answered 410 to an answer request: the AI stopped ringing and closed the room.
     struct CallAlreadyEnded: Error {}
 
@@ -120,24 +130,11 @@ final class LiveKitClient: NSObject {
     /// A pass for a new call: the voice server is dispatched into the new room when the app joins.
     /// With `answering`, a pass into the room of the AI's call instead; the voice server is already there.
     /// With `continuing`, the new call picks up from that earlier call (its record id, like 2026-10-14/0055).
-    private func fetchAccess(from address: String, answering roomName: String?,
-                             continuing earlierCall: String? = nil) async throws -> Access {
-        let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard var parts = URLComponents(string: address), parts.scheme != nil else {
-            throw TokenServerError(errorDescription: "The token server address is not a URL.")
+    private func fetchAccess(answering roomName: String?, continuing earlierCall: String? = nil) async throws
+        -> Access {
+        guard let request = server.request(Self.passPath(answering: roomName, continuing: earlierCall)) else {
+            throw TokenServerError(errorDescription: "This build has no server address.")
         }
-        var query: [URLQueryItem] = []
-        if let roomName {
-            query += [URLQueryItem(name: "room", value: roomName), URLQueryItem(name: "answer", value: "1")]
-        } else if let earlierCall {
-            query.append(URLQueryItem(name: "continue", value: earlierCall))
-        }
-        parts.queryItems = (parts.queryItems ?? []) + query
-        guard let url = parts.url else {
-            throw TokenServerError(errorDescription: "The token server address is not a URL.")
-        }
-        var request = URLRequest(url: url, timeoutInterval: 10)
-        server.authorize(&request)
         let (data, response) = try await http.data(for: request)
         switch server.read(response.httpStatus, data, to: request) {
         case .ok(200, let body):

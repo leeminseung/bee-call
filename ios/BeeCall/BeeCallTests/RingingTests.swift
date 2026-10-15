@@ -94,7 +94,7 @@ final class RingingTests: XCTestCase {
     /// The name shows on CallKit's call screen and in the Phone app's Recents, where a tap calls back.
     @MainActor func testACallThePersonStartsIsNamedBeeCall() async throws {
         let callKit = FakeCallKit(), calls = calls(callKit)
-        await calls.startCall(tokenServerURL: Server.tokenURL)
+        await calls.startCall()
         let start = try XCTUnwrap(callKit.requested.first as? CXStartCallAction)
         XCTAssertEqual(start.handle.value, "Bee Call")
         XCTAssertEqual(start.handle.type, .generic)

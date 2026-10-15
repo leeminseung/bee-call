@@ -11,7 +11,7 @@ final class CallLifecycleTests: XCTestCase {
 
     /// The person taps Call; CallKit hands the start back, as it does once the call is on its screen.
     @MainActor private func start(_ calls: CallManager, _ callKit: FakeCallKit) async throws -> UUID {
-        await calls.startCall(tokenServerURL: Server.tokenURL)
+        await calls.startCall()
         let start = try XCTUnwrap(callKit.requested.last as? CXStartCallAction)
         calls.perform(start)
         return start.callUUID

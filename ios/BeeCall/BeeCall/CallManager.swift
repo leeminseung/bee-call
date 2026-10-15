@@ -30,7 +30,6 @@ final class CallManager: NSObject {
     @ObservationIgnored private let calls: any CallKitRequests
     @ObservationIgnored private let microphone: () async -> Bool
     @ObservationIgnored private var callID: UUID?
-    @ObservationIgnored private var tokenServerURL = ""
     @ObservationIgnored private var earlierCall: String? // the record id of the call a new call continues
     @ObservationIgnored private var connecting: Task<Void, Never>?
     // Room → CallKit call, for every AI call rung. The ring stream replays the last minute on each reconnect.
@@ -98,7 +97,7 @@ final class CallManager: NSObject {
     }
 
     /// Calls Bee Call. With `continuing`, the new call picks up from that earlier call (its record id).
-    func startCall(tokenServerURL: String, continuing earlierCall: String? = nil) async {
+    func startCall(continuing earlierCall: String? = nil) async {
         guard !isInCall else { return }
         isInCall = true
         self.earlierCall = earlierCall
@@ -111,7 +110,6 @@ final class CallManager: NSObject {
         }
         let id = UUID()
         callID = id
-        self.tokenServerURL = tokenServerURL
         let start = CXStartCallAction(call: id, handle: Self.handle)
         do {
             try await calls.request(CXTransaction(action: start))
@@ -136,16 +134,16 @@ final class CallManager: NSObject {
     // MARK: - The AI's calls
 
     /// Keeps the token server's ring stream open until this task is cancelled (the app left the
-    /// foreground, or the address changed), reconnecting after a drop.
-    func listenForRings(tokenServerURL: String) async {
+    /// foreground, or a Debug build's typed address changed), reconnecting after a drop.
+    func listenForRings() async {
         ringStatus = ""
-        guard let url = RingStream.url(tokenServerURL: tokenServerURL) else { return }
-        try? await Task.sleep(for: .milliseconds(500)) // the address may still be being typed
+        guard !Server.api.isEmpty else { return }
+        try? await Task.sleep(for: .milliseconds(500)) // a typed address may still be being typed
         var delay = 1
         while !Task.isCancelled {
             var problem = "The ring stream closed."
             do {
-                try await RingStream.read(from: url, onOpen: {
+                try await RingStream.read(onOpen: {
                     ringStatus = "Waiting for calls"
                     delay = 1
                     Task { await PushTokens.shared.deliver(.voip) } // the address may be new
@@ -174,13 +172,12 @@ final class CallManager: NSObject {
     /// room that has not rung yet, while no other call is on and the app knows its server. Returns the new
     /// call's id, or nil when the ring must not ring.
     private func beginRinging(_ ring: Ring) -> UUID? {
-        guard Self.answerBy(ring) > .now, rungRooms[ring.room] == nil, !isInCall, !Server.tokenURL.isEmpty else {
+        guard Self.answerBy(ring) > .now, rungRooms[ring.room] == nil, !isInCall, !Server.api.isEmpty else {
             return nil
         }
         let id = UUID()
         rungRooms[ring.room] = id
         callID = id
-        tokenServerURL = Server.tokenURL
         isInCall = true
         isRinging = true
         status = ring.topic.map { "Bee Call is calling about: \($0)" } ?? "Bee Call is calling…"
@@ -304,7 +301,6 @@ final class CallManager: NSObject {
     /// Gets a pass and joins the room: a new room for a call the user starts,
     /// or with `answering`, the room of the AI's call.
     private func join(_ id: UUID, answering roomName: String?) {
-        let url = tokenServerURL
         pickedUp = false
         phoneRecordingProblem = nil
         room.onAgentAnswered = { [weak self] in self?.agentPickedUp(id) }
@@ -316,8 +312,7 @@ final class CallManager: NSObject {
                     await beforeAnswering()
                     try Task.checkCancellation() // the call ended while the settings went out
                 }
-                _ = try await room.connect(tokenServerURL: url, answering: roomName,
-                                           continuing: roomName == nil ? earlierCall : nil)
+                _ = try await room.connect(answering: roomName, continuing: roomName == nil ? earlierCall : nil)
                 try Task.checkCancellation() // the call ended while we were connecting
                 // Only now: a recording started after a hang-up ran on into the next call's file (review finding 15).
                 phoneRecordingProblem = room.recordOnPhoneIfWanted()

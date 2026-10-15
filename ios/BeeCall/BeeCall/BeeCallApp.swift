@@ -34,7 +34,7 @@ struct BeeCallApp: App {
             .onContinueUserActivity(RecentsCall.activityType) { activity in
                 guard RecentsCall.startsCall(activity, signedIn: server.isSignedIn, inCall: calls.isInCall)
                 else { return }
-                Task { await calls.startCall(tokenServerURL: Server.tokenURL) }
+                Task { await calls.startCall() }
             }
             #if DEBUG
             .task {
