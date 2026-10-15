@@ -83,7 +83,7 @@ from voice.titles import title_call
 from voice.ringback import STATE_ATTRIBUTE, ring_back
 from voice.voices import make_tts, voice_choice
 from worker.fake import FakeWorker
-from worker.runner import JobNotification, JobRunner, NoWorker
+from worker.runner import JobNotification, JobRunner, NoWorker, StandingBy
 from worker.search import SearchWorker
 
 load_dotenv(".env.local")
@@ -498,16 +498,24 @@ def job_worker(worker_model: str, mode: str | None = None) -> Any:
         return SearchWorker()
     if mode != "harness":
         return FakeWorker()
+    role = model_catalog.role("worker")
     first = model_catalog.choice("worker", worker_model)
     problems = []
-    for choice in (first, *(c for c in model_catalog.role("worker").choices if c is not first)):
+    for choice in (first, *(c for c in role.choices if c is not first)):
         adapter = providers.adapter(choice.offering.provider)
         problem = adapter.setup_problem()
         if problem is None:
             if problems:
                 log.warning("the worker %s cannot run here (%s); %s runs this call's jobs", first.id,
                             "; ".join(problems), choice.id)
-            return adapter.worker(choice)
+            worker = adapter.worker(choice)
+            standby = role.standby
+            if standby is None or standby.offering == choice.offering:
+                return worker
+            backup = providers.adapter(standby.offering.provider)
+            if backup.setup_problem() is not None:
+                return worker
+            return StandingBy(worker, lambda: backup.worker(standby), choice.name, standby.name)
         problems.append(f"{choice.id}: {problem}")
     log.error("no background worker can run here: %s", "; ".join(problems))
     return NoWorker("; ".join(problems))
@@ -740,7 +748,7 @@ async def end_call(call: Call) -> None:
         models = session_usage(session)
         if models:
             spend.add("call_hung_up_while_ringing", models=models, room=call.ctx.room.name)
-        for usage in sorted((rec.dir / "jobs").glob("*/usage.json")):  # its folder goes, so its jobs' use moves
+        for usage in sorted((rec.dir / "jobs").glob("*/usage*.json")):  # its folder goes, so its jobs' use moves
             try:
                 spend.add("job_in_call_left_before_the_ai_spoke", job=json.loads(usage.read_text()),
                           room=call.ctx.room.name)

@@ -74,6 +74,11 @@ SERVER_TOOL_USD = {("anthropic", "web_search"): 10.00 / 1000}
 
 # Z.ai makes GLM 5; AWS runs it (Bedrock, and the AgentCore harness for the worker).
 GLM_STANDBY = Choice("glm", "GLM 5", "Z.ai", {"ko": "대기 모델", "en": "Standing by"}, GLM_5, max_tokens=2000)
+# The worker's GLM 5 on the AgentCore harness: a choice of its own, and the worker role's standby. It reasons only when
+# asked to (probed 2026-10-15); 32K holds any report in one call and leaves about 170K of its 202,752-token context
+# for the job's conversation (worker/harness.py).
+GLM_WORKER = Choice("glm", "GLM 5", "Z.ai", {"ko": "AWS에서 돌아가요", "en": "Runs on AWS"}, GLM_5_WORKER,
+                    max_tokens=32768, extra={"reasoning_effort": "high"})
 
 ROLES: dict[str, Role] = {role.name: role for role in (
     Role("call", person=True, standby=GLM_STANDBY, choices=(
@@ -88,17 +93,16 @@ ROLES: dict[str, Role] = {role.name: role for role in (
                {"ko": "더 깊이 생각하고, 조금 느려요", "en": "Thinks more, a little slower"},
                CLAUDE_SONNET, thinking="between_tools", effort="low"),
     )),
-    Role("worker", person=True, choices=(
+    # A job Claude cannot run (a refused key, no credit, overloaded after retries) runs again on GLM 5 when the first
+    # attempt produced nothing (worker/runner.py StandingBy); a decline never does.
+    Role("worker", person=True, standby=GLM_WORKER, choices=(
         # The user's choice (2026-10-15): our own runner on Anthropic's API (worker/claude.py), thinking on and effort
         # high, as background work need not be quick. A job is a tool loop: its conversation is cached as it grows.
         Choice("sonnet", "Claude Sonnet 5.5", "Anthropic",
                {"ko": "조사와 보고서가 가장 꼼꼼해요", "en": "Most thorough research and reports"},
                CLAUDE_SONNET, default=True, thinking="adaptive", effort="high", max_tokens=32000,
                extra={"anthropic": {"cache_control": {"type": "ephemeral"}}}),
-        # GLM 5 reasons only when asked to (probed 2026-10-15); 32K holds any report in one call and leaves about
-        # 170K of its 202,752-token context for the job's conversation (worker/harness.py).
-        Choice("glm", "GLM 5", "Z.ai", {"ko": "AWS에서 돌아가요", "en": "Runs on AWS"}, GLM_5_WORKER,
-               max_tokens=32768, extra={"reasoning_effort": "high"}),
+        GLM_WORKER,
     )),
     Role("meta", standby=Choice("glm", "GLM 5", "Z.ai", {"ko": "대기 모델", "en": "Standing by"}, GLM_5,
                                 max_tokens=2000, extra={"read_timeout": 90, "retries": 3}), choices=(

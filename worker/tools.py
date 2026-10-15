@@ -22,7 +22,7 @@ from typing import Any, Awaitable, Callable
 from beelink.clock import now_text
 from voice.language import LANGUAGES
 from worker.chart import render_svg, svg_to_png
-from worker.runner import Job
+from worker.runner import USAGE, Job
 
 log = logging.getLogger("bee-call.worker")
 
@@ -76,7 +76,7 @@ JOB_TOOLS: dict[str, dict[str, Any]] = {
 
 
 def allowed_name(name: str) -> bool:
-    return bool(SAFE_NAME.fullmatch(name)) and name.casefold() not in RESERVED
+    return bool(SAFE_NAME.fullmatch(name)) and name.casefold() not in RESERVED and not USAGE.fullmatch(name.casefold())
 
 
 def free_name(folder: Path, name: str, fallback: str) -> str:

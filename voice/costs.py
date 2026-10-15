@@ -130,7 +130,7 @@ def spent_today(workspace: Path, now: datetime) -> float:
                 continue
             usage = _json(call / "usage.json")
             total += call_cost(usage) if isinstance(usage, dict) else CALL_USD_PER_MINUTE * _call_minutes(call)
-            for job in (call / "jobs").glob("*/usage.json"):
+            for job in (call / "jobs").glob("*/usage*.json"):  # usage.1.json: an attempt before the standby's
                 used = _json(job)
                 if isinstance(used, dict):
                     total += job_cost(used)

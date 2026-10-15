@@ -198,6 +198,8 @@ def job_notification(news: JobNotification) -> str:
         lines.append(f"<error>{escape(news.error, quote=False)}</error>")
     if news.files:
         lines.append(f"<files>{escape(', '.join(news.files), quote=False)}</files>")
+    if news.note:  # how it ran, when not as asked: the worker's standby ran it
+        lines.append(f"<note>{escape(news.note, quote=False)}</note>")
     lines.append("</job-notification>")
     return "\n".join(lines)
 

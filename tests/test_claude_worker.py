@@ -458,7 +458,7 @@ def both_workers(monkeypatch):
     from voice.providers.anthropic import Anthropic
 
     glm = replace(model_catalog.choice("worker", "glm"), default=False)
-    monkeypatch.setitem(model_catalog.ROLES, "worker", Role("worker", person=True, choices=(SONNET, glm)))
+    monkeypatch.setitem(model_catalog.ROLES, "worker", Role("worker", person=True, choices=(SONNET, glm), standby=glm))
     monkeypatch.setitem(providers._ADAPTERS, "anthropic", Anthropic())  # no client left over from another test
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     monkeypatch.setattr(harness, "load_harness_arn", lambda: "arn:aws:bedrock-agentcore:ap-southeast-2:1:harness/h")
@@ -473,11 +473,11 @@ def test_the_person_s_worker_model_picks_what_runs_their_jobs(both_workers):
     from worker.fake import FakeWorker
     from worker.search import SearchWorker
 
-    picked = job_worker("sonnet", "harness")
+    picked = job_worker("sonnet", "harness").first  # with GLM 5 standing by
     assert isinstance(picked, ClaudeWorker) and picked.choice.offering.model == "claude-sonnet-5-5"
     assert isinstance(job_worker("glm", "harness"), both_workers.HarnessWorker)
-    assert isinstance(job_worker("gpt-9", "harness"), ClaudeWorker)  # an id the catalog no longer has: the default
-    assert isinstance(job_worker(None, "harness"), ClaudeWorker)  # never picked: the role's default
+    assert isinstance(job_worker("gpt-9", "harness").first, ClaudeWorker)  # an id the catalog no longer has: default
+    assert isinstance(job_worker(None, "harness").first, ClaudeWorker)  # never picked: the role's default
     assert isinstance(job_worker("sonnet", "fake"), FakeWorker) and isinstance(job_worker("glm", "search"), SearchWorker)
 
 
@@ -564,3 +564,118 @@ def test_a_connection_that_drops_mid_stream_is_tried_again(tmp_path, monkeypatch
         client, posts = sdk_client([(first, drop), sse(streamed("Done after the drop."))])
         summary, _, _ = run(job_in(tmp_path, None), client)
         assert summary == "Done after the drop." and len(posts) == 2, drop
+
+
+# ---------- GLM 5 standing by for the worker (coordinator's review of 2026-10-15, item 2) ----------
+
+class Failing:
+    """A worker that spends something, then fails before or after a result."""
+
+    def __init__(self, error: BaseException, relay_first: bool = False) -> None:
+        self.error, self.relay_first = error, relay_first
+
+    async def run(self, job, progress, relay):
+        from worker.tools import write_usage
+
+        write_usage(job, {"provider": "anthropic", "model": "claude-sonnet-5-5", "input_tokens": 1_000_000,
+                          "output_tokens": 0, "server_tools": {"web_search": 10}})
+        if self.relay_first:
+            await relay("Half an answer.")
+        raise self.error
+
+
+class Standby:
+    def __init__(self) -> None:
+        self.ran = 0
+
+    async def run(self, job, progress, relay):
+        from worker.tools import write_usage
+
+        self.ran += 1
+        write_usage(job, {"provider": "agentcore", "model": "zai.glm-5", "input_tokens": 1_000_000,
+                          "output_tokens": 0})
+        await relay("GLM 5 found it.")
+        (job.dir / "report.md").write_text("# Report\n")
+        return "GLM 5 found it."
+
+
+def run_standing_by(tmp_path, first, standby):
+    from worker.runner import JobRunner, StandingBy
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    events, news = [], []
+
+    async def notify(n):
+        news.append(n)
+
+    async def main():
+        backend = StandingBy(first, lambda: standby, "Claude Sonnet 5.5", "GLM 5")
+        runner = JobRunner(tmp_path, lambda name, **f: events.append((name, f)), backend, notify,
+                           clock=lambda: datetime.now(SEOUL))
+        job = runner.start("Compare the trails")
+        await asyncio.gather(*runner.tasks.values(), return_exceptions=True)
+        return job
+
+    return asyncio.run(main()), events, news
+
+
+def test_a_job_claude_cannot_run_runs_again_on_glm_5_and_each_attempt_counts_once(tmp_path):
+    """When the Claude worker fails before it produced anything (here a refused key: 401), the job runs again on GLM
+    5, the worker role's standby; the call's record and the job's own log say so, the call AI hears it, and the day's
+    budget counts what each attempt used, once."""
+    import anthropic
+    import httpx
+
+    from voice.costs import spent_today
+
+    call = tmp_path / datetime.now(SEOUL).strftime("%Y-%m-%d") / "0100"
+    call.mkdir(parents=True)
+    refused = anthropic.AuthenticationError("invalid x-api-key", body=None, response=httpx.Response(
+        401, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")))
+    standby = Standby()
+    job, events, news = run_standing_by(call, Failing(refused), standby)
+    assert job.status == "completed" and standby.ran == 1
+    (moved,) = [f for name, f in events if name == "job_standby"]
+    assert (moved["instead_of"], moved["worker"]) == ("Claude Sonnet 5.5", "GLM 5") and "invalid x-api-key" in moved["reason"]
+    logged = [json.loads(line) for line in (job.dir / "events.jsonl").read_text().splitlines()]
+    assert [e["type"] for e in logged if e["type"] == "standby"] == ["standby"]
+    assert all("GLM 5 ran it instead" in n.note for n in news) and news[0].summary == "GLM 5 found it."
+    assert sorted(p.name for p in job.dir.glob("usage*.json")) == ["usage.1.json", "usage.json"]
+    claude_attempt = 2.00 + 10 * 0.01  # 1M Sonnet input tokens and 10 searches
+    glm_attempt = 1.00  # 1M GLM 5 input tokens
+    assert spent_today(tmp_path, datetime.now(SEOUL)) == pytest.approx(claude_attempt + glm_attempt)
+    from voice.coordinator import job_notification
+
+    assert "<note>Claude Sonnet 5.5 could not run this job" in job_notification(news[0])
+
+
+def test_a_job_that_produced_something_or_was_declined_or_cut_off_does_not_move(tmp_path):
+    from worker.runner import JobDeclined
+
+    for first in (Failing(RuntimeError("overloaded"), relay_first=True), Failing(JobDeclined("declined (refusal)"))):
+        standby = Standby()
+        job, events, _ = run_standing_by(tmp_path / str(id(first)), first, standby)
+        assert job.status == "failed" and standby.ran == 0 and "job_standby" not in [name for name, _ in events]
+    standby = Standby()
+    job, _, _ = run_standing_by(tmp_path / "cut", Failing(asyncio.CancelledError()), standby)
+    assert job.status == "cancelled" and standby.ran == 0
+
+
+def test_the_worker_role_s_standby_is_glm_5_on_the_harness_and_jobs_get_it(both_workers):
+    from voice.agent import job_worker
+    from worker.runner import StandingBy
+
+    standby = model_catalog.role("worker").standby
+    assert (standby.id, standby.offering.provider, standby.offering.model) == ("glm", "agentcore", "zai.glm-5")
+    picked = job_worker("sonnet", "harness")
+    assert isinstance(picked, StandingBy) and isinstance(picked.first, ClaudeWorker)
+    assert isinstance(picked.standby(), both_workers.HarnessWorker)
+    assert isinstance(job_worker("glm", "harness"), both_workers.HarnessWorker)  # GLM 5 itself: nothing to stand by
+
+
+def test_a_claude_refusal_is_a_decline_the_standby_never_takes(tmp_path):
+    """A refusal is a safety decision, not an outage (as for the call AI): it never goes to GLM 5."""
+    from worker.runner import JobDeclined
+
+    declined, _, _ = run(job_in(tmp_path, None), api([reply([text("I can't help with that.")], "refusal")]))
+    assert isinstance(declined, JobDeclined)

@@ -29,6 +29,7 @@ from voice.audio_tags import strip_tags
 from voice.call_folders import CALL_ID, EVENTS, call_ids, read_events, session_id
 from voice.offers import topic_line
 from worker.chart import svg_title
+from worker.runner import USAGE
 
 LIVE_S = 120  # no new line or file refresh for this long, and no end: the call no longer reads as live
 RECENT_S = 600  # an ended call is still announced by /changes on connect for this long (contract section 3)
@@ -489,7 +490,7 @@ def _files(call_id: str, call: Call, job: Job) -> list[dict[str, Any]]:
         if len(parts) != 3 or parts[0] != "jobs" or parts[1] != job.id:
             continue
         name = parts[2]
-        if name in BOOKKEEPING or not FILE_NAME.fullmatch(name) or name not in folder.names:
+        if name in BOOKKEEPING or USAGE.fullmatch(name) or not FILE_NAME.fullmatch(name) or name not in folder.names:
             continue
         listed[name] = path
     out = []

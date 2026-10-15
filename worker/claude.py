@@ -30,7 +30,7 @@ from typing import Any, Awaitable, Callable
 from voice.model_catalog import Choice
 from voice.providers import ToolResult, ToolSpec, Turn, Usage
 from voice.providers import anthropic as anthropic_api
-from worker.runner import Job
+from worker.runner import Job, JobDeclined
 from worker.tools import JOB_TOOLS, MAX_FILE_BYTES, NO_SUCH_TOOL, free_name, job_request, use_tool, write_usage
 
 log = logging.getLogger("bee-call.worker")
@@ -162,6 +162,8 @@ class ClaudeWorker:
                 await self._save_outputs(content, job, outputs)
                 if final.stop_reason == "end_turn":
                     break
+                if final.stop_reason == "refusal":  # a decision, never handed to the standby
+                    raise JobDeclined("Claude declined this job")
                 if last or final.stop_reason not in ("pause_turn", "tool_use"):
                     raise RuntimeError(f"the worker stopped before finishing ({final.stop_reason or 'no stop reason'})")
                 limit = "web searches" if usage["server_tools"].get("web_search", 0) >= JOB_WEB_SEARCHES else \
