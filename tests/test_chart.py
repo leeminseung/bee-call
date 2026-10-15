@@ -60,6 +60,40 @@ def test_korean_text_is_drawn_with_its_own_glyphs():
         "This Font Software is licensed under the SIL Open Font License")
 
 
+def test_a_chart_a_job_saves_is_drawn_off_the_call_s_event_loop(tmp_path, monkeypatch):
+    """A job runs in the call's process, beside the voice: drawing a PNG takes 40-170 ms (an M1; more on the
+    server), against LiveKit's 200 ms of outgoing audio, so it is drawn in a worker thread (review, 2026-10-15)."""
+    import asyncio
+    import threading
+    from datetime import datetime
+
+    from tests.helpers import SEOUL
+    from worker import tools
+    from worker.runner import Job
+
+    drawn_on = []
+
+    def png(svg: str) -> bytes:
+        drawn_on.append(threading.get_ident())
+        return b"PNG"
+
+    monkeypatch.setattr(tools, "svg_to_png", png)
+    job = Job(job_id="01", dir=tmp_path, task="t", now=datetime.now(SEOUL))
+
+    async def relay(words):
+        pass
+
+    async def main():
+        loop_thread = threading.get_ident()
+        said, ok = await tools.use_tool("save_chart", {"name": "rain", "title": "비", "kind": "line", "series": [
+            {"label": "서울", "points": [[8, 10], [12, 40]]}]}, job, lambda line: None, relay)
+        return loop_thread, ok
+
+    loop_thread, ok = asyncio.run(main())
+    assert ok and drawn_on and drawn_on[0] != loop_thread
+    assert (tmp_path / "rain.png").read_bytes() == b"PNG" and (tmp_path / "rain.svg").exists()
+
+
 def test_older_charts_get_their_png_from_the_one_off_command(tmp_path, capsys):
     """`python -m worker.chart data/people/<id>` draws the PNG of each chart the worker drew before PNGs existed;
     one already drawn, and an SVG this code did not make, are left alone."""

@@ -11,6 +11,7 @@ The job folder stays on this Mac with one writer per file: a worker's model writ
 first message (job_request) and its usage.json (write_usage), the same for every worker.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -126,7 +127,10 @@ async def use_tool(name: str, args: dict[str, Any], job: Job, progress: Callable
                          str(args.get("x_label", "")), str(args.get("y_label", "")))
         (job.dir / file_name).write_text(svg)
         try:  # the picture the app shows (contract 2.4); without it the chart is listed as a plain file
-            (job.dir / file_name).with_suffix(".png").write_bytes(svg_to_png(svg))
+            # Drawn in a worker thread: a job runs in the call's process, and drawing takes 40-170 ms (on an M1),
+            # near LiveKit's 200 ms of outgoing audio.
+            png = await asyncio.to_thread(svg_to_png, svg)
+            (job.dir / file_name).with_suffix(".png").write_bytes(png)
         except Exception:
             log.exception("could not draw %s as PNG", file_name)
         return f"Saved {file_name}. Mention it in the report.", True
