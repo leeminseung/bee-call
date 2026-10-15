@@ -15,6 +15,7 @@ struct CallSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("language") private var language = "en"
     @State private var titleUp = false
+    @State private var files = FilePreview() // a job's file, opened over this sheet
 
     private var korean: Bool { language == "ko" }
     private var words: ConversationWords { ConversationWords(korean: korean) }
@@ -64,6 +65,7 @@ struct CallSheet: View {
             }
             .overlay(alignment: .bottom) { continueButton }
         }
+        .filePreviews(files)
         .presentationDragIndicator(.visible)
         .task { await source.show(callID) }
     }

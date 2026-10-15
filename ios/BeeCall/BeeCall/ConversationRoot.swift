@@ -22,6 +22,7 @@ struct ConversationRoot: View {
     /// view presents one thing at a time (review of 2026-10-15, finding 6).
     @State private var sheetUp = false
     @State private var notice = ResultNotice()
+    @State private var files = FilePreview() // a job's file open in Quick Look
     @State private var jump: String?
     @Environment(\.scenePhase) private var scenePhase
     @Namespace private var zoom
@@ -61,6 +62,8 @@ struct ConversationRoot: View {
                     // conversation, whose live section asks for it too.
                     .task(id: source.ownCall) { if let id = source.ownCall { await source.show(id) } }
             }
+            .filePreviews(files, onDismiss: { sheetUp = false })
+            .onChange(of: files.url) { _, url in if url != nil { sheetUp = true } }
             .sheet(isPresented: $settingsOpen, onDismiss: { sheetUp = false }) {
                 SettingsSheet(person: person, catalog: catalog, preview: preview)
             }
@@ -72,9 +75,11 @@ struct ConversationRoot: View {
             }
             .onChange(of: calls.callIsOn, initial: true) { _, on in
                 presentation.callChanged(inCall: on)
-                if on { // the call screen goes over everything: a sheet still up is closed first
+                if on { // the call screen goes over everything: what is still up is closed first
                     settingsOpen = false
                     opened = nil
+                    files.url = nil
+                    offers.keepBooked() // the cancel question's alert
                     preview.stop()
                 } else {
                     notice.callEnded()

@@ -199,7 +199,8 @@ struct JobCardView: View {
     let job: Job
     let words: ConversationWords
     var glowing = false
-    @State private var opened: URL?
+    @Environment(FilePreview.self) private var files: FilePreview? // where a file opens, when the screen holds one
+    @State private var opened: URL? // else here
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -246,7 +247,12 @@ struct JobCardView: View {
             if !chips.isEmpty {
                 HStack(spacing: 8) {
                     ForEach(chips, id: \.url) { file in
-                        Button { Task { opened = await ServerFiles.shared.open(file) } } label: {
+                        Button {
+                            Task {
+                                guard let url = await ServerFiles.shared.open(file) else { return }
+                                if let files { files.url = url } else { opened = url }
+                            }
+                        } label: {
                             FileChip(label: words.file(file), kind: file.kind)
                         }
                         .buttonStyle(.plain)

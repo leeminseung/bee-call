@@ -1,3 +1,4 @@
+import QuickLook
 import SwiftUI
 import UIKit
 
@@ -53,5 +54,61 @@ struct ServerImage: View {
             }
         }
         .task(id: path) { image = await ServerFiles.shared.image(path) }
+    }
+}
+
+/// The job file open in Quick Look, held where the call screen can close it: a call that starts closes it first,
+/// and the call screen waits until it is down, as for the other sheets (second review of the D wiring, finding 10).
+@Observable
+final class FilePreview {
+    var url: URL?
+}
+
+/// A file opened as a sheet, so its dismissal is known, unlike the plain Quick Look modifier.
+struct OpenedFile: Identifiable {
+    let url: URL
+    var id: URL { url }
+}
+
+/// Quick Look in a sheet.
+struct QuickLookSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UINavigationController {
+        let preview = QLPreviewController()
+        preview.dataSource = context.coordinator
+        return UINavigationController(rootViewController: preview)
+    }
+
+    func updateUIViewController(_ controller: UINavigationController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(url: url)
+    }
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource {
+        let url: URL
+
+        init(url: URL) {
+            self.url = url
+        }
+
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+
+        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> any QLPreviewItem {
+            url as NSURL
+        }
+    }
+}
+
+extension View {
+    /// Presents the files that `preview` opens, from here.
+    func filePreviews(_ preview: FilePreview, onDismiss: @escaping () -> Void = {}) -> some View {
+        sheet(item: Binding(get: { preview.url.map(OpenedFile.init) }, set: { if $0 == nil { preview.url = nil } }),
+              onDismiss: onDismiss) { file in
+            QuickLookSheet(url: file.url)
+                .ignoresSafeArea()
+        }
+        .environment(preview)
     }
 }
