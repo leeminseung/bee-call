@@ -9,8 +9,8 @@ of at most two sentences. It is a test stand-in, not the product.
 from typing import Awaitable, Callable
 
 from beelink.clock import now_text
-from worker.harness import write_usage
 from worker.runner import Job
+from worker.tools import write_usage
 from worker.web_search import SearchResult, web_search
 
 Search = Callable[[str], Awaitable[SearchResult]]

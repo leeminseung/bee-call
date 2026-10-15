@@ -5,25 +5,20 @@ Sydney. This Mac starts a job with InvokeHarness and serves the harness's inline
 functions: when the agent calls one, the harness stops and hands the call to us;
 we run it and send the result back in the same session, and the agent carries on.
 
-Inline functions (run here, on this Mac):
-  progress(text)                       a line on the job card
-  relay_to_user(text)                  one or two sentences for the voice to tell the user
+Inline functions (run here, on this Mac): the job's own tools (worker/tools.py: progress, relay_to_user, save_file,
+save_chart), and
   web_search(question)                 Nova Web Grounding (us-east-1): an answer with sources
-  save_file(name, content)             a text result file in the job folder (report.md, a CSV table)
-  save_chart(name, title, kind, ...)   a chart from numbers; this Mac draws it as SVG, and the same drawing as PNG
-                                       for the app (worker/chart.py)
 Built-in tool (run by AWS): AgentCore Code Interpreter, for calculations, except for models that
 fail with it (NO_CODE_INTERPRETER).
 
 The job folder stays on this Mac, with one writer per file: the agent writes into it
-only through save_file. The harness itself is created by scripts/deploy_worker.py.
+only through save_file and save_chart. The harness itself is created by scripts/deploy_worker.py.
 """
 
 import asyncio
 import json
 import logging
 import os
-import re
 import threading
 import time
 import uuid
@@ -35,13 +30,11 @@ import botocore.session
 from botocore.config import Config
 from botocore.exceptions import EventStreamError
 
-from beelink.clock import now_text
 from voice.aws_session import aws_session
 from voice.costs import SpendLog
-from voice.language import LANGUAGES
 from voice.people import data_root
-from worker.chart import render_svg, svg_to_png
 from worker.runner import Job
+from worker.tools import JOB_TOOLS, job_request, use_tool, write_usage
 from worker.web_search import LONGEST_S as WEB_SEARCH_LONGEST_S
 from worker.web_search import SearchResult, web_search
 
@@ -83,7 +76,6 @@ REASONING = {"zai.glm-5": {"additionalModelRequestFields": {"reasoning_effort": 
 IDLE_SESSION_S = 1800
 SESSION_LIFETIME_S = 28800
 INVOKE_READ_TIMEOUT_S = HARNESS_TIMEOUT_S + 60  # this Mac never gives up on a round the harness still runs
-MAX_FILE_BYTES = 5_000_000
 MAX_TOOL_TEXT = 8000
 
 SYSTEM_PROMPT = """\
@@ -105,45 +97,14 @@ found and which files you saved, not how you passed it to the coordinator.
 """
 
 
-def _schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
-    return {"type": "object", "properties": properties, "required": required}
-
-
-INLINE_FUNCTIONS: dict[str, dict[str, Any]] = {
-    "progress": {
-        "description": "Show a short progress line on the job card the user sees.",
-        "inputSchema": _schema({"text": {"type": "string", "description": "Under ten words."}}, ["text"]),
-    },
-    "relay_to_user": {
-        "description": "Give the coordinator one or two short sentences to say to the user out loud.",
-        "inputSchema": _schema({"text": {"type": "string"}}, ["text"]),
-    },
-    "web_search": {
-        "description": "Search the web and get an answer with numbered sources.",
-        "inputSchema": _schema({"question": {"type": "string", "description": "A specific question."}}, ["question"]),
-    },
-    "save_file": {
-        "description": "Save a text result file (Markdown or CSV) into the job folder the user can open in the app.",
-        "inputSchema": _schema({
-            "name": {"type": "string", "description": "File name such as report.md or prices.csv; no folders."},
-            "content": {"type": "string"},
-        }, ["name", "content"]),
-    },
-    "save_chart": {
-        "description": "Draw a line or bar chart from numbers and save it into the job folder as an image.",
-        "inputSchema": _schema({
-            "name": {"type": "string", "description": "File name without extension, such as rain_by_hour."},
-            "title": {"type": "string"},
-            "kind": {"type": "string", "enum": ["line", "bar"]},
-            "x_label": {"type": "string"},
-            "y_label": {"type": "string"},
-            "series": {"type": "array", "items": {"type": "object", "properties": {
-                "label": {"type": "string"},
-                "points": {"type": "array", "description": "[[x, y], ...]; x is a number or a category name.",
-                           "items": {"type": "array"}}}, "required": ["label", "points"]}},
-        }, ["name", "title", "kind", "series"]),
-    },
+WEB_SEARCH = {
+    "description": "Search the web and get an answer with numbered sources.",
+    "parameters": {"type": "object", "properties": {"question": {"type": "string", "description": "A specific question."}},
+                   "required": ["question"]},
 }
+INLINE_FUNCTIONS: dict[str, dict[str, Any]] = {
+    name: {"description": spec["description"], "inputSchema": spec["parameters"]}
+    for name, spec in (*list(JOB_TOOLS.items())[:2], ("web_search", WEB_SEARCH), *list(JOB_TOOLS.items())[2:])}
 
 
 def new_session_id(tag: str) -> str:
@@ -282,8 +243,6 @@ def _read_events(events: Iterable[dict[str, Any]], out: Round) -> None:
 
 # ---------- running a job ----------
 
-SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
-RESERVED = {"request.md", "events.jsonl", "usage.json"}  # written by this Mac, never by the agent
 FINISHED = {"end_turn", "stop_sequence"}
 # A new harness session starts a fresh microVM, which took about 30 s on 2026-10-13, so the voice
 # server warms one at call start and keeps it from idling out until a job takes it.
@@ -305,10 +264,6 @@ def update_request(definition: dict[str, Any], harness_id: str) -> dict[str, Any
         wrapped = member.type_name == "structure" and list(member.members) == ["optionalValue"]
         out[key] = {"optionalValue": value} if wrapped else value
     return out
-
-
-def allowed_name(name: str) -> bool:
-    return bool(SAFE_NAME.fullmatch(name)) and name.casefold() not in RESERVED
 
 
 def load_harness_arn() -> str | None:
@@ -423,49 +378,18 @@ class HarnessWorker:
                     relay: Callable[[str], Awaitable[None]]) -> tuple[str, str]:
         """Runs one inline function. Returns (text for the agent, status)."""
         args = use.input
-        if use.name == "progress":
-            progress(str(args.get("text", ""))[:200])
-            return "Shown on the job card.", "success"
-        if use.name == "relay_to_user":
-            await relay(str(args.get("text", "")))
-            return "The coordinator will tell the user.", "success"
         if use.name == "web_search":
             result = await self.search(str(args.get("question", "")))
             return result.markdown()[:MAX_TOOL_TEXT], "success"
-        if use.name == "save_file":
-            name = str(args.get("name", ""))
-            if not allowed_name(name):
-                return f"Not saved: {name!r} is not an allowed file name.", "error"
-            data = str(args.get("content", "")).encode()
-            if len(data) > MAX_FILE_BYTES:
-                return f"Not saved: {len(data)} bytes is over the {MAX_FILE_BYTES} byte limit.", "error"
-            (job.dir / name).write_bytes(data)
-            return f"Saved {name} ({len(data)} bytes).", "success"
-        if use.name == "save_chart":
-            name = f"{str(args.get('name', 'chart')).removesuffix('.svg')}.svg"
-            if not allowed_name(name):
-                return f"Not saved: {name!r} is not an allowed file name.", "error"
-            svg = render_svg(str(args.get("title", "")), str(args.get("kind", "line")), args.get("series") or [],
-                             str(args.get("x_label", "")), str(args.get("y_label", "")))
-            (job.dir / name).write_text(svg)
-            try:  # the picture the app shows (contract 2.4); without it the chart is listed as a plain file
-                (job.dir / name).with_suffix(".png").write_bytes(svg_to_png(svg))
-            except Exception:
-                log.exception("could not draw %s as PNG", name)
-            return f"Saved {name}. Mention it in the report.", "success"
+        if use.name in JOB_TOOLS:
+            text, ok = await use_tool(use.name, args, job, progress, relay)
+            return text, "success" if ok else "error"
         log.warning("worker called an unknown tool %r", use.name)
         return f"There is no tool named {use.name}. Use one of: {', '.join(INLINE_FUNCTIONS)}.", "error"
 
     async def run(self, job: Job, progress: Callable[[str], None], relay: Callable[[str], Awaitable[None]]) -> str:
         session_id = await self._take_session(job.job_id)
-        # The worker has no clock; relative dates in the task ("this Saturday") need today's date.
-        request = (f"Job {job.job_id} (it is now {now_text(job.now)}; read today, tomorrow and weekdays against this): "
-                   f"{job.task}")
-        if job.language in LANGUAGES:  # the user reads the job card, the summary and the charts in the call's language
-            name = LANGUAGES[job.language].name
-            request += (f"\n\nThe user speaks {name}. Write in {name} every progress line, what you relay, chart "
-                        "titles and labels, the report and your final summary.")
-        messages = [{"role": "user", "content": [{"text": request}]}]
+        messages = [{"role": "user", "content": [{"text": job_request(job)}]}]
         # What the job used so far, in usage.json after every round, so the daily budget counts a job that fails or
         # is cancelled when the call ends as well as one that finishes (voice/costs.py).
         usage: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0, "reasoning_chars": 0, "stop_reason": None,
@@ -541,10 +465,3 @@ class HarnessWorker:
         log.info("job %s took %d rounds: %s", job.job_id, len(steps), steps)
         self._ready = self._ready or session_id  # still warm: the next job can use it
         return summary
-
-
-def write_usage(job: Job, usage: dict[str, Any]) -> None:
-    """The job's usage.json, replaced whole, so a reader never sees half of it."""
-    tmp = job.dir / ".usage.json.tmp"
-    tmp.write_text(json.dumps(usage))
-    tmp.replace(job.dir / "usage.json")
