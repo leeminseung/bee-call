@@ -26,6 +26,8 @@ summary, and if it fails, the error.
 """
 
 import asyncio
+import functools
+import html
 import json
 import logging
 import re
@@ -132,6 +134,9 @@ class NoWorker:
     async def run(self, job: Job, progress: Callable[[str], None],
                   relay: Callable[[str], Awaitable[None]]) -> str:
         raise RuntimeError(f"no background worker is set up on this server ({self.why})")
+
+
+escape = functools.partial(html.escape, quote=False)
 
 
 def short(text: str, limit: int = 200) -> str:
@@ -263,18 +268,18 @@ class JobRunner:
             return "No background jobs in this call."
         now = time.monotonic()
         lines = []
-        for job in self.jobs.values():
+        for job in self.jobs.values():  # what the worker wrote is escaped: it comes from web pages too
             seconds = round((job.ended_at or now) - job.started_at)
             if job.status == "running":
-                parts = [f"Job {job.job_id}", f"running for {seconds} s", f"task: {short(job.task)}"]
+                parts = [f"Job {job.job_id}", f"running for {seconds} s", f"task: {escape(short(job.task))}"]
                 if job.last_step:
-                    parts.append(f"latest step: {job.last_step}")
+                    parts.append(f"latest step: {escape(job.last_step)}")
             else:
-                parts = [f"Job {job.job_id}", f"{job.status} after {seconds} s", f"task: {short(job.task)}"]
+                parts = [f"Job {job.job_id}", f"{job.status} after {seconds} s", f"task: {escape(short(job.task))}"]
                 if job.files:
-                    parts.append(f"files: {', '.join(job.files)}")
+                    parts.append(f"files: {escape(', '.join(job.files))}")
                 if job.error:
-                    parts.append(f"error: {job.error}")
+                    parts.append(f"error: {escape(job.error)}")
             lines.append(" | ".join(parts))
         return "\n".join(lines)
 

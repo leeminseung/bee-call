@@ -37,7 +37,11 @@ History rules (one adapter instance per call):
   LiveKit copies from our chunks into the item's `extra`. If the caller cut a
   reply off, or never heard it, a note says so; the reply is never changed.
   A reply cut off while Claude was still streaming was never recorded, so the
-  words the caller heard go in as a plain assistant turn, with a note.
+  words the caller heard go in as a plain assistant turn, with a note. What the
+  caller heard is checked against a reply as it is heard (voice/speech_filter.py
+  heard: without stage directions and audio tags, which LiveKit's item never
+  holds): a reply of only "[laughs]" or "(웃음)" has no item and is not one the
+  caller missed.
 - Every tool_use gets a tool_result in the next user message. A tool that was
   cancelled or is still running gets a stand-in result; its real result, if it
   comes, arrives later as a note.
@@ -68,6 +72,8 @@ import anthropic
 from anthropic import AsyncAnthropicBedrock
 from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+
+from voice.speech_filter import heard
 
 try:  # private in LiveKit Agents (pinned to 1.8.6): the speech a reply is generated for
     from livekit.agents.voice.agent_activity import _SpeechHandleContextVar
@@ -180,6 +186,12 @@ class Reply:
     speech: Any | None  # LiveKit's SpeechHandle, when known
     draft: Draft
     tools_sent: bool = True  # False when the reply was cut short and its tool calls never went to LiveKit
+
+    @property
+    def said(self) -> str:
+        """The reply's words as the caller hears them and LiveKit's item for it holds them: through the call AI's
+        speech filter, without stage directions and audio tags."""
+        return heard(self.text)
 
 
 class ClaudeBedrockLLM(llm.LLM):
@@ -310,7 +322,7 @@ class ClaudeBedrockLLM(llm.LLM):
                     if reply is not None:
                         if tag in self._unsettled and tag not in draft.settled:
                             draft.settled.add(tag)
-                            if item.interrupted and _norm(text) != _norm(reply.text):
+                            if item.interrupted and _norm(text) != _norm(reply.said):
                                 notes.append("Note from the app: the caller cut you off. "
                                              f'They heard only this part of your reply: "{text}"')
                     elif tag or (not self.history and not draft.messages):
@@ -345,7 +357,7 @@ class ClaudeBedrockLLM(llm.LLM):
                     and not _spoken(reply.speech, tag):
                 draft.settled.add(tag)
                 notes.append(f'Note from the app: the caller did not hear your reply that began '
-                             f'"{_opening(reply.text)}". They started talking before it played.')
+                             f'"{_opening(reply.said)}". They started talking before it played.')
 
         close()
         return draft
@@ -437,7 +449,7 @@ class ClaudeBedrockLLM(llm.LLM):
         self.history.append({"role": "assistant", "content": reply.content})
         self._committed |= reply.draft.item_ids
         self._unsettled = [t for t in self._unsettled if t not in reply.draft.settled]
-        if reply.text.strip():
+        if reply.said.strip():  # words the caller could miss; a reply of only a tag has none
             self._unsettled.append(reply.id)
         self._replies[reply.id] = reply
         self._last = reply

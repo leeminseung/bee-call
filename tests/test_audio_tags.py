@@ -132,3 +132,100 @@ def test_the_call_view_shows_no_tag(tmp_path):
     record(tmp_path, [INBOUND, say(2, "[laughs] That's a good one."), hear(5, "Right?"),
                       say(7, "Okay. [sighs] Long day."), CLOSED, ENDED])
     assert speech(view(tmp_path)) == [("ai", "That's a good one."), ("person", "Right?"), ("ai", "Okay. Long day.")]
+
+
+# ---------- what the Claude adapter tells Claude about a reply with tags (review of 2026-10-15, finding 7) ----------
+
+def test_a_reply_that_is_only_a_tag_is_not_reported_unheard():
+    """A reply of only "[laughs]", played in full: the captions node leaves it no words, so LiveKit files no assistant
+    item for it. That is not a reply the caller missed, so no "did not hear" note goes to Claude next turn."""
+    from tests.test_claude_llm import FakeSpeech, new_ctx, run_turn, say
+    from voice.claude_llm import ClaudeBedrockLLM
+    from voice.fake_claude import FakeAnthropic
+
+    async def main():
+        client = FakeAnthropic([say("[laughs]"), say("So, what's next?")])
+        model = ClaudeBedrockLLM(client=client)
+        ctx = new_ctx()
+        ctx.add_message(role="user", content="And then the cat sat on my keyboard and sent the email.")
+        speech = FakeSpeech()
+        await run_turn(model, ctx, speech=speech)
+        speech._done = True  # played to the end; no assistant item, since its caption was empty
+        ctx.add_message(role="user", content="Anyway.")
+        await run_turn(model, ctx)
+        return client
+
+    client = asyncio.run(main())
+    second = client.calls[1]["messages"]
+    assert second[1]["role"] == "assistant" and second[1]["content"][-1] == {"type": "text", "text": "[laughs]"}
+    assert not any("did not hear" in json.dumps(m) for m in second) and client.problems == []
+
+
+def test_a_reply_heard_in_full_but_its_tag_is_not_reported_cut_off():
+    """LiveKit's item for a reply holds what the caller heard, without its tags: a reply whose words were all heard is
+    not one the caller cut off, even when LiveKit marks the item interrupted (the caller spoke at its very end)."""
+    from tests.test_claude_llm import new_ctx, run_turn, say, spoken
+    from voice.claude_llm import ClaudeBedrockLLM
+    from voice.fake_claude import FakeAnthropic
+
+    async def main():
+        client = FakeAnthropic([say("[laughs] Okay, I'll look it up."), say("Here it is."),
+                                say("[sighs] That one was long. Let me check."), say("Sure.")])
+        model = ClaudeBedrockLLM(client=client)
+        ctx = new_ctx()
+        ctx.add_message(role="user", content="Can you check the train times?")
+        chunks = await run_turn(model, ctx)
+        spoken(ctx, chunks, heard="Okay, I'll look it up.", interrupted=True)
+        ctx.add_message(role="user", content="Thanks.")
+        chunks = await run_turn(model, ctx)
+        spoken(ctx, chunks)
+        ctx.add_message(role="user", content="And the bus?")
+        chunks = await run_turn(model, ctx)
+        spoken(ctx, chunks, heard="That one was long.", interrupted=True)  # cut off for real
+        ctx.add_message(role="user", content="Wait.")
+        await run_turn(model, ctx)
+        return client
+
+    client = asyncio.run(main())
+    second, fourth = client.calls[1]["messages"], client.calls[3]["messages"]
+    assert not any("cut you off" in json.dumps(m) for m in second)
+    assert 'heard only this part of your reply: \\"That one was long.\\"' in json.dumps(fourth[-1])
+    assert client.problems == []
+
+
+def test_a_reply_heard_as_the_speech_filter_leaves_it_gets_no_false_note():
+    """Review of the final fixes, finding 4: the captions and LiveKit's item hold a reply after the speech filter
+    too, which drops stage directions such as "[chuckles]" or "(웃음)", so a reply of only one got the "did not hear"
+    note, and one heard in full but marked interrupted the "cut off" one. A reply is now compared as it is heard."""
+    from tests.test_claude_llm import FakeSpeech, new_ctx, run_turn, say, spoken
+    from voice.claude_llm import ClaudeBedrockLLM
+    from voice.fake_claude import FakeAnthropic
+
+    async def unheard(reply: str) -> list:
+        client = FakeAnthropic([say(reply), say("So, what's next?")])
+        model = ClaudeBedrockLLM(client=client)
+        ctx = new_ctx()
+        ctx.add_message(role="user", content="And then the cat sent the email.")
+        speech = FakeSpeech()
+        await run_turn(model, ctx, speech=speech)
+        speech._done = True  # played to the end; nothing was left to caption
+        ctx.add_message(role="user", content="Anyway.")
+        await run_turn(model, ctx)
+        return client.calls[1]["messages"]
+
+    async def cut_off(reply: str, heard: str) -> list:
+        client = FakeAnthropic([say(reply), say("Here it is.")])
+        model = ClaudeBedrockLLM(client=client)
+        ctx = new_ctx()
+        ctx.add_message(role="user", content="Can you check the train times?")
+        chunks = await run_turn(model, ctx)
+        spoken(ctx, chunks, heard=heard, interrupted=True)
+        ctx.add_message(role="user", content="Thanks.")
+        await run_turn(model, ctx)
+        return client.calls[1]["messages"]
+
+    for reply in ("[chuckles]", "(웃음)"):
+        assert not any("did not hear" in json.dumps(m) for m in asyncio.run(unheard(reply))), reply
+    for reply in ("[chuckles] Okay, I'll look it up.", "(웃음) 네, 찾아볼게요."):
+        heard = reply.split(" ", 1)[1]
+        assert not any("cut you off" in json.dumps(m) for m in asyncio.run(cut_off(reply, heard))), reply

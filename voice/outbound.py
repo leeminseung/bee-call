@@ -46,10 +46,10 @@ from voice.dispatch import DECLINES, RING_SECONDS, place_call
 from voice.costs import SpendLog, day_budget
 from voice.language import CallLanguage, call_language
 from voice.people import People, Person, Settings, dev_person
-from voice.offers import (OPEN, AlreadyOffered, Offer, OfferStore, QuestionWaiting, agreed, not_placed_notification,
-                          notification, plan_of)
+from voice.offers import (OPEN, AlreadyOffered, Offer, OfferStore, QuestionWaiting, agreed, booked_call,
+                          not_placed_notification, notification, plan_of)
 from voice.prep import NOTE_SECONDS, OPENING_BY_S, prepare_outbound
-from meta.agent import Thinker
+from meta.agent import Thinker, thinker_for
 from meta.session import DAILY_NOTIFICATIONS, MetaSession, add_event, meta_notes, quiet, quiet_ends
 
 load_dotenv(".env.local")
@@ -180,6 +180,27 @@ def busy(workspace: Path, now: datetime) -> bool:
         placed is not None and timedelta(0) <= now - placed < timedelta(seconds=RING_SECONDS + 30))
 
 
+def prep_deadline(offer: Offer) -> float:
+    """How long an agreed AI call's prep may take: a "Call me now" rings soon (NOW_PREP_S); a booked time is
+    prepared ahead of it (NOTE_SECONDS)."""
+    return NOTE_SECONDS if booked_call(offer) else NOW_PREP_S
+
+
+async def prepare_offer(offer: Offer, person: Person, *, prepare=prepare_outbound, deadline_s: float | None = None,
+                        language: CallLanguage | None = None):
+    """The call prep for an agreed AI call, made before its phone rings and sent to the voice server with the call
+    (voice/dispatch.py), within prep_deadline unless told otherwise; voice.text_call --answer makes it the same way.
+    It reads the Bee login chosen for the work it runs in: the person's loops choose theirs (serve_person)."""
+    workspace = person.workspace
+    deadline_s = prep_deadline(offer) if deadline_s is None else deadline_s
+    extra = {"agreed": agreed(offer), "meta_notes": meta_notes(workspace)}
+    if offer.continue_from:
+        extra["earlier_call"] = earlier_call(workspace, offer.continue_from)
+    return await prepare(plan_of(offer), extra=extra, spend=SpendLog(workspace), bee=person.settings().bee,
+                         ours=OurCalls.of(workspace), now=person.now(), deadline_s=deadline_s,
+                         **({"language": language} if language else {}))
+
+
 async def call_due(person: Person, now: datetime | None = None, prepare=prepare_outbound, place=place_call, *,
                    language: CallLanguage | None = None) -> list[str]:
     """Places a call the user said yes to: "Call me now", an accepted time that has come (prepared up to
@@ -194,7 +215,6 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
     for offer in store.due(now, ahead=BOOKED_AHEAD):
         if busy(workspace, now):
             return []
-        right_now = offer.state == "now"
         claim = store.claim(offer.id, now)
         if claim is None:  # called off meanwhile, or another runner has it
             continue
@@ -204,13 +224,7 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
             log.info("offer %s not called: %s", offer.id, budget.why())
             continue
         try:
-            extra = {"agreed": agreed(claim.offer), "meta_notes": meta_notes(workspace)}
-            if offer.continue_from:
-                extra["earlier_call"] = earlier_call(workspace, offer.continue_from)
-            prep = await prepare(plan_of(claim.offer), extra=extra, spend=SpendLog(workspace), bee=person.settings().bee,
-                                 ours=OurCalls.of(workspace),
-                                 now=person.now(), deadline_s=NOW_PREP_S if right_now else NOTE_SECONDS,
-                                 **({"language": language} if language else {}))
+            prep = await prepare_offer(claim.offer, person, prepare=prepare, language=language)
             wait = (offer.at("call_at") - person.now()).total_seconds()
             if wait > 0:  # prepared early for a booked time
                 await asyncio.sleep(wait)
@@ -341,8 +355,8 @@ async def serve_person(people: People, person_id: str, settings: Settings) -> No
     async def on_trigger(trigger: Trigger) -> None:
         add_event(workspace, "bee_change", now=person.now(), **bee_event(trigger, workspace))
 
-    thinker = Thinker(workspace, send=send, call_time=settings.call_time, bee=settings.bee,
-                      language=settings.language)
+    thinker = thinker_for(workspace, send=send, call_time=settings.call_time, bee=settings.bee,
+                          language=settings.language)
     # A TaskGroup: if one loop fails, the others stop too, so serve_people() never starts a second set beside
     # survivors of the first.
     async with asyncio.TaskGroup() as group:
@@ -416,8 +430,8 @@ async def main() -> None:
     async def send(offer: Offer, ws: Path, now: datetime) -> str:
         return await send_offer(offer, person, now, language)
 
-    thinker = Thinker(workspace, send=send, call_time=settings.call_time, bee=settings.bee,
-                      language=settings.language)
+    thinker = thinker_for(workspace, send=send, call_time=settings.call_time, bee=settings.bee,
+                          language=settings.language)
     if args.once:
         if args.rules:
             made = await handle(saved_trigger(args.once), planner, args.dry_run, person)

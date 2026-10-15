@@ -194,6 +194,7 @@ class Thinker:
         self.role = role or model_catalog.mode_role("meta", coordinator_llm())
         self.send = send
         self.call_time = call_time  # the evening time an offer suggests (the person's setting; the default when None)
+        self.language = language if language in LANGUAGES else "en"
 
     async def _tool(self, name: str, args: dict[str, Any], now: datetime, actions: list[dict[str, Any]]) -> str:
         ws = self.workspace
@@ -308,3 +309,69 @@ class Thinker:
             entry["seconds"] = round(time.monotonic() - started, 2)
             MetaSession(self.workspace).log(entry)
         return entry
+
+
+# ---------- the meta agent without a model (META_AGENT=rules) ----------
+
+# Why the stand-in offers a call, said to the person (an offer's reason), in their language.
+RULE_WHY = {"ko": "Bee에 기록된 오늘 대화예요. 짧게 이야기해 볼까요?",
+            "en": "It came up in a conversation Bee recorded today. Want to talk it through?"}
+RULE_DECISION = {"ko": ("“{topics}”에 대해 통화를 제안했어요.", "제안할 통화가 없어요."),
+                 "en": ("Offered a call about “{topics}”.", "Nothing to offer a call about.")}
+
+
+class RuleThinker(Thinker):
+    """The meta agent without a model, for tests from outside and machines without one (META_AGENT=rules): every
+    event gets its think with no model and no network, logged in meta/session.jsonl as the model's are (model
+    "rules"). A Bee conversation of at least MIN_UTTERANCES utterances (beelink/planner.py's rule) gets one offer
+    about it, by its short summary, through the same offer_call as the model's, so the same rules hold (one question
+    at a time, one offer per conversation, quiet hours); anything else gets nothing."""
+
+    async def think(self, events: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
+        from beelink.planner import MIN_UTTERANCES
+
+        started = time.monotonic()
+        entry: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "events": events, "model": "rules",
+                                 "tools": [], "actions": [], "decision": "",
+                                 "usage": {"input_tokens": 0, "output_tokens": 0}}
+        offered: list[str] = []
+        try:
+            for event in events:
+                if event.get("kind") != "bee_change" or not self.bee:
+                    continue
+                inbox = str(event.get("inbox") or "")
+                try:
+                    changed = json.loads((files._inside(self.workspace, inbox) / "changed.json").read_text())
+                except (files.FileError, OSError, ValueError):
+                    continue
+                kept = set(event.get("conversation_ids") or [])  # the watcher left out what Bee heard of our calls
+                for c in changed.get("conversations") or []:
+                    summary = str(c.get("short_summary") or "").strip()
+                    if (kept and c.get("id") not in kept) or not summary or \
+                            (c.get("utterances_count") or 0) < MIN_UTTERANCES:
+                        continue
+                    args = {"topic": summary, "why": RULE_WHY[self.language], "conversation_ids": [c.get("id")],
+                            "inbox": inbox}
+                    result = await self._tool("offer_call", args, now, entry["actions"])
+                    entry["tools"].append({"name": "offer_call", "input": args, "result": result[:600]})
+                    if result.startswith("Asked"):
+                        offered.append(summary)
+            did, nothing = RULE_DECISION[self.language]
+            entry["decision"] = did.format(topics="”, “".join(offered)) if offered else nothing
+        except Exception as exc:  # serve_meta tries these events again; nothing was proposed
+            log.exception("the meta agent's rules failed")
+            entry["error"] = f"{type(exc).__name__}: {exc}"[:500]
+        finally:
+            entry["seconds"] = round(time.monotonic() - started, 2)
+            MetaSession(self.workspace).log(entry)
+        return entry
+
+
+def thinker_for(workspace: Path, *, send: Send | None, call_time: str | None, bee: bool,
+                language: str = "en") -> Thinker:
+    """The meta agent a person's loops run: on its model, or with META_AGENT=rules on the rules (RuleThinker)."""
+    import os
+
+    kind = RuleThinker if os.environ.get("META_AGENT", "").strip().lower() == "rules" else Thinker
+    return kind(workspace, send=send, call_time=call_time, bee=bee, language=language)
+

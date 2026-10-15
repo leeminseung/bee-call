@@ -55,7 +55,8 @@ class EchoStream(llm.LLMStream):
         last_user = next((i for i in reversed(items) if getattr(i, "role", None) == "user"), None)
         heard = (last_user.text_content or "").strip() if last_user else ""
         if TRIGGER in heard.lower() and "delegate" in _tool_names(self._tools):
-            call = llm.FunctionToolCall(name="delegate", arguments=json.dumps({"task": heard}),
+            call = llm.FunctionToolCall(name="delegate",
+                                        arguments=json.dumps({"task": heard, "title": "Test job"}),
                                         call_id=f"call_{uuid.uuid4().hex[:12]}")
             self._event_ch.send_nowait(llm.ChatChunk(id=chunk_id, delta=llm.ChoiceDelta(role="assistant", tool_calls=[call])))
             return

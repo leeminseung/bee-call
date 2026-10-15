@@ -816,16 +816,34 @@ def _context(workspace: Path, records: list[tuple[str, Record]], zone: tzinfo, l
     return ctx, verdicts
 
 
-def call_list(workspace: Path, *, zone: tzinfo, language: str, now: datetime, wall: float | None = None,
-              limit: int = DEFAULT_LIMIT, before: str | None = None, cache: Calls | None = None) -> dict[str, Any]:
-    """GET /calls: every call, newest first, a page at a time (section 1). BadRequest for a bad limit or cursor."""
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
-        raise BadRequest(f"limit must be a whole number from 1 to {MAX_LIMIT}")
-    after = _read_cursor(before) if before is not None else None
+@dataclass
+class Look:
+    """One look at a person's records, for several answers built at the same time (one /changes rebuild): the
+    records with their calls, and what every answer shares (the ring log, the verdicts, the ids)."""
+    records: list[tuple[str, Record]]
+    calls: dict[str, "Call"]
+    ctx: Context
+    verdicts: dict[str, str]
+
+
+def take_look(workspace: Path, *, zone: tzinfo, language: str, wall: float | None = None,
+              cache: Calls | None = None) -> Look:
     cache = cache or Calls(workspace)
     records = cache.all()
     ctx, verdicts = _context(workspace, records, zone, language, time.time() if wall is None else wall)
-    calls = {call_id: cache.call(record, zone) for call_id, record in records}
+    return Look(records, {call_id: cache.call(record, zone) for call_id, record in records}, ctx, verdicts)
+
+
+def call_list(workspace: Path, *, zone: tzinfo, language: str, now: datetime, wall: float | None = None,
+              limit: int = DEFAULT_LIMIT, before: str | None = None, cache: Calls | None = None,
+              look: Look | None = None) -> dict[str, Any]:
+    """GET /calls: every call, newest first, a page at a time (section 1). BadRequest for a bad limit or cursor.
+    `look`: one already taken, shared with other answers built at the same time."""
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
+        raise BadRequest(f"limit must be a whole number from 1 to {MAX_LIMIT}")
+    after = _read_cursor(before) if before is not None else None
+    look = look or take_look(workspace, zone=zone, language=language, wall=wall, cache=cache)
+    ctx, verdicts, calls = look.ctx, look.verdicts, look.calls
     rooms = {call.room for call in calls.values() if call.room}
     entries: list[tuple[tuple[float, str], Any]] = [((c.started.timestamp(), call_id), call_id)
                                                      for call_id, c in calls.items()]
@@ -850,15 +868,14 @@ def call_list(workspace: Path, *, zone: tzinfo, language: str, now: datetime, wa
 
 
 def call_view(workspace: Path, call_id: str, *, zone: tzinfo, language: str, now: datetime,
-              wall: float | None = None, cache: Calls | None = None) -> dict[str, Any] | None:
-    """GET /calls/{call_id}: one call as its thread (section 2); None for a call with no record (404)."""
-    cache = cache or Calls(workspace)
-    records = cache.all()
-    record = next((r for found, r in records if found == call_id), None)
-    if record is None:
+              wall: float | None = None, cache: Calls | None = None, look: Look | None = None) -> dict[str, Any] | None:
+    """GET /calls/{call_id}: one call as its thread (section 2); None for a call with no record (404). `look`: one
+    already taken, shared with other answers built at the same time."""
+    look = look or take_look(workspace, zone=zone, language=language, wall=wall, cache=cache)
+    call = look.calls.get(call_id)
+    if call is None:
         return None
-    ctx, _ = _context(workspace, records, zone, language, time.time() if wall is None else wall)
-    call = cache.call(record, zone)
+    ctx = look.ctx
     entry, items, captions = summary(call_id, call, ctx)
     body: dict[str, Any] = {"call": entry, "why_calling": why_calling(call, ctx) if entry["started_by"] == "ai" else None,
                             "prep": prep_card(call, entry["started_by"], zone), "items": items,
@@ -870,18 +887,32 @@ def call_view(workspace: Path, call_id: str, *, zone: tzinfo, language: str, now
 # ---------- what /changes watches (contract section 3) ----------
 
 def watched_calls(workspace: Path, *, zone: tzinfo, now: datetime, wall: float | None = None,
-                  cache: Calls | None = None) -> list[tuple[str, Path]]:
+                  cache: Calls | None = None, look: Look | None = None) -> list[tuple[str, Path]]:
     """The calls /changes announces on connect and rebuilds: those live, those that ended in the last RECENT_S (a
     title and Bee retries arrive after the end), and those whose record changed in that time."""
-    cache = cache or Calls(workspace)
-    wall = time.time() if wall is None else wall
+    look = look or take_look(workspace, zone=zone, language="en", wall=wall, cache=cache)
+    wall = look.ctx.wall
     found = []
-    for call_id, record in cache.all():
-        call = cache.call(record, zone)
+    for call_id, record in look.records:
+        call = look.calls[call_id]
         if state_of(call, wall) == "live" or wall - record.mtime <= RECENT_S \
                 or (now - call.when(call.end_t())).total_seconds() <= RECENT_S:
             found.append((call_id, record.folder))
     return found
+
+
+def changes(workspace: Path, *, zone: tzinfo, language: str, now: datetime, wall: float | None = None,
+            cache: Calls | None = None) -> tuple[dict[str, str], list[Path]]:
+    """One /changes rebuild (contract section 3): the version of the list's first page and of each watched call, and
+    the watched calls' folders, all from one look at the records."""
+    look = take_look(workspace, zone=zone, language=language, wall=wall, cache=cache)
+    found = {"/calls": call_list(workspace, zone=zone, language=language, now=now, look=look)["version"]}
+    watched = watched_calls(workspace, zone=zone, now=now, look=look)
+    for call_id, _ in watched:
+        body = call_view(workspace, call_id, zone=zone, language=language, now=now, look=look)
+        if body is not None:
+            found[f"/calls/{call_id}"] = body["version"]
+    return found, [folder for _, folder in watched]
 
 
 def files_stamp(workspace: Path, folders: list[Path]) -> tuple:

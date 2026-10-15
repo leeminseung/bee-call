@@ -25,7 +25,7 @@ only an aside says nothing at all: no space or line break comes out before the f
 
 import re
 
-from voice.audio_tags import is_tag
+from voice.audio_tags import is_tag, strip_tags
 
 TAG_START = re.compile(r"<\s*[/|｜!?]?\s*[A-Za-z_｜|]")  # "<word", "</word", "<|word", "<｜word"
 PARTIAL = re.compile(r"<\s*[/|｜!?]?\s*$")  # could still become a tag when more text arrives
@@ -212,3 +212,9 @@ def speech_only(text: str) -> str:
     speech = SpeechFilter()
     return (speech.feed(text) + speech.flush()).strip()
 
+
+def heard(text: str) -> str:
+    """A whole reply as the caller hears it and its captions show it: without markup, stage directions and audio
+    tags (this filter in the call AI's llm_node, then voice/audio_tags.py in its transcription node)."""
+    speech = SpeechFilter()
+    return strip_tags(speech.feed(text) + speech.flush())

@@ -4,6 +4,7 @@ web search, web fetch and code execution and the job's own tools, against a scri
 import asyncio
 import json
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -207,6 +208,7 @@ def test_a_job_runs_on_claude_with_anthropic_s_server_tools_and_the_job_s_own_to
         "web_search_20260318", "web_fetch_20260318", "code_execution_20260521"]
     assert tools["web_search"]["max_uses"] == claude.WEB_SEARCHES_PER_REQUEST
     assert tools["web_fetch"]["max_content_tokens"] == claude.FETCHED_TOKENS
+    assert tools["web_fetch"]["max_uses"] == claude.WEB_FETCHES_PER_REQUEST
     assert list(tools)[3:] == ["progress", "relay_to_user", "save_file", "save_chart"]
     asked = opening["messages"][0]["content"][0]["text"]
     assert asked.startswith("Job 01 (it is now ") and "맥북 에어와 프로 가격 비교" in asked and "Korean" in asked
@@ -309,6 +311,22 @@ def test_at_its_search_limit_a_job_is_asked_for_its_answer_without_tools(tmp_pat
     assert note[0]["type"] == "tool_result" and "web searches" in note[-1]["text"]
 
 
+@pytest.mark.parametrize("limit, value, used, what", [
+    ("JOB_WEB_FETCHES", 2, {"fetches": 2}, "page reads"),
+    ("JOB_USD", 0.5, {"tokens": (300_000, 0, 0, 0)}, "budget"),  # a large PDF read whole costs this way
+])
+def test_a_job_s_page_reads_and_spending_are_limits_too(tmp_path, monkeypatch, limit, value, used, what):
+    """Coordinator's review of 2026-10-15 (queued): web fetch had no cap, and max_content_tokens does not cap a PDF.
+    Page reads are capped per request and a job's page reads and spending are limits like its searches."""
+    monkeypatch.setattr(claude, limit, value)
+    client = api([reply([tool("toolu_1", "progress", text="Reading")], **used),
+                  reply([text("What I have.")], "end_turn")])
+    summary, _, _ = run(job_in(tmp_path, None), client)
+    final = client.messages.sent[-1]
+    assert summary == "What I have." and final["tool_choice"] == {"type": "none"}
+    assert what in final["messages"][-1]["content"][-1]["text"] and usage_of(job_in(tmp_path, None))["limit"] == what
+
+
 def test_at_a_limit_beside_a_server_tool_still_waiting_only_the_tool_results_go_back(tmp_path, monkeypatch):
     """Coordinator's review of 2026-10-15, item 1: when the turn that reaches a limit also called a server tool that
     has not run yet (web_search beside progress), the next message may hold only the tool results (a note after them
@@ -401,6 +419,26 @@ def test_a_job_cancelled_while_a_request_runs_counts_an_estimate(tmp_path):
     assert isinstance(cancelled, asyncio.CancelledError)
     used = usage_of(job_in(tmp_path))
     assert used["status"] == "cancelled" and used["estimated"] and used["input_tokens"] > 0
+
+
+def test_a_job_cut_off_by_the_end_of_its_call_still_clears_its_files_from_the_files_api(tmp_path):
+    """Coordinator's review of 2026-10-15 (queued): a job cancelled when its call ended left the files it had saved
+    from code execution in Anthropic's Files API. They go then too, within a few seconds at most."""
+    hold = asyncio.Event()
+
+    class HeldSecond(Messages):
+        def stream(self, **params):
+            stream = super().stream(**params)
+            stream.hold = hold if len(self.sent) == 2 else None
+            return stream
+
+    files = Files({"file_1": ("prices.csv", b"a,b\n")})
+    client = SimpleNamespace(messages=HeldSecond([reply([*ran_code("srvtoolu_1", "file_1"),
+                                                         tool("toolu_1", "progress", text="Saving")]),
+                                                  reply([text("Never.")], "end_turn")], files=files), files=files)
+    cancelled, _, _ = run(job_in(tmp_path, None), client, cancel_after=0.2)
+    assert isinstance(cancelled, asyncio.CancelledError) and (tmp_path / "prices.csv").exists()
+    assert files.deleted == ["file_1"]
 
 
 def test_a_request_that_runs_past_its_deadline_is_cut_and_tried_again(tmp_path, monkeypatch):
@@ -679,3 +717,99 @@ def test_a_claude_refusal_is_a_decline_the_standby_never_takes(tmp_path):
 
     declined, _, _ = run(job_in(tmp_path, None), api([reply([text("I can't help with that.")], "refusal")]))
     assert isinstance(declined, JobDeclined)
+
+
+def test_a_call_that_ends_while_a_failed_job_clears_its_files_does_not_hand_the_job_over(tmp_path, monkeypatch):
+    """Review of the last stretch, finding 6: the end of the call was swallowed while a failed job deleted its code
+    execution files, so the failure went on to the standby, which ran after the call was over and held its end. A
+    deletion that never finishes holds the call's end FORGET_ON_CANCEL_S at most (shortened here)."""
+    import anthropic
+    import httpx
+
+    from worker.runner import JobRunner, StandingBy
+
+    monkeypatch.setattr(claude, "FORGET_ON_CANCEL_S", 0.2)
+    held = asyncio.Event()
+
+    class SlowFiles(Files):
+        async def delete(self, file_id):
+            await held.wait()  # never set: the deletion is still running when the call ends
+
+    files = SlowFiles({"f1": ("huge.bin", b"0" * (claude.MAX_FILE_BYTES + 1))})
+    refused = anthropic.BadRequestError("bad", body=None, response=httpx.Response(
+        400, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")))
+    client = SimpleNamespace(messages=Messages([reply([*ran_code("srvtoolu_1", "f1"), tool("toolu_1", "progress",
+                                                                                            text="x")]), refused]),
+                             files=files)
+    standby = Standby()
+
+    async def main():
+        backend = StandingBy(ClaudeWorker(SONNET, client=client), lambda: standby, "Claude Sonnet 5.5", "GLM 5")
+
+        async def notify(news):
+            pass
+
+        runner = JobRunner(tmp_path, lambda name, **f: None, backend, notify, clock=lambda: datetime.now(SEOUL))
+        job = runner.start("Compare the trails")
+        await asyncio.sleep(0.3)  # the job failed and is deleting its files
+        await asyncio.wait_for(runner.cancel_all(), 2)  # the call ends
+        return job
+
+    job = asyncio.run(main())
+    assert job.status == "cancelled" and standby.ran == 0
+
+
+@pytest.mark.parametrize("ending", ["finished", "failed"])
+def test_the_end_of_the_call_while_a_job_clears_its_files_lets_the_deletions_finish(tmp_path, ending):
+    """Review of the final fixes, finding 3: since a8efc5b the end of the call while a job deleted its code execution
+    files from the Files API ended the job as cancelled even when it had finished (its summary lost, its files not
+    listed in the app), and in every case the deletions still to come were dropped. A finished job's result stands;
+    a failed one still ends as cancelled, never handed to the standby; and the deletions go on for
+    FORGET_ON_CANCEL_S after the call's end."""
+    import anthropic
+    import httpx
+
+    from worker.runner import JobRunner, StandingBy
+
+    release = asyncio.Event()  # the deletion finishes a moment after the call ends
+
+    class SlowFiles(Files):
+        async def delete(self, file_id):
+            await release.wait()
+            self.deleted.append(file_id)
+
+    if ending == "finished":
+        files = SlowFiles({"f1": ("prices.csv", b"a,b\n")})  # saved into the job folder
+        last = reply([text("Done.")], "end_turn")
+    else:
+        files = SlowFiles({"f1": ("huge.bin", b"0" * (claude.MAX_FILE_BYTES + 1))})  # too large: nothing produced
+        last = anthropic.BadRequestError("bad", body=None, response=httpx.Response(
+            400, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")))
+    client = SimpleNamespace(messages=Messages([reply([*ran_code("srvtoolu_1", "f1"),
+                                                       tool("toolu_1", "progress", text="x")]), last], files=files),
+                             files=files)
+    standby = Standby()
+    events: list = []
+
+    async def main():
+        backend = StandingBy(ClaudeWorker(SONNET, client=client), lambda: standby, "Claude Sonnet 5.5", "GLM 5")
+
+        async def notify(news):
+            pass
+
+        runner = JobRunner(tmp_path, lambda name, **f: events.append((name, f)), backend, notify,
+                           clock=lambda: datetime.now(SEOUL))
+        job = runner.start("Compare the trails")
+        await asyncio.sleep(0.3)  # the job's conversation is over and it is deleting its files
+        asyncio.get_running_loop().call_later(0.2, release.set)
+        await asyncio.wait_for(runner.cancel_all(), 2)  # the call ends
+        return job
+
+    job = asyncio.run(main())
+    assert files.deleted == ["f1"]
+    if ending == "finished":
+        (done,) = [f for name, f in events if name == "job_done"]
+        assert job.status == "completed" and done["summary"] == "Done."
+        assert [Path(f).name for f in done["files"]] == ["prices.csv", "report.md", "usage.json"]
+    else:
+        assert job.status == "cancelled" and standby.ran == 0
