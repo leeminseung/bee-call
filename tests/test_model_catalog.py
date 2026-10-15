@@ -21,16 +21,20 @@ def test_each_role_lists_its_choices_default_first_with_ids_of_the_catalog_s_own
             assert MODEL_ID.fullmatch(c.id) and c.name and c.maker and c.description["ko"] and c.description["en"]
             assert c.offering.provider in ("anthropic", "bedrock", "agentcore")
     assert [c.id for c in role("call").choices] == ["haiku", "sonnet"]
-    # Only what runs (the coordinator, 2026-10-15): Claude Sonnet 5.5 joins as the default with the Claude runner.
-    assert [c.id for c in role("worker").choices] == ["glm"]
+    assert [c.id for c in role("worker").choices] == ["sonnet", "glm"]
     assert {name for name, found in ROLES.items() if found.person} == {"call", "worker"}
 
 
 def test_the_user_s_decisions_on_who_runs_what():
-    """Decision 10 of the app contract and the user's choices of 2026-10-15; the worker runs GLM 5 on the AgentCore
-    harness until the Claude runner exists."""
+    """Decision 10 of the app contract and the user's choices of 2026-10-15: the worker is Claude Sonnet 5.5 on
+    Anthropic's API with thinking on at effort high, its conversation cached as it grows (worker/claude.py), and GLM 5
+    on the AgentCore harness stays selectable."""
     worker = choice("worker")
-    assert (worker.id, worker.offering.provider, worker.offering.model) == ("glm", "agentcore", "zai.glm-5")
+    assert (worker.id, worker.offering.provider, worker.offering.model, worker.thinking, worker.effort) == (
+        "sonnet", "anthropic", "claude-sonnet-5-5", "adaptive", "high")
+    assert worker.extra["anthropic"] == {"cache_control": {"type": "ephemeral"}}
+    glm = choice("worker", "glm")
+    assert (glm.offering.provider, glm.offering.model, glm.default) == ("agentcore", "zai.glm-5", False)
     meta, prep = choice("meta"), choice("prep")
     assert (meta.offering.model, prep.offering.model) == ("claude-sonnet-5-5", "claude-haiku-5-5")
     for name in ("call", "meta", "prep"):
@@ -41,8 +45,7 @@ def test_the_user_s_decisions_on_who_runs_what():
 def test_a_stored_id_the_catalog_no_longer_has_reads_as_the_role_s_default():
     assert choice("call", "sonnet").id == "sonnet"
     assert choice("call", "opus-9").id == choice("call", None).id == "haiku"
-    assert choice("worker", "haiku").id == "glm"  # haiku is a call model, not a worker
-    assert choice("worker", "sonnet").id == "glm"  # not a worker until the Claude runner exists
+    assert choice("worker", "haiku").id == "sonnet"  # haiku is a call model, not a worker
     with pytest.raises(KeyError):
         role("nobody")
 

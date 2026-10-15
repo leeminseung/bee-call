@@ -2,6 +2,16 @@
   "role": "worker",
   "models": [
     {
+      "id": "sonnet",
+      "name": "Claude Sonnet 5.5",
+      "maker": "Anthropic",
+      "description": {
+        "ko": "조사와 보고서가 가장 꼼꼼해요",
+        "en": "Most thorough research and reports"
+      },
+      "default": true
+    },
+    {
       "id": "glm",
       "name": "GLM 5",
       "maker": "AWS",
@@ -9,7 +19,7 @@
         "ko": "AWS에서 돌아가요",
         "en": "Runs on AWS"
       },
-      "default": true
+      "default": false
     }
   ]
 }
