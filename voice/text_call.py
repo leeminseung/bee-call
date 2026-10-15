@@ -36,6 +36,9 @@ from voice.offers import OfferStore, agreed, plan_of
 from voice.people import People
 
 
+FIRST_WORDS_S = 15.0  # the longest the person waits for the AI's first words before speaking anyway
+
+
 class TextRoom:
     """What a call uses of its LiveKit room: its name, the voice server's attributes and the room's events."""
 
@@ -134,7 +137,7 @@ async def text_call(people: People, person: str, lines: list[str], *, answer: st
     """Runs one call in text; returns {"call_id", "record"} (record None for a call that was not answered)."""
     room, meta = meta_for(people, person, answer, continue_from)
     job = TextJob(room, meta)
-    closed = asyncio.Event()
+    closed, spoke = asyncio.Event(), asyncio.Event()
 
     def make_session(ctx, language, voice, rec, call_model) -> AgentSession:
         session = TextSession(llm=agent.make_llm(rec, language, call_model))
@@ -144,6 +147,7 @@ async def text_call(people: People, person: str, lines: list[str], *, answer: st
             item = ev.item
             if getattr(item, "role", None) == "assistant" and (item.text_content or "").strip():
                 say(f"AI: {item.text_content.strip()}")
+                spoke.set()
                 session.emit("agent_state_changed", SimpleNamespace(old_state="thinking", new_state="speaking"))
 
         session.on("conversation_item_added", added)
@@ -154,6 +158,10 @@ async def text_call(people: People, person: str, lines: list[str], *, answer: st
     await agent.run_call(job, people)
     session = job.session
     if session is not None and not closed.is_set():
+        try:  # the person speaks after the AI's first words, as they would after hearing them
+            await asyncio.wait_for(spoke.wait(), FIRST_WORDS_S)
+        except TimeoutError:
+            pass
         for line in lines:
             if closed.is_set():  # the AI ended the call
                 break
