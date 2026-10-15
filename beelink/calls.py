@@ -2,9 +2,9 @@
 
 Bee also records our calls (the wearable hears the user talking to us). For those windows our own record is the
 source, so what Bee made of them is never read as new context (BC-060): its conversations that overlap one of our
-calls, and the facts, todos and notes it made from them. OurCalls holds that rule for every reader: the watcher's
-batches (beelink/watcher.py), a call's Bee inputs (beelink/context.py) and the reads of the call AI, the prep and
-the meta agent (beelink/reads.py).
+calls, the facts and todos it made from them, and a voice note recorded during one. OurCalls holds that rule for
+every reader: the watcher's batches (beelink/watcher.py), a call's Bee inputs (beelink/context.py) and the reads of
+the call AI, the prep and the meta agent (beelink/reads.py).
 """
 
 from dataclasses import dataclass
@@ -15,7 +15,7 @@ from beelink.clock import parse_time
 from voice.call_folders import EVENTS, call_folders, read_events
 
 MARGIN_SECONDS = 60.0
-# Bee derives facts, todos and notes from a conversation some time after it ends. What it made from one of our calls
+# Bee derives facts and todos from a conversation some time after it ends. What it made from one of our calls
 # up to this long after the call is taken as made from that call (a guess: Bee does not say which conversation a
 # fact came from). A fact from another conversation in that time is left out too, the cost of the rule.
 DERIVED_AFTER_SECONDS = 600.0
@@ -83,6 +83,17 @@ class OurCalls:
     def conversations(self, items: Any) -> list[Any]:
         return [item for item in items or [] if not self.conversation(item)]
 
+    def during(self, item: Any) -> bool:
+        """Something made during one of our calls."""
+        made = _seconds(item.get("created_at")) if isinstance(item, dict) else None
+        return made is not None and any(start - MARGIN_SECONDS <= made <= end + MARGIN_SECONDS
+                                        for start, end in self.windows)
+
     def others(self, items: Any) -> list[Any]:
-        """Facts, todos or notes, without those Bee made of our calls (items with no time are kept)."""
+        """Facts or todos, without those Bee made of our calls (items with no time are kept)."""
         return [item for item in items or [] if not self.derived(item)]
+
+    def voice_notes(self, items: Any) -> list[Any]:
+        """Voice notes (Bee journals), without one recorded during our call. A voice note is the user's own words,
+        not something Bee makes of a conversation, so one recorded in the minutes after a call is kept."""
+        return [item for item in items or [] if not self.during(item)]

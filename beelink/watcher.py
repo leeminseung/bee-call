@@ -97,7 +97,7 @@ class BeeWatcher:
             "conversations": conversations,
             "facts": ours.others(payload.get("facts")),
             "todos": ours.others(payload.get("todos")),
-            "journals": ours.others(payload.get("journals")),
+            "journals": ours.voice_notes(payload.get("journals")),
             "dailies": payload.get("dailies") or [],
         }
         counts = {k: len(v) for k, v in kept.items()}

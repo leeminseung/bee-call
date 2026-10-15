@@ -100,7 +100,9 @@ def test_what_bee_made_of_our_own_call_is_never_new_context(tmp_path, fake_bee, 
                "facts": [{"id": 1, "text": "Said to the AI", "created_at": soon_after},
                          {"id": 2, "text": "Said to a friend", "created_at": later}],
                "todos": [{"id": 3, "text": "From our call", "created_at": during}],
-               "journals": [{"id": 4, "text": "A note while on our call", "created_at": during}], "dailies": []}
+               "journals": [{"id": 4, "text": "A note while on our call", "created_at": during},
+                            {"id": 5, "text": "A voice note right after the call", "created_at": soon_after}],
+               "dailies": []}
     (tmp_path / "changed.json").write_text(json.dumps(changed))
     monkeypatch.setenv("FAKE_BEE_CHANGED", str(tmp_path / "changed.json"))
 
@@ -108,9 +110,12 @@ def test_what_bee_made_of_our_own_call_is_never_new_context(tmp_path, fake_bee, 
         pass
 
     trigger = asyncio.run(BeeWatcher(workspace, on_trigger).catch_up("test"))
-    assert trigger.counts == {"conversations": 0, "facts": 1, "todos": 0, "journals": 0, "dailies": 0}
+    assert trigger.counts == {"conversations": 0, "facts": 1, "todos": 0, "journals": 1, "dailies": 0}
     saved = json.loads((trigger.inbox_dir / "changed.json").read_text())
     assert [f["id"] for f in saved["facts"]] == [2] and saved["conversations"] == saved["todos"] == []
+    # A voice note is the user's own words: Bee makes none from a conversation, so one recorded in the minutes after
+    # our call is kept; only one recorded during the call is left out (the wearable heard the call).
+    assert [j["id"] for j in saved["journals"]] == [5]
     assert "Said to the AI" not in json.dumps(saved, ensure_ascii=False)  # the meta agent can read this file
 
 
