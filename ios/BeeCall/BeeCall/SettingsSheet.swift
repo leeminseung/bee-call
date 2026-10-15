@@ -14,6 +14,9 @@ struct SettingsSheet: View {
     @AppStorage("language") private var appLanguage = "en"
     @State private var picked: CallLanguage?
     @State private var pickedVoice: String?
+    #if DEBUG
+    @AppStorage(Server.typedAddressKey) private var typedAddress = "" // a Debug build's token server, typed
+    #endif
 
     private var language: CallLanguage {
         picked ?? person.me?.settings.language ?? CallLanguage(rawValue: appLanguage) ?? .en
@@ -61,6 +64,19 @@ struct SettingsSheet: View {
                 } footer: {
                     Text(words.footer)
                 }
+                #if DEBUG
+                Section {
+                    TextField("http://<Mac IP>:8787", text: $typedAddress)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: {
+                    Text("Token server (development)")
+                } footer: {
+                    Text("Debug builds only: the Mac's address changes with the Wi-Fi. Design D's calls, offers and voices "
+                         + "come from the contract's examples unless the app is launched with -realServer YES.")
+                }
+                #endif
             }
             .navigationTitle(words.title)
             .navigationBarTitleDisplayMode(.inline)

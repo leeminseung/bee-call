@@ -156,6 +156,7 @@ struct HomeView: View {
     let calls: CallManager
     let offers: OfferCenter
     let status: String
+    var problem: String?
     var glowing: String?
     @Binding var jump: String?
     let showCallScreen: () -> Void
@@ -271,6 +272,13 @@ struct HomeView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            if let problem {
+                Text(problem)
+                    .font(.caption)
+                    .foregroundStyle(BeeStyle.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
         }
         .padding(.bottom, 4)
     }

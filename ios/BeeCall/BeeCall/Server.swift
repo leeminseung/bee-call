@@ -5,9 +5,9 @@ import UIKit
 
 /// The Bee Call server this build talks to, and who is signed in to it (voice/token_server.py).
 ///
-/// The address comes with the build: Info.plist BeeCallServer and BeeCallRecords, set per build configuration
-/// in the Xcode project. A Debug build talks to the Mac on the same Wi-Fi and can be pointed elsewhere with the
-/// field on the first screen; a Release (TestFlight) build talks to the cloud server only.
+/// The address comes with the build: Info.plist BeeCallServer, set per build configuration in the Xcode project.
+/// A Debug build talks to the Mac on the same Wi-Fi and can be pointed elsewhere with the field in the settings
+/// sheet; a Release (TestFlight) build talks to the cloud server only. The records server is the Mac page's alone.
 /// Signing in uses Sign in with Apple. The server answers with its own sign-in token, which stays in the
 /// Keychain, and every request carries it. A new person waits until the server's operator approves the code
 /// the server gives (python -m voice.people approve).
@@ -64,19 +64,8 @@ final class Server {
         return origin(of: Bundle.main.object(forInfoDictionaryKey: "BeeCallServer") as? String ?? "") ?? ""
     }
 
-    /// Where a Debug build keeps the address typed on its first screen.
+    /// Where a Debug build keeps the address typed in its settings sheet.
     nonisolated static let typedAddressKey = "tokenServerURL"
-
-    /// The call record page (voice/session_server.py). In a Debug build: the same host as the token server,
-    /// port 8788, with ?debug=1, the only address on which the page offers its debug events (web/app.js).
-    nonisolated static var recordsURL: URL? {
-        #if DEBUG
-        if let host = URLComponents(string: api)?.host {
-            return URL(string: "http://\(host):8788/?debug=1")
-        }
-        #endif
-        return URL(string: Bundle.main.object(forInfoDictionaryKey: "BeeCallRecords") as? String ?? "")
-    }
 
     nonisolated private static func origin(of address: String) -> String? {
         guard let parts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),

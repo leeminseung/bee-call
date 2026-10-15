@@ -48,19 +48,25 @@ struct BeeCallApp: App {
         }
     }
 
+    /// Design D's app once signed in (AppRoot), else the sign-in screen. In a Debug build the voice demo shows the
+    /// call screen with its orb on synthetic levels (VoiceDemo.swift).
     @ViewBuilder private var root: some View {
-        if showsCallScreen {
-            CallScreen(calls: calls)
+        #if DEBUG
+        if VoiceDemo.requested() != nil {
+            CallModeView(calls: calls, job: nil, showConversation: {})
+        } else {
+            signedInOrNot
+        }
+        #else
+        signedInOrNot
+        #endif
+    }
+
+    @ViewBuilder private var signedInOrNot: some View {
+        if server.isSignedIn {
+            AppRoot(calls: calls)
         } else {
             SignInView(server: server)
         }
-    }
-
-    /// The call screen once signed in; in a Debug build, also for the voice demo (VoiceDemo.swift).
-    private var showsCallScreen: Bool {
-        #if DEBUG
-        if VoiceDemo.requested() != nil { return true }
-        #endif
-        return server.isSignedIn
     }
 }

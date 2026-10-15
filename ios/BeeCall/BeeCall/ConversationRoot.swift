@@ -10,6 +10,7 @@ struct ConversationRoot: View {
     let source: any ConversationSource
     let offers: OfferCenter
     let status: String
+    var problem: String? // in red under the status line: what did not reach the server or did not start
     let person: PersonStore
     let catalog: VoiceCatalog
     @State private var presentation: CallPresentation
@@ -22,14 +23,17 @@ struct ConversationRoot: View {
     @State private var sheetUp = false
     @State private var notice = ResultNotice()
     @State private var jump: String?
+    @Environment(\.scenePhase) private var scenePhase
     @Namespace private var zoom
 
-    init(calls: CallManager, source: any ConversationSource, offers: OfferCenter, status: String, person: PersonStore,
-         catalog: VoiceCatalog, samples: any VoiceSamples, presentation: CallPresentation = CallPresentation()) {
+    init(calls: CallManager, source: any ConversationSource, offers: OfferCenter, status: String,
+         problem: String? = nil, person: PersonStore, catalog: VoiceCatalog, samples: any VoiceSamples,
+         presentation: CallPresentation = CallPresentation()) {
         self.calls = calls
         self.source = source
         self.offers = offers
         self.status = status
+        self.problem = problem
         self.person = person
         self.catalog = catalog
         _presentation = State(initialValue: presentation)
@@ -37,7 +41,8 @@ struct ConversationRoot: View {
     }
 
     var body: some View {
-        HomeView(source: source, calls: calls, offers: offers, status: status, glowing: notice.glowing, jump: $jump,
+        HomeView(source: source, calls: calls, offers: offers, status: status, problem: problem, glowing: notice.glowing,
+                 jump: $jump,
                  showCallScreen: { presentation.show(.callScreen) },
                  openSettings: {
                      sheetUp = true
@@ -84,7 +89,10 @@ struct ConversationRoot: View {
                 try? await Task.sleep(for: .seconds(2))
                 notice.glowEnded(id)
             }
-            .task { await source.keepFresh() }
+            .task(id: scenePhase == .background) { // up to date while on screen, and again on coming back
+                guard scenePhase != .background else { return }
+                await source.keepFresh()
+            }
     }
 
     /// "이 통화 이어서 하기": the call starts once the sheet is down, so the call screen is not asked for while the
