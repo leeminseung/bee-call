@@ -16,7 +16,8 @@ Errors are printed with their status and type: a 400 means the request's shape i
 The key comes from ANTHROPIC_API_KEY or --env-file and is never printed (its length is).
 
 Run:  uv run python probes/haiku_probe.py [--call-model haiku|sonnet] [--thinking T] [--effort E]
-                                         [--transcript PATH] [--turns 6] [--rounds 2] [--env-file .env.local]
+                                         [--transcript PATH] [--turns 6] [--rounds 2] [--language ko|en]
+                                         [--env-file .env.local]
       --thinking and --effort try another setting than the call model's own.
 Cost: a round of six turns is about 0.1 US cent with Haiku and 2 cents with Sonnet (requests of 4-5K input tokens,
 most of them read from the cache).
@@ -52,6 +53,7 @@ PREP_NOTE = """\
 - Open todo suggestion: "Send the hackathon demo video to the team."
 Opening already said: "네, Bee Call이에요. 어떤 이야기 해 볼까요?"
 """
+OPENING_KO, OPENING_EN = "네, Bee Call이에요. 어떤 이야기 해 볼까요?", "Hi, it's Bee Call. What shall we talk about?"
 LINE = re.compile(r"^- (\d+):(\d+(?:\.\d+)?) \*\*User:\*\* (.*)$")
 
 
@@ -87,7 +89,8 @@ def stand_in_glm():
     return ScriptedLLM([["(GLM 5 would answer here)"]] * 20, model="glm-5-not-called")
 
 
-async def one_round(turns: list[str], workspace: Path, round_no: int, call_model) -> dict[str, Any]:
+async def one_round(turns: list[str], workspace: Path, round_no: int, call_model, language_code: str = "ko"
+                    ) -> dict[str, Any]:
     from livekit.agents import AgentSession
 
     from voice import agent as voice_agent
@@ -99,9 +102,10 @@ async def one_round(turns: list[str], workspace: Path, round_no: int, call_model
     voice_agent.aws.LLM = lambda **_: stand_in_glm()  # never Bedrock from the probe
     now = datetime.now(SEOUL)
     rec = CallRecorder(workspace, room=f"probe-{round_no}", now=now)
-    language = call_language("ko")
+    language = call_language(language_code)
     model = voice_agent.make_llm(rec, language, call_model)
-    coordinator = BeeCoordinator(rec, StubJobs(), workspace, clock=lambda: datetime.now(SEOUL), prep_note=PREP_NOTE,
+    prep_note = PREP_NOTE if language_code == "ko" else PREP_NOTE.replace(OPENING_KO, OPENING_EN)
+    coordinator = BeeCoordinator(rec, StubJobs(), workspace, clock=lambda: datetime.now(SEOUL), prep_note=prep_note,
                                  language=language)
     metrics: list[Any] = []
     rows = []
@@ -162,6 +166,7 @@ def main() -> None:
     parser.add_argument("--rounds", type=int, default=1, help="calls one after another (the second reads the cache)")
     parser.add_argument("--env-file", type=Path, default=REPO / ".env.local")
     parser.add_argument("--out", type=Path, help="where to keep the rounds' records (a new temporary folder)")
+    parser.add_argument("--language", default="ko", choices=("ko", "en"), help="the call's language")
     args = parser.parse_args()
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -187,7 +192,7 @@ def main() -> None:
     turns = caller_turns(args.transcript, args.turns) if args.transcript else TURNS[:args.turns]
     print(f"{len(turns)} caller turns" + (f" from {args.transcript}" if args.transcript else " (built in)"))
     for round_no in range(1, args.rounds + 1):
-        result = asyncio.run(one_round(turns, out / f"round-{round_no}", round_no, call_model))
+        result = asyncio.run(one_round(turns, out / f"round-{round_no}", round_no, call_model, args.language))
         (out / f"round-{round_no}.json").write_text(json.dumps(result, ensure_ascii=False, indent=1, default=str))
         report(result, round_no)
     print(f"records: {out}")
