@@ -632,3 +632,30 @@ def test_the_usual_ways_of_saying_yes_save(tmp_path, fake_bee, answer):
         return await saved(agent, question, answer, kind="todo_create", text="버그 기록" if korean else "Note the bug")
 
     assert asyncio.run(main()).startswith("Saved to Bee")
+
+
+def test_the_call_ai_waits_at_most_15_s_on_bee_and_background_jobs_are_not_held_to_it():
+    """The user's rule (2026-10-15): what the call AI waits on in silence has a 15 s ceiling; reads are shorter."""
+    from beelink import reads
+
+    assert cli.CALL_WAIT_S == 15.0 and cli.WRITE_TIMEOUT == cli.CALL_WAIT_S
+    assert reads.READ_TIMEOUT_S <= cli.CALL_WAIT_S
+
+
+def test_the_fact_read_before_a_fix_waits_no_longer_than_the_call_allows(tmp_path, fake_bee, monkeypatch):
+    """Before a fact is fixed its old text is read (so the fix can be taken back); that read is held to the
+    call's ceiling too, and a slow one only means the fix cannot be taken back."""
+    import time
+
+    monkeypatch.setenv("FAKE_BEE_SLOW", "facts get 3")
+    monkeypatch.setattr(cli, "CALL_WAIT_S", 0.5)
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path, language="en")
+        started = time.monotonic()
+        said = await saved(agent, "Shall I fix it in Bee to 'Bonus is 10%'?", "Yes.",
+                           kind="fact_update", fact_id=7, text="Bonus is 10%")
+        return said, time.monotonic() - started
+
+    said, took = asyncio.run(main())
+    assert said.startswith("Saved to Bee") and took < 2.5

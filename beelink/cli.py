@@ -26,7 +26,10 @@ from pathlib import Path
 from typing import Any
 
 TIMEOUT = 60.0
-WRITE_TIMEOUT = TIMEOUT  # how long a write waits for Bee's answer
+# The longest the call AI waits on Bee in silence during a call (Matt, 2026-10-15). Background jobs are not held to
+# it: the call goes on while they run. Reads during a call stop sooner (beelink/reads.py READ_TIMEOUT_S).
+CALL_WAIT_S = 15.0
+WRITE_TIMEOUT = CALL_WAIT_S  # how long a write waits for Bee's answer: writes happen in calls and right after them
 LOGIN_LINK = re.compile(r"Authentication link:\s*(https://\S+)")
 
 
@@ -155,8 +158,8 @@ async def me(timeout: float = TIMEOUT) -> dict[str, Any]:
     return await run_json("me", timeout=timeout)
 
 
-async def fact(fact_id: int) -> dict[str, Any]:
-    return await run_json("facts", "get", str(fact_id))
+async def fact(fact_id: int, timeout: float = TIMEOUT) -> dict[str, Any]:
+    return await run_json("facts", "get", str(fact_id), timeout=timeout)
 
 
 async def todos(limit: int = 50, cursor: Any = None, timeout: float = TIMEOUT) -> dict[str, Any]:

@@ -162,7 +162,7 @@ class BeeWrites:
         before = None
         if item.get("kind") == "fact_update":  # kept so the user can take the fix back
             try:
-                before = (await cli.fact(item["fact_id"])).get("fact")
+                before = (await cli.fact(item["fact_id"], timeout=cli.CALL_WAIT_S)).get("fact")
             except Exception:
                 before = None
         # The key is taken and recorded with nothing awaited in between, so writes made at the same time (one
