@@ -7,7 +7,8 @@ A job is one conversation. Claude has Anthropic's server tools, which Anthropic 
   code_execution  Python and bash in a sandbox, one container for the whole job (free with the web tools)
 and the job's own tools (worker/tools.py: progress, relay_to_user, save_file, save_chart), which this Mac runs
 between requests. A file Claude leaves in $OUTPUT_DIR in code execution comes back as a file id: this Mac saves it
-into the job folder under a free, safe name and deletes it from Anthropic's Files API.
+into the job folder under a free, safe name at once, and deletes it from Anthropic's Files API once the job is over
+(the job's conversation names the file until then, and a request naming a deleted file is refused).
 
 Background jobs need not be quick (the user, 2026-10-15): every request may write up to the role's max_tokens with
 thinking at effort high, a job may make MAX_REQUESTS requests and JOB_WEB_SEARCHES web searches, and at either limit
@@ -164,6 +165,8 @@ class ClaudeWorker:
             raise
         finally:
             write_usage(job, usage)
+            if usage["status"] != "cancelled":  # a call that ended is not held up for this
+                await self._forget_outputs(outputs, job)
         summary = "".join(b.get("text", "") for b in content if b.get("type") == "text").strip() \
             or "The worker finished without a summary."
         if not (job.dir / "report.md").exists():
@@ -211,8 +214,7 @@ class ClaudeWorker:
         return results
 
     async def _save_outputs(self, content: list[dict[str, Any]], job: Job, outputs: dict[str, str]) -> None:
-        """Saves into the job folder each file code execution left in $OUTPUT_DIR, then deletes it from the Files
-        API; a file over MAX_FILE_BYTES is only deleted."""
+        """Saves into the job folder each file code execution left in $OUTPUT_DIR (not one over MAX_FILE_BYTES)."""
         found = [item["file_id"] for block in content if block.get("type") in CODE_RESULTS
                  and isinstance(block.get("content"), dict)
                  for item in block["content"].get("content") or []
@@ -239,11 +241,16 @@ class ClaudeWorker:
                     else:
                         (job.dir / name).write_bytes(data)
                         outputs[file_id] = name
-            except Exception:
+            except Exception:  # left in the Files API: it may come down later by hand
                 log.warning("job %s: could not save %s from code execution", job.job_id, file_id, exc_info=True)
-                continue  # left in the Files API: it may come down later by hand
+
+    async def _forget_outputs(self, outputs: dict[str, str], job: Job) -> None:
+        """Deletes from the Files API the files the job saved (or found too large), once its conversation is over."""
+        for file_id, became in outputs.items():
+            if became == "failed":
+                continue
             try:
-                await files.delete(file_id)
+                await self.client().files.delete(file_id)
             except Exception:
                 log.warning("job %s: could not delete %s from the Files API", job.job_id, file_id, exc_info=True)
 

@@ -81,15 +81,20 @@ class Stream:
 
 
 class Messages:
-    def __init__(self, answers: list, hold: asyncio.Event | None = None) -> None:
-        self.answers, self.hold, self.sent = list(answers), hold, []
+    def __init__(self, answers: list, hold: asyncio.Event | None = None, files: "Files | None" = None) -> None:
+        self.answers, self.hold, self.files, self.sent = list(answers), hold, files, []
 
     def stream(self, **params):
         self.sent.append(json.loads(json.dumps(params)))
-        answer = self.answers.pop(0)
-        if isinstance(answer, BaseException) and getattr(answer, "before_stream", False):
-            raise answer
-        return Stream(answer, self.hold)
+        # As the real API does: a request whose conversation names a file deleted from the Files API is refused.
+        gone = [f for f in (self.files.deleted if self.files else []) if f in json.dumps(params)]
+        if gone:
+            import anthropic
+            import httpx
+
+            raise anthropic.NotFoundError(f"File `{gone[0]}` not found.", body=None, response=httpx.Response(
+                404, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")))
+        return Stream(self.answers.pop(0), self.hold)
 
 
 class Files:
@@ -114,7 +119,8 @@ class Files:
 
 
 def api(answers: list, files: dict | None = None, hold: asyncio.Event | None = None) -> SimpleNamespace:
-    return SimpleNamespace(messages=Messages(answers, hold), files=Files(files or {}))
+    stored = Files(files or {})
+    return SimpleNamespace(messages=Messages(answers, hold, stored), files=stored)
 
 
 def job_in(tmp_path, language: str | None = "ko") -> Job:
@@ -168,7 +174,8 @@ def test_a_job_runs_on_claude_with_anthropic_s_server_tools_and_the_job_s_own_to
     assert progress == ["가격 찾는 중"] and relayed == ["에어는 159만 원부터예요."]
     assert (tmp_path / "report.md").read_text() == report
     assert (tmp_path / "prices.csv").read_bytes() == b"model,price\nAir,1590000\n"  # from code execution
-    assert client.files.deleted == ["file_1"]  # not kept in Anthropic's Files API
+    # Deleted from Anthropic's Files API once the job is over: its conversation names the file until then.
+    assert client.files.deleted == ["file_1"]
     assert (tmp_path / "prices.svg").exists() and (tmp_path / "prices.png").exists()
 
     opening, second, third, last = client.messages.sent
