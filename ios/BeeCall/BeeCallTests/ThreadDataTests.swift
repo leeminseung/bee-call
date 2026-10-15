@@ -13,13 +13,14 @@ final class ThreadDataTests: XCTestCase {
         return room.map { text.replacingOccurrences(of: live, with: $0) } ?? text
     }
 
-    /// A call the person starts, joined: the thread's own call is its room.
-    @MainActor private func data(_ server: FakeServer) async throws -> ThreadData {
+    /// A call the person starts, joined: the thread's own call is its room. With `stream`, /changes is that.
+    @MainActor private func data(_ server: FakeServer, stream: FakeChangeStream? = nil) async throws -> ThreadData {
         let callKit = FakeCallKit(), calls = CallManager(callKit: callKit, calls: callKit, microphone: { true },
                                                          room: FakeRoom(), beforeAnswering: {},
                                                          decline: CallDecline(server: server.client()))
         let data = ThreadData(calls: calls, store: CallStore(server: server.client()),
-                              offers: OfferCenter(server: server.client()), person: PersonStore(server: server.client()))
+                              offers: OfferCenter(server: server.client()), person: PersonStore(server: server.client()),
+                              listen: stream?.listener)
         await calls.startCall()
         calls.perform(try XCTUnwrap(callKit.requested.last as? CXStartCallAction))
         await waitUntil("the room is joined") { calls.ownRoom != nil }
@@ -79,5 +80,76 @@ final class ThreadDataTests: XCTestCase {
         data.keepFresh(false)
         data.keepFresh(true)
         await waitUntil("fetched again on coming back") { server.requests.count == before + 6 }
+    }
+
+    // MARK: - Fresh-context review of round1 7c1361a, finding 1
+
+    /// Coming back (the app on screen again) asks again for every view held, with its version: a call that ended
+    /// while the app was in the background is no longer drawn as live.
+    @MainActor func testComingBackAsksAgainForTheViewsHeld() async throws {
+        let server = FakeServer()
+        server.replies["GET /calls/\(room)"] = .status(200, try text("call-view-live", room: room))
+        let data = try await data(server)
+        await data.show(room)
+        XCTAssertEqual(data.view(room)?.call.state, .live)
+        server.replies["GET /calls/\(room)"] = .status(200, try text("call-view", room: room))
+        data.keepFresh(true)
+        await waitUntil("the view held is asked again") { data.view(room)?.call.state == .ended }
+    }
+
+    /// Each time /changes opens again, the list, the offers and every view held are asked again with their
+    /// versions: on connect it announces only calls live or ended in the last ten minutes, so a call that ended
+    /// while the stream was down for longer is otherwise never fetched again.
+    @MainActor func testEachOpeningOfTheStreamAsksAgainForWhatIsHeld() async throws {
+        let server = FakeServer(), stream = FakeChangeStream()
+        server.replies["GET /calls"] = .status(200, try text("calls"))
+        server.replies["GET /offers"] = .status(200, try text("offers"))
+        server.replies["GET /calls/\(room)"] = .status(200, try text("call-view-live", room: room))
+        let data = try await data(server, stream: stream)
+        await data.show(room)
+        data.keepFresh(true)
+        await waitUntil("the stream is asked for") { stream.isListening }
+        server.replies["GET /calls/\(room)"] = .status(200, try text("call-view", room: room))
+        let before = server.requests.count
+        stream.open()
+        await waitUntil("the view held is asked again") { data.view(room)?.call.state == .ended }
+        let again = server.requests.dropFirst(before).compactMap(\.url?.path)
+        XCTAssertTrue(again.contains("/calls") && again.contains("/offers"), "the list and the offers too: \(again)")
+        let asked = server.requests.dropFirst(before).filter { $0.url?.path == "/offers" }
+        XCTAssertNotNil(asked.first?.value(forHTTPHeaderField: "If-None-Match"), "with the version held")
+        data.keepFresh(false)
+        await waitUntil("the stream is closed") { !stream.isListening }
+    }
+}
+
+/// GET /changes in a test: the test says when it opens (again) and what it announces.
+@MainActor
+final class FakeChangeStream {
+    private var opened: (() -> Void)?
+    private var changed: ((Change) -> Void)?
+
+    var isListening: Bool { opened != nil }
+
+    /// What ThreadData takes for its stream.
+    var listener: ThreadData.Listen {
+        { [self] opened, changed in await listen(opened, changed) }
+    }
+
+    /// Stands in for ThreadData's stream until the task is cancelled.
+    func listen(_ opened: @escaping () -> Void, _ changed: @escaping (Change) -> Void) async {
+        self.opened = opened
+        self.changed = changed
+        while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(20)) }
+        self.opened = nil
+        self.changed = nil
+    }
+
+    /// The server accepted the stream (again).
+    func open() {
+        opened?()
+    }
+
+    func send(_ change: Change) {
+        changed?(change)
     }
 }

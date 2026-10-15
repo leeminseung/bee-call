@@ -59,11 +59,11 @@ enum ChangeStream {
     }
 
     /// Keeps the stream open until the task is cancelled, opening it again after a pause when it closes: 1 s,
-    /// doubling up to 10 s, and 1 s again once a stream was accepted.
-    static func keepOpen(server: ServerClient, onChange: (Change) -> Void) async {
+    /// doubling up to 10 s, and 1 s again once a stream was accepted. `onOpen` runs each time one is accepted.
+    static func keepOpen(server: ServerClient, onOpen: () -> Void, onChange: (Change) -> Void) async {
         var delay = 1
         while !Task.isCancelled {
-            try? await read(server: server, onOpen: { delay = 1 }, onChange: onChange)
+            try? await read(server: server, onOpen: { delay = 1; onOpen() }, onChange: onChange)
             guard !Task.isCancelled else { return }
             try? await Task.sleep(for: .seconds(delay))
             delay = min(delay * 2, 10)

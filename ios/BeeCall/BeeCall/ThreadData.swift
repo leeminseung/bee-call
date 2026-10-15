@@ -17,7 +17,7 @@ protocol ConversationSource: AnyObject {
     func view(_ callID: String) -> CallView?
     /// The server has no record of the call (404): not recorded yet, or a missed call.
     func isMissing(_ callID: String) -> Bool
-    /// A call's section or record is shown: its view is fetched if the app has none or a newer one exists.
+    /// A call's section or record is shown: its view is fetched, or asked again with the version held.
     func show(_ callID: String) async
     func loadOlder() async
     /// Keeps the content up to date while `on` (the app on screen, or in a call); off stops it.
@@ -37,13 +37,26 @@ final class ThreadData: ConversationSource {
     /// Keeping the content fresh, owned here so a call screen covering the conversation does not stop it (second
     /// review of the D wiring, finding 2: it ran on the covered view).
     @ObservationIgnored private var freshness: Task<Void, Never>?
+    /// GET /changes kept open until cancelled: `opened` each time the server accepts it, `changed` for each change.
+    typealias Listen = @MainActor (_ opened: @escaping @MainActor () -> Void,
+                                   _ changed: @escaping @MainActor (Change) -> Void) async -> Void
+    @ObservationIgnored private let listen: Listen?
+
+    /// The token server's change stream; none for the contract's examples, which never change.
+    static var changeStream: Listen? {
+        guard !ContractServer.usesExamples else { return nil }
+        return { opened, changed in
+            await ChangeStream.keepOpen(server: ContractServer.client, onOpen: opened, onChange: changed)
+        }
+    }
 
     init(calls: CallManager, store: CallStore = CallStore(), offers: OfferCenter = .shared,
-         person: PersonStore = PersonStore()) {
+         person: PersonStore = PersonStore(), listen: Listen? = ThreadData.changeStream) {
         self.calls = calls
         self.store = store
         self.offers = offers
         self.person = person
+        self.listen = listen
     }
 
     var sections: [CallThread.Section] {
@@ -102,17 +115,24 @@ final class ThreadData: ConversationSource {
         freshness = Task { [weak self] in await self?.refreshAndListen() }
     }
 
-    /// Brings the list, the offers and the person up to date, then keeps them so through GET /changes until
-    /// cancelled (not for the contract's examples, which never change).
+    /// Brings the person and everything held up to date, then keeps them so through GET /changes until
+    /// cancelled, asking again for everything held each time the stream opens.
     private func refreshAndListen() async {
-        async let list: Void = store.refreshList()
-        async let open: Void = offers.refresh()
+        async let held: Void = refreshHeld()
         async let me: Void = person.refresh()
-        _ = await (list, open, me)
-        guard !ContractServer.usesExamples else { return }
-        await ChangeStream.keepOpen(server: ContractServer.client) { [weak self] change in
-            Task { await self?.changed(change) }
-        }
+        _ = await (held, me)
+        guard let listen else { return }
+        await listen({ [weak self] in Task { await self?.refreshHeld() } },
+                     { [weak self] change in Task { await self?.changed(change) } })
+    }
+
+    /// The list, the offers and every view held, asked again with their versions (a 304 costs nothing), so none
+    /// outlives what the server says: /changes announces on connect only the calls of the last ten minutes, and a
+    /// call can end while the stream is closed (fresh-context review of round1 7c1361a, finding 1).
+    private func refreshHeld() async {
+        async let calls: Void = store.refreshHeld()
+        async let open: Void = offers.refresh()
+        _ = await (calls, open)
     }
 
     private func changed(_ change: Change) async {

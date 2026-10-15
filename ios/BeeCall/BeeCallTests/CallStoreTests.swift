@@ -54,8 +54,8 @@ final class CallStoreTests: XCTestCase {
         XCTAssertFalse(store.missing.contains(id))
     }
 
-    /// /changes: a view the app holds is fetched again when its version moves; one it does not hold is only noted,
-    /// and fetched when it is shown.
+    /// /changes: a view the app holds is fetched again when its version moves; one it does not hold is fetched
+    /// when it is shown, and asked again with its version each time it is shown after that.
     @MainActor func testChangesFetchOnlyWhatTheAppHolds() async throws {
         let server = FakeServer(), (held, other) = try ids()
         let ended = try Examples.decode(CallView.self, "call-view"), ai = try Examples.decode(CallView.self, "call-view-ai")
@@ -70,11 +70,14 @@ final class CallStoreTests: XCTestCase {
         await store.changed(Change(path: "/calls/\(held)", version: ended.version))
         XCTAssertEqual(server.requests.count, asked, "the version drawn already")
         await store.changed(Change(path: "/calls/\(other)", version: ai.version))
-        XCTAssertEqual(server.requests.count, asked, "not held: only noted")
+        XCTAssertEqual(server.requests.count, asked, "not held: not fetched")
         await store.show(other)
         XCTAssertEqual(store.views[other], ai)
+        server.replies["GET /calls/\(other)"] = .status(304)
         await store.show(other)
-        XCTAssertEqual(server.requests.count, asked + 1, "shown again with the version noted: nothing to fetch")
+        XCTAssertEqual(server.requests.count, asked + 2)
+        XCTAssertEqual(ifNoneMatch(server), "\"\(ai.version)\"", "shown again: asked with its version")
+        XCTAssertEqual(store.views[other], ai, "304: kept")
     }
 
     @MainActor func testAChangedListIsFetched() async throws {
@@ -193,5 +196,54 @@ final class CallStoreTests: XCTestCase {
         await first.value
         await waitUntil("the newer view is kept") { store.views[id]?.call.state == .ended }
         XCTAssertEqual(server.requests.count, 2)
+    }
+
+    // MARK: - Fresh-context review of round1 7c1361a
+
+    /// Finding 1: a view held from during a call, shown after the call ended while /changes was closed (and later
+    /// than /changes announces ended calls on connect), is asked again with its version: the ended call replaces
+    /// it, and an unchanged view is a 304.
+    @MainActor func testAHeldViewIsAskedAgainWhenShown() async throws {
+        let server = FakeServer(), id = try ids().person
+        let live = try Examples.decode(CallView.self, "call-view-live"), ended = try Examples.decode(CallView.self, "call-view")
+        server.replies["GET /calls/\(id)"] = .status(200, try Examples.text("call-view-live"))
+        let store = CallStore(server: server.client())
+        await store.refreshView(id)
+        server.replies["GET /calls/\(id)"] = .status(200, try Examples.text("call-view"))
+        await store.show(id)
+        XCTAssertEqual(ifNoneMatch(server), "\"\(live.version)\"", "asked with the version held")
+        XCTAssertEqual(store.views[id], ended, "the call ended meanwhile")
+        server.replies["GET /calls/\(id)"] = .status(304)
+        await store.show(id)
+        XCTAssertEqual(ifNoneMatch(server), "\"\(ended.version)\"")
+        XCTAssertEqual(store.views[id], ended, "304: kept")
+    }
+
+    /// Finding 1: the list and every view held are asked again with their versions at once (when /changes opens).
+    @MainActor func testTheListAndEveryHeldViewAreAskedAgain() async throws {
+        let server = FakeServer(), (person, ai) = try ids(), list = try Examples.decode(CallList.self, "calls")
+        let view = try Examples.decode(CallView.self, "call-view-ai")
+        server.replies["GET /calls"] = .status(200, try Examples.text("calls"))
+        server.replies["GET /calls/\(person)"] = .status(200, try Examples.text("call-view-live"))
+        server.replies["GET /calls/\(ai)"] = .status(200, try Examples.text("call-view-ai"))
+        let store = CallStore(server: server.client())
+        await store.refreshList()
+        await store.refreshView(person)
+        await store.refreshView(ai)
+        server.replies["GET /calls"] = .status(304)
+        server.replies["GET /calls/\(person)"] = .status(200, try Examples.text("call-view"))
+        server.replies["GET /calls/\(ai)"] = .status(304)
+        let asked = server.requests.count
+        await store.refreshHeld()
+        let again = server.requests.dropFirst(asked)
+        func version(_ path: String) -> String? {
+            again.first { $0.url?.path == path }?.value(forHTTPHeaderField: "If-None-Match")
+        }
+        XCTAssertEqual(again.count, 3, "the list and the two views, once each")
+        XCTAssertEqual(version("/calls"), "\"\(list.version)\"")
+        XCTAssertEqual(version("/calls/\(person)"), "\"\(try Examples.decode(CallView.self, "call-view-live").version)\"")
+        XCTAssertEqual(version("/calls/\(ai)"), "\"\(view.version)\"")
+        XCTAssertEqual(store.views[person]?.call.state, .ended)
+        XCTAssertEqual(store.views[ai], view)
     }
 }

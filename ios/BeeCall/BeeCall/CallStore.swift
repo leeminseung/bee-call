@@ -4,7 +4,8 @@ import Observation
 /// The only place that fetches the call list (GET /calls) and the call views (GET /calls/{call_id}), contract
 /// sections 1 to 3. It keeps the last body of each with its version and asks again with If-None-Match, so an
 /// unchanged answer is a 304 with no body. What /changes announces is fetched only when the app holds that
-/// resource; otherwise the version is noted, and the resource is fetched when it is shown.
+/// resource; a view is asked again each time it is shown, and everything held each time /changes opens, so nothing
+/// held outlives what the server says (a call can end while the stream is closed).
 @Observable
 final class CallStore {
     private(set) var list: CallList? // the first page
@@ -19,7 +20,6 @@ final class CallStore {
     @ObservationIgnored private var loadingOlder = false // a second tap waits for the page on its way
     @ObservationIgnored private var fetching: Set<String> = [] // views on their way: one fetch per view at a time
     @ObservationIgnored private var fetchAgain: Set<String> = [] // asked for while on their way
-    @ObservationIgnored private var announced: [String: String] = [:] // path → the version /changes said
     @ObservationIgnored private let server: ServerClient
 
     init(server: ServerClient = ContractServer.client) {
@@ -42,6 +42,17 @@ final class CallStore {
         guard let body: CallList = await fetch("/calls", holding: list?.version) else { return }
         list = body
         for entry in body.calls { known[entry.id] = entry }
+    }
+
+    /// Everything held, asked again with its version (a 304 costs nothing): the first page and every view.
+    /// /changes announces on connect only the calls live or ended in the last ten minutes, so a view held from a
+    /// call that ended while the stream was closed for longer would otherwise keep showing it live (fresh-context
+    /// review of round1 7c1361a, finding 1).
+    func refreshHeld() async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await self.refreshList() }
+            for callID in views.keys { group.addTask { await self.refreshView(callID) } }
+        }
     }
 
     func loadOlder() async {
@@ -84,17 +95,15 @@ final class CallStore {
         }
     }
 
-    /// A call's section is shown (expanded, opened as a sheet, or the call that is on): fetched if the app has
-    /// no view of it, or /changes announced a newer one.
+    /// A call's section is shown (expanded, opened as a sheet, or the call that is on): fetched, or asked again
+    /// with the version held, so a view held from before (a call that ended while the app was away) is not shown
+    /// as it was (fresh-context review of round1 7c1361a, finding 1).
     func show(_ callID: String) async {
-        let path = Self.viewPath(callID)
-        guard let view = views[callID] else { return await refreshView(callID) }
-        if let version = announced[path], version != view.version { await refreshView(callID) }
+        await refreshView(callID)
     }
 
     /// GET /changes said the resource at this path now has this version.
     func changed(_ change: Change) async {
-        announced[change.path] = change.version
         if change.path == "/calls" {
             if list?.version != change.version { await refreshList() }
         } else if change.path.hasPrefix("/calls/") {
@@ -103,7 +112,7 @@ final class CallStore {
                 if view.version != change.version { await refreshView(callID) }
             } else if missing.contains(callID) {
                 await refreshView(callID) // a record that has begun since the 404
-            } // else not held: only noted, for when it is shown
+            } // else not held: fetched when it is shown
         }
     }
 
