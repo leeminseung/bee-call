@@ -13,7 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from meta.session import quiet
 from tests.helpers import signed_in
-from tests.test_meta import ScriptedModel, tool_use
+from tests.test_meta import on_glm, ScriptedModel, tool_use
 from tests.test_offers import asked
 from voice import outbound, voip_push
 from voice.offers import OfferStore
@@ -53,7 +53,7 @@ def test_the_meta_agent_and_its_offer_read_the_person_s_clock(tmp_path, monkeypa
     model = ScriptedModel([
         {"role": "assistant", "content": [tool_use(1, "offer_call", topic="The flat prices", why="A result is in.")]},
         {"role": "assistant", "content": [{"text": "Asked."}]}])
-    thinker = outbound.Thinker(me.workspace, ("m", "r"), client=model, bee=False)
+    thinker = outbound.Thinker(me.workspace, on_glm(model), bee=False)
     monkeypatch.setattr(outbound, "META_CHECK_S", 0.01)
     from meta.session import add_event
     add_event(me.workspace, "call_ended", now=me.person.now(), call="x")

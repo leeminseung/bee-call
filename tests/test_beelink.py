@@ -147,7 +147,7 @@ def test_the_call_ai_the_prep_and_the_meta_agent_read_nothing_bee_made_of_our_ca
     make_session(workspace, datetime.fromtimestamp(time.time() - 3600 - 120), 3600)
     rec = CallRecorder(workspace, room="r", now=seoul_now())
     coordinator = BeeCoordinator(rec, SimpleNamespace(), workspace, clock=seoul_now)
-    thinker = Thinker(workspace, ("m", "r"), client=None, bee=True)
+    thinker = Thinker(workspace, bee=True)
 
     async def main():
         today = await coordinator.bee_today(None)

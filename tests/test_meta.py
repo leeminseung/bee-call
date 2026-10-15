@@ -5,6 +5,7 @@ No network: the model is a fake Converse client, and the notification sender is 
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -13,7 +14,10 @@ import pytest
 from meta import files
 from meta.agent import TOOLS, Thinker, context
 from meta.session import MetaSession, add_event, quiet, quiet_ends
+from voice import model_catalog, providers
+from voice.model_catalog import Role
 from voice.offers import OfferStore
+from voice.providers.bedrock import Bedrock
 from tests.helpers import SEOUL
 
 NOW = datetime(2026, 10, 14, 18, 30, tzinfo=SEOUL)
@@ -75,7 +79,32 @@ def test_the_file_tools_read_the_workspace_and_nothing_else(tmp_path):
             files.read_file(ws, bad)
 
 
-class ScriptedModel:
+class Streams:
+    """converse_stream for a stand-in that answers with converse(): its message, streamed as Bedrock streams it."""
+
+    def converse_stream(self, **request):
+        message = self.converse(**request)["output"]["message"]
+
+        def events():
+            yield {"messageStart": {"role": "assistant"}}
+            for i, block in enumerate(message["content"]):
+                if "text" in block:
+                    yield {"contentBlockDelta": {"contentBlockIndex": i, "delta": {"text": block["text"]}}}
+                else:
+                    use = block["toolUse"]
+                    yield {"contentBlockStart": {"contentBlockIndex": i, "start": {"toolUse": {
+                        "toolUseId": use["toolUseId"], "name": use["name"]}}}}
+                    yield {"contentBlockDelta": {"contentBlockIndex": i,
+                                                 "delta": {"toolUse": {"input": json.dumps(use["input"])}}}}
+                yield {"contentBlockStop": {"contentBlockIndex": i}}
+            yield {"messageStop": {"stopReason": "tool_use" if any("toolUse" in b for b in message["content"])
+                                   else "end_turn"}}
+            yield {"metadata": {"usage": {"inputTokens": 1000, "outputTokens": 50}}}
+
+        return {"stream": events()}
+
+
+class ScriptedModel(Streams):
     """A Converse client that answers from a script and keeps what it was sent."""
 
     def __init__(self, replies):
@@ -84,6 +113,14 @@ class ScriptedModel:
     def converse(self, **request):
         self.sent.append(request)
         return {"output": {"message": self.replies.pop(0)}}
+
+
+def on_glm(client) -> Role:
+    """The meta agent on GLM 5 through Bedrock's Converse API, answered by `client` (a stand-in)."""
+    providers.register("meta-stand-in", Bedrock(client=client))
+    standby = model_catalog.role("meta").standby
+    return Role("meta", choices=(replace(standby, default=True, offering=replace(standby.offering,
+                                                                                    provider="meta-stand-in")),))
 
 
 def tool_use(i, name, **args):
@@ -109,10 +146,11 @@ def test_one_think_looks_things_up_offers_a_call_and_logs_its_own_words(tmp_path
 
     add_event(ws, "bee_change", now=NOW, inbox="inbox/2026-10-14-182500", conversation_ids=[77])
     events = MetaSession(ws).take_events()
-    entry = asyncio.run(Thinker(ws, ("zai.glm-5", "ap-southeast-2"), client=model, send=send, bee=True).think(events, NOW))
+    entry = asyncio.run(Thinker(ws, on_glm(model), send=send, bee=True).think(events, NOW))
 
     first = model.sent[0]
-    assert first["modelId"] == "zai.glm-5" and first["toolConfig"]["tools"] == TOOLS
+    assert first["modelId"] == "zai.glm-5" and [t["toolSpec"]["name"] for t in first["toolConfig"]["tools"]] == [
+        t.name for t in TOOLS]
     assert "Weighing two job offers" in first["messages"][0]["content"][0]["text"]  # the change, without a lookup
     (offer,) = OfferStore(ws).all()
     assert (offer.topic, offer.conversation_ids, offer.state) == ("Weighing two job offers", [77], "asked")
@@ -131,7 +169,7 @@ def test_the_meta_agent_writes_an_offer_s_topic_and_why_in_the_person_s_language
     card), so the meta agent writes them in the person's language, the reason said to the person."""
     ws = workspace_with_a_call(tmp_path)
     model = ScriptedModel([{"role": "assistant", "content": [{"text": "Nothing to do."}]}])
-    asyncio.run(Thinker(ws, ("m", "r"), client=model, bee=True, language="ko").think([{"kind": "bee_change",
+    asyncio.run(Thinker(ws, on_glm(model), bee=True, language="ko").think([{"kind": "bee_change",
                                                                                         "at": "x"}], NOW))
     system = model.sent[0]["system"][0]["text"]
     assert "The user's language is Korean: write offer_call's topic and why in Korean" in system
@@ -140,21 +178,54 @@ def test_the_meta_agent_writes_an_offer_s_topic_and_why_in_the_person_s_language
     assert "the user's language" in properties["topic"]["description"]
     assert "said to the user" in properties["why"]["description"]
     english = ScriptedModel([{"role": "assistant", "content": [{"text": "Nothing."}]}])
-    asyncio.run(Thinker(ws, ("m", "r"), client=english, bee=False).think([{"kind": "bee_change", "at": "x"}], NOW))
+    asyncio.run(Thinker(ws, on_glm(english), bee=False).think([{"kind": "bee_change", "at": "x"}], NOW))
     assert "The user's language is English" in english.sent[0]["system"][0]["text"]
+
+
+def test_the_meta_agent_thinks_on_claude_sonnet_and_glm_5_takes_over_when_it_fails(tmp_path, monkeypatch):
+    """Decision 10 of the app contract: Claude Sonnet 5.5 with its conversation cached as the loop grows; GLM 5
+    answers the whole think when Sonnet's first request fails, and the timeline entry says so."""
+    from types import SimpleNamespace
+
+    from tests.test_providers import Messages
+    from voice.providers.anthropic import Anthropic
+
+    ws = workspace_with_a_call(tmp_path)
+    said = {"content": [{"type": "text", "text": "Nothing to do."}], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 500, "output_tokens": 20, "cache_read_input_tokens": 3000,
+                      "cache_creation_input_tokens": 1000}}
+    messages = Messages((said, ["Nothing to do."]))
+    monkeypatch.setitem(providers._ADAPTERS, "anthropic", Anthropic(client=SimpleNamespace(messages=messages)))
+    entry = asyncio.run(Thinker(ws, model_catalog.role("meta"), bee=True).think([{"kind": "bee_change", "at": "x"}], NOW))
+    (sent,) = messages.sent
+    assert (sent["model"], sent["thinking"], sent["cache_control"]) == ("claude-sonnet-5-5", {"type": "adaptive"},
+                                                                         {"type": "ephemeral"})
+    assert entry["model"] == "claude-sonnet-5-5" and entry["usage"] == {"input_tokens": 4500, "output_tokens": 20,
+                                                                         "cache_read": 3000, "cache_write": 1000}
+
+    class Down:
+        async def reply(self, *args, **kwargs):
+            raise RuntimeError("Anthropic is overloaded")
+
+    monkeypatch.setitem(providers._ADAPTERS, "anthropic", Down())
+    model = ScriptedModel([{"role": "assistant", "content": [{"text": "GLM: nothing to do."}]}])
+    monkeypatch.setitem(providers._ADAPTERS, "bedrock", Bedrock(client=model))
+    entry = asyncio.run(Thinker(ws, model_catalog.role("meta"), bee=True).think([{"kind": "bee_change", "at": "x"}], NOW))
+    assert (entry["model"], entry["decision"]) == ("zai.glm-5", "GLM: nothing to do.")
+    assert "overloaded" in entry["standby_reason"]
 
 
 def test_doing_nothing_is_logged_too_and_a_failure_proposes_nothing(tmp_path):
     ws = workspace_with_a_call(tmp_path)
     quiet_model = ScriptedModel([{"role": "assistant", "content": [{"text": "A two-line hello. Nothing to do."}]}])
-    entry = asyncio.run(Thinker(ws, ("m", "r"), client=quiet_model, bee=True).think([{"kind": "bee_change", "at": "x"}], NOW))
+    entry = asyncio.run(Thinker(ws, on_glm(quiet_model), bee=True).think([{"kind": "bee_change", "at": "x"}], NOW))
     assert entry["decision"] == "A two-line hello. Nothing to do." and entry["actions"] == []
 
-    class Broken:
+    class Broken(Streams):
         def converse(self, **request):
             raise RuntimeError("Bedrock throttled")
 
-    failed = asyncio.run(Thinker(ws, ("m", "r"), client=Broken(), bee=True).think([{"kind": "call_ended", "at": "x"}], NOW))
+    failed = asyncio.run(Thinker(ws, on_glm(Broken()), bee=True).think([{"kind": "call_ended", "at": "x"}], NOW))
     assert "Bedrock throttled" in failed["error"] and OfferStore(ws).all() == []
     assert len(MetaSession(ws).entries()) == 2
 
@@ -178,10 +249,10 @@ def test_a_bee_conversation_that_had_an_offer_gets_no_second_one(tmp_path):
                                                        conversation_ids=[77])]},
             {"role": "assistant", "content": [{"text": "Done."}]}])
 
-    asyncio.run(Thinker(ws, ("m", "r"), client=offering(), bee=True).think([], NOW))
+    asyncio.run(Thinker(ws, on_glm(offering()), bee=True).think([], NOW))
     (first,) = OfferStore(ws).all()
     OfferStore(ws).answer(first.id, "decline", NOW)
-    entry = asyncio.run(Thinker(ws, ("m", "r"), client=offering(), bee=True).think([], NOW + timedelta(hours=2)))
+    entry = asyncio.run(Thinker(ws, on_glm(offering()), bee=True).think([], NOW + timedelta(hours=2)))
     assert [o.id for o in OfferStore(ws).all()] == [first.id]
     assert entry["tools"][0]["result"].startswith("Not asked: Bee conversation 77 already had an offer")
 
@@ -194,7 +265,7 @@ def test_one_question_at_a_time_and_a_short_plain_topic(tmp_path):
         {"role": "assistant", "content": [tool_use(2, "offer_call", topic="Dentist appointment", why="w")]},
         {"role": "assistant", "content": [{"text": "Asked once."}]},
     ])
-    entry = asyncio.run(Thinker(ws, ("m", "r"), client=model, bee=True).think([], NOW))
+    entry = asyncio.run(Thinker(ws, on_glm(model), bee=True).think([], NOW))
     (offer,) = OfferStore(ws).all()  # the second question waits for the answer to the first
     assert "\n" not in offer.topic and len(offer.topic) <= 80 and offer.state == "asked"
     assert entry["tools"][1]["result"].startswith("Not asked: the user has not answered the offer")
@@ -241,7 +312,7 @@ def test_the_calls_get_the_meta_agents_notes_and_answers_wake_it(tmp_path):
 
 
 
-class Flaky:
+class Flaky(Streams):
     """A model that fails `fails` times, then answers."""
 
     def __init__(self, fails):
@@ -263,7 +334,7 @@ def test_a_failed_think_keeps_its_events_until_a_think_works(tmp_path):
     ws = tmp_path / "workspace"
     session = MetaSession(ws)
     add_event(ws, "bee_change", now=NOW, inbox="inbox/x")
-    broken, tries = Thinker(ws, ("m", "r"), client=Flaky(fails=10), bee=True), 0
+    broken, tries = Thinker(ws, on_glm(Flaky(fails=10)), bee=True), 0
     for _ in range(10):
         tries = asyncio.run(think_about_new_events(session, broken, NOW, tries))
     assert tries == 10 and session.peek_events()[0]  # still there
@@ -282,7 +353,7 @@ def test_the_meta_loop_waits_longer_after_each_failed_think(tmp_path, monkeypatc
     monkeypatch.setattr(outbound, "META_CHECK_S", 0.01)
     monkeypatch.setattr(outbound, "META_RETRY_S", (0.05, 0.1))
     model = Flaky(fails=4)
-    thinker = Thinker(me.workspace, ("m", "r"), client=model, bee=False)
+    thinker = Thinker(me.workspace, on_glm(model), bee=False)
     add_event(me.workspace, "call_ended", now=me.person.now(), call="x")
 
     async def main():
@@ -393,7 +464,7 @@ def test_file_tools_skip_links_out_hidden_folders_and_locations(tmp_path):
 def test_the_meta_agent_only_reads_offers_and_keeps_notes():
     """BC-048 and BC-050, pinned by name rather than against the tool list itself: read-only file and Bee tools,
     and three ways a run ends (offer a call, rewrite its notes, nothing). No tool places a call or writes to Bee."""
-    names = {tool["toolSpec"]["name"] for tool in TOOLS}
+    names = {tool.name for tool in TOOLS}
     assert names == {"list_files", "read_file", "grep", "bee_today", "bee_conversation", "search_bee", "bee_day",
                      "bee_pending", "write_state", "offer_call"}
 
@@ -404,7 +475,7 @@ def test_without_bee_the_meta_agent_has_no_bee_tools_or_words(tmp_path):
 
     ws = workspace_with_a_call(tmp_path)
     model = ScriptedModel([{"role": "assistant", "content": [{"text": "The call went fine. Nothing to do."}]}])
-    asyncio.run(Thinker(ws, ("m", "r"), client=model, bee=False).think(
+    asyncio.run(Thinker(ws, on_glm(model), bee=False).think(
         [{"kind": "call_ended", "at": "x", "call": "2026-10-14/1200"}], NOW))
     (request,) = model.sent
     names = [t["toolSpec"]["name"] for t in request["toolConfig"]["tools"]]

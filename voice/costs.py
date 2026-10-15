@@ -135,7 +135,9 @@ def spent_today(workspace: Path, now: datetime) -> float:
         except ValueError:
             continue
         if isinstance(entry, dict) and isinstance(entry.get("usage"), dict) and on_day(entry.get("at"), now):
-            total += llm_cost(entry.get("model"), entry["usage"].get("input_tokens"), entry["usage"].get("output_tokens"))
+            used = entry["usage"]
+            total += llm_cost(entry.get("model"), used.get("input_tokens"), used.get("output_tokens"),
+                              used.get("cache_read"), used.get("cache_write"))
     return total + SpendLog(workspace).spent_on(now)
 
 

@@ -128,18 +128,6 @@ class Prep:
         return cls(**{k: data[k] for k in names if k in data})
 
 
-def prep_model(mode: str) -> tuple[str, str] | None:
-    """The meta agent's Bedrock model and region for this mode, as before the model catalog (it moves next)."""
-    import os
-
-    region = os.environ.get("BEDROCK_REGION", os.environ.get("AWS_REGION", "ap-southeast-2"))
-    found = model_catalog.mode_role("prep", mode)
-    if found is None:
-        return None
-    model = found.choices[0].offering.model if mode in ("bedrock", "nova", "claude") else GLM_5
-    return model, (found.choices[0].extra.get("region") or region)
-
-
 def prep_role(mode: str) -> Role | None:
     """The prep's role as this COORDINATOR_LLM mode runs it (model_catalog.mode_role); None for the stand-ins
     without a model (echo, fake)."""

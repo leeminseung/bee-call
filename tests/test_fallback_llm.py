@@ -266,15 +266,19 @@ def test_coordinator_settings_in_the_environment_never_change_the_call_model(tmp
     assert agent.ignored_settings() == ["COORDINATOR_EFFORT", "COORDINATOR_MODEL", "COORDINATOR_THINKING"]
 
 
-def test_the_prep_and_the_meta_agent_stay_on_glm_5_with_anthropic(tmp_path, monkeypatch):
+def test_with_anthropic_the_prep_runs_on_haiku_and_the_meta_agent_on_sonnet_with_glm_5_standing_by(tmp_path,
+                                                                                                   monkeypatch):
+    """Decision 10 of the app contract, as the server's mode (anthropic) runs it; COORDINATOR_MODEL names the
+    development modes' model and changes nothing here."""
     from meta.agent import Thinker
-    from voice.prep import prep_model
+    from voice.prep import prep_role
 
     monkeypatch.setenv("COORDINATOR_LLM", "anthropic")
-    monkeypatch.setenv("COORDINATOR_MODEL", "claude-haiku-5-5")  # names the call AI's model, not the prep's
-    monkeypatch.setenv("BEDROCK_REGION", "ap-southeast-2")
-    assert prep_model("anthropic") == ("zai.glm-5", "ap-southeast-2")
-    assert Thinker(tmp_path, bee=True).model == ("zai.glm-5", "ap-southeast-2")
+    monkeypatch.setenv("COORDINATOR_MODEL", "claude-opus-5-5")
+    prep, meta = prep_role("anthropic"), Thinker(tmp_path, bee=True).role
+    assert [(c.offering.provider, c.offering.model) for c in (prep.choices[0], meta.choices[0])] == [
+        ("anthropic", "claude-haiku-5-5"), ("anthropic", "claude-sonnet-5-5")]
+    assert {(r.standby.offering.provider, r.standby.offering.model) for r in (prep, meta)} == {("bedrock", "zai.glm-5")}
 
 
 def test_every_call_language_has_a_line_for_a_declined_turn():
@@ -303,7 +307,7 @@ def test_every_process_reads_the_same_coordinator_mode_with_the_same_default(tmp
 
     modes = []
     monkeypatch.setattr(prep_module, "prep_role", lambda mode: modes.append(mode))
-    monkeypatch.setattr(meta_agent, "prep_model", lambda mode: modes.append(mode))
+    monkeypatch.setattr(meta_agent.model_catalog, "mode_role", lambda name, mode: modes.append(mode))
     asyncio.run(prep_module.prepare_outbound(Plan(call=True, reason="r", inbox_dir=None), spend=SpendLog(tmp_path),
                                              bee=False, now=datetime.now(SEOUL)))
     Thinker(tmp_path, bee=False)

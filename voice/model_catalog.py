@@ -99,8 +99,10 @@ ROLES: dict[str, Role] = {role.name: role for role in (
     )),
     Role("meta", standby=Choice("glm", "GLM 5", "AWS", {"ko": "대기 모델", "en": "Standing by"}, GLM_5,
                                 max_tokens=2000, extra={"read_timeout": 90, "retries": 3}), choices=(
+        # A think is a tool loop: each request repeats the one before, so the conversation is cached as it grows.
         Choice("sonnet", "Claude Sonnet 5.5", "Anthropic", {"ko": "통화 사이의 판단", "en": "Decides between calls"},
-               CLAUDE_SONNET, default=True, thinking="adaptive", effort="medium", max_tokens=8000),
+               CLAUDE_SONNET, default=True, thinking="adaptive", effort="medium", max_tokens=8000,
+               extra={"anthropic": {"cache_control": {"type": "ephemeral"}}}),
     )),
     Role("prep", standby=Choice("glm", "GLM 5", "AWS", {"ko": "대기 모델", "en": "Standing by"}, GLM_5,
                                 max_tokens=500, extra={"temperature": 0.3, "read_timeout": 20}), choices=(
