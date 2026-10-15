@@ -659,3 +659,49 @@ def test_the_fact_read_before_a_fix_waits_no_longer_than_the_call_allows(tmp_pat
 
     said, took = asyncio.run(main())
     assert said.startswith("Saved to Bee") and took < 2.5
+
+
+class Context:
+    """Stands in for LiveKit's RunContext: records the filler lines a tool asks for while it waits."""
+
+    def __init__(self) -> None:
+        self.fillers = []
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def with_filler(self, source, *, delay=0, interval=None, max_steps=None):
+        self.fillers.append((source, delay, interval))
+        yield
+
+
+def test_every_tool_the_call_ai_waits_on_says_one_line_after_2_s(tmp_path, fake_bee):
+    """The user's rule (2026-10-15): one general rule for every tool that waits on something outside the call,
+    not a line for Bee alone. LiveKit plays it once the call has been silent for 2 s."""
+    async def main():
+        agent, _ = await in_a_call(tmp_path, language="ko")
+        fillers = {}
+        for name, use in (("search_bee", lambda c: agent.search_bee(c, query="등산")),
+                          ("bee_today", lambda c: agent.bee_today(c)),
+                          ("bee_conversation", lambda c: agent.bee_conversation(c, conversation_id=1))):
+            context = Context()
+            await use(context)
+            fillers[name] = context.fillers
+        context = Context()
+        number = await agent.propose_bee_save(context, kind="todo_create", text="버그 기록")
+        fillers["propose_bee_save"] = context.fillers  # waits on nothing outside the call
+        number = int(re.search(r"Proposal (\d+)", number).group(1))
+        await say(agent, ("assistant", "Bee에 할 일로 '버그 기록'을 넣을까요?"), ("user", "네."))
+        for name, use in (("save_to_bee", lambda c: agent.save_to_bee(c, proposal=number)),
+                          ("undo_bee_write", lambda c: agent.undo_bee_write(c))):
+            context = Context()
+            await use(context)
+            fillers[name] = context.fillers
+        return fillers
+
+    fillers = asyncio.run(main())
+    line = call_language("ko").waiting
+    assert line == "잠깐만요, 확인하고 있어요." and call_language("en").waiting == "One moment, I'm checking."
+    for name in ("search_bee", "bee_today", "bee_conversation", "save_to_bee", "undo_bee_write"):
+        assert fillers[name] == [(line, 2.0, None)], name
+    assert fillers["propose_bee_save"] == []

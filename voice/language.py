@@ -21,6 +21,7 @@ class CallLanguage:
     opening: str  # how the prep's opening line should sound (voice/prep.py)
     rule: str = ""  # added to the coordinator's instructions
     greetings: dict[str, str] = field(default_factory=dict)
+    waiting: str = ""  # said once when a tool the call AI waits on takes a while (voice/coordinator.py)
     elevenlabs_voice: str = ""  # an ElevenLabs voice id for TTS=elevenlabs (voice/voices.py)
 
 
@@ -31,6 +32,7 @@ LANGUAGES = {
         # Sarah, an ElevenLabs default voice; Jessica (cgSgspJ2msm6clMCkdW9) and Chris (iP95p4xoKVk53GoZ742B)
         # are the other English picks (Matt, 2026-10-14), not yet decided between.
         elevenlabs_voice="EXAVITQu4vr4xnSDxMaL",
+        waiting="One moment, I'm checking.",
         greetings={
             "echo": "Hi! This is the echo test. Say something and I'll repeat it.",
             "voice note": "Hi, it's Bee Call. I'm calling about your new voice note. Do you have a minute?",
@@ -47,6 +49,7 @@ LANGUAGES = {
         opening="one or two short sentences of spoken Korean, in the polite style",
         # Sian - Tender, Calm & Clear, from the Voice Library (Matt's pick, 2026-10-14); add it to My Voices to use it.
         elevenlabs_voice="5n5gqmaQi9Ewevrz7bOS",
+        waiting="잠깐만요, 확인하고 있어요.",
         rule=("Speak Korean with the user, in natural, polite spoken Korean. The app's notes, the call prep note "
               "and job results may be in English; say what matters in Korean, and keep names and numbers exact."),
         greetings={

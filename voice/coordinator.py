@@ -10,6 +10,7 @@ them. The voice server picks one by the person's setting when the call starts (v
 
 import asyncio
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -87,6 +88,10 @@ whether to fix it in Bee, quoting the new text, and after a yes save it.
 """
 
 NOTE_WAIT_S = 2.0  # the first reply waits at most this long for a prep note still being written (arbitrary)
+# A tool the call AI waits on (anything outside the call: Bee today) says the language's waiting line once the
+# call has been silent this long, so the caller does not think it dropped (Matt, 2026-10-15). One rule for
+# every such tool; how long they may wait at most is beelink/cli.py CALL_WAIT_S.
+WAITING_LINE_AFTER_S = 2.0
 HANGUL = re.compile(r"[\uac00-\ud7a3]")
 QUESTION = re.compile(r"[?？]")
 NAMES_BEE = re.compile(r"(?<![A-Za-z])Bee(?![a-z]| Call)")  # "Bee", "Bee에"; not "been", "beer" or "Bee Call"
@@ -228,6 +233,16 @@ class Coordinator(Agent):
             self._recorder.event("speech_markup_dropped", text=speech.dropped)
 
     # ---------- recording ----------
+
+    @asynccontextmanager
+    async def waiting(self, context: RunContext | None):
+        """Around what a tool waits on outside the call: LiveKit says the language's waiting line once the call has
+        been silent for WAITING_LINE_AFTER_S (RunContext.with_filler)."""
+        if context is None:  # a tool called directly, as in tests
+            yield
+            return
+        async with context.with_filler(self._language.waiting, delay=WAITING_LINE_AFTER_S):
+            yield
 
     async def stt_node(self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings):
         # A transcript too quiet to be the user (the AI's own voice coming back faintly) is kept out of the
@@ -385,12 +400,14 @@ class BeeCoordinator(Coordinator):
         Args:
             query: What to look for, in plain words.
         """
-        return await reads.search(query)
+        async with self.waiting(context):
+            return await reads.search(query)
 
     @function_tool
     async def bee_today(self, context: RunContext) -> str:
         """What the user's Bee wearable has for today: the daily summary, active todos, notes and recent conversations."""
-        return await reads.today(self._clock().tzinfo)
+        async with self.waiting(context):
+            return await reads.today(self._clock().tzinfo)
 
     @function_tool
     async def bee_conversation(self, context: RunContext, conversation_id: int) -> str:
@@ -399,7 +416,8 @@ class BeeCoordinator(Coordinator):
         Args:
             conversation_id: The Bee conversation id, from the prep note, bee_today or search_bee.
         """
-        return await reads.conversation(conversation_id, self._clock().tzinfo)
+        async with self.waiting(context):
+            return await reads.conversation(conversation_id, self._clock().tzinfo)
 
     @function_tool
     async def propose_bee_save(self, context: RunContext, kind: str, text: str, fact_id: int | None = None,
@@ -473,11 +491,12 @@ class BeeCoordinator(Coordinator):
             return (f"Not saved: the answer is not a yes (\"{answer}\"). If the user wants it, propose it again with "
                     "propose_bee_save and ask about it alone.")
         found.saved = True
-        write = await self._bee_writes.begin(found.item, question, answer)
-        try:
-            await self._bee_writes.apply(write)
-        finally:  # also when the tool is cut off mid-write: the record shows the write, and that Bee may have it
-            self._recorder.event("bee_write", **event_fields(write))
+        async with self.waiting(context):
+            write = await self._bee_writes.begin(found.item, question, answer)
+            try:
+                await self._bee_writes.apply(write)
+            finally:  # also when the tool is cut off mid-write: the record shows the write, and that Bee may have it
+                self._recorder.event("bee_write", **event_fields(write))
         what = label(write, ENGLISH)
         if write.status == "ok":
             return f"Saved to Bee: {what}. Tell the user in a few words what you saved."
@@ -493,7 +512,8 @@ class BeeCoordinator(Coordinator):
         saved = [w for w in self._bee_writes.all() if w.status == "ok"]
         if not saved:
             return "Nothing saved to Bee in this call is left to take out."
-        write = await self._bee_writes.undo(saved[-1].key)
+        async with self.waiting(context):
+            write = await self._bee_writes.undo(saved[-1].key)
         what = label(write, ENGLISH)
         if write.status != "undone":
             return f"Could not take {what} out of Bee ({write.error}). Tell the user."
