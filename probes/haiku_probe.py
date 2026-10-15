@@ -73,7 +73,7 @@ def caller_turns(path: Path, limit: int) -> list[str]:
 class StubJobs:
     """Background jobs do not run in the probe."""
 
-    def start(self, task: str) -> SimpleNamespace:
+    def start(self, task: str, title: str | None = None, language: str | None = None) -> SimpleNamespace:
         return SimpleNamespace(job_id="1")
 
     def status_text(self) -> str:

@@ -159,6 +159,7 @@ def test_worker_serves_inline_functions_until_the_agent_finishes(tmp_path):
     first, second, third, fourth, fifth = harness.requests
     opening = first["messages"][0]["content"][0]["text"]
     assert opening.startswith("Job 01 (it is now ") and opening.endswith("): Compare the trails")
+    assert "Korean" not in opening and "English" not in opening  # a job without a language: as before
     assert len({r["runtimeSessionId"] for r in harness.requests}) == 1 and len(first["runtimeSessionId"]) >= 33
     assert second["messages"][0]["content"][0]["toolResult"]["toolUseId"] == "t1"
     assert "trails.example" in third["messages"][0]["content"][0]["toolResult"]["content"][0]["text"]
@@ -501,3 +502,23 @@ def test_the_worker_smoke_test_builds_its_job(monkeypatch, capsys):
     asyncio.run(deploy_worker.smoke("arn:harness"))
     out = capsys.readouterr().out
     assert "ran at Asia/Seoul" in out and "'reasoning_chars': 412" in out  # how a deploy shows the model reasoned
+
+
+def test_a_job_in_the_call_s_language_asks_the_worker_to_write_for_the_user_in_it(tmp_path):
+    """Decision 5 of the contract: the worker is told the call's language in the job's own request (no change to
+    the deployed harness), for its progress lines, what it relays, its summary, its charts and its report."""
+    harness = FakeHarness([assistant(("text", "끝났어요."), stop="end_turn")])
+
+    async def main():
+        job = Job(job_id="01", dir=tmp_path, now=datetime.now(SEOUL), task="Compare the trails", title="등산로 비교",
+                  language="ko")
+
+        async def relay(text):
+            pass
+
+        await HarnessWorker("arn:harness", client=harness, search=fake_search).run(job, lambda t: None, relay)
+
+    asyncio.run(main())
+    opening = harness.requests[0]["messages"][0]["content"][0]["text"]
+    assert opening.endswith("): Compare the trails\n\nThe user speaks Korean. Write in Korean every progress line, "
+                            "what you relay, chart titles and labels, the report and your final summary.")

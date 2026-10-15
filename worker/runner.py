@@ -1,7 +1,7 @@
 """Runs delegated jobs for a call and reports back to the voice server.
 
 The boundary with any worker backend is one job folder:
-  jobs/<NN>/request.md     what the coordinator asked for (written here)
+  jobs/<NN>/request.md     what the coordinator asked for, its title and the call's language (written here)
   jobs/<NN>/events.jsonl   the job's own progress log (written here, append-only)
   jobs/<NN>/report.md      the backend's final report (written by the backend)
   jobs/<NN>/...            any files the backend made (charts, tables)
@@ -28,6 +28,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
+from voice.language import LANGUAGES
+
 EmitEvent = Callable[..., None]  # recorder.event(name, **fields)
 log = logging.getLogger("worker.runner")
 
@@ -38,6 +40,8 @@ class Job:
     dir: Path
     task: str
     now: datetime  # when it started, on the person's clock (Person.now()): the worker reads dates against it
+    title: str | None = None  # a few words for the user's screen, in the call's language (delegate's title)
+    language: str | None = None  # the call's language: the worker writes what the user reads in it
     status: str = "running"  # then completed, failed or cancelled
     started_at: float = field(default_factory=time.monotonic)
     ended_at: float | None = None
@@ -86,25 +90,29 @@ class JobRunner:
         self.jobs: dict[str, Job] = {}
         self.tasks: dict[str, asyncio.Task] = {}
 
-    def _next_job(self, task: str) -> Job:
+    def _next_job(self, task: str, title: str | None, language: str | None) -> Job:
         jobs = self.session_dir / "jobs"
         jobs.mkdir(exist_ok=True)
         n = len([p for p in jobs.iterdir() if p.is_dir()]) + 1
-        job = Job(job_id=f"{n:02d}", dir=jobs / f"{n:02d}", task=task, now=self.clock())
+        job = Job(job_id=f"{n:02d}", dir=jobs / f"{n:02d}", task=task, now=self.clock(), title=title,
+                  language=language)
         job.dir.mkdir()
-        (job.dir / "request.md").write_text(f"# Job {job.job_id}\n\n{task}\n")
+        heading = f"# Job {job.job_id}" + (f": {title}" if title else "")
+        said_in = f"\nLanguage: {LANGUAGES[language].name}\n" if language in LANGUAGES else ""
+        (job.dir / "request.md").write_text(f"{heading}\n\n{task}\n{said_in}")
         return job
 
     def _job_log(self, job: Job, name: str, **fields) -> None:
         with (job.dir / "events.jsonl").open("a") as f:
             f.write(json.dumps({"at": time.time(), "type": name, **fields}, ensure_ascii=False) + "\n")
 
-    def start(self, task: str) -> Job:
-        """Starts a job and returns at once; the call keeps going while it runs."""
-        job = self._next_job(task)
+    def start(self, task: str, title: str | None = None, language: str | None = None) -> Job:
+        """Starts a job and returns at once; the call keeps going while it runs. `title`: a few words for the user's
+        screen; `language`: the call's (voice/language.py), for what the worker writes for the user."""
+        job = self._next_job(task, title, language)
         self.jobs[job.job_id] = job
-        self.emit("job_started", job_id=job.job_id, task=task)
-        self._job_log(job, "started", task=task)
+        self.emit("job_started", job_id=job.job_id, task=task, title=title, language=language)
+        self._job_log(job, "started", task=task, title=title, language=language)
 
         def progress(text: str) -> None:
             job.last_step = text

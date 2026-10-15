@@ -132,7 +132,7 @@ class StubJobs:
     def __init__(self) -> None:
         self.tasks: list[str] = []
 
-    def start(self, task: str):
+    def start(self, task: str, title: str | None = None, language: str | None = None):
         self.tasks.append(task)
         return SimpleNamespace(job_id=f"{len(self.tasks):02d}")
 

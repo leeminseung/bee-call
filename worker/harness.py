@@ -37,6 +37,7 @@ from botocore.exceptions import EventStreamError
 from beelink.clock import now_text
 from voice.aws_session import aws_session
 from voice.costs import SpendLog
+from voice.language import LANGUAGES
 from voice.people import data_root
 from worker.chart import render_svg
 from worker.runner import Job
@@ -453,8 +454,13 @@ class HarnessWorker:
     async def run(self, job: Job, progress: Callable[[str], None], relay: Callable[[str], Awaitable[None]]) -> str:
         session_id = await self._take_session(job.job_id)
         # The worker has no clock; relative dates in the task ("this Saturday") need today's date.
-        messages = [{"role": "user", "content": [{"text": f"Job {job.job_id} (it is now {now_text(job.now)}; read today, "
-                                                         f"tomorrow and weekdays against this): {job.task}"}]}]
+        request = (f"Job {job.job_id} (it is now {now_text(job.now)}; read today, tomorrow and weekdays against this): "
+                   f"{job.task}")
+        if job.language in LANGUAGES:  # the user reads the job card, the summary and the charts in the call's language
+            name = LANGUAGES[job.language].name
+            request += (f"\n\nThe user speaks {name}. Write in {name} every progress line, what you relay, chart "
+                        "titles and labels, the report and your final summary.")
+        messages = [{"role": "user", "content": [{"text": request}]}]
         # What the job used so far, in usage.json after every round, so the daily budget counts a job that fails or
         # is cancelled when the call ends as well as one that finishes (voice/costs.py).
         usage: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0, "reasoning_chars": 0, "stop_reason": None,
