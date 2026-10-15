@@ -30,8 +30,10 @@ import botocore.session
 from botocore.config import Config
 from botocore.exceptions import EventStreamError
 
+from voice import model_catalog
 from voice.aws_session import aws_session
 from voice.costs import SpendLog
+from voice.model_catalog import Choice
 from voice.people import data_root
 from worker.runner import Job
 from worker.tools import JOB_TOOLS, job_request, use_tool, write_usage
@@ -60,15 +62,14 @@ REGION_PREFIXES = ("global.", "us.", "eu.", "au.", "apac.", "jp.")
 MAX_ROUNDS = 80  # inline-function round trips per job (40 until 2026-10-15)
 HARNESS_TIMEOUT_S = 1800  # one round (invocation); AgentCore's default is 3600 and a stream lasts at most 60 min
 MAX_ITERATIONS = 120  # model and code interpreter steps in one round (AgentCore's default is 75)
-# Per model call. GLM 5 on Bedrock takes a prompt and maxTokens of at most 202,752 tokens together (probed
+# The model's output limit per call and its reasoning effort are the model catalog's glm worker choice
+# (voice/model_catalog.py). GLM 5 on Bedrock takes a prompt and maxTokens of at most 202,752 tokens together (probed
 # 2026-10-15: "This model's maximum context length is 202752 tokens"), so the largest answer it accepts shrinks as
-# a job's conversation grows. 32K tokens holds any report in one call and leaves about 170K for the conversation.
-MODEL_MAX_TOKENS = 32768
-# GLM 5 on Bedrock reasons only when the request asks it to (probed 2026-10-15: no reasoning by default;
+# a job's conversation grows; the catalog's 32K holds any report in one call and leaves about 170K for the
+# conversation. GLM 5 reasons only when the request asks it to (probed 2026-10-15: no reasoning by default;
 # reasoning_effort takes none, minimal, low, medium, high, xhigh or max). The harness merges additionalParams into
 # its Converse request as they are, so the field goes inside additionalModelRequestFields (a bare reasoning_effort
 # failed every round: "Unknown parameter in input").
-REASONING = {"zai.glm-5": {"additionalModelRequestFields": {"reasoning_effort": "high"}}}
 # A session outlives the longest wait between a job's rounds: this Mac runs a round's calls one after another, and
 # two web searches at their longest (WEB_SEARCH_LONGEST_S each) still fit. It is warmed when a call starts and serves
 # that call's jobs until the call ends, so it may live as long as AgentCore allows (8 hours, its default): a job late
@@ -134,12 +135,18 @@ def harness_tools(code_interpreter: bool = True) -> list[dict[str, Any]]:
     return tools
 
 
+def catalog_choice() -> Choice:
+    """The worker role's choice this harness runs (voice/model_catalog.py)."""
+    return next(c for c in model_catalog.role("worker").choices if c.offering.provider == "agentcore")
+
+
 def harness_definition(role_arn: str, model_id: str = DEFAULT_MODEL) -> dict[str, Any]:
     """The CreateHarness / UpdateHarness parameters for the worker."""
     code_interpreter = uses_code_interpreter(model_id)
-    model = {"modelId": model_id, "maxTokens": MODEL_MAX_TOKENS}
-    if model_id in REASONING:
-        model["additionalParams"] = REASONING[model_id]
+    glm = catalog_choice()
+    model = {"modelId": model_id, "maxTokens": glm.max_tokens}
+    if model_id == glm.offering.model and glm.extra.get("reasoning_effort"):
+        model["additionalParams"] = {"additionalModelRequestFields": {"reasoning_effort": glm.extra["reasoning_effort"]}}
     return {
         "harnessName": HARNESS_NAME,
         "executionRoleArn": role_arn,
@@ -183,7 +190,7 @@ class Round:
     stop_reason: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
-    reasoning_chars: int = 0  # the model's reasoning, streamed when it is asked to reason (REASONING)
+    reasoning_chars: int = 0  # the model's reasoning, streamed when it is asked to reason (harness_definition)
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -392,8 +399,8 @@ class HarnessWorker:
         messages = [{"role": "user", "content": [{"text": job_request(job)}]}]
         # What the job used so far, in usage.json after every round, so the daily budget counts a job that fails or
         # is cancelled when the call ends as well as one that finishes (voice/costs.py).
-        usage: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0, "reasoning_chars": 0, "stop_reason": None,
-                                 "status": "running",
+        usage: dict[str, Any] = {"provider": "agentcore", "model": DEFAULT_MODEL, "input_tokens": 0,
+                                 "output_tokens": 0, "reasoning_chars": 0, "stop_reason": None, "status": "running",
                                  "steps": []}  # seconds per model round (AWS side, built-in tools included) and call
         steps = usage["steps"]
         # A round still running when the job is cancelled runs on and is paid for. It counts at once as a guess, the

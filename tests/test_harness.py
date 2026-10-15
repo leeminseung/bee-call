@@ -99,6 +99,22 @@ def test_the_worker_has_room_for_long_research_and_reports():
     assert "additionalParams" not in other["model"]["bedrockModelConfig"]  # the switch is GLM 5's own
 
 
+def test_the_harness_runs_glm_5_as_the_model_catalog_says(monkeypatch):
+    """The model catalog is the one place for a role's run settings: the harness takes the glm worker choice's output
+    limit and reasoning effort (deployed with scripts/deploy_worker.py)."""
+    from dataclasses import replace
+
+    from voice import model_catalog
+    from voice.model_catalog import Role
+
+    changed = replace(model_catalog.choice("worker", "glm"), max_tokens=1000, extra={"reasoning_effort": "medium"})
+    monkeypatch.setitem(model_catalog.ROLES, "worker", Role("worker", person=True, choices=(changed,)))
+    model = harness_definition("arn:aws:iam::123456789012:role/bee-call-worker", "zai.glm-5")["model"]
+    assert model["bedrockModelConfig"]["maxTokens"] == 1000
+    assert model["bedrockModelConfig"]["additionalParams"] == {
+        "additionalModelRequestFields": {"reasoning_effort": "medium"}}
+
+
 def test_the_worker_s_reasoning_is_counted_in_its_usage(tmp_path):
     """How the reasoning switch shows in a job: the harness streams GLM 5's reasoning, and the job's usage.json
     counts its characters."""
@@ -153,7 +169,8 @@ def test_worker_serves_inline_functions_until_the_agent_finishes(tmp_path):
         assert summary == "Compared the two trails; Gwanaksan is gentler."
         assert progress == ["Searching trails"] and relayed == ["Gwanaksan is the gentler hike."]
         assert (tmp_path / "report.md").read_text() == report and not (tmp_path.parent / "escape.md").exists()
-        assert json.loads((tmp_path / "usage.json").read_text())["output_tokens"] == 50
+        used = json.loads((tmp_path / "usage.json").read_text())
+        assert (used["provider"], used["model"], used["output_tokens"]) == ("agentcore", "zai.glm-5", 50)
 
     asyncio.run(main())
     first, second, third, fourth, fifth = harness.requests
