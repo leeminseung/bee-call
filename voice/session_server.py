@@ -334,12 +334,25 @@ def local_host(name: str | None) -> bool:
     return name == "localhost" or name.endswith(LOCAL_SUFFIXES) or name == socket.gethostname().lower()
 
 
+LOOPBACK = ("localhost", "127.0.0.1", "::1")
+
+
+def host_allowed(request: web.Request) -> bool:
+    """The host names both web servers answer to, against DNS rebinding. On a server (BEE_CALL_PUBLIC_HOST set):
+    its own name, and this machine's loopback; never a bare IP address (BC-083). On a Mac: an IP address, a
+    .local-style name or the machine's own name, for the app and the session screen on the same Wi-Fi."""
+    public = os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip().lower()  # the server's own name, behind https
+    host = (request.url.host or "").lower().rstrip(".").strip("[]")
+    if public:
+        return host == public or host in LOOPBACK
+    return local_host(request.url.host)
+
+
 @web.middleware
 async def local_hosts_only(request: web.Request, handler):
-    public = os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip().lower()  # the server's own name, behind https
-    host = (request.url.host or "").lower().rstrip(".")
-    if not local_host(request.url.host) and not (public and host == public):
-        hint = "" if public else "; use this computer's IP address or .local name"  # on a server, just refuse
+    if not host_allowed(request):
+        on_a_server = os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip()
+        hint = "" if on_a_server else "; use this computer's IP address or .local name"  # on a server, just refuse
         raise web.HTTPMisdirectedRequest(text=f"unknown host name{hint}\n")
     return await handler(request)
 

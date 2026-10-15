@@ -77,7 +77,7 @@ from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata, call_room_of
     room_name
 from voice.offers import OfferClosed, OfferStore, UnknownChoice
 from voice.people import People, Person, dev_person, waiting_code
-from voice.session_server import local_host
+from voice.session_server import host_allowed
 
 load_dotenv(".env.local")
 log = logging.getLogger("bee-call.token")
@@ -125,10 +125,8 @@ def dev_request(request: web.Request) -> bool:
 @web.middleware
 async def known_hosts_only(request: web.Request, handler):
     """Refuses host names other than this machine's and the server's own, so a web page cannot point its own
-    domain at this server (DNS rebinding)."""
-    public = os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip().lower()
-    host = (request.url.host or "").lower().rstrip(".")
-    if not local_host(request.url.host) and not (public and host == public):
+    domain at this server (DNS rebinding); the rule is the session screen's (voice/session_server.py)."""
+    if not host_allowed(request):
         raise web.HTTPMisdirectedRequest(text="unknown host name\n")
     return await handler(request)
 

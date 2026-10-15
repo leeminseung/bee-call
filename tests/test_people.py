@@ -1052,6 +1052,28 @@ def test_the_record_server_serves_only_the_page_s_own_files(tmp_path, monkeypatc
     assert set(statuses.values()) <= {403, 404}, statuses
 
 
+def test_on_a_server_a_bare_ip_address_is_refused_by_both_servers(tmp_path, monkeypatch):
+    """BC-083: requests must name the server; a bare IP address was let in on purpose, which suits a Mac on the home
+    network but not a server. On a server only its own name and this machine's loopback come in; on a Mac (no
+    public name) an IP address still does, for the app and the session screen on the same Wi-Fi."""
+    me = signed_in(tmp_path)
+
+    async def statuses():
+        found = []
+        for app, path in ((app_for(me.people), "/me"), (session_server.make_app(me.people), "/api/sessions")):
+            async with TestClient(TestServer(app), headers=me.headers) as client:
+                for host in ("203.0.113.5", "[2001:db8::1]", "192.168.0.7", "call.example.com", "127.0.0.1", "localhost"):
+                    found.append((host, (await client.get(path, headers={"Host": host})).status))
+        return found
+
+    monkeypatch.setenv("BEE_CALL_PUBLIC_HOST", "call.example.com")
+    on_a_server = asyncio.run(statuses())
+    assert [status for host, status in on_a_server] == [421, 421, 421, 200, 200, 200] * 2, on_a_server
+    monkeypatch.delenv("BEE_CALL_PUBLIC_HOST")
+    on_a_mac = asyncio.run(statuses())
+    assert [status for host, status in on_a_mac if host == "192.168.0.7"] == [200, 200], on_a_mac
+
+
 def test_on_a_server_an_unknown_host_name_is_refused_without_a_hint_about_a_mac(tmp_path, monkeypatch):
     monkeypatch.setenv("BEE_CALL_PUBLIC_HOST", "call.example.com")
 
