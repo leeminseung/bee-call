@@ -624,6 +624,46 @@ def test_a_second_bee_connect_stops_the_first_before_it_starts(tmp_path, fake_be
     assert first_done == [True, True]
 
 
+def test_bee_connects_and_disconnects_that_overlap_run_one_after_another(tmp_path, fake_bee, monkeypatch):
+    """Review of the user-noticed fixes, 6b: a double tap started two `bee login` runs on one folder at once, and
+    a disconnect while a connect was still starting removed the folder before the connect wrote its pending file
+    (an error), or let the connect's wait turn Bee back on. Bee's connect and disconnect now take turns."""
+    from beelink import cli
+    from voice import token_server as server
+
+    me = signed_in(tmp_path)
+    folder = me.people.bee_dir("matt")
+    running, overlapped = [0], []
+    real_start = cli.start_login
+
+    async def slow_start(folder, *a, **kw):
+        running[0] += 1
+        overlapped.append(running[0] > 1)
+        await asyncio.sleep(0.2)  # Bee takes a moment to hand out its approval link
+        try:
+            return await real_start(folder, *a, **kw)
+        finally:
+            running[0] -= 1
+
+    monkeypatch.setattr(server.bee, "start_login", slow_start)
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people)), headers=me.headers) as client:
+            first, second = await asyncio.gather(client.post("/bee/connect"), client.post("/bee/connect"))
+            connect = asyncio.create_task(client.post("/bee/connect"))
+            await asyncio.sleep(0.05)  # the connect is still starting
+            off = await client.post("/bee/disconnect")
+            connected = await connect
+            (folder / "approve").write_text("") if folder.exists() else None
+            await asyncio.sleep(0.3)
+            return [r.status for r in (first, second, connected, off)]
+
+    statuses = asyncio.run(main())
+    assert overlapped == [False, False, False]  # one `bee login` at a time
+    assert statuses == [200, 200, 200, 204]
+    assert not folder.exists() and me.people.settings("matt").bee is False  # the disconnect came last and won
+
+
 # ---------- the daily budget ----------
 
 def test_claude_haiku_5_5_is_priced_with_its_cache(tmp_path):

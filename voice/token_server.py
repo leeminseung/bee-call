@@ -96,6 +96,7 @@ PEOPLE = web.AppKey("people", People)
 NONCES = web.AppKey("nonces", apple_signin.Nonces)
 VERIFY = web.AppKey("verify", object)  # apple_signin.verify, or a stand-in in tests
 BEE_LOGINS = web.AppKey("bee_logins", dict)  # person -> the task waiting for their Bee approval
+BEE_TURNS = web.AppKey("bee_turns", dict)  # person -> the lock their Bee connect and disconnect take turns on
 
 
 def env(name: str) -> str:
@@ -415,16 +416,24 @@ async def stop_waiting_for_bee(app: web.Application, who: str) -> None:
         await asyncio.gather(task, return_exceptions=True)
 
 
+def bee_turn(app: web.Application, who: str) -> asyncio.Lock:
+    """A person's Bee connect and disconnect take turns: a double tap never runs two `bee login` on one folder, and
+    a disconnect never removes the folder under a connect that is still starting (or lets its wait turn Bee back
+    on)."""
+    return app[BEE_TURNS].setdefault(who, asyncio.Lock())
+
+
 async def connect_bee(request: web.Request) -> web.Response:
     who, people = person(request), request.app[PEOPLE]
     folder = people.bee_dir(who)
-    await stop_waiting_for_bee(request.app, who)  # one `bee login` at a time on a folder
-    try:
-        link = await bee.start_login(folder)
-    except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
-        raise web.HTTPBadGateway(text=f"could not start a Bee login: {exc}\n")
-    (folder / BEE_PENDING).write_text(json.dumps({"started_at": time.time()}))
-    wait_for_bee_approval(request.app, who, BEE_APPROVAL_SECONDS)
+    async with bee_turn(request.app, who):
+        await stop_waiting_for_bee(request.app, who)  # one `bee login` at a time on a folder
+        try:
+            link = await bee.start_login(folder)
+        except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
+            raise web.HTTPBadGateway(text=f"could not start a Bee login: {exc}\n")
+        (folder / BEE_PENDING).write_text(json.dumps({"started_at": time.time()}))
+        wait_for_bee_approval(request.app, who, BEE_APPROVAL_SECONDS)
     return web.json_response({"link": link})
 
 
@@ -432,20 +441,21 @@ async def disconnect_bee(request: web.Request) -> web.Response:
     """Bee off, and the person's Bee login gone from this server, whatever `bee logout` says: 204 only once the
     login folder is removed (the app clears its status on 204)."""
     who, people = person(request), request.app[PEOPLE]
-    await stop_waiting_for_bee(request.app, who)
-    folder = people.bee_dir(who)
-    try:
-        await bee.logout(folder)
-    except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
-        log.warning("bee logout for %s failed (%s); removing the login here anyway", who, exc)
-    people.change_settings(who, {"bee": False}, allowed=("bee",))
-    try:
-        shutil.rmtree(folder)
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        log.error("could not remove the Bee login of %s: %s", who, exc)
-        raise web.HTTPBadGateway(text="Bee is off, but the server could not remove the Bee login; try again\n")
+    async with bee_turn(request.app, who):
+        await stop_waiting_for_bee(request.app, who)
+        folder = people.bee_dir(who)
+        try:
+            await bee.logout(folder)
+        except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
+            log.warning("bee logout for %s failed (%s); removing the login here anyway", who, exc)
+        people.change_settings(who, {"bee": False}, allowed=("bee",))
+        try:
+            shutil.rmtree(folder)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.error("could not remove the Bee login of %s: %s", who, exc)
+            raise web.HTTPBadGateway(text="Bee is off, but the server could not remove the Bee login; try again\n")
     return web.Response(status=204)
 
 
@@ -482,6 +492,7 @@ def make_app(url: str, key: str, secret: str, people: People, room_exists=liveki
     app.on_response_prepare.append(plain_server_name)
     app[URL], app[KEY], app[SECRET], app[ROOM_EXISTS] = url, key, secret, room_exists
     app[PEOPLE], app[NONCES], app[VERIFY], app[BEE_LOGINS] = people, apple_signin.Nonces(), verify, {}
+    app[BEE_TURNS] = {}
     app.on_startup.append(resume_bee_logins)
     app.on_shutdown.append(stop_bee_logins)
     app.router.add_get("/auth/nonce", new_nonce)
