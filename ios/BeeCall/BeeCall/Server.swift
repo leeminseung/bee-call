@@ -1,5 +1,4 @@
 import AuthenticationServices
-import CryptoKit
 import Foundation
 import Observation
 import Security
@@ -25,7 +24,7 @@ final class Server {
 
     private(set) var state: State
     private(set) var problem: String? // the last sign-in failure, in words
-    @ObservationIgnored private var nonce: String?
+    @ObservationIgnored let signIn = AppleSignIn()
     @ObservationIgnored let bee = BeeSync(noteStatus: { Server.shared.noteStatus($0) })
     @ObservationIgnored let settings = SettingsSync(tokenReadable: { Server.savedToken() != nil },
                                                     noteStatus: { Server.shared.noteStatus($0) })
@@ -124,59 +123,42 @@ final class Server {
     /// A one-time value from the server, fetched before the Sign in with Apple button is tapped (its request
     /// is made synchronously).
     func prepare() async {
-        guard let request = Self.request("/auth/nonce"),
-              let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            nonce = nil
-            problem = "The server cannot be reached right now."
-            return
-        }
-        nonce = body["nonce"] as? String
-        problem = nil
+        problem = await signIn.prepare() ? nil : "The server cannot be reached right now."
     }
 
     /// For Apple's request: the nonce's SHA-256, which Apple puts into the identity token.
     func hashedNonce() -> String {
-        SHA256.hash(data: Data((nonce ?? "").utf8)).map { String(format: "%02x", $0) }.joined()
+        signIn.hashForRequest()
     }
 
     func finish(_ result: Result<ASAuthorization, any Error>) async {
         defer { Task { await prepare() } } // a nonce works once
-        guard case .success(let authorization) = result,
-              let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
-              let tokenData = credential.identityToken, let identityToken = String(data: tokenData, encoding: .utf8),
-              let nonce else {
-            if case .failure(let error) = result, (error as? ASAuthorizationError)?.code == .canceled { return }
-            problem = "Sign in with Apple did not finish."
-            return
+        var identityToken: String?
+        var cancelled = false
+        switch result {
+        case .success(let authorization):
+            if let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+               let data = credential.identityToken {
+                identityToken = String(data: data, encoding: .utf8)
+            }
+        case .failure(let error):
+            cancelled = (error as? ASAuthorizationError)?.code == .canceled
         }
-        guard let request = Self.request("/auth/apple", method: "POST",
-                                         json: ["identity_token": identityToken, "nonce": nonce]),
-              let (data, response) = try? await URLSession.shared.data(for: request) else {
-            problem = "The server cannot be reached right now."
-            return
-        }
-        let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-        switch (response as? HTTPURLResponse)?.statusCode {
-        case 200:
-            guard let token = body["token"] as? String, let person = body["person"] as? String else { break }
+        switch await signIn.finish(identityToken: identityToken, cancelled: cancelled) {
+        case .signedIn(let token, let person):
             Self.save(token: token)
             UserDefaults.standard.set(person, forKey: "person")
             state = .signedIn(person: person)
             problem = nil
             await afterSignIn()
-            return
-        case 403:
-            if let code = body["waiting"] as? String {
-                state = .waiting(code: code)
-                problem = nil
-                return
-            }
-        default:
+        case .waiting(let code):
+            state = .waiting(code: code)
+            problem = nil
+        case .cancelled:
             break
+        case .failed(let message):
+            problem = message
         }
-        problem = "The server did not accept the sign-in."
     }
 
     func signOut() async {
