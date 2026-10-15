@@ -122,7 +122,7 @@ struct ProblemLine: View {
 
     var body: some View {
         if let problem {
-            Text(words.notSaved(problem))
+            Text(words.notSaved(MessageWords.words(problem, korean: words.korean)))
                 .foregroundStyle(BeeStyle.red)
         }
     }

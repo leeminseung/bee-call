@@ -67,6 +67,13 @@ struct CallModeView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                if let problem = calls.phoneRecordingProblem { // "Save on this iPhone" is on, but nothing is saved
+                    Text(MessageWords.words(problem, korean: language == "ko"))
+                        .font(.caption)
+                        .foregroundStyle(BeeStyle.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 2)
+                }
             }
             HStack {
                 Button(action: showConversation) {

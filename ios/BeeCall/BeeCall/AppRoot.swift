@@ -49,13 +49,22 @@ struct AppRoot: View {
         scenePhase == .background ? "" : Server.api
     }
 
+    /// The line under the call button, and Bee's state when it needs the person (connecting, not connected,
+    /// turning off), which the old one-screen app showed too. "Bee 연결됨" and the approval waiting are in the
+    /// header already.
     private var status: String {
-        HomeStatus.line(korean: language == "ko", callStatus: calls.statusLine, ringStatus: calls.ringStatus,
-                        voipRegistered: PushTokens.shared.voipRegistered)
+        let korean = language == "ko"
+        let ready = HomeStatus.line(korean: korean, callStatus: calls.statusLine, ringStatus: calls.ringStatus,
+                                    voipRegistered: PushTokens.shared.voipRegistered)
+        let bee = server.bee.status
+        let beeNote = ["", "Bee connected", "Waiting for your approval in the Bee app"].contains(bee) ? ""
+            : MessageWords.words(bee, korean: korean)
+        return [ready, beeNote].filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
-    /// What did not reach the server or did not start, in red under the status line.
+    /// What did not reach the server or did not start, in red under the status line, in the call language.
     private var problem: String? {
-        server.settings.problem ?? calls.phoneRecordingProblem ?? data.offers.notice ?? data.problem
+        (server.settings.problem ?? calls.phoneRecordingProblem ?? data.offers.notice ?? data.problem)
+            .map { MessageWords.words($0, korean: language == "ko") }
     }
 }

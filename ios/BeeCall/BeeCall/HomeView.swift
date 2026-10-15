@@ -200,7 +200,7 @@ struct HomeView: View {
                 Spacer()
                 if calls.callIsOn {
                     smallControls
-                } else {
+                } else if !calls.isRinging { // while Bee Call's call rings, iOS's own screen has the buttons
                     callButton
                 }
             }
