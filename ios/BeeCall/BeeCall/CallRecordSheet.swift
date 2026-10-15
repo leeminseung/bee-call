@@ -114,9 +114,13 @@ struct SessionPage: UIViewRepresentable {
             self.openOutside = openOutside
         }
 
-        /// "Continue this call": {"continue": "2026-10-14/0055"}. Only an id of that shape is passed on.
+        /// "Continue this call": {"continue": "2026-10-14/0055"}, from the records page itself (RecordPagePolicy).
+        /// Only an id of that shape is passed on.
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard let body = message.body as? [String: Any], let id = body["continue"] as? String,
+            let frame = message.frameInfo, origin = frame.securityOrigin
+            guard policy.acceptsMessage(fromMainFrame: frame.isMainFrame, scheme: origin.protocol, host: origin.host,
+                                        port: origin.port),
+                  let body = message.body as? [String: Any], let id = body["continue"] as? String,
                   id.wholeMatch(of: /\d{4}-\d{2}-\d{2}\/\d{4}(-\d+)?/) != nil else { return }
             onContinue(id)
         }

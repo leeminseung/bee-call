@@ -39,6 +39,37 @@ final class RecordPagePolicyTests: XCTestCase {
         XCTAssertEqual(debug.navigation(to: URL(string: "http://192.168.219.106/")!), .openInSafari)
     }
 
+    // MARK: - Who may continue a call
+
+    /// "Continue this call" starts a call: it counts only from the main frame of a page on the records server.
+    /// WebKit gives a default port as 0.
+    @MainActor func testOnlyTheRecordsPageItselfMayContinueACall() {
+        XCTAssertTrue(records.acceptsMessage(fromMainFrame: true, scheme: "https", host: "call.mslee.dev", port: 8443))
+        XCTAssertFalse(records.acceptsMessage(fromMainFrame: false, scheme: "https", host: "call.mslee.dev",
+                                              port: 8443)) // a frame inside the page
+        XCTAssertFalse(records.acceptsMessage(fromMainFrame: true, scheme: "https", host: "example.org", port: 8443))
+        XCTAssertFalse(records.acceptsMessage(fromMainFrame: true, scheme: "https", host: "call.mslee.dev", port: 0))
+        XCTAssertFalse(records.acceptsMessage(fromMainFrame: true, scheme: "", host: "", port: 0)) // a sandboxed file
+        let plain = RecordPagePolicy(records: URL(string: "https://call.mslee.dev/")!)
+        XCTAssertTrue(plain.acceptsMessage(fromMainFrame: true, scheme: "https", host: "call.mslee.dev", port: 0))
+    }
+
+    /// The web view itself: the records page's "Continue this call" reaches the app.
+    @MainActor func testTheRecordsPageContinuesACall() async throws {
+        let records = URL(string: "https://records.invalid:8443/")!
+        var continued: [String] = []
+        let coordinator = SessionPage.Coordinator(policy: RecordPagePolicy(records: records), failed: .constant(false),
+                                                  onContinue: { continued.append($0) }, openOutside: { _ in })
+        let view = SessionPage.webView(coordinator)
+        view.loadHTMLString("""
+            <!doctype html><script>
+            window.webkit.messageHandlers.beeCall.postMessage({continue: "2026-10-14/0055"});
+            </script>
+            """, baseURL: records)
+        await waitUntil("the call is continued", timeout: .seconds(10)) { !continued.isEmpty }
+        XCTAssertEqual(continued, ["2026-10-14/0055"])
+    }
+
     /// The web view itself: a page that leaves for another site is stopped, and the site opens in Safari.
     @MainActor func testTheWebViewHandsOtherSitesToSafari() async throws {
         let records = URL(string: "https://records.invalid:8443/")! // never resolves: nothing leaves this Mac
