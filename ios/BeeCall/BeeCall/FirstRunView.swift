@@ -76,7 +76,7 @@ struct LanguageRows: View {
     @Binding var language: String
 
     var body: some View {
-        ForEach(CallLanguage.allCases) { option in
+        ForEach(CallLanguage.choices) { option in
             let picked = option.rawValue == language
             Button { language = option.rawValue } label: {
                 HStack {

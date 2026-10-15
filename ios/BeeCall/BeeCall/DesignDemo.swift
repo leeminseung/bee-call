@@ -149,7 +149,7 @@ struct DemoVoices: VoiceCatalog, VoiceSamples {
         let voices: [(String, String, String)] = switch language {
         case .ko: [("harin", "하린", "친근함"), ("seojun", "서준", "차분함"), ("daon", "다온", "또렷함"),
                    ("narae", "나래", "밝음"), ("doyun", "도윤", "낮고 안정적")]
-        case .en: [("ava", "Ava", "Warm"), ("ethan", "Ethan", "Calm"), ("nora", "Nora", "Clear"),
+        case .en, .unrecognized: [("ava", "Ava", "Warm"), ("ethan", "Ethan", "Calm"), ("nora", "Nora", "Clear"),
                    ("lily", "Lily", "Bright"), ("owen", "Owen", "Low and steady")]
         }
         return voices.map { CallVoice(id: $0.0, name: $0.1, manner: $0.2) }

@@ -25,7 +25,7 @@ final class FirstRunTests: XCTestCase {
 
     /// Each row has the language's own name and, under it, its name in the other language.
     @MainActor func testEachLanguageRowNamesItselfForBothReaders() {
-        XCTAssertEqual(CallLanguage.allCases, [.ko, .en])
+        XCTAssertEqual(CallLanguage.choices, [.ko, .en])
         XCTAssertEqual(CallLanguage.ko.name, "한국어")
         XCTAssertEqual(CallLanguage.ko.otherName, "Korean")
         XCTAssertEqual(CallLanguage.en.name, "English")

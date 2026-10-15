@@ -26,14 +26,30 @@ enum FirstRun {
     }
 }
 
-/// The two languages Bee Call speaks. A row shows the language's own name and, under it, its name in the other
-/// language, so a reader of either finds theirs.
-enum CallLanguage: String, CaseIterable, Identifiable {
-    case ko, en
+/// The two languages Bee Call speaks (the contract's `language`). A row shows the language's own name and, under
+/// it, its name in the other language, so a reader of either finds theirs.
+enum CallLanguage: String, ContractValue, Identifiable {
+    case ko, en, unrecognized
+
+    /// The languages to pick from, in the list's order.
+    static let choices: [CallLanguage] = [.ko, .en]
 
     var id: String { rawValue }
-    var name: String { self == .ko ? "한국어" : "English" }
-    var otherName: String { self == .ko ? "Korean" : "영어" }
+    var name: String {
+        switch self {
+        case .ko: "한국어"
+        case .en: "English"
+        case .unrecognized: ""
+        }
+    }
+
+    var otherName: String {
+        switch self {
+        case .ko: "Korean"
+        case .en: "영어"
+        case .unrecognized: ""
+        }
+    }
 
     /// The language the person already picked; else the phone's own, when it is Korean or English; else English.
     static func initial(written: String?, preferred: [String]) -> CallLanguage {
