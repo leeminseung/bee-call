@@ -62,7 +62,8 @@ def _readable(path: Path, root: Path) -> bool:
             names += list(form.relative_to(root).parts)
         except ValueError:
             pass
-    return not any(fnmatch.fnmatch(name, pattern) for name in names for pattern in HIDDEN)
+    # In lower case: a Mac's disk finds "VOIP_TOKEN.json" under "voip_token.json" (BC-049).
+    return not any(fnmatch.fnmatchcase(name.lower(), pattern) for name in names for pattern in HIDDEN)
 
 
 def redact(text: str) -> str:

@@ -289,6 +289,23 @@ def test_the_agent_hears_only_of_conversations_the_watcher_kept(tmp_path):
     assert "Weighing two job offers" in line and "Our own AI call" not in line
 
 
+def test_file_tools_hide_secrets_and_audio_whatever_the_case_of_their_names(tmp_path):
+    """BC-049: the hidden names were matched case by case, and a Mac's disk is not: "state/VOIP_TOKEN.json" opened
+    the push token and "audio/USER.WAV" the call audio. Names in upper case are hidden as their lower-case form."""
+    ws = workspace_with_a_call(tmp_path)
+    (ws / "state").mkdir(exist_ok=True)
+    (ws / "state" / "VOIP_TOKEN.json").write_text('{"token": "zebra-push-token"}')
+    audio = ws / "2026-10-14" / "1200" / "AUDIO"
+    audio.mkdir(exist_ok=True)  # on a Mac this is the call's own audio folder
+    (audio / "USER.WAV").write_bytes(b"RIFF zebra audio")
+    (ws / "2026-10-14" / "1200" / "MODEL-LOG.JSONL").write_text('{"chat": "zebra"}\n')
+    for private in ("state/VOIP_TOKEN.json", "2026-10-14/1200/AUDIO/USER.WAV", "2026-10-14/1200/MODEL-LOG.JSONL"):
+        with pytest.raises(files.FileError):
+            files.read_file(ws, private)
+    assert "zebra" not in files.grep(ws, "zebra")
+    assert "VOIP_TOKEN" not in files.list_files(ws, "state") and "USER.WAV" not in files.list_files(ws, "2026-10-14/1200/AUDIO")
+
+
 def test_file_tools_leave_out_the_model_log_and_claude_s_history(tmp_path):
     """A call's model log repeats the whole conversation in every request (and the Bee context with it), so a search
     would match it on every line and push the transcripts out of the 50 matches; like Claude's history, it is a
