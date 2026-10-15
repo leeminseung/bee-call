@@ -38,7 +38,11 @@ MAX_REQUESTS = 80  # a job's requests before its answer, paused turns continued 
 JOB_WEB_SEARCHES = 60  # a job's web searches before it is asked for its answer (0.60 USD)
 WEB_SEARCHES_PER_REQUEST = 20  # so one request can pass the job's limit by at most this many
 FETCHED_TOKENS = 30_000  # at most this much of one fetched page or PDF reaches the conversation (about 120 KB)
-REQUEST_TIMEOUT_S = 1800.0  # one request, its server tools included; the stream's own wait for its next bytes
+# One request, its server tools included. A real one stayed open for about 50 minutes on a live connection
+# (2026-10-15), so each has a deadline, and a connection silent for REQUEST_IDLE_S is taken for dropped; either way
+# the request is tried again. The longest seen to finish took about 100 s.
+REQUEST_DEADLINE_S = 900.0
+REQUEST_IDLE_S = 300.0
 RETRY_WAITS_S = (15, 60)  # before each new try of a request that failed midway
 # Past a limit, a turn that also left a server tool waiting is continued without the note; at most this many times.
 LATE_LIMIT_REQUESTS = 5
@@ -103,7 +107,7 @@ def retryable(exc: BaseException) -> bool:
     a rate limit."""
     import anthropic
 
-    if isinstance(exc, transport_errors()):
+    if isinstance(exc, transport_errors() + (TimeoutError,)):  # TimeoutError: past REQUEST_DEADLINE_S
         return True
     if isinstance(exc, anthropic.APIStatusError):
         body = exc.body if isinstance(exc.body, dict) else {}
@@ -123,7 +127,7 @@ class ClaudeWorker:
 
             self._client = anthropic_api.async_client(
                 api_key=anthropic_api.api_key() or None, max_retries=2,
-                timeout=anthropic.Timeout(REQUEST_TIMEOUT_S, connect=10.0))
+                timeout=anthropic.Timeout(REQUEST_IDLE_S, connect=10.0))
         return self._client
 
     async def run(self, job: Job, progress: Callable[[str], None], relay: Callable[[str], Awaitable[None]]) -> str:
@@ -207,7 +211,8 @@ class ClaudeWorker:
         for attempt in range(len(RETRY_WAITS_S) + 1):
             used = Usage()
             try:
-                return await anthropic_api.ADAPTER.stream(params, usage=used, client=self.client())
+                async with asyncio.timeout(REQUEST_DEADLINE_S):
+                    return await anthropic_api.ADAPTER.stream(params, usage=used, client=self.client())
             except Exception as exc:
                 if attempt == len(RETRY_WAITS_S) or not retryable(exc):
                     raise

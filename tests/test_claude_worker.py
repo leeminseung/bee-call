@@ -380,6 +380,27 @@ def test_a_job_cancelled_while_a_request_runs_counts_an_estimate(tmp_path):
     assert used["status"] == "cancelled" and used["estimated"] and used["input_tokens"] > 0
 
 
+def test_a_request_that_runs_past_its_deadline_is_cut_and_tried_again(tmp_path, monkeypatch):
+    """A real request in the limit probe of 2026-10-15 stayed open for about 50 minutes on a live connection (the
+    read timeout never fired, so bytes kept coming). Each request now has a deadline: one past it is cut, counted as
+    an estimate, and tried again like a dropped connection."""
+    monkeypatch.setattr(claude, "RETRY_WAITS_S", (0, 0))
+    monkeypatch.setattr(claude, "REQUEST_DEADLINE_S", 0.2)
+    hold = asyncio.Event()  # never set: the first request never ends
+
+    class OnceHeld(Messages):
+        def stream(self, **params):
+            stream = super().stream(**params)
+            stream.hold = hold if len(self.sent) == 1 else None
+            return stream
+
+    client = SimpleNamespace(messages=OnceHeld([reply([text("Never.")], "end_turn"), reply([text("Done.")], "end_turn")]),
+                             files=Files({}))
+    summary, _, _ = run(job_in(tmp_path, None), client)
+    used = usage_of(job_in(tmp_path, None))
+    assert summary == "Done." and len(client.messages.sent) == 2 and used["requests"] == 2 and used["estimated"]
+
+
 def test_a_request_that_fails_midway_is_tried_again(tmp_path, monkeypatch):
     """Through the real SDK: a connection that cannot be made, and an error event in the middle of the stream (which
     the SDK raises with the stream's own status, 200), are tried again; a refused request (400) is not."""
