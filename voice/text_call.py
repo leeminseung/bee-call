@@ -27,7 +27,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 from livekit import rtc
-from livekit.agents import AgentSession
+from livekit.agents import AgentSession, llm
 
 from voice import agent
 from voice.call_folders import find_call
@@ -118,25 +118,34 @@ async def no_ringing(room: Any) -> None:
     await asyncio.Event().wait()  # until the AI picks up
 
 
-def meta_for(people: People, person: str, answer: str | None, continue_from: str | None) -> tuple[str, dict]:
-    """The call's room and the dispatch metadata the voice server would be given."""
-    if answer is None:
-        meta: dict[str, Any] = {"direction": "inbound", "person": person}
-        if continue_from:
-            meta["continue_from"] = continue_from
-        return room_name(person, people.person(person).now()), meta
-    offer = next((o for o in OfferStore(people.workspace(person)).all() if o.room == answer), None)
+def meta_for(people: People, person: str, continue_from: str | None) -> tuple[str, dict]:
+    """A call the person starts: its room and the dispatch metadata the app's pass gives the voice server."""
+    meta: dict[str, Any] = {"direction": "inbound", "person": person}
+    if continue_from:
+        meta["continue_from"] = continue_from
+    return room_name(person, people.person(person).now()), meta
+
+
+async def prepared_meta(people: People, person: str, room: str) -> tuple[str, dict]:
+    """An agreed AI call placed in `room`: the dispatch metadata it was placed with, its prep made again the way
+    voice/outbound.py makes it before the phone rings (on the prep's model, with its cost recorded)."""
+    from voice import outbound
+    from voice.language import call_language
+
+    offer = next((o for o in OfferStore(people.workspace(person)).all() if o.room == room), None)
     if offer is None:
-        raise SystemExit(f"no AI call of {person}'s was placed in room {answer}")
-    return answer, json.loads(call_metadata("outbound", plan_of(offer), None, offer.continue_from, agreed(offer),
-                                            person))
+        raise SystemExit(f"no AI call of {person}'s was placed in room {room}")
+    someone = people.person(person)
+    prep = await outbound.prepare_offer(offer, someone, language=call_language(someone.settings().language))
+    return room, json.loads(call_metadata("outbound", plan_of(offer), prep.to_meta(), offer.continue_from,
+                                          agreed(offer), person))
 
 
 async def text_call(people: People, person: str, lines: list[str], *, answer: str | None = None,
                     continue_from: str | None = None, wait_s: float = 0.0,
                     say: Callable[[str], None] = print) -> dict[str, Any]:
     """Runs one call in text; returns {"call_id", "record"} (record None for a call that was not answered)."""
-    room, meta = meta_for(people, person, answer, continue_from)
+    room, meta = await prepared_meta(people, person, answer) if answer else meta_for(people, person, continue_from)
     job = TextJob(room, meta)
     closed, spoke = asyncio.Event(), asyncio.Event()
 
@@ -189,6 +198,9 @@ async def converse(session: AgentSession, person: str, lines: list[str], spoke: 
             break
         say(f"{person}: {line}")
         try:
+            # What LiveKit runs when a spoken turn ends (a typed one skips it): the call AI's wait for its prep note.
+            ai = session.current_agent
+            await ai.on_user_turn_completed(ai.chat_ctx.copy(), llm.ChatMessage(role="user", content=[line]))
             await session.run(user_input=line)
         except Exception as exc:
             if closed.is_set() or ending(session):

@@ -152,3 +152,39 @@ def test_a_call_in_text_goes_on_after_a_turn_that_fails_as_a_call_does(tmp_path,
     found = asyncio.run(text_call.text_call(me.people, "matt", ["Hello", "boom", "Still there?"], say=said.append))
     ended_properly(me, found)
     assert "AI: You said Still there?." in said
+
+
+def test_an_answered_ai_call_gets_its_prep_and_each_typed_line_passes_the_spoken_turn_s_hook(tmp_path, monkeypatch):
+    """Review of the last stretch, finding 2: --answer gave the voice server no prep (the real dispatch carries the
+    prep voice/outbound.py made before the phone rang), and a typed line skipped the hook LiveKit runs when a spoken
+    turn ends (the call AI's wait for a prep note still being written)."""
+    from datetime import timedelta
+
+    from tests.helpers import fake_livekit
+    from voice.coordinator import Coordinator
+    from voice.dispatch import place_call
+    from voice.offers import OfferStore
+
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(agent, "COORDINATOR_LLM", "echo")
+    monkeypatch.setattr(agent, "WORKER", "fake")
+    turns = []
+    real_hook = Coordinator.on_user_turn_completed
+
+    async def hook(self, turn_ctx, new_message):
+        turns.append(new_message.text_content)
+        await real_hook(self, turn_ctx, new_message)
+
+    monkeypatch.setattr(Coordinator, "on_user_turn_completed", hook)
+    now = me.person.now()
+    store = OfferStore(me.workspace)
+    offer = store.book("the interview", now + timedelta(seconds=1), now)
+    room = asyncio.run(place_call(store.claim(offer.id, now + timedelta(seconds=2)), me.person, lk=fake_livekit([])))
+    _, meta = asyncio.run(text_call.prepared_meta(me.people, "matt", room))
+    assert "prep" in meta and meta["direction"] == "outbound" and meta["topic"] == "the interview"
+    found = asyncio.run(text_call.text_call(me.people, "matt", ["Hello", "Tell me more."], answer=room,
+                                            say=lambda line: None))
+    events = [json.loads(line) for line in (Path(found["record"]) / "events.jsonl").read_text().splitlines()]
+    (prep,) = [e for e in events if e["type"] == "call_prep"]
+    assert "without a prep" not in str(prep.get("error"))
+    assert turns == ["Hello", "Tell me more."]

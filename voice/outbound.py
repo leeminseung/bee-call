@@ -180,6 +180,19 @@ def busy(workspace: Path, now: datetime) -> bool:
         placed is not None and timedelta(0) <= now - placed < timedelta(seconds=RING_SECONDS + 30))
 
 
+async def prepare_offer(offer: Offer, person: Person, *, prepare=prepare_outbound, deadline_s: float = NOTE_SECONDS,
+                        language: CallLanguage | None = None):
+    """The call prep for an agreed AI call, made before its phone rings and sent to the voice server with the call
+    (voice/dispatch.py); voice.text_call --answer makes it the same way."""
+    workspace = person.workspace
+    extra = {"agreed": agreed(offer), "meta_notes": meta_notes(workspace)}
+    if offer.continue_from:
+        extra["earlier_call"] = earlier_call(workspace, offer.continue_from)
+    return await prepare(plan_of(offer), extra=extra, spend=SpendLog(workspace), bee=person.settings().bee,
+                         ours=OurCalls.of(workspace), now=person.now(), deadline_s=deadline_s,
+                         **({"language": language} if language else {}))
+
+
 async def call_due(person: Person, now: datetime | None = None, prepare=prepare_outbound, place=place_call, *,
                    language: CallLanguage | None = None) -> list[str]:
     """Places a call the user said yes to: "Call me now", an accepted time that has come (prepared up to
@@ -204,13 +217,8 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
             log.info("offer %s not called: %s", offer.id, budget.why())
             continue
         try:
-            extra = {"agreed": agreed(claim.offer), "meta_notes": meta_notes(workspace)}
-            if offer.continue_from:
-                extra["earlier_call"] = earlier_call(workspace, offer.continue_from)
-            prep = await prepare(plan_of(claim.offer), extra=extra, spend=SpendLog(workspace), bee=person.settings().bee,
-                                 ours=OurCalls.of(workspace),
-                                 now=person.now(), deadline_s=NOW_PREP_S if right_now else NOTE_SECONDS,
-                                 **({"language": language} if language else {}))
+            prep = await prepare_offer(claim.offer, person, prepare=prepare,
+                                       deadline_s=NOW_PREP_S if right_now else NOTE_SECONDS, language=language)
             wait = (offer.at("call_at") - person.now()).total_seconds()
             if wait > 0:  # prepared early for a booked time
                 await asyncio.sleep(wait)
