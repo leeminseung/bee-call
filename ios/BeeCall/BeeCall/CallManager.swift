@@ -19,8 +19,9 @@ final class CallManager: NSObject {
     private(set) var isEnding = false
     let liveKit = LiveKitClient()
 
-    @ObservationIgnored private let provider: CXProvider
-    @ObservationIgnored private let controller = CXCallController()
+    @ObservationIgnored private let callKit: any CallKitReports
+    @ObservationIgnored private let calls: any CallKitRequests
+    @ObservationIgnored private let microphone: () async -> Bool
     @ObservationIgnored private var callID: UUID?
     @ObservationIgnored private var tokenServerURL = ""
     @ObservationIgnored private var earlierCall: String? // the record id of the call a new call continues
@@ -37,15 +38,15 @@ final class CallManager: NSObject {
                                                           noteStatus: { Server.shared.noteStatus($0) })
     private static let pickUpSeconds = 30 // the voice server picks up within about 8 s; this catches a stuck one
 
-    override init() {
-        let configuration = CXProviderConfiguration()
-        configuration.supportsVideo = false
-        configuration.maximumCallGroups = 1
-        configuration.maximumCallsPerCallGroup = 1
-        configuration.supportedHandleTypes = [.generic]
-        provider = CXProvider(configuration: configuration)
+    /// CallKit's provider and controller and the microphone prompt, unless a test passes stand-ins.
+    init(callKit: (any CallKitReports)? = nil, calls: (any CallKitRequests)? = nil,
+         microphone: @escaping () async -> Bool = { await LiveKitSDK.ensureDeviceAccess(for: [.audio]) }) {
+        let provider: CXProvider? = callKit == nil ? Self.provider() : nil
+        self.callKit = callKit ?? provider!
+        self.calls = calls ?? CXCallController()
+        self.microphone = microphone
         super.init()
-        provider.setDelegate(self, queue: nil) // nil = main queue
+        provider?.setDelegate(self, queue: nil) // nil = main queue
 
         // CallKit is the only owner of the audio session. The SDK must not configure the session,
         // and its audio engine may run only between didActivate and didDeactivate below
@@ -60,12 +61,21 @@ final class CallManager: NSObject {
         pushRegistry.desiredPushTypes = [.voIP]
     }
 
+    private static func provider() -> CXProvider {
+        let configuration = CXProviderConfiguration()
+        configuration.supportsVideo = false
+        configuration.maximumCallGroups = 1
+        configuration.maximumCallsPerCallGroup = 1
+        configuration.supportedHandleTypes = [.generic]
+        return CXProvider(configuration: configuration)
+    }
+
     /// Asks for the microphone while the app is on screen. A call rung by a VoIP push cannot show the prompt.
     func askForMicrophone() async {
         #if DEBUG
         guard VoiceDemo.requested() == nil else { return } // a pretend call needs no microphone
         #endif
-        _ = await LiveKitSDK.ensureDeviceAccess(for: [.audio])
+        _ = await microphone()
     }
 
     /// Calls Bee Call. With `continuing`, the new call picks up from that earlier call (its record id).
@@ -76,7 +86,7 @@ final class CallManager: NSObject {
         status = earlierCall == nil ? "Calling…" : "Calling to continue…"
         // Ask now, while the app is on screen. Inside the CallKit audio window the SDK
         // cannot show the prompt, and turning the engine on fails without permission.
-        guard await LiveKitSDK.ensureDeviceAccess(for: [.audio]) else {
+        guard await microphone() else {
             finish("Microphone access is off. Turn it on in Settings.")
             return
         }
@@ -85,7 +95,7 @@ final class CallManager: NSObject {
         self.tokenServerURL = tokenServerURL
         let start = CXStartCallAction(call: id, handle: CXHandle(type: .generic, value: "AI"))
         do {
-            try await controller.request(CXTransaction(action: start))
+            try await calls.request(CXTransaction(action: start))
         } catch {
             finish("Could not start the call: \(error.localizedDescription)")
         }
@@ -95,7 +105,7 @@ final class CallManager: NSObject {
         guard let id = callID, !isEnding else { return }
         isEnding = true
         do {
-            try await controller.request(CXTransaction(action: CXEndCallAction(call: id)))
+            try await calls.request(CXTransaction(action: CXEndCallAction(call: id)))
         } catch {
             // CallKit no longer knows this call, so clean up here.
             connecting?.cancel()
@@ -138,7 +148,7 @@ final class CallManager: NSObject {
 
     /// Rings the phone through CallKit for the AI's call, unless the ring has expired,
     /// this room rang already, or another call is on.
-    private func ringPhone(for ring: Ring, tokenServerURL: String) {
+    func ringPhone(for ring: Ring, tokenServerURL: String) {
         guard Self.answerBy(ring) > .now, rungRooms[ring.room] == nil, !isInCall else { return }
         let id = UUID()
         rungRooms[ring.room] = id
@@ -152,7 +162,7 @@ final class CallManager: NSObject {
 
     private func reportIncoming(_ id: UUID, _ ring: Ring) async {
         // Same reason as in startCall: once CallKit owns the audio, the prompt cannot appear.
-        let micAllowed = await LiveKitSDK.ensureDeviceAccess(for: [.audio])
+        let micAllowed = await microphone()
         guard callID == id else { return } // ended while we asked
         guard micAllowed else {
             finish("Microphone access is off. Turn it on in Settings.")
@@ -167,7 +177,11 @@ final class CallManager: NSObject {
         update.localizedCallerName = callerName(topic: ring.topic)
         update.hasVideo = false
         do {
-            try await provider.reportNewIncomingCall(with: id, update: update)
+            try await withCheckedThrowingContinuation { (reported: CheckedContinuation<Void, Error>) in
+                callKit.reportIncoming(id, update) { error in
+                    if let error { reported.resume(throwing: error) } else { reported.resume() }
+                }
+            }
         } catch {
             guard callID == id else { return }
             if (error as? CXErrorCodeIncomingCallError)?.code == .callUUIDAlreadyExists {
@@ -178,7 +192,7 @@ final class CallManager: NSObject {
             return
         }
         guard callID == id else {
-            provider.reportCall(with: id, endedAt: nil, reason: .remoteEnded) // ended while CallKit set it up
+            callKit.reportEnded(id, reason: .remoteEnded) // ended while CallKit set it up
             return
         }
         stopRingingAtExpiry(id, ring)
@@ -205,7 +219,7 @@ final class CallManager: NSObject {
 
     /// iOS ends an app that does not report a call to CallKit for every VoIP push, and may stop its pushes, so
     /// this reports one at once, before anything else: also for a ring that expired, rang already, or cannot ring.
-    private func reportPushedCall(_ ring: Ring?, completion: @escaping () -> Void) {
+    func reportPushedCall(_ ring: Ring?, completion: @escaping () -> Void) {
         let done = Handed(completion)
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: "Bee Call")
@@ -214,15 +228,15 @@ final class CallManager: NSObject {
         if let ring, let rung = rungRooms[ring.room], callID == rung {
             // The ring stream rang this call (or is about to): reporting it again changes nothing on screen,
             // and if this report wins the race the stream's own report gets callUUIDAlreadyExists.
-            provider.reportNewIncomingCall(with: rung, update: update) { _ in done.call() }
+            callKit.reportIncoming(rung, update) { _ in done.call() }
             return
         }
         let address = Server.tokenURL
         guard let ring, rungRooms[ring.room] == nil, Self.answerBy(ring) > .now, !isInCall, !address.isEmpty else {
             // Unreadable, already rung and over, expired, during another call, or no token server set.
             let id = UUID()
-            provider.reportNewIncomingCall(with: id, update: update) { [weak self] _ in
-                Task { @MainActor in self?.provider.reportCall(with: id, endedAt: nil, reason: .unanswered) }
+            callKit.reportIncoming(id, update) { [weak self] _ in
+                Task { @MainActor in self?.callKit.reportEnded(id, reason: .unanswered) }
                 done.call()
             }
             return
@@ -234,7 +248,7 @@ final class CallManager: NSObject {
         isInCall = true
         isRinging = true
         status = ring.topic.map { "Bee Call is calling about: \($0)" } ?? "Bee Call is calling…"
-        provider.reportNewIncomingCall(with: id, update: update) { [weak self] error in
+        callKit.reportIncoming(id, update) { [weak self] error in
             let failure = error.map(Self.ringFailure)
             Task { @MainActor in
                 guard let self, self.callID == id else { return }
@@ -312,7 +326,7 @@ final class CallManager: NSObject {
         pickUpTimeout?.cancel()
         pickUpTimeout = nil
         guard !rungRooms.values.contains(id) else { return } // the AI's own call: connected when answered
-        provider.reportOutgoingCall(with: id, connectedAt: nil)
+        callKit.reportConnected(id)
         status = "Connected"
     }
 
@@ -333,7 +347,7 @@ final class CallManager: NSObject {
     private func hangUp(_ reason: CXCallEndedReason, _ message: String) {
         guard let id = callID, !isEnding else { return }
         isEnding = true
-        provider.reportCall(with: id, endedAt: nil, reason: reason)
+        callKit.reportEnded(id, reason: reason)
         connecting?.cancel()
         Task {
             await liveKit.disconnect()
@@ -396,7 +410,7 @@ extension CallManager: CXProviderDelegate {
 
     func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         action.fulfill() // CallKit activates the audio session after this.
-        provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
+        callKit.reportStartedConnecting(action.callUUID)
         join(action.callUUID, answering: nil)
     }
 
