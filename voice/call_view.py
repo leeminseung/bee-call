@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 
-from beelink.planner import OUTBOUND_LOG
+from beelink.planner import OFFERS_DIR, OUTBOUND_LOG
 from voice.call_folders import CALL_ID, EVENTS, call_ids, read_events, session_id
 from voice.offers import topic_line
 
@@ -138,11 +138,12 @@ def read_record(folder: Path) -> Record:
 
 
 class Calls:
-    """One person's call records, each read again only when one of its files changed."""
+    """One person's call records, each read again only when one of its files changed, and what each says."""
 
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace
         self._records: dict[Path, tuple[tuple, Record]] = {}
+        self._calls: dict[tuple[Path, str], tuple[Record, "Call"]] = {}
 
     def record(self, folder: Path) -> Record:
         stamp = _stamp(folder)
@@ -152,12 +153,22 @@ class Calls:
             self._records[folder] = cached
         return cached[1]
 
+    def call(self, record: Record, zone: tzinfo) -> "Call":
+        """What the record says, on the clock of `zone`."""
+        key = (record.folder, str(zone))
+        cached = self._calls.get(key)
+        if cached is None or cached[0] is not record:
+            cached = (record, read_call(record, zone))
+            self._calls[key] = cached
+        return cached[1]
+
     def all(self) -> list[tuple[str, Record]]:
         """(call id, record) for every record, oldest first."""
         found = call_ids(self.workspace)
         alive = {folder for _, folder in found}
         for gone in [f for f in self._records if f not in alive]:
             del self._records[gone]
+        self._calls = {key: value for key, value in self._calls.items() if key[0] in alive}
         return [(call_id, self.record(folder)) for call_id, folder in found]
 
 
@@ -786,7 +797,7 @@ def call_list(workspace: Path, *, zone: tzinfo, language: str, now: datetime, wa
     cache = cache or Calls(workspace)
     records = cache.all()
     ctx, verdicts = _context(workspace, records, zone, language, time.time() if wall is None else wall)
-    calls = {call_id: read_call(record, zone) for call_id, record in records}
+    calls = {call_id: cache.call(record, zone) for call_id, record in records}
     rooms = {call.room for call in calls.values() if call.room}
     entries: list[tuple[tuple[float, str], Any]] = [((c.started.timestamp(), call_id), call_id)
                                                      for call_id, c in calls.items()]
@@ -819,10 +830,38 @@ def call_view(workspace: Path, call_id: str, *, zone: tzinfo, language: str, now
     if record is None:
         return None
     ctx, _ = _context(workspace, records, zone, language, time.time() if wall is None else wall)
-    call = read_call(record, zone)
+    call = cache.call(record, zone)
     entry, items, captions = summary(call_id, call, ctx)
     body: dict[str, Any] = {"call": entry, "why_calling": why_calling(call, ctx) if entry["started_by"] == "ai" else None,
                             "prep": prep_card(call, entry["started_by"], zone), "items": items,
                             "captions_included": captions}
     body["version"] = version_of(body)
     return body
+
+
+# ---------- what /changes watches (contract section 3) ----------
+
+def watched_calls(workspace: Path, *, zone: tzinfo, now: datetime, wall: float | None = None,
+                  cache: Calls | None = None) -> list[tuple[str, Path]]:
+    """The calls /changes announces on connect and rebuilds: those live, those that ended in the last RECENT_S (a
+    title and Bee retries arrive after the end), and those whose record changed in that time."""
+    cache = cache or Calls(workspace)
+    wall = time.time() if wall is None else wall
+    found = []
+    for call_id, record in cache.all():
+        call = cache.call(record, zone)
+        if state_of(call, wall) == "live" or wall - record.mtime <= RECENT_S \
+                or (now - call.when(call.end_t())).total_seconds() <= RECENT_S:
+            found.append((call_id, record.folder))
+    return found
+
+
+def files_stamp(workspace: Path, folders: list[Path]) -> tuple:
+    """What /changes looks at between its rebuilds: new call folders, the ring log and its verdicts, the offers, and
+    the files of the calls it watches. Equal stamps: nothing a body shows changed but by the clock."""
+    try:
+        days = tuple(sorted((p.name, _stat(p)) for p in workspace.iterdir() if DAY.fullmatch(p.name)))
+    except OSError:
+        days = ()
+    return (days, _stat(workspace / OUTBOUND_LOG), _stat(workspace / "meta" / "events.jsonl"),
+            _stat(workspace / OFFERS_DIR), tuple(_stamp(folder) for folder in folders))

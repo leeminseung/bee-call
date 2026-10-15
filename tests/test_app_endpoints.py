@@ -161,3 +161,132 @@ def test_an_offer_without_a_topic_shows_the_notification_s_line_and_now_reads_as
     (offer,) = json.loads(body)["offers"]
     check_body("offers", json.loads(body))
     assert offer["state"] == "calling" and offer["call_at"]
+
+
+# ---------- live updates ----------
+
+LIVE = "call-minseung-20261015-145000"
+
+
+def quiet_fixtures(me) -> None:
+    """The fixture calls' files as last written an hour ago, so none of them counts as recent."""
+    import os
+    import time
+
+    old = time.time() - 3600
+    for path in me.workspace.rglob("*"):
+        os.utime(path, (old, old))
+
+
+def live_call(me) -> Path:
+    folder = me.workspace / "2026-10-15" / "1450"
+    folder.mkdir()
+    lines = [{"t": 0.0, "type": "call_started", "room": LIVE, "started_at": "2026-10-15T14:50:00+09:00"},
+             {"t": 0.01, "type": "call", "direction": "inbound", "topic": None, "reason": None},
+             {"t": 3.0, "type": "message", "role": "assistant", "text": "네, Bee Call이에요.", "interrupted": False}]
+    (folder / "events.jsonl").write_text("".join(json.dumps(l, ensure_ascii=False) + "\n" for l in lines))
+    return folder
+
+
+async def changed_events(response, seconds: float) -> list[dict]:
+    """The data of each `changed` event read from an open stream within `seconds`."""
+    loop = asyncio.get_running_loop()
+    end, block, found = loop.time() + seconds, [], []
+    while loop.time() < end:
+        try:
+            line = await asyncio.wait_for(response.content.readline(), end - loop.time())
+        except asyncio.TimeoutError:
+            break
+        line = line.decode().rstrip("\n")
+        if line:
+            block.append(line)
+            continue
+        fields = dict(part.split(": ", 1) for part in block if ": " in part and not part.startswith(":"))
+        if fields.get("event") == "changed":
+            found.append(json.loads(fields["data"]))
+        block = []
+    return found
+
+
+def test_changes_announces_every_watched_path_on_connect_then_each_new_version(minseung, monkeypatch):
+    """Contract section 3: on connect, /calls, /offers and each call live or ended in the last ten minutes; then a
+    `changed` whenever a version changes, with the version GET answers."""
+    monkeypatch.setattr(token_server, "CHANGES_POLL_S", 0.05)
+    quiet_fixtures(minseung)
+    folder = live_call(minseung)
+
+    async def main():
+        app = token_server.make_app("wss://example", "APIkey", "s" * 32, minseung.people, room_exists=None)
+        async with TestClient(TestServer(app), headers=minseung.headers) as client:
+            stream = await client.get("/changes")
+            first = await changed_events(stream, 0.5)
+            with (folder / "events.jsonl").open("a") as f:
+                f.write(json.dumps({"t": 6.0, "type": "user_transcript", "text": "오늘 할 일 정리해 줘."},
+                                   ensure_ascii=False) + "\n")
+            later = await changed_events(stream, 0.5)
+            view = await (await client.get(f"/calls/{LIVE}")).json()
+            calls = await (await client.get("/calls")).json()
+            return stream.status, stream.headers, first, later, view, calls
+
+    status, headers, first, later, view, calls = asyncio.run(main())
+    assert status == 200 and headers["Content-Type"].startswith("text/event-stream")
+    for event in first + later:
+        check_body("change", event)
+    assert {e["path"] for e in first} == {"/calls", "/offers", f"/calls/{LIVE}"} and len(first) == 3
+    assert {e["path"]: e["version"] for e in later} == {f"/calls/{LIVE}": view["version"],
+                                                         "/calls": calls["version"]}
+
+
+def test_changes_announces_what_the_clock_alone_changes(minseung, monkeypatch):
+    """A live call that goes quiet turns dropped, and a ring nobody answered turns missed, without any file changing:
+    /changes rebuilds them every CHANGES_REBUILD_S."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from voice import call_view
+
+    monkeypatch.setattr(token_server, "CHANGES_POLL_S", 0.05)
+    monkeypatch.setattr(token_server, "CHANGES_REBUILD_S", 0.2)
+    monkeypatch.setattr(call_view, "LIVE_S", 1)
+    quiet_fixtures(minseung)
+    live_call(minseung)
+    now = minseung.person.now()
+    ring = {"at": (now - timedelta(seconds=59)).isoformat(timespec="seconds"), "room": "call-minseung-20261015-145959",
+            "expires_at": (now + timedelta(seconds=1)).isoformat(timespec="seconds"), "topic": "점심 약속", "kind": None}
+    with (minseung.workspace / "state" / "outbound.jsonl").open("a") as f:
+        f.write(json.dumps(ring, ensure_ascii=False) + "\n")
+
+    async def main():
+        app = token_server.make_app("wss://example", "APIkey", "s" * 32, minseung.people, room_exists=None)
+        async with TestClient(TestServer(app), headers=minseung.headers) as client:
+            stream = await client.get("/changes")
+            first = await changed_events(stream, 0.3)
+            later = await changed_events(stream, 2.0)
+            view = await (await client.get(f"/calls/{LIVE}")).json()
+            calls = await (await client.get("/calls")).json()
+            return first, later, view, calls
+
+    first, later, view, calls = asyncio.run(main())
+    assert f"/calls/{LIVE}" in {e["path"] for e in first}
+    assert view["call"]["state"] == "dropped"
+    assert calls["calls"][0]["call_id"] == "call-minseung-20261015-145959" and calls["calls"][0]["state"] == "missed"
+    final = {e["path"]: e["version"] for e in later}
+    assert final[f"/calls/{LIVE}"] == view["version"] and final["/calls"] == calls["version"]
+
+
+def test_a_quiet_change_stream_sends_keepalives(minseung, monkeypatch):
+    """The app treats 40 s of silence as a dead stream; with nothing changing, a comment goes out every 15 s."""
+    monkeypatch.setattr(token_server, "CHANGES_POLL_S", 0.02)
+    monkeypatch.setattr(token_server, "KEEPALIVE_SECONDS", 0.1)
+    quiet_fixtures(minseung)
+
+    async def main():
+        app = token_server.make_app("wss://example", "APIkey", "s" * 32, minseung.people, room_exists=None)
+        async with TestClient(TestServer(app), headers=minseung.headers) as client:
+            stream = await client.get("/changes")
+            lines = []
+            while b": keepalive\n" not in lines:
+                lines.append(await asyncio.wait_for(stream.content.readline(), 2))
+            return lines
+
+    assert b": keepalive\n" in asyncio.run(main())

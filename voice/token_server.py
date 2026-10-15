@@ -42,6 +42,9 @@ POST /push  {"token": hex, "environment": ...}
 GET  /calls?limit=20&before=CURSOR       the call list, newest first (voice/call_view.py; contract section 1)
 GET  /calls/<call_id>                    one call as its thread (contract section 2); 404 for a call with no record
 GET  /calls/<call_id>/files/<path>       one of its files, by the records server's rule (voice/call_folders.py)
+GET  /changes                            Server-Sent Events: `changed` {path, version} for /calls, /offers and each
+                                         call live or ended in the last ten minutes, on connect and whenever a
+                                         version changes, so the app fetches only what changed (contract section 3)
 GET  /offers                             offers still waiting for an answer or a call
      /calls, /calls/<call_id> and /offers carry their body's version as ETag; with If-None-Match the same
      version answers 304 and no body (contract section 0)
@@ -60,6 +63,7 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 import shutil
 import sys
@@ -91,6 +95,8 @@ from voice.session_server import host_allowed
 load_dotenv(".env.local")
 log = logging.getLogger("bee-call.token")
 KEEPALIVE_SECONDS = 15.0
+CHANGES_POLL_S = 0.25  # how often /changes looks at the files: at most one event per path every 250 ms
+CHANGES_REBUILD_S = 30.0  # /changes rebuilds what it watches at least this often (contract section 3)
 BEE_APPROVAL_SECONDS = 330  # Bee's approval link lasts about 5 minutes (bee login --no-wait)
 # A Bee login waiting for the person's approval, kept in their Bee folder, so a restart of this server goes on
 # waiting for it: {"started_at": epoch seconds}.
@@ -370,13 +376,18 @@ def versioned(request: web.Request, body: dict) -> web.Response:
     return web.json_response(body, headers={"ETag": tag}, dumps=lambda data: json.dumps(data, ensure_ascii=False))
 
 
-async def list_offers(request: web.Request) -> web.Response:
-    """The offers still waiting for an answer or a call, for the app's first screen."""
+def offers_body(request: web.Request) -> dict:
+    """The offers still waiting for an answer or a call, as GET /offers answers them."""
     store = OfferStore(workspace(request))
     settings = request.app[PEOPLE].settings(person(request))
     body = {"offers": [o.view(settings.language, settings.zone()) for o in store.open(someone(request).now())]}
     body["version"] = call_view.version_of(body)
-    return versioned(request, body)
+    return body
+
+
+async def list_offers(request: web.Request) -> web.Response:
+    """The offers still waiting for an answer or a call, for the app's first screen."""
+    return versioned(request, offers_body(request))
 
 
 async def answer_offer(request: web.Request) -> web.Response:
@@ -456,6 +467,64 @@ async def call_file(request: web.Request) -> web.FileResponse:
     except FileNotFoundError:
         raise web.HTTPNotFound() from None
     return web.FileResponse(target, headers=served_headers(target))
+
+
+def versions_now(request: web.Request) -> tuple[dict[str, str], list[Path]]:
+    """The version of each path /changes watches (the list's first page, the offers, each watched call), and the
+    folders of the watched calls."""
+    settings = request.app[PEOPLE].settings(person(request))
+    zone, now, cache = settings.zone(), someone(request).now(), call_records(request)
+    found = {"/calls": call_view.call_list(workspace(request), zone=zone, language=settings.language, now=now,
+                                           cache=cache)["version"],
+             "/offers": offers_body(request)["version"]}
+    watched = call_view.watched_calls(workspace(request), zone=zone, now=now, cache=cache)
+    for call_id, _ in watched:
+        body = call_view.call_view(workspace(request), call_id, zone=zone, language=settings.language, now=now,
+                                   cache=cache)
+        if body is not None:
+            found[f"/calls/{call_id}"] = body["version"]
+    return found, [folder for _, folder in watched]
+
+
+async def changes(request: web.Request) -> web.StreamResponse:
+    """GET /changes: Server-Sent Events, one `changed` {path, version} whenever a version the app may show changes
+    (contract section 3). On connect, one for each watched path. The files are looked at every CHANGES_POLL_S and
+    everything watched is rebuilt when they changed, and at least every CHANGES_REBUILD_S for what the clock alone
+    changes (a quiet live call turning dropped, a ring turning missed)."""
+    response = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-store",
+                                           "X-Accel-Buffering": "no"})
+    await response.prepare(request)
+    sent: dict[str, str] = {}
+
+    async def tell(found: dict[str, str]) -> bool:
+        """Sends what changed since it was last sent; whether anything was."""
+        told = False
+        for path, version in found.items():
+            if sent.get(path) != version:
+                data = json.dumps({"path": path, "version": version})
+                await response.write(f"event: changed\ndata: {data}\n\n".encode())
+                sent[path], told = version, True
+        return told
+
+    folders: list[Path] = []
+    stamp, rebuilt, written = None, -math.inf, time.monotonic()
+    try:
+        while True:
+            # Looked at before the rebuild, so a change made during it shows at the next look.
+            seen = call_view.files_stamp(workspace(request), folders)
+            if seen != stamp or time.monotonic() - rebuilt >= CHANGES_REBUILD_S:
+                found, watched = versions_now(request)
+                if await tell(found):
+                    written = time.monotonic()
+                stamp = seen if watched == folders else None  # newly watched calls: look again at once
+                folders, rebuilt = watched, time.monotonic()
+            if time.monotonic() - written >= KEEPALIVE_SECONDS:
+                await response.write(b": keepalive\n\n")
+                written = time.monotonic()
+            await asyncio.sleep(CHANGES_POLL_S)
+    except (ConnectionResetError, asyncio.CancelledError):
+        pass
+    return response
 
 
 # ---------- Bee ----------
@@ -583,6 +652,7 @@ def make_app(url: str, key: str, secret: str, people: People, room_exists=liveki
     app.router.add_get("/calls", list_calls)
     app.router.add_get("/calls/{call_id}", show_call)
     app.router.add_get("/calls/{call_id}/files/{path:.+}", call_file)
+    app.router.add_get("/changes", changes)
     app.router.add_post("/voip", voip_token)
     app.router.add_post("/push", alert_token)
     app.router.add_get("/offers", list_offers)
