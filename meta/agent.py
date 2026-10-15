@@ -25,6 +25,7 @@ from typing import Any
 from botocore.config import Config
 
 from beelink import cli, reads
+from beelink.calls import OurCalls
 from beelink.clock import now_text
 from beelink.planner import Plan
 from meta import files
@@ -207,16 +208,19 @@ class Thinker:
                 return await asyncio.to_thread(files.grep, ws, str(args["pattern"]), str(args.get("path") or "."),
                                                str(args.get("glob") or "*"))
             if name == "bee_today":
-                return await reads.today(now.tzinfo)
+                return await reads.today(now.tzinfo, ours=OurCalls.of(ws))
             if name == "bee_conversation":
-                return await reads.conversation(int(args["conversation_id"]), now.tzinfo)
+                return await reads.conversation(int(args["conversation_id"]), now.tzinfo, ours=OurCalls.of(ws))
             if name == "search_bee":
-                return await reads.search(str(args.get("query", "")))
+                return await reads.search(str(args.get("query", "")), ours=OurCalls.of(ws))
             if name == "bee_day":
                 return await reads.day(str(args.get("date", "")))
             if name == "bee_pending":
                 facts, suggestions = await asyncio.gather(cli.unconfirmed_facts(), cli.todo_suggestions(),
                                                           return_exceptions=True)
+                ours = OurCalls.of(ws)  # what Bee made of our own calls is left out (BC-060)
+                facts = facts if isinstance(facts, BaseException) else ours.others(facts)
+                suggestions = suggestions if isinstance(suggestions, BaseException) else ours.others(suggestions)
                 parts = []
                 parts.append("Unconfirmed facts:\n" + (reads.facts_text(facts) or "none") if not isinstance(facts, BaseException)
                              else f"Unconfirmed facts: read failed ({facts})")

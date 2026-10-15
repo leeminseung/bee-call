@@ -22,6 +22,7 @@ from livekit.agents.llm import StopResponse
 from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_instructions
 
 from beelink import reads
+from beelink.calls import OurCalls
 from beelink.clock import now_text
 from beelink.writer import KINDS, BeeWrites, event_fields, item_label, label
 from voice.language import CallLanguage, call_language
@@ -401,13 +402,13 @@ class BeeCoordinator(Coordinator):
             query: What to look for, in plain words.
         """
         async with self.waiting(context):
-            return await reads.search(query)
+            return await reads.search(query, ours=OurCalls.of(self._workspace))
 
     @function_tool
     async def bee_today(self, context: RunContext) -> str:
         """What the user's Bee wearable has for today: the daily summary, active todos, notes and recent conversations."""
         async with self.waiting(context):
-            return await reads.today(self._clock().tzinfo)
+            return await reads.today(self._clock().tzinfo, ours=OurCalls.of(self._workspace))
 
     @function_tool
     async def bee_conversation(self, context: RunContext, conversation_id: int) -> str:
@@ -417,7 +418,7 @@ class BeeCoordinator(Coordinator):
             conversation_id: The Bee conversation id, from the prep note, bee_today or search_bee.
         """
         async with self.waiting(context):
-            return await reads.conversation(conversation_id, self._clock().tzinfo)
+            return await reads.conversation(conversation_id, self._clock().tzinfo, ours=OurCalls.of(self._workspace))
 
     @function_tool
     async def propose_bee_save(self, context: RunContext, kind: str, text: str, fact_id: int | None = None,

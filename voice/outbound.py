@@ -34,7 +34,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from beelink import cli as bee
-from beelink.calls import our_call_windows
+from beelink.calls import OurCalls, our_call_windows
 from beelink.clock import parse_time
 from beelink.planner import COOLDOWN, MAX_AGE, OUTBOUND_LOG, RulePlanner, call_in_progress, last_outbound
 from beelink.watcher import BeeWatcher, Trigger
@@ -201,6 +201,7 @@ async def call_due(person: Person, now: datetime | None = None, prepare=prepare_
             if offer.continue_from:
                 extra["earlier_call"] = earlier_call(workspace, offer.continue_from)
             prep = await prepare(plan_of(claim.offer), extra=extra, spend=SpendLog(workspace), bee=person.settings().bee,
+                                 ours=OurCalls.of(workspace),
                                  now=person.now(), deadline_s=NOW_PREP_S if right_now else NOTE_SECONDS,
                                  **({"language": language} if language else {}))
             wait = (offer.at("call_at") - person.now()).total_seconds()

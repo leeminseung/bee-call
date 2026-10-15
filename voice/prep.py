@@ -30,6 +30,7 @@ from typing import Any, Callable
 from botocore.config import Config
 
 from beelink import reads
+from beelink.calls import OurCalls
 from beelink.clock import now_text
 from beelink.context import CallInputs, fetch_call_inputs
 from beelink.planner import Plan
@@ -219,14 +220,15 @@ def parse_note(text: str) -> str | None:
     return (found.group(1).strip() or None) if found else None
 
 
-async def _read(use: dict[str, Any], prep: Prep, zone) -> dict[str, Any]:
+async def _read(use: dict[str, Any], prep: Prep, zone, ours: OurCalls | None = None) -> dict[str, Any]:
+    """One of the prep's extra Bee reads; `ours`: the person's own calls, left out of what is read (BC-060)."""
     name, args = use.get("name"), use.get("input") or {}
     prep.reads.append(f"{name} {json.dumps(args, ensure_ascii=False)}")
     if name == "search_bee":
-        text = await reads.search(str(args.get("query", "")))
+        text = await reads.search(str(args.get("query", "")), ours=ours)
     elif name == "bee_conversation":
         try:
-            text = await reads.conversation(int(args.get("conversation_id")), zone)
+            text = await reads.conversation(int(args.get("conversation_id")), zone, ours=ours)
         except (TypeError, ValueError):
             text = "conversation_id must be a number."
     elif name == "bee_day":
@@ -316,8 +318,10 @@ class Preparation:
     with the note (or None) when the prep ends."""
 
     def __init__(self, inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *, spend: SpendLog,
-                 bee: bool, now: datetime, client=None, language: CallLanguage | None = None) -> None:
+                 bee: bool, now: datetime, client=None, language: CallLanguage | None = None,
+                 ours: OurCalls | None = None) -> None:
         self.prep = Prep(model=model[0] if model else None)
+        self._ours = ours  # the person's own calls, left out of the prep's extra Bee reads (BC-060)
         self._spend = spend  # the person's spend log: the prep's model use goes there when it ends
         self._bee = bee  # the person uses Bee: Bee data, Bee tools and Bee's words; otherwise none of them
         instructions = PREP_INSTRUCTIONS if bee else PREP_INSTRUCTIONS_WITHOUT_BEE
@@ -389,8 +393,8 @@ class Preparation:
         written = "".join(block.get("text", "") for block in reply["content"])
         uses = [block["toolUse"] for block in reply["content"] if "toolUse" in block]
         if uses:
-            results = await asyncio.gather(*(_read(u, self.prep, self._now.tzinfo) if n < MAX_READS else _not_read(u)
-                                             for n, u in enumerate(uses)))
+            results = await asyncio.gather(*(_read(u, self.prep, self._now.tzinfo, self._ours) if n < MAX_READS
+                                             else _not_read(u) for n, u in enumerate(uses)))
             ask = "Now write the note." if self.prep.opening else "Now write the opening and the note."
             messages += [reply, {"role": "user", "content": [*results, {"text": ask}]}]
             reply = await _stream(client, model_id, self._system, messages, lambda text: self._on_text(written + text),
@@ -403,10 +407,10 @@ class Preparation:
 
 async def prepare_call(inputs: CallInputs, meta: dict[str, Any], model: tuple[str, str] | None, *, spend: SpendLog,
                        bee: bool, now: datetime, deadline_s: float = NOTE_SECONDS, client=None,
-                       language: CallLanguage | None = None) -> Prep:
+                       language: CallLanguage | None = None, ours: OurCalls | None = None) -> Prep:
     """Runs the prep to the end. Never raises: a Prep without a note says why in `error`."""
     preparation = Preparation(inputs, meta, model, spend=spend, bee=bee, client=client, now=now,
-                              language=language).start(deadline_s)
+                              language=language, ours=ours).start(deadline_s)
     await preparation.done
     return preparation.prep
 
@@ -417,14 +421,14 @@ def plan_meta(plan: Plan) -> dict[str, Any]:
 
 async def prepare_outbound(plan: Plan, *, spend: SpendLog, bee: bool, now: datetime, mode: str | None = None,
                            extra: dict[str, Any] | None = None, deadline_s: float = NOTE_SECONDS,
-                           language: CallLanguage | None = None) -> Prep:
+                           language: CallLanguage | None = None, ours: OurCalls | None = None) -> Prep:
     """For voice/outbound.py, before the phone rings: reads Bee for this plan (`bee`: the person uses Bee), then
     prepares. `extra` adds to the call's metadata (agreed, earlier_call); a shorter `deadline_s` rings sooner,
-    with the note given up earlier."""
+    with the note given up earlier. `ours`: the person's own calls, whose Bee records are left out (BC-060)."""
     started = time.monotonic()
-    inputs = await fetch_call_inputs(plan.inbox_dir, plan.conversation_ids)
+    inputs = await fetch_call_inputs(plan.inbox_dir, plan.conversation_ids, ours=ours)
     prep = await prepare_call(inputs, {**plan_meta(plan), **(extra or {})},
                               prep_model(mode or os.environ.get("COORDINATOR_LLM", "bedrock")), spend=spend, bee=bee,
-                              now=now, deadline_s=deadline_s, language=language)
+                              now=now, deadline_s=deadline_s, language=language, ours=ours)
     prep.seconds = round(time.monotonic() - started, 2)
     return prep

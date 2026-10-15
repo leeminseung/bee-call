@@ -45,6 +45,7 @@ from livekit.plugins import aws, silero
 from livekit.plugins.aws.stt import Credentials
 
 from beelink import cli as bee
+from beelink.calls import OurCalls
 from beelink.context import CallInputs, fetch_call_inputs, save_call_inputs
 from beelink.writer import BeeWrites, event_fields, summary_notification
 from voice.aws_session import aws_profile, aws_session
@@ -386,7 +387,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
     first_words = asyncio.Event()  # the AI's voice has started
     if meta.get("direction") == "outbound":
         # Prepared before the phone rang (voice/outbound.py). Bee is read again for the call's record meanwhile.
-        inputs_task = asyncio.create_task(fetch_call_inputs(inbox, conversation_ids))
+        inputs_task = asyncio.create_task(fetch_call_inputs(inbox, conversation_ids, ours=OurCalls.of(workspace)))
         answer = await wait_for_answer(ctx, workspace)
         if answer != "answered":
             log.info("the call in room %s was %s", ctx.room.name, answer)
@@ -441,9 +442,10 @@ async def run_call(ctx: JobContext, people: People) -> None:
 
         async def get_ready() -> CallInputs:
             nonlocal preparation
-            got = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S)
+            ours = OurCalls.of(workspace)  # what Bee made of earlier calls is not new context (BC-060)
+            got = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S, ours=ours)
             preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM), spend=SpendLog(workspace), bee=uses_bee,
-                                      now=someone.now(), language=language).start()
+                                      now=someone.now(), language=language, ours=ours).start()
             await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - started))
             return got
 

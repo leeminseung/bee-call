@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from beelink import cli
-from beelink.calls import our_call_windows, overlaps_our_call
+from beelink.calls import OurCalls
 
 log = logging.getLogger("beelink.watcher")
 
@@ -90,15 +90,15 @@ class BeeWatcher:
         payload = await cli.changed(self._load_cursor())
         next_cursor = payload.get("meta", {}).get("next_cursor")
 
-        windows = our_call_windows(self.workspace)
-        conversations = [c for c in payload.get("conversations", [])
-                         if not overlaps_our_call(c.get("start_time"), c.get("end_time"), windows)]
+        # What Bee made of our own calls is left out, also from the batch saved for the meta agent (BC-060).
+        ours = OurCalls.of(self.workspace)
+        conversations = ours.conversations(payload.get("conversations"))
         kept = {
             "conversations": conversations,
-            "facts": payload.get("facts", []),
-            "todos": payload.get("todos", []),
-            "journals": payload.get("journals", []),
-            "dailies": payload.get("dailies", []),
+            "facts": ours.others(payload.get("facts")),
+            "todos": ours.others(payload.get("todos")),
+            "journals": ours.others(payload.get("journals")),
+            "dailies": payload.get("dailies") or [],
         }
         counts = {k: len(v) for k, v in kept.items()}
         if not any(counts.values()):
@@ -107,7 +107,9 @@ class BeeWatcher:
 
         inbox = self.workspace / "inbox" / datetime.now().strftime("%Y-%m-%d-%H%M%S")
         inbox.mkdir(parents=True, exist_ok=True)
-        (inbox / "changed.json").write_text(json.dumps(payload, ensure_ascii=False, indent=1))
+        left_out = {k: len(payload.get(k) or []) - len(v) for k, v in kept.items()}
+        (inbox / "changed.json").write_text(json.dumps({**payload, **kept, "left_out_as_our_calls": left_out},
+                                                       ensure_ascii=False, indent=1))
         trigger = Trigger(reason=reason, inbox_dir=inbox,
                           conversation_ids=[c["id"] for c in conversations if "id" in c], counts=counts)
         await self.on_trigger(trigger)  # if this raises, the cursor stays and the batch comes back next time

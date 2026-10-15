@@ -1,7 +1,8 @@
 """Bee data as short text for a model: before a call (voice/prep.py) and during it (the coordinator's tools).
 
 The reads never raise: a failed read comes back as a line that says so, and the model carries on
-without it. Times are in the user's time zone (`zone`, from the person's settings: voice/people.py).
+without it. Times are in the user's time zone (`zone`, from the person's settings: voice/people.py). Given the
+person's own calls (`ours`), what Bee made of them is left out (BC-060, beelink/calls.py).
 """
 
 import asyncio
@@ -10,6 +11,7 @@ from datetime import datetime, tzinfo
 from typing import Any
 
 from beelink import cli
+from beelink.calls import OurCalls
 
 # Under LiveKit's 5 s wait for tools after an interruption, so a read is not lost (see voice/coordinator.py).
 READ_TIMEOUT_S = 4.0
@@ -88,27 +90,35 @@ def suggestions_text(suggestions: list[dict[str, Any]]) -> str:
     return "\n".join(f"[todo suggestion {s.get('id')}] {s.get('text')}" for s in suggestions[:10])
 
 
-async def today(zone: tzinfo) -> str:
+async def today(zone: tzinfo, ours: OurCalls | None = None) -> str:
     try:
-        return today_text(await cli.today_context(timeout=READ_TIMEOUT_S), zone)
+        data = await cli.today_context(timeout=READ_TIMEOUT_S)
     except Exception as exc:
         return f"Bee read failed: {exc}"
+    if ours is not None and isinstance(data, dict):
+        data = {**data, "recentConversations": ours.conversations(data.get("recentConversations"))}
+    return today_text(data, zone)
 
 
-async def recent_conversations(zone: tzinfo, limit: int = 8) -> str:
+async def recent_conversations(zone: tzinfo, limit: int = 8, ours: OurCalls | None = None) -> str:
     try:
-        return recent_text(await cli.conversations(limit, timeout=READ_TIMEOUT_S), zone)
+        found = await cli.conversations(limit, timeout=READ_TIMEOUT_S)
     except Exception as exc:
         return f"Bee read failed: {exc}"
+    return recent_text(ours.conversations(found) if ours is not None else found, zone)
 
 
-async def conversation(conversation_id: int, zone: tzinfo) -> str:
+async def conversation(conversation_id: int, zone: tzinfo, ours: OurCalls | None = None) -> str:
     try:
         got, said = await asyncio.gather(cli.conversation(conversation_id, timeout=READ_TIMEOUT_S),
                                          cli.transcript(conversation_id, timeout=READ_TIMEOUT_S))
     except Exception as exc:
         return f"Bee read failed: {exc}"
-    return conversation_text(got.get("conversation") or {"id": conversation_id}, said.get("transcript") or [], zone)
+    found = got.get("conversation") or {"id": conversation_id}
+    if ours is not None and ours.conversation(found):
+        return (f"Bee conversation {conversation_id} is left out: Bee recorded it during one of the user's calls with "
+                "this assistant, and that call's own record is the source.")
+    return conversation_text(found, said.get("transcript") or [], zone)
 
 
 async def day(date: str) -> str:
@@ -120,11 +130,13 @@ async def day(date: str) -> str:
     return cap(f"Bee daily summary for {date}: {text_of(summary)}") if summary else f"No Bee daily summary for {date}."
 
 
-async def search(query: str, limit: int = 3) -> str:
+async def search(query: str, limit: int = 3, ours: OurCalls | None = None) -> str:
     try:
         results = await cli.search_conversations(query, limit=limit, timeout=READ_TIMEOUT_S)
     except Exception as exc:
         return f"Bee search failed: {exc}"
+    if ours is not None:
+        results = ours.conversations(results)  # results that carry their times; Bee's search may not
     if not results:
         return "No matching Bee conversations."
     return json.dumps(results, ensure_ascii=False)[:2000]
