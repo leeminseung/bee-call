@@ -71,6 +71,20 @@ def test_settings_are_checked_and_the_app_changes_only_its_own(tmp_path):
     assert people.settings("matt").record_on_server is True  # never set: the default, on (Matt, 2026-10-14)
 
 
+def test_a_phone_whose_sign_in_expired_gets_no_more_pushes_for_that_person(tmp_path):
+    """Round 2 (server review finding 1, minor leftover): only a sign-out or a removal dropped a phone's push tokens,
+    so a sign-in that expired after 180 days kept them, and the phone kept ringing for that person."""
+    people = People(tmp_path)
+    people.add("matt")
+    long_ago = datetime.now() - timedelta(days=181)
+    old_sign_in = people.new_session("matt", now=long_ago)
+    people.register_device("matt", "voip", "aa" * 32, "production", session_token=old_sign_in, now=long_ago)
+    people.register_device("matt", "alert", "bb" * 32, "production", session_token=people.new_session("matt"))
+    assert people.device("matt", "voip") is None  # that sign-in has expired
+    assert people.device("matt", "alert")["token"] == "bb" * 32  # a fresh one keeps its phone
+    assert "aa" * 32 not in (tmp_path / "devices.json").read_text()
+
+
 def test_two_settings_changes_at_once_both_stay(tmp_path, monkeypatch):
     """Server review finding 10: each change read, changed and wrote the file on its own, so of two at once (the
     app's PUT /settings and Bee's connect turning bee on) the later write undid the other's change."""

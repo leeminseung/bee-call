@@ -385,8 +385,18 @@ class People:
             self._write("devices.json", devices)
 
     def device(self, person: str, kind: str) -> dict[str, Any] | None:
-        """The person's phone for this kind of push, {"token", "environment"}, or None."""
+        """The person's phone for this kind of push, {"token", "environment"}, or None. A token whose sign-in has
+        ended meanwhile, by expiring (SESSION_DAYS), is dropped here, as a sign-out drops it."""
+        now = datetime.now()
         with self._lock():
+            sessions = self._read("sessions.json")
+
+            def ended(entry: dict[str, Any]) -> bool:
+                signed_in = entry.get("session")
+                session = sessions.get(signed_in) if signed_in else None
+                return signed_in is not None and not (isinstance(session, dict) and self._fresh(session, now))
+
+            self._drop_devices(ended)
             devices = self._devices()
         for token, entry in devices.get(kind, {}).items():
             if entry.get("person") == person:
