@@ -118,7 +118,8 @@ def test_an_ai_call_s_opening_never_waits_for_the_bee_read_kept_for_the_record(t
 
     me = signed_in(tmp_path)
     me.people.change_settings("matt", {"bee": True}, allowed=("bee",))
-    call = FakeCall(me.people, {"direction": "outbound", "person": "matt", "topic": "the interview"})
+    call = FakeCall(me.people, {"direction": "outbound", "person": "matt", "topic": "the interview",
+                                "kind": "voice note"})
     use_fakes(monkeypatch, call)
 
     async def slow_read(*a, **kw):
@@ -146,6 +147,8 @@ def test_an_ai_call_s_opening_never_waits_for_the_bee_read_kept_for_the_record(t
     assert "Bonus is 15%" in instructions  # the plain Bee context still reached the AI, once read
     (folder,) = call_folders(me.workspace)
     assert (folder / "inputs" / "unconfirmed_facts.json").exists()  # and the record keeps the read
+    (said,) = [json.loads(l) for l in (folder / "events.jsonl").read_text().splitlines() if '"type": "call"' in l]
+    assert (said["topic"], said["kind"]) == ("the interview", "voice note")  # an AI call without a topic falls back by it
 
 
 def test_a_booked_call_is_told_to_the_ai_as_its_own_call_continuing_the_earlier_one(tmp_path, monkeypatch, quick):

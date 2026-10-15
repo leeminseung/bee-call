@@ -626,7 +626,7 @@ def open_record(ctx: JobContext, people: People, caller: Caller, meta: dict) -> 
               person=caller.id, audio_on_server=settings.record_on_server, audio_on_phone=settings.record_on_phone,
               **({"settings_not_used": unused} if unused else {}))
     rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"),
-              continue_from=meta.get("continue_from") if meta.get("earlier_call") else None)
+              kind=meta.get("kind"), continue_from=meta.get("continue_from") if meta.get("earlier_call") else None)
     return rec, settings
 
 
