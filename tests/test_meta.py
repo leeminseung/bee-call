@@ -212,36 +212,60 @@ def test_the_calls_get_the_meta_agents_notes_and_answers_wake_it(tmp_path):
 
 
 
-def test_a_failed_think_keeps_its_events_for_another_try_then_gives_up(tmp_path):
-    from voice.outbound import META_TRIES, think_about_new_events
+class Flaky:
+    """A model that fails `fails` times, then answers."""
+
+    def __init__(self, fails):
+        self.fails, self.calls = fails, 0
+
+    def converse(self, **request):
+        self.calls += 1
+        if self.fails:
+            self.fails -= 1
+            raise RuntimeError("read timeout")
+        return {"output": {"message": {"role": "assistant", "content": [{"text": "Looked; nothing to do."}]}}}
+
+
+def test_a_failed_think_keeps_its_events_until_a_think_works(tmp_path):
+    """BC-061: a change whose handling failed is seen again; it is never given up (it was after 3 tries, so a
+    Bedrock outage of 10-30 s lost a Bee change)."""
+    from voice.outbound import think_about_new_events
 
     ws = tmp_path / "workspace"
     session = MetaSession(ws)
-    add_event(ws, "call_ended", now=NOW, call="2026-10-14/1200")
-
-    class Flaky:
-        def __init__(self, fails):
-            self.fails = fails
-
-        def converse(self, **request):
-            if self.fails:
-                self.fails -= 1
-                raise RuntimeError("read timeout")
-            return {"output": {"message": {"role": "assistant", "content": [{"text": "Looked; nothing to do."}]}}}
-
-    thinker = Thinker(ws, ("m", "r"), client=Flaky(fails=1), bee=True)
-    tries = asyncio.run(think_about_new_events(session, thinker, NOW, 0))
-    assert tries == 1 and session.peek_events()[0]  # still there
-    assert asyncio.run(think_about_new_events(session, thinker, NOW, tries)) == 0
+    add_event(ws, "bee_change", now=NOW, inbox="inbox/x")
+    broken, tries = Thinker(ws, ("m", "r"), client=Flaky(fails=10), bee=True), 0
+    for _ in range(10):
+        tries = asyncio.run(think_about_new_events(session, broken, NOW, tries))
+    assert tries == 10 and session.peek_events()[0]  # still there
+    assert "gave up" not in json.dumps(session.entries())
+    assert asyncio.run(think_about_new_events(session, broken, NOW, tries)) == 0
     assert session.peek_events()[0] == []  # handled once it worked
     assert "Failed: RuntimeError: read timeout" in session.recent_text()
 
-    add_event(ws, "bee_change", now=NOW, inbox="inbox/x")
-    broken, tries = Thinker(ws, ("m", "r"), client=Flaky(fails=99), bee=True), 0
-    for _ in range(META_TRIES):
-        tries = asyncio.run(think_about_new_events(session, broken, NOW, tries))
-    assert tries == 0 and session.peek_events()[0] == []
-    assert session.entries()[-1]["error"] == f"gave up on these events after {META_TRIES} failed tries"
+
+def test_the_meta_loop_waits_longer_after_each_failed_think(tmp_path, monkeypatch):
+    """Tried again and again, but not every few seconds against a model that is down."""
+    from voice import outbound
+    from tests.helpers import signed_in
+
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(outbound, "META_CHECK_S", 0.01)
+    monkeypatch.setattr(outbound, "META_RETRY_S", (0.05, 0.1))
+    model = Flaky(fails=4)
+    thinker = Thinker(me.workspace, ("m", "r"), client=model, bee=False)
+    add_event(me.workspace, "call_ended", now=me.person.now(), call="x")
+
+    async def main():
+        loop = asyncio.create_task(outbound.serve_meta(me.person, thinker))
+        await asyncio.sleep(0.6)
+        loop.cancel()
+        await asyncio.gather(loop, return_exceptions=True)
+
+    asyncio.run(main())
+    assert model.calls == 5  # four failures, spaced out, then the think that worked
+    assert MetaSession(me.workspace).peek_events()[0] == []
+    assert "gave up" not in json.dumps(MetaSession(me.workspace).entries())
 
 
 def test_the_agent_hears_only_of_conversations_the_watcher_kept(tmp_path):

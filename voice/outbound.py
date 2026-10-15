@@ -28,6 +28,7 @@ import asyncio
 import json
 import logging
 import signal
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -57,7 +58,9 @@ log = logging.getLogger("bee-call.outbound")
 OFFER_CHECK_S = 5.0  # how often answered and booked offers are checked (arbitrary)
 META_CHECK_S = 3.0  # how often the meta agent's inbox is checked; events that come together are seen together
 BOOKED_NOTICE = timedelta(minutes=10)  # the meta agent hears of a booked call this early, to set its agenda
-META_TRIES = 3  # a think that fails is tried again with the same events this many times in all
+# After a think that failed (the model unreachable, say), the same events are tried again after these waits, the
+# last one from then on: never given up (BC-061), and never every few seconds against a model that is down.
+META_RETRY_S = (30.0, 60.0, 120.0, 300.0, 900.0)
 BOOKED_AHEAD = timedelta(seconds=30)  # a booked call is prepared this early, so it rings on time
 NOW_PREP_S = OPENING_BY_S + 2.0  # "Call me now": ring soon; the note gets this long (GLM 5 needed 4.5-7.7 s)
 PEOPLE_CHECK_S = 10.0  # how often the list of people and their settings is read again (arbitrary)
@@ -268,21 +271,22 @@ def bee_event(trigger: Trigger, workspace: Path) -> dict:
 
 
 async def think_about_new_events(session: MetaSession, thinker: Thinker, now: datetime, tries: int) -> int:
-    """One look at the inbox. The cursor moves only after a think that worked; a failed one sees the same events
-    next round, up to META_TRIES times in all, and then they are logged as given up. Returns the failed tries so far."""
+    """One look at the inbox. The cursor moves only after a think that worked; after a failed one the same events
+    stay for the next try (BC-061). Returns the failed tries in a row so far."""
     events, offset = session.peek_events()
     if not events:
         return tries
     entry = await thinker.think(events, now)
     print(f"meta agent ({entry['seconds']} s): {entry.get('decision') or entry.get('error')}", flush=True)
-    tries = tries + 1 if entry.get("error") else 0
-    if entry.get("error") and tries < META_TRIES:
-        return tries
-    if tries:
-        session.log({"at": now.isoformat(timespec="seconds"), "events": events, "actions": [], "tools": [],
-                     "error": f"gave up on these events after {tries} failed tries"})
+    if entry.get("error"):
+        return tries + 1
     session.commit(offset)
     return 0
+
+
+def retry_wait(tries: int) -> float:
+    """How long the meta loop waits before trying the same events again, after this many failed thinks in a row."""
+    return META_RETRY_S[min(tries, len(META_RETRY_S)) - 1]
 
 
 async def serve_meta(person: Person, thinker: Thinker, until_offer_closes: bool = False,
@@ -292,6 +296,7 @@ async def serve_meta(person: Person, thinker: Thinker, until_offer_closes: bool 
     person's daily budget it does not think; the events wait for the next day."""
     workspace = person.workspace
     session, store, announced, tries = MetaSession(workspace), OfferStore(workspace), set(), 0
+    think_after = 0.0  # time.monotonic() after which the meta agent may think again (later after a failed think)
     while True:
         now = person.now()
         try:
@@ -302,8 +307,9 @@ async def serve_meta(person: Person, thinker: Thinker, until_offer_closes: bool 
                     announced.add(offer.id)
                     add_event(workspace, "booked_soon", now=now, offer=offer.id, call_at=offer.call_at,
                               topic=offer.topic)
-            if not day_budget(person, now).used_up:
+            if not day_budget(person, now).used_up and time.monotonic() >= think_after:
                 tries = await think_about_new_events(session, thinker, now, tries)
+                think_after = time.monotonic() + retry_wait(tries) if tries else 0.0
             await send_held(person, now, language)
         except Exception:
             log.exception("the meta loop failed")
