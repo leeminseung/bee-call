@@ -16,6 +16,8 @@ PROVIDER = "anthropic"
 STOPS = {"end_turn": "end", "tool_use": "tool_use", "max_tokens": "max_tokens", "refusal": "refusal",
          "pause_turn": "pause", "stop_sequence": "end"}
 TIMEOUT_S = 120.0  # one request, its answer included
+# The result blocks of the server tools usage.server_tool_use counts, by the tool's name there.
+RESULTS_CHARGED = {"web_search_tool_result": "web_search", "web_fetch_tool_result": "web_fetch"}
 # The call AI's requests: the SDK does not retry (a failed first request goes to the standby at once, and LiveKit
 # retries later ones); no route shows within 3 s.
 CALL_TIMEOUT_S, CALL_CONNECT_S = 20.0, 3.0
@@ -86,24 +88,38 @@ class Anthropic:
     async def stream(self, params: dict[str, Any], *, on_text: Callable[[str], None] | None = None,
                      usage: Usage | None = None, client: Any = None) -> Any:
         """One streamed request: the final message. `usage` is added what the API counted, or, for a request cut
-        short once its answer began, an estimate from what was sent and said."""
+        short once its answer began, an estimate: what was sent, all the model wrote (text, thinking, the input of
+        the tools it called) and the searches that already ran."""
         text, answering, counted = "", False, False
+        written: list[str] = []
+        ran: dict[str, int] = {}
         try:
             async with (client or self.client()).messages.stream(**params) as stream:
                 async for event in stream:
                     answering = True
-                    delta = getattr(event, "delta", None)
-                    if getattr(event, "type", None) == "content_block_delta" and getattr(delta, "type", None) == "text_delta":
-                        text += delta.text
-                        if on_text:
-                            on_text(text)
+                    kind, delta = getattr(event, "type", None), getattr(event, "delta", None)
+                    if kind == "content_block_delta":
+                        part = getattr(delta, "type", None)
+                        if part == "text_delta":
+                            text += delta.text
+                            written.append(delta.text)
+                            if on_text:
+                                on_text(text)
+                        elif part == "thinking_delta":
+                            written.append(getattr(delta, "thinking", "") or "")
+                        elif part == "input_json_delta":
+                            written.append(getattr(delta, "partial_json", "") or "")
+                    elif kind == "content_block_start":
+                        tool = RESULTS_CHARGED.get(getattr(getattr(event, "content_block", None), "type", None))
+                        if tool:  # a server tool that ran (searches are charged)
+                            ran[tool] = ran.get(tool, 0) + 1
                 final = await stream.get_final_message()
             used = counted_usage(final.usage)
             counted = True
         finally:
-            if answering and not counted and usage is not None:  # cut short: what was sent and said, estimated
+            if answering and not counted and usage is not None:  # cut short: what was sent and written, estimated
                 usage.add(Usage(input_tokens=estimated_tokens(params.get("system"), params["messages"]),
-                                output_tokens=estimated_tokens(text), estimated=True))
+                                output_tokens=estimated_tokens("".join(written)), estimated=True, server_tools=ran))
         if usage is not None:
             usage.add(used)
         return final
