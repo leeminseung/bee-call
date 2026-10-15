@@ -97,6 +97,44 @@ def test_an_opening_not_ready_in_time_falls_back_to_the_fixed_greeting(tmp_path,
     assert call.session.said == ["Hi, it's Bee Call. What's on your mind?"]
 
 
+def test_an_ai_call_s_opening_never_waits_for_the_bee_read_kept_for_the_record(tmp_path, monkeypatch, quick):
+    """BC-022: the AI's call was prepared before it rang; Bee is read again only for the record (and, without a
+    prep note, for the plain Bee context). Answered while that read was slow, the AI said nothing for up to 4 s."""
+    import time
+    from beelink.context import CallInputs
+
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"bee": True}, allowed=("bee",))
+    call = FakeCall(me.people, {"direction": "outbound", "person": "matt", "topic": "the interview"})
+    use_fakes(monkeypatch, call)
+
+    async def slow_read(*a, **kw):
+        await asyncio.sleep(1.5)
+        return CallInputs(facts=[{"id": 7, "text": "Bonus is 15%"}])
+
+    monkeypatch.setattr(agent, "fetch_call_inputs", slow_read)
+    said_at = []
+    real_say = call.session.say
+    call.session.say = lambda text: (said_at.append(time.monotonic()), real_say(text))
+
+    async def main():
+        running = asyncio.create_task(agent.run_call(call, me.people))
+        await asyncio.sleep(0.05)
+        answered = time.monotonic()
+        call.join()
+        await running
+        await asyncio.sleep(1.7)  # the read lands meanwhile
+        instructions = call.session.started["agent"].instructions
+        await call.end()
+        return answered, instructions
+
+    answered, instructions = asyncio.run(main())
+    assert said_at and said_at[0] - answered < 0.3
+    assert "Bonus is 15%" in instructions  # the plain Bee context still reached the AI, once read
+    (folder,) = call_folders(me.workspace)
+    assert (folder / "inputs" / "unconfirmed_facts.json").exists()  # and the record keeps the read
+
+
 def test_an_ai_call_unanswered_in_time_is_missed_and_not_called_again(tmp_path, monkeypatch, quick):
     """Confirmed rule (2026-10-15): an AI call unanswered for 60 s is recorded as missed and not called again;
     the meta agent hears of it."""

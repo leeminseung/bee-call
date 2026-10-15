@@ -94,9 +94,6 @@ DECLINE_CHECK_S = 1.0  # how often a ringing AI call looks whether the user decl
 # 10 s (shutdown_process_timeout), and the call's own record is closed first (arbitrary).
 BEE_RETRY_S = 5.0
 TURN_ENDPOINTING = {"mode": "dynamic", "min_delay": 0.5, "max_delay": 3.0}  # LiveKit 1.8.6 EndpointingOptions
-# After the user answers an AI call, its prepared opening does not wait longer than this for the Bee read
-# that only feeds the call record (arbitrary).
-OUTBOUND_INPUTS_WAIT_S = 0.5
 
 log = logging.getLogger("bee-call")
 
@@ -300,11 +297,18 @@ def greeting(meta: dict, language: CallLanguage) -> str:
     return lines["inbound"]
 
 
-async def read_by(task: asyncio.Task, seconds: float) -> CallInputs | None:
-    """The task's Bee inputs if they are read within `seconds`; None while still reading (the task keeps going)."""
+def read_already(task: asyncio.Task) -> CallInputs | None:
+    """The task's Bee inputs if it has read them already; None while it is still reading (or it failed)."""
+    if task.done() and not task.cancelled() and task.exception() is None:
+        return task.result()
+    return None
+
+
+async def brief_once_read(task: asyncio.Task, meta: dict) -> str | None:
+    """The plain Bee context, once the task has read Bee (None if the read failed)."""
     try:
-        return await asyncio.wait_for(asyncio.shield(task), seconds)
-    except asyncio.TimeoutError:
+        return call_brief(await asyncio.shield(task), meta)
+    except Exception:
         return None
 
 
@@ -405,8 +409,9 @@ async def run_call(ctx: JobContext, people: People) -> None:
             return
         prep = Prep.from_meta(meta.get("prep")) or Prep(error="the call was placed without a prep note")
         preparation = ringing = left = None
-        # This read is for the call record, and for the plain Bee context only when the call has no prep note.
-        inputs = await read_by(inputs_task, OUTBOUND_INPUTS_WAIT_S if prep.note else INBOUND_READ_TIMEOUT_S)
+        # The AI speaks as soon as the phone answers (BC-022). This read is for the call record, and for the plain
+        # Bee context when the call has no prep note, which then reaches the AI once the read lands.
+        inputs = read_already(inputs_task)
     else:
         # The user called: they hear ringing while the AI reads Bee and starts its prep. It picks up as soon as
         # its opening is written; the note usually follows during the opening (voice/prep.py).
@@ -533,6 +538,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
     # Until (or without) a prep note, the plain Bee context. A note still being written replaces it when it
     # arrives, up to the first reply.
     pending = preparation.done if preparation is not None and not preparation.done.done() else None
+    if pending is None and not prep.note and inputs_saver is not None:  # an AI call answered before Bee was read
+        pending = asyncio.ensure_future(brief_once_read(inputs_task, meta))
     agent = (BeeCoordinator if uses_bee else Coordinator)(
         rec, jobs, workspace, clock=someone.now, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
         language=language, earlier_call=meta.get("earlier_call"))
