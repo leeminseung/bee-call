@@ -2,8 +2,8 @@ import XCTest
 @testable import BeeCall
 
 /// A call booked for a time: the person asked for it out loud in a call ("call me again at 7 PM") or accepted the
-/// time a notification suggested. Its row on the first screen lists it with "Call off" (the server takes "decline"
-/// until the call's room exists, contract section 4).
+/// time a notification suggested. Its row on the first screen says when and about what, and "Cancel call" asks
+/// before it sends "decline" (which the server takes until the call's room exists, contract section 4).
 final class BookedCallTests: XCTestCase {
     /// GET /offers with one call booked in a call at 18:30 for 19:00 Seoul time, as voice/offers.py Offer.view()
     /// writes it (printed from that code).
