@@ -37,13 +37,15 @@ struct SignInView: View {
             }
             SignInWithAppleButton(.signIn) { request in
                 request.requestedScopes = [] // no name or email: the approval code says who it is
-                request.nonce = server.hashedNonce()
+                request.nonce = server.signIn.takeForRequest() // taken once: the server gets the same value
             } onCompletion: { result in
                 Task { await server.finish(result) }
             }
             .frame(height: 50)
+            .disabled(!server.signIn.isReady) // until the server has given a one-time value
         }
         .padding()
-        .task { await server.prepare() }
+        // Whenever no value is ready (at first, and after each tap), a new one is fetched.
+        .task(id: server.signIn.isReady) { await server.prepareSignIn() }
     }
 }

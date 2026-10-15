@@ -16,22 +16,6 @@ enum RingStream {
         let code: Int
     }
 
-    /// `/ring` on the token server's scheme, host and port. Nil if the address is empty or not a URL.
-    static func url(tokenServerURL: String) -> URL? {
-        endpoint("/ring", tokenServerURL: tokenServerURL)
-    }
-
-    /// Another path on the token server, such as `/voip`.
-    static func endpoint(_ path: String, tokenServerURL: String) -> URL? {
-        let address = tokenServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard var parts = URLComponents(string: address), parts.scheme == "http" || parts.scheme == "https",
-              parts.host?.isEmpty == false else { return nil }
-        parts.path = path
-        parts.query = nil
-        parts.fragment = nil
-        return parts.url
-    }
-
     /// The ring a VoIP push carries: the same fields as a ring event.
     static func ring(fromPush payload: [AnyHashable: Any]) -> Ring? {
         guard JSONSerialization.isValidJSONObject(payload),
@@ -40,14 +24,16 @@ enum RingStream {
     }
 
     /// Reads ring events until the stream ends. `onOpen` runs once the server has accepted the stream.
-    static func read(from url: URL, onOpen: () -> Void, onRing: (Ring) -> Void) async throws {
+    static func read(server: ServerClient = ServerClient(), onOpen: () -> Void, onRing: (Ring) -> Void) async throws {
         // The server sends a keepalive every 15 s, so 40 s of silence means the connection is gone.
-        var request = URLRequest(url: url, timeoutInterval: 40)
+        guard var request = server.request("/ring", timeout: 40) else { throw URLError(.badURL) } // no address
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        Server.authorize(&request)
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard code == 200 else { throw BadStatus(code: code) }
+        guard code == 200 else {
+            _ = server.read(code, Data(), to: request) // a 401: the sign-in ended
+            throw BadStatus(code: code)
+        }
         onOpen()
         var event = ""
         // `lines` drops the blank line that ends an event, so an event is handled at its data line
@@ -73,7 +59,7 @@ enum RingStream {
         let room: String
         let topic: String?
         let expiresAt: String
-        let expiresEpoch: Double? // seconds since 1970; the Mac's local time above has no time zone
+        let expiresEpoch: Double? // the same moment as seconds since 1970
     }
 
     private static func parse(_ json: String) -> Ring? {
@@ -81,17 +67,8 @@ enum RingStream {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         guard let line = try? decoder.decode(Line.self, from: Data(json.utf8)),
               let expiresAt = line.expiresEpoch.map(Date.init(timeIntervalSince1970:))
-                ?? macClock.date(from: line.expiresAt) else { return nil }
+                ?? ISO8601DateFormatter().date(from: line.expiresAt) else { return nil }
         let topic = line.topic?.trimmingCharacters(in: .whitespacesAndNewlines)
         return Ring(room: line.room, topic: topic?.isEmpty == false ? topic : nil, expiresAt: expiresAt)
     }
-
-    /// The Mac writes its local time with no zone. The phone is in the same zone, so read it as local time.
-    private static let macClock: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-        return formatter
-    }()
 }

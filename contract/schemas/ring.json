@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract.bee-call.invalid/schemas/ring.json",
+  "title": "GET /ring: the data of one `ring` event (the AI is calling)",
+  "description": "The VoIP push carries room, topic and expires_at (and expires_epoch) of the same line.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["at", "room", "expires_at", "topic"],
+  "properties": {
+    "at": {"$ref": "defs.json#/$defs/time", "description": "When it began to ring."},
+    "room": {"$ref": "defs.json#/$defs/call_id", "description": "The room to answer in, which is also the call's call_id."},
+    "expires_at": {"$ref": "defs.json#/$defs/time", "description": "After this the AI has given up: do not answer."},
+    "topic": {"$ref": "defs.json#/$defs/text_or_null"},
+    "kind": {"enum": ["conversation", "voice note", null], "description": "The app does not read it."},
+    "reason": {"type": ["string", "null"], "description": "The app does not read it."},
+    "plan": {"type": ["string", "null"], "description": "The server's own file. The app does not read it."},
+    "expires_epoch": {"type": "integer", "deprecated": true, "description": "Pre-D builds only. D reads expires_at."}
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract.bee-call.invalid/schemas/offers.json",
+  "title": "GET /offers: questions waiting for an answer, and booked calls",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["offers", "version"],
+  "properties": {
+    "offers": {
+      "description": "In the order they were made. At most one is asked at a time.",
+      "type": "array",
+      "items": {
+        "$ref": "defs.json#/$defs/offer",
+        "properties": {"state": {"enum": ["asked", "booked", "calling"]}}
+      },
+      "maxContains": 1,
+      "contains": {"properties": {"state": {"const": "asked"}}},
+      "minContains": 0
+    },
+    "version": {"$ref": "defs.json#/$defs/version"}
+  }
+}

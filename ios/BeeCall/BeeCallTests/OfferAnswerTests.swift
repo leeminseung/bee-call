@@ -7,26 +7,26 @@ final class OfferAnswerTests: XCTestCase {
     private let offer = "20261015-2100-1"
 
     @MainActor func testEachReplyHasItsOwnResult() {
-        let cases: [(Int?, OfferAnswer)] = [
-            (200, .accepted),
-            (401, .signedOut), // the sign-in has ended
-            (404, .closed), // no such offer
-            (409, .closed), // closed or already answered
-            (nil, .unreachable),
-            (400, .failed(400)),
-            (429, .failed(429)),
-            (500, .failed(500)),
-            (502, .failed(502)), // the server restarting behind its proxy
+        let cases: [(ServerAnswer, OfferAnswer)] = [
+            (.ok(200, Data()), .accepted),
+            (.signedOut, .signedOut), // the sign-in has ended
+            (.refused(404, Data()), .closed), // no such offer
+            (.refused(409, Data()), .closed), // closed or already answered
+            (.unreachable, .unreachable),
+            (.refused(400, Data()), .failed(400)),
+            (.refused(429, Data()), .failed(429)),
+            (.refused(500, Data()), .failed(500)),
+            (.refused(502, Data()), .failed(502)), // the server restarting behind its proxy
         ]
-        for (status, result) in cases {
-            XCTAssertEqual(OfferAnswer(status: status), result, "status \(String(describing: status))")
+        for (answer, result) in cases {
+            XCTAssertEqual(OfferAnswer(answer), result, "\(answer)")
         }
     }
 
     @MainActor func testAnAcceptedAnswer() async throws {
         let server = FakeServer()
         server.replies["POST /offers/\(offer)"] = .json(200, ["offer": ["id": offer, "state": "now"]])
-        let offers = OfferCenter(transport: server, noteStatus: { _ in })
+        let offers = OfferCenter(server: server.client())
         let result = await offers.answer(offer, .now)
         XCTAssertEqual(result, .accepted)
         XCTAssertNil(offers.notice)
@@ -37,7 +37,7 @@ final class OfferAnswerTests: XCTestCase {
         for status in [404, 409] {
             let server = FakeServer()
             server.replies["POST /offers/\(offer)"] = .status(status)
-            let offers = OfferCenter(transport: server, noteStatus: { _ in })
+            let offers = OfferCenter(server: server.client())
             let result = await offers.answer(offer, .later)
             XCTAssertEqual(result, .closed)
             XCTAssertEqual(offers.notice, "That offer has closed. You can call Bee Call any time.")
@@ -47,7 +47,7 @@ final class OfferAnswerTests: XCTestCase {
     @MainActor func testAnUnreachableServer() async {
         let server = FakeServer()
         server.replies["POST /offers/\(offer)"] = .unreachable
-        let offers = OfferCenter(transport: server, noteStatus: { _ in })
+        let offers = OfferCenter(server: server.client())
         let result = await offers.answer(offer, .decline)
         XCTAssertEqual(result, .unreachable)
         XCTAssertEqual(offers.notice, "Couldn't reach Bee Call. Try again from here.")
@@ -56,19 +56,19 @@ final class OfferAnswerTests: XCTestCase {
     @MainActor func testAnEndedSignInSaysSoAndSignsOut() async {
         let server = FakeServer()
         server.replies["POST /offers/\(offer)"] = .status(401, "sign in first")
-        var noted: [Int] = []
-        let offers = OfferCenter(transport: server, noteStatus: { noted.append($0) })
+        var ended = 0
+        let offers = OfferCenter(server: server.client(signInEnded: { ended += 1 }))
         let result = await offers.answer(offer, .now)
         XCTAssertEqual(result, .signedOut)
         XCTAssertEqual(offers.notice, "Your sign-in ended. Sign in again to answer.")
-        XCTAssertEqual(noted.first, 401)
+        XCTAssertEqual(ended, 1)
     }
 
     /// A server error is not a closed offer: the answer may still be wanted.
     @MainActor func testAServerFailureIsNotAClosedOffer() async {
         let server = FakeServer()
         server.replies["POST /offers/\(offer)"] = .status(502)
-        let offers = OfferCenter(transport: server, noteStatus: { _ in })
+        let offers = OfferCenter(server: server.client())
         let result = await offers.answer(offer, .now)
         XCTAssertEqual(result, .failed(502))
         XCTAssertEqual(offers.notice, "Bee Call couldn't take that answer (error 502). Try again from here.")
@@ -76,7 +76,7 @@ final class OfferAnswerTests: XCTestCase {
 
     @MainActor func testAnOffersButtonsAreOffWhileItsAnswerIsOnItsWay() async {
         let server = FakeServer()
-        let offers = OfferCenter(transport: server, noteStatus: { _ in })
+        let offers = OfferCenter(server: server.client())
         var duringRequest: Set<String> = []
         server.onRequest = { if $0.httpMethod == "POST" { duringRequest = offers.answering } }
         await offers.answer(offer, .now)
@@ -88,7 +88,7 @@ final class OfferAnswerTests: XCTestCase {
     @MainActor func testASecondTapWhileTheAnswerIsOnItsWaySendsNothing() async {
         let server = FakeServer()
         server.replies["POST /offers/\(offer)"] = .after(.milliseconds(200), 200)
-        let offers = OfferCenter(transport: server, noteStatus: { _ in })
+        let offers = OfferCenter(server: server.client())
         let id = offer
         async let first = offers.answer(id, .now)
         async let second = offers.answer(id, .now)

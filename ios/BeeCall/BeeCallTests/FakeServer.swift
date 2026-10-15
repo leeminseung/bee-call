@@ -46,6 +46,12 @@ final class FakeServer: HTTPTransport {
         }
     }
 
+    /// The app's one way to the server (ServerClient), answered by this stand-in, for a person whose sign-in
+    /// token reads as `token`; `signInEnded` runs when the client finds that the sign-in ended.
+    func client(token: String? = "test-token", signInEnded: @escaping () -> Void = {}) -> ServerClient {
+        ServerClient(transport: self, token: { token }, signInEnded: signInEnded)
+    }
+
     /// "METHOD /path" of every request so far.
     var sent: [String] {
         requests.map { "\($0.httpMethod ?? "GET") \($0.url?.path ?? "")" }

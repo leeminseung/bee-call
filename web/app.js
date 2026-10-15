@@ -19,6 +19,8 @@
   // The debug toggle, and the debug events behind it, exist only with ?debug=1 in the address, which the iPhone
   // app adds in its Debug builds. A call record otherwise shows the conversation, why the AI called, and its jobs.
   const DEBUG_ALLOWED = /(?:^\?|&)debug=1(?:&|$)/.test(location.search);
+  // The debug view: in such a page, once switched on with the toggle (the choice is kept).
+  const debugViewOn = () => DEBUG_ALLOWED && readPref("debug") === "1";
 
   const $ = (id) => document.getElementById(id);
   const view = $("view");
@@ -177,15 +179,35 @@
     try { localStorage.setItem(`beecall.${key}`, value); } catch { /* private mode: the setting just is not kept */ }
   }
 
-  async function fetchSessions() {
+  // One read of the API: its JSON, or why there is none. The one place that reads an answer's status: a 401
+  // means the sign-in ended (the app signs in again), no answer means the network or the server is away.
+  async function getJSON(path) {
+    let response;
     try {
-      const response = await fetch(API, { cache: "no-store" });
-      if (!response.ok) return null;
-      const data = await response.json();
-      return Array.isArray(data) ? data : null;
+      response = await fetch(path, { cache: "no-store" });
     } catch {
-      return null;
+      return { problem: "unreachable" };
     }
+    if (response.status === 401) return { problem: "signedOut" };
+    if (!response.ok) return { problem: "failed", status: response.status };
+    try {
+      return { data: await response.json() };
+    } catch {
+      return { problem: "failed", status: response.status };
+    }
+  }
+
+  // What to say when a read failed.
+  function problemText(answer) {
+    if (answer.problem === "signedOut") return SIGNED_OUT;
+    if (answer.problem === "unreachable") return UNREACHABLE;
+    return `The call records are not available right now (error ${answer.status}). Retrying…`;
+  }
+
+  // The list of calls, newest first, or why there is none.
+  async function getSessions() {
+    const answer = await getJSON(API);
+    return answer.data !== undefined && !Array.isArray(answer.data) ? { problem: "failed", status: 200 } : answer;
   }
 
   function setHeader(title, back) {
@@ -210,6 +232,7 @@
   }
 
   const UNREACHABLE = "Can't reach the call records right now. Retrying…"; // the server is on the Mac or in the cloud
+  const SIGNED_OUT = "Your sign-in ended. Open Bee Call and sign in again.";
   const NO_CALLS = "No calls yet. When the AI calls you, the call shows up here.";
 
   // ---------- file viewer (keeps the iPhone web view on this page) ----------
@@ -263,14 +286,14 @@
     }
 
     async load() {
-      const sessions = await fetchSessions();
+      const answer = await getSessions();
       if (this.closed) return;
-      const key = JSON.stringify(sessions);
+      const key = JSON.stringify(answer);
       if (key === this.shown) return;
       this.shown = key;
-      if (sessions === null) showNote(UNREACHABLE);
-      else if (!sessions.length) view.replaceChildren(metaLink(), el("p", "empty", NO_CALLS));
-      else this.render(sessions);
+      if (answer.problem) showNote(problemText(answer));
+      else if (!answer.data.length) view.replaceChildren(metaLink(), el("p", "empty", NO_CALLS));
+      else this.render(answer.data);
     }
 
     render(sessions) {
@@ -317,27 +340,55 @@
     call_declined: (e) => `You declined an AI call about “${e.topic || ""}”`,
   };
 
+  // The meta agent's times it looked, newest first. The server lists the newest page; with "more", it has older
+  // ones, which ?before=<at of the oldest shown> lists the same way (BC-054).
+  const META = API.replace(/\/sessions$/, "/meta");
+
   class MetaPage {
     constructor() {
       setHeader("Between calls", true);
       setStatus(null);
       this.shown = "";
+      this.latest = null; // the newest page, as last listed
+      this.older = []; // pages loaded with "Show earlier", oldest last
+      this.olderMore = false; // the server has some older than these
       this.load();
       this.timer = setInterval(() => this.load(), LIST_POLL_MS);
     }
 
     async load() {
-      let data = null;
-      try {
-        const response = await fetch(`${API.replace(/\/sessions$/, "")}/meta`, { cache: "no-store" });
-        if (response.ok) data = await response.json();
-      } catch { /* shown below */ }
+      const answer = await getJSON(META);
       if (this.closed) return;
-      const key = JSON.stringify(data);
+      const key = JSON.stringify(answer);
       if (key === this.shown) return;
       this.shown = key;
-      if (data === null) showNote(UNREACHABLE);
-      else this.render(data);
+      if (answer.problem) showNote(problemText(answer));
+      else {
+        this.latest = answer.data || {};
+        this.render(this.latest);
+      }
+    }
+
+    /** The newest page, then the older ones loaded, each look once. */
+    entries(data) {
+      const newest = Array.isArray(data.entries) ? data.entries : [];
+      const seen = new Set(newest.map((entry) => entry.at));
+      return newest.concat(this.older.filter((entry) => !seen.has(entry.at)));
+    }
+
+    async loadOlder(button, oldest) {
+      button.disabled = true;
+      const answer = await getJSON(`${META}?before=${encodeURIComponent(oldest)}`);
+      if (this.closed) return;
+      if (answer.problem) {
+        button.disabled = false;
+        button.textContent = "Couldn't load earlier ones. Try again.";
+        return;
+      }
+      const data = answer.data || {};
+      this.older.push(...(Array.isArray(data.entries) ? data.entries : []));
+      this.olderMore = Boolean(data.more);
+      this.render(this.latest || {});
     }
 
     render(data) {
@@ -351,9 +402,14 @@
         card.append(head, el("p", "meta-state-text", data.state));
         frag.append(card);
       }
-      const entries = Array.isArray(data.entries) ? data.entries : [];
+      const entries = this.entries(data);
       if (!entries.length) frag.append(el("p", "empty", "Nothing yet. Bee Call looks when Bee saves something new or a call ends."));
       for (const entry of entries) frag.append(this.entry(entry));
+      if (entries.length && (this.older.length ? this.olderMore : Boolean(data.more))) {
+        const button = el("button", "link-button meta-older", "Show earlier");
+        button.addEventListener("click", () => this.loadOlder(button, entries[entries.length - 1].at));
+        frag.append(button);
+      }
       view.replaceChildren(frag);
     }
 
@@ -378,16 +434,23 @@
         }
         card.append(list);
       }
-      if (entry.error) card.append(el("p", "job-error", `It could not finish: ${entry.error}`));
+      // What it noticed, decided and did, in words; its tool calls, raw results, model and raw errors only in the
+      // debug view.
+      const debug = debugViewOn();
+      if (entry.error) {
+        card.append(el("p", "job-error", debug ? `It could not finish: ${entry.error}` : "It could not finish this time."));
+      }
       if (entry.decision) card.append(el("p", "meta-decision", entry.decision));
       const actions = Array.isArray(entry.actions) ? entry.actions : [];
       for (const a of actions) {
-        const text = a.tool === "offer_call" ? `Asked you about a call: “${a.topic}”. ${a.result || ""}`
-          : a.tool === "write_state" ? "Updated what it keeps track of" : `${a.tool}: ${a.result || ""}`;
-        card.append(el("p", "card-note", text));
+        let text = null;
+        if (a.tool === "offer_call") text = `Asked you about a call: “${a.topic}”.${debug && a.result ? ` ${a.result}` : ""}`;
+        else if (a.tool === "write_state") text = "Updated what it keeps track of";
+        else if (debug) text = `${a.tool}: ${a.result || ""}`;
+        if (text) card.append(el("p", "card-note", text));
       }
       const tools = Array.isArray(entry.tools) ? entry.tools : [];
-      if (tools.length) {
+      if (debug && tools.length) {
         const details = el("details", "meta-tools");
         details.append(el("summary", null, `What it looked at (${tools.length})`));
         for (const t of tools) {
@@ -399,7 +462,7 @@
         card.append(details);
       }
       const foot = [entry.model, typeof entry.seconds === "number" ? `${entry.seconds.toFixed(1)} s` : null].filter(Boolean);
-      if (foot.length) card.append(el("p", "card-note", foot.join(", ")));
+      if (debug && foot.length) card.append(el("p", "card-note", foot.join(", ")));
       return card;
     }
 
@@ -422,15 +485,16 @@
     }
 
     async tick() {
-      const sessions = await fetchSessions();
+      const answer = await getSessions();
       if (this.closed) return;
-      if (sessions === null || !sessions.length) {
-        if (!this.session) showNote(sessions === null ? UNREACHABLE : NO_CALLS);
+      if (answer.problem || !answer.data.length) {
+        if (!this.session) showNote(answer.problem ? problemText(answer) : NO_CALLS);
         return;
       }
-      if (this.session && this.session.id === sessions[0].id) return;
+      const newest = answer.data[0];
+      if (this.session && this.session.id === newest.id) return;
       if (this.session) this.session.close();
-      this.session = new SessionPage(sessions[0].id);
+      this.session = new SessionPage(newest.id);
     }
 
     close() {
@@ -445,7 +509,7 @@
   class SessionPage {
     constructor(id) {
       this.id = id;
-      this.debug = DEBUG_ALLOWED && readPref("debug") === "1";
+      this.debug = debugViewOn();
       this.events = [];
       this.ready = false; // the backlog has arrived
       this.reconnecting = false;
@@ -471,6 +535,7 @@
       this.beeSlot = el("div", "bee-slot");
       this.continueSlot = el("div", "continue-slot"); // "Continue this call", in the iPhone app once the call is over
       const foot = el("footer", "session-foot");
+      foot.hidden = !DEBUG_ALLOWED; // it holds only the room's name and the debug toggle
       this.footNote = el("span", "foot-note");
       this.debugButton = el("button", "link-button");
       this.debugButton.type = "button";
@@ -549,20 +614,68 @@
 
     onError() {
       if (this.closed) return;
-      if (this.callEnded || this.source.readyState === EventSource.CLOSED) {
-        this.source.close(); // the stream ends at call_ended; do not reconnect
-        if (!this.events.length) {
-          setStatus(null);
-          view.replaceChildren(el("p", "empty", "This call could not be loaded."));
-        }
+      if (this.callEnded) {
+        this.source.close(); // the stream ends at call_ended: nothing more will come
         return;
       }
-      this.reconnecting = true; // EventSource retries and resumes after the last line it got
+      this.reconnecting = true;
+      this.renderStatus();
+      // After a dropped connection EventSource tries again by itself and resumes after the last line it got.
+      // A stream the server refused (Caddy's 502 while the session server restarts, a 401) it gives up on.
+      if (this.source.readyState === EventSource.CLOSED) this.recover();
+    }
+
+    // Finds out from the call list why the stream was refused, then opens a new stream and rebuilds the call
+    // from its backlog. While the server is away it asks again, after 2 s, then up to every 10 s.
+    async recover() {
+      this.source.close();
+      if (this.recovering) return;
+      this.recovering = true;
+      let wait = 2000;
+      while (!this.closed) {
+        const answer = await getSessions();
+        if (this.closed) break;
+        if (answer.problem === "signedOut") {
+          this.stopWith(SIGNED_OUT);
+          break;
+        }
+        if (!answer.problem) {
+          if (answer.data.some((s) => s.id === this.id)) this.reopen();
+          else this.stopWith("This call could not be loaded.");
+          break;
+        }
+        await new Promise((resolve) => { this.retry = setTimeout(resolve, wait); });
+        wait = Math.min(wait * 2, 10000);
+      }
+      this.recovering = false;
+    }
+
+    reopen() {
+      this.events = [];
+      this.ready = false;
+      this.reset();
+      this.connect();
+    }
+
+    // The page can do no more: a call with nothing shown says so in its place, else the status line does.
+    stopWith(text) {
+      this.reconnecting = false;
+      if (!this.events.length) {
+        setStatus(null);
+        view.replaceChildren(el("p", "empty", text));
+        this.stopped = text;
+        return;
+      }
+      this.stopped = text;
       this.renderStatus();
     }
 
     renderStatus() {
       if (this.closed) return;
+      if (this.stopped) {
+        if (this.events.length) setStatus({ state: "ended", text: this.stopped });
+        return;
+      }
       const now = performance.now();
       const idle = (now - this.lastAt) / 1000;
       if (this.endT !== null || (this.ready && idle > STALE_S)) this.renderContinue();
@@ -593,6 +706,7 @@
     close() {
       this.closed = true;
       if (this.source) this.source.close();
+      clearTimeout(this.retry);
       clearInterval(this.ticker);
       window.removeEventListener("scroll", this.onScroll);
       ui.jump.hidden = true;
@@ -609,7 +723,7 @@
           const start = parseDate(ev.started_at);
           setHeader(titleFor(this.id, start), true);
           this.addSystem("Call started", start ? hhmm(start) : "");
-          this.footNote.textContent = ev.room ? `Room ${ev.room}` : "";
+          this.footNote.textContent = this.debug && ev.room ? `Room ${ev.room}` : "";
           break;
         }
         case "why_calling":
@@ -689,11 +803,8 @@
       const row = el("li", "row error");
       const source = ev.source && ev.source !== "NoneType" ? `${humanize(ev.source)}: ` : "";
       const raw = `${source}${ev.error || "something went wrong"}`;
-      const text = el("span", "row-text", this.debug ? raw : plain);
-      if (!this.debug) {
-        text.title = "Tap to show what went wrong";
-        text.addEventListener("click", () => { text.textContent = text.textContent === plain ? raw : plain; });
-      } else {
+      const text = el("span", "row-text", this.debug ? raw : plain); // the raw error only in the debug view
+      if (this.debug) {
         text.title = "Tap to show the whole error";
         text.addEventListener("click", () => text.classList.toggle("open")); // long errors start clamped
       }
@@ -857,9 +968,11 @@
       }
     }
 
-    // The note the AI wrote from Bee before it picked up (voice/prep.py), and the extra reads it chose.
+    // The note the AI wrote before it picked up (voice/prep.py), and the extra Bee reads it chose: how the call
+    // was made, so it shows only in the debug view.
     renderPrep(ev) {
       this.prepEvent = ev;
+      if (!this.debug) return;
       const card = el("section", "card prep");
       const head = el("div", "card-head");
       head.append(icon("search"), el("span", null, "Before picking up"));
@@ -869,7 +982,7 @@
         card.append(el("p", "prep-note", withoutIds(note)));
       } else {
         const why = ev.error ? ` (${ev.error})` : "";
-        card.append(el("p", "card-note", `No prep note${why}, so the call started with the plain Bee context.`));
+        card.append(el("p", "card-note", `No prep note${why}, so the call started without one.`));
       }
       const reads = Array.isArray(ev.reads) ? ev.reads.map(readLabel).filter(Boolean) : [];
       if (reads.length) {

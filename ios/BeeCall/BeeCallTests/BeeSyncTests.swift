@@ -11,9 +11,9 @@ final class BeeSyncTests: XCTestCase {
     }
 
     @MainActor private func bee(_ store: UserDefaults, _ server: FakeServer, opened: @escaping (URL) -> Void = { _ in },
-                                statuses: @escaping (Int) -> Void = { _ in },
+                                signInEnded: @escaping () -> Void = {},
                                 signedIn: @escaping () -> Bool = { true }) -> BeeSync {
-        BeeSync(store: store, transport: server, open: { opened($0); return true }, noteStatus: statuses,
+        BeeSync(store: store, server: server.client(signInEnded: signInEnded), open: { opened($0); return true },
                 signedIn: signedIn)
     }
 
@@ -203,9 +203,9 @@ final class BeeSyncTests: XCTestCase {
     @MainActor func testEveryAnswerGoesThroughTheSignInRule() async {
         let server = FakeServer()
         server.replies["GET /me"] = .status(401)
-        var noted: [Int] = []
-        await bee(store(useBee: true), server, statuses: { noted.append($0) }).sync()
-        XCTAssertEqual(noted, [401])
+        var ended = 0
+        await bee(store(useBee: true), server, signInEnded: { ended += 1 }).sync()
+        XCTAssertEqual(ended, 1)
     }
 
     // MARK: - Without the app on screen: a launch for a VoIP push, a change made in the Settings app
@@ -255,8 +255,8 @@ final class BeeSyncTests: XCTestCase {
         server.replies["POST /bee/connect"] = .json(200, ["link": link])
         var onScreen = false
         var opened = 0
-        let bee = BeeSync(store: store(useBee: true), transport: server,
-                          open: { _ in if onScreen { opened += 1 }; return onScreen }, noteStatus: { _ in })
+        let bee = BeeSync(store: store(useBee: true), server: server.client(),
+                          open: { _ in if onScreen { opened += 1 }; return onScreen })
         await bee.sync()
         XCTAssertEqual(server.sent, ["GET /me", "POST /bee/connect", "POST /bee/disconnect"],
                        "the approval nobody can see is cancelled")

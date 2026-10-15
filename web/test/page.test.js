@@ -334,3 +334,242 @@ test("between calls, a missed and a declined AI call read as words, not as event
   assert.match(text, /You declined an AI call about “Saturday hike”/);
   assert.doesNotMatch(text, /call_missed|call_declined/);
 });
+
+// ---------- what a normal record leaves out (BC-034, BC-149; the 10/15 rule: the conversation, why the AI
+// called, and its jobs; everything else only in a Debug build's debug view) ----------
+
+/** A Debug build's page with the debug view switched on. */
+const debugView = (hash) => loadPage({ hash, search: "?debug=1", prefs: { debug: "1" } });
+
+test("the note the AI wrote before picking up shows only in the debug view", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(fixture(AI_CALL));
+  assert.equal(page.all("prep").length, 0);
+  assert.doesNotMatch(page.visibleText(), /Before picking up/);
+  const debug = debugView("#/s/2026-10-15/2100");
+  debug.feed(fixture(AI_CALL));
+  assert.match(debug.text(debug.one("prep")), /Before picking up Dana's knee is still sore/);
+});
+
+test("without a prep note, the debug view does not claim the call started with Bee's context", () => {
+  const page = debugView("#/s/2026-10-15/1830");
+  page.feed([
+    { t: 0, type: "call", direction: "inbound", topic: null, reason: null },
+    { t: 1, type: "call_prep", seconds: 0.4, reads: [], note: null, error: "the person does not use Bee" },
+  ]);
+  const card = page.text(page.one("prep"));
+  assert.match(card, /No prep note/);
+  assert.doesNotMatch(card, /Bee context/);
+});
+
+test("the LiveKit room's name shows only in the debug view, and a normal record has no footer", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(fixture(AI_CALL));
+  assert.doesNotMatch(page.visibleText(), /call-matt-20261015-210002/);
+  assert.equal(page.one("session-foot").hidden, true);
+  const debug = debugView("#/s/2026-10-15/2100");
+  debug.feed(fixture(AI_CALL));
+  assert.match(debug.visibleText(debug.one("session-foot")), /Room call-matt-20261015-210002/);
+});
+
+test("an error reads in plain words, and the raw error is not one tap away outside the debug view", () => {
+  const raw = "bee_conversation: HTTP 502 from https://api.bee.computer";
+  const error = { t: 2, type: "error", source: "bee_context", error: raw };
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed([error]);
+  const row = page.one("error");
+  assert.equal(page.text(row.children[1]), "Some of your Bee data could not be read before the call.");
+  row.children[1].click();
+  assert.doesNotMatch(page.visibleText(), /502/);
+  const debug = debugView("#/s/2026-10-15/2100");
+  debug.feed([error]);
+  assert.match(debug.visibleText(debug.one("error")), /HTTP 502/);
+});
+
+/** A fetch that answers every request with this JSON body. */
+const answering = (body, status = 200) => async () => ({
+  ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body),
+});
+
+const metaRun = {
+  entries: [{
+    at: "2026-10-15T19:02:00", events: [{ kind: "bee_change", inbox: "inbox/1902" }],
+    decision: "Dana's hike plan changed; worth a short call tonight.",
+    error: "ThrottlingException: Rate exceeded (Bedrock)",
+    actions: [
+      { tool: "offer_call", topic: "Saturday hike", result: "notification sent: About “Saturday hike”: free for a quick call?" },
+      { tool: "search_bee", result: "[{\"id\": 5121, \"score\": 0.82}]" },
+      { tool: "write_state", result: "notes updated" },
+    ],
+    tools: [{ name: "bee_today", input: {}, result: "{\"todos\": []}" }],
+    model: "claude-sonnet-5-5", seconds: 12.3,
+  }],
+  state: "Dana: easy trails only.",
+};
+
+test("between calls, a normal page shows what Bee Call noticed and did, not its raw tool calls or model", async () => {
+  const page = loadPage({ hash: "#/meta", fetch: answering(metaRun) });
+  await page.settle();
+  const shown = page.visibleText(page.byId("view"));
+  assert.match(shown, /Dana's hike plan changed; worth a short call tonight\./);
+  assert.match(shown, /Asked you about a call: “Saturday hike”\./);
+  assert.match(shown, /Updated what it keeps track of/);
+  assert.match(shown, /It could not finish this time\./);
+  for (const internal of [/ThrottlingException/, /claude-sonnet-5-5/, /What it looked at/, /search_bee/, /bee_today/,
+    /notification sent/, /12\.3 s/]) {
+    assert.doesNotMatch(shown, internal);
+  }
+});
+
+test("between calls, the debug view still shows the raw tool calls, the model and the error", async () => {
+  const page = loadPage({ hash: "#/meta", search: "?debug=1", prefs: { debug: "1" }, fetch: answering(metaRun) });
+  await page.settle();
+  const shown = page.visibleText(page.byId("view"));
+  for (const internal of [/ThrottlingException/, /claude-sonnet-5-5/, /What it looked at \(1\)/, /search_bee/,
+    /notification sent/]) {
+    assert.match(shown, internal);
+  }
+});
+
+/** One time the meta agent looked, with only what a normal page shows. */
+const looked = (at, decision) => ({ at, events: [{ kind: "bee_change", inbox: "inbox/x" }], decision });
+
+/** A fetch for Between calls: the newest page, and pages before a given time (BC-054). */
+function metaPages(pages) {
+  const asked = [];
+  const fetch = async (url) => {
+    asked.push(url);
+    const before = /[?&]before=([^&]+)/.exec(url);
+    return answering(pages[before ? decodeURIComponent(before[1]) : ""])();
+  };
+  return { fetch, asked };
+}
+
+test("between calls, earlier times it looked load below when the server says there are more (BC-054)", async () => {
+  const pages = {
+    "": { entries: [looked("2026-10-15T21:05:00+09:00", "Newest look.")], state: "", more: true },
+    "2026-10-15T21:05:00+09:00": { entries: [looked("2026-10-14T08:00:00+09:00", "An older look.")], more: false },
+  };
+  const server = metaPages(pages);
+  const page = loadPage({ hash: "#/meta", fetch: server.fetch });
+  await page.settle();
+  assert.doesNotMatch(page.visibleText(page.byId("view")), /An older look\./);
+  page.one("meta-older").click();
+  await page.settle();
+  const shown = page.visibleText(page.byId("view"));
+  assert.match(shown, /Newest look\.[\s\S]*An older look\./);
+  assert.equal(page.has("meta-older"), false, "nothing older is left");
+  assert.deepEqual(server.asked.slice(-1), ["api/meta?before=2026-10-15T21%3A05%3A00%2B09%3A00"]);
+
+  // The next poll brings a new look; the older ones stay below it.
+  pages[""] = { entries: [looked("2026-10-15T22:00:00+09:00", "A new look."), looked("2026-10-15T21:05:00+09:00", "Newest look.")],
+    state: "", more: true };
+  page.tick();
+  await page.settle();
+  assert.match(page.visibleText(page.byId("view")), /A new look\.[\s\S]*Newest look\.[\s\S]*An older look\./);
+});
+
+test("between calls, a server that does not say there are more shows no button (BC-054)", async () => {
+  const page = loadPage({ hash: "#/meta", fetch: answering({ entries: [looked("2026-10-15T21:05:00+09:00", "A look.")] }) });
+  await page.settle();
+  assert.equal(page.has("meta-older"), false);
+});
+
+test("between calls, earlier times that cannot be loaded say so and can be tried again (BC-054)", async () => {
+  let failing = true;
+  const fetch = async (url) => (url.includes("before=") && failing
+    ? answering("Bad Gateway", 502)()
+    : answering(url.includes("before=") ? { entries: [looked("2026-10-14T08:00:00+09:00", "An older look.")] }
+      : { entries: [looked("2026-10-15T21:05:00+09:00", "A look.")], more: true })());
+  const page = loadPage({ hash: "#/meta", fetch });
+  await page.settle();
+  page.one("meta-older").click();
+  await page.settle();
+  assert.match(page.text(page.one("meta-older")), /Couldn't load earlier ones\. Try again\./);
+  failing = false;
+  page.one("meta-older").click();
+  await page.settle();
+  assert.match(page.visibleText(page.byId("view")), /An older look\./);
+});
+
+// ---------- when the records cannot be read (review finding 7) ----------
+
+test("a 401 says the sign-in ended, on every page that reads the records", async () => {
+  for (const hash of ["#/", "#/calls", "#/meta"]) {
+    const page = loadPage({ hash, fetch: answering("sign in first\n", 401) });
+    await page.settle();
+    const note = page.visibleText(page.byId("view"));
+    assert.match(note, /Your sign-in ended\. Open Bee Call and sign in again\./, hash);
+    assert.doesNotMatch(note, /Can't reach/, hash);
+  }
+});
+
+test("a server error says the records are not available, with its code", async () => {
+  const page = loadPage({ hash: "#/calls", fetch: answering("Bad Gateway", 502) });
+  await page.settle();
+  assert.match(page.visibleText(page.byId("view")), /The call records are not available right now \(error 502\)\. Retrying…/);
+});
+
+// ---------- the live stream after a server restart (review finding 7) ----------
+
+/** A fetch that gives these answers in turn, then the last one again and again. */
+const inTurn = (...answers) => {
+  let next = 0;
+  return async (...args) => answers[Math.min(next++, answers.length - 1)](...args);
+};
+const listed = (...ids) => answering(ids.map((id) => ({ id, started_at: "2026-10-15T21:00:02", live: true })));
+
+test("a stream the server refuses while it restarts reopens, and the call is rebuilt from its backlog", async () => {
+  const lines = fixture(AI_CALL);
+  const page = loadPage({ hash: "#/s/2026-10-15/2100",
+    fetch: inTurn(answering("Bad Gateway", 502), listed("2026-10-15/2100")) });
+  page.feed(lines.slice(0, 12)); // a live call, mid-way
+  page.stream.refuse(); // Caddy's 502 while the session server restarts
+  assert.equal(page.byId("status-text").textContent, "Reconnecting…");
+  await page.settle(); // the list answers 502 too: wait and ask again
+  assert.equal(page.streams.length, 1);
+  page.tick();
+  await page.settle(); // now the call is listed again
+  assert.equal(page.streams.length, 2, "a new stream");
+  page.feed(lines.slice(0, 20)); // the new stream sends the whole backlog, and more
+  assert.equal(userBubbles(page)[0], "Yes, now is fine. Dana says her knee is better, but she still wants an easy route.");
+  assert.equal(page.all("speech").filter((s) => /Is now still good/.test(page.text(s))).length, 1, "nothing twice");
+});
+
+test("a dropped connection is left to the browser, which resumes by itself", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(fixture(AI_CALL).slice(0, 12));
+  page.stream.drop();
+  assert.equal(page.byId("status-text").textContent, "Reconnecting…");
+  assert.equal(page.streams.length, 1);
+});
+
+test("the stream of an ended call is not reopened", async () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100", fetch: listed("2026-10-15/2100") });
+  page.feed(fixture(AI_CALL));
+  page.stream.refuse(); // the 204 a finished stream answers
+  await page.settle();
+  page.tick();
+  await page.settle();
+  assert.equal(page.streams.length, 1);
+  assert.equal(page.byId("status-text").textContent, "Call ended");
+});
+
+test("a call the server does not have says it could not be loaded", async () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2359", fetch: listed("2026-10-15/2100") });
+  page.stream.refuse(); // 404
+  await page.settle();
+  assert.match(page.visibleText(page.byId("view")), /This call could not be loaded\./);
+  assert.equal(page.streams.length, 1);
+});
+
+test("a sign-in that ended while watching says so and stops", async () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100", fetch: answering("sign in first\n", 401) });
+  page.feed(fixture(AI_CALL).slice(0, 12));
+  page.stream.refuse();
+  await page.settle();
+  page.tick();
+  await page.settle();
+  assert.equal(page.streams.length, 1);
+  assert.equal(page.byId("status-text").textContent, "Your sign-in ended. Open Bee Call and sign in again.");
+});

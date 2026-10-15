@@ -17,6 +17,7 @@ final class LiveKitClient: NSObject {
     @ObservationIgnored private var room: Room?
     @ObservationIgnored private var microphoneOn = true // a mute that arrives before the mic is published
     @ObservationIgnored private let phoneRecorder = PhoneRecorder() // "Save call audio on this iPhone"
+    @ObservationIgnored private let server = ServerClient()
     /// Both voices' live levels, for the indicator around the call screen's main button.
     let voices = VoiceActivity()
 
@@ -31,11 +32,10 @@ final class LiveKitClient: NSObject {
 
     /// Joins a room and publishes the microphone. Returns the room name. A new room for a call the user
     /// starts; with `answering`, the room of the AI's call. Only the pass from the token server differs.
-    func connect(tokenServerURL: String, answering roomName: String? = nil,
-                 continuing earlierCall: String? = nil) async throws -> String {
+    func connect(answering roomName: String? = nil, continuing earlierCall: String? = nil) async throws -> String {
         captionList = CaptionList()
         voices.aiHasAnswered = roomName != nil // the AI's own call has no ringing: the first sound is its voice
-        let access = try await fetchAccess(from: tokenServerURL, answering: roomName, continuing: earlierCall)
+        let access = try await fetchAccess(answering: roomName, continuing: earlierCall)
         try Task.checkCancellation() // the call ended while we fetched the token
         return try await connect(access: access)
     }
@@ -58,7 +58,8 @@ final class LiveKitClient: NSObject {
         try Task.checkCancellation() // the call ended while we got the room ready
         try await room.connect(url: access.url, token: access.token)
         try await room.localParticipant.setMicrophone(enabled: microphoneOn)
-        phoneRecorder.startIfWanted(room: access.room)
+        // The call may have ended during those waits; then its voice levels must not start (review finding 15).
+        guard room === self.room else { throw CancellationError() }
         voices.microphoneOn = microphoneOn
         voices.start()
         if room.remoteParticipants.values.contains(where: { $0.attributes[Self.stateAttribute] == "answered" }) {
@@ -72,6 +73,11 @@ final class LiveKitClient: NSObject {
     private func agentAnswered() {
         voices.aiHasAnswered = true
         onAgentAnswered?()
+    }
+
+    /// The recording on this iPhone, once the call has joined; it stops when the call leaves its room.
+    func recordOnPhoneIfWanted() -> String? {
+        phoneRecorder.startIfWanted()
     }
 
     func setMicrophone(enabled: Bool) async throws {
@@ -103,6 +109,17 @@ final class LiveKitClient: NSObject {
         let room: String
     }
 
+    /// Where the pass comes from on the token server: GET /token, for a new call, an answer, or a continuation.
+    static func passPath(answering roomName: String?, continuing earlierCall: String?) -> String {
+        var query = URLComponents()
+        if let roomName {
+            query.queryItems = [URLQueryItem(name: "room", value: roomName), URLQueryItem(name: "answer", value: "1")]
+        } else if let earlierCall {
+            query.queryItems = [URLQueryItem(name: "continue", value: earlierCall)]
+        }
+        return "/token" + (query.percentEncodedQuery.map { "?" + $0 } ?? "")
+    }
+
     /// The token server answered 410 to an answer request: the AI stopped ringing and closed the room.
     struct CallAlreadyEnded: Error {}
 
@@ -113,38 +130,23 @@ final class LiveKitClient: NSObject {
     /// A pass for a new call: the voice server is dispatched into the new room when the app joins.
     /// With `answering`, a pass into the room of the AI's call instead; the voice server is already there.
     /// With `continuing`, the new call picks up from that earlier call (its record id, like 2026-10-14/0055).
-    private func fetchAccess(from address: String, answering roomName: String?,
-                             continuing earlierCall: String? = nil) async throws -> Access {
-        let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard var parts = URLComponents(string: address), parts.scheme != nil else {
-            throw TokenServerError(errorDescription: "The token server address is not a URL.")
+    private func fetchAccess(answering roomName: String?, continuing earlierCall: String? = nil) async throws
+        -> Access {
+        guard let request = server.request(Self.passPath(answering: roomName, continuing: earlierCall)) else {
+            throw TokenServerError(errorDescription: "This build has no server address.")
         }
-        var query: [URLQueryItem] = []
-        if let roomName {
-            query += [URLQueryItem(name: "room", value: roomName), URLQueryItem(name: "answer", value: "1")]
-        } else if let earlierCall {
-            query.append(URLQueryItem(name: "continue", value: earlierCall))
-        }
-        parts.queryItems = (parts.queryItems ?? []) + query
-        guard let url = parts.url else {
-            throw TokenServerError(errorDescription: "The token server address is not a URL.")
-        }
-        var request = URLRequest(url: url, timeoutInterval: 10)
-        Server.authorize(&request)
         let (data, response) = try await http.data(for: request)
-        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        Server.shared.noteStatus(code)
-        if code == 410, roomName != nil {
+        switch server.read(response.httpStatus, data, to: request) {
+        case .ok(200, let body):
+            return try JSONDecoder().decode(Access.self, from: body)
+        case .refused(410, _) where roomName != nil:
             throw CallAlreadyEnded()
-        }
-        if code == 429 { // today's budget is used up; the server says how much
-            throw TokenServerError(errorDescription: String(decoding: data, as: UTF8.self)
+        case .refused(429, let body): // today's budget is used up; the server says how much
+            throw TokenServerError(errorDescription: String(decoding: body, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            throw TokenServerError(errorDescription: "The token server answered \(response.httpStatus).")
         }
-        guard code == 200 else {
-            throw TokenServerError(errorDescription: "The token server answered \(code).")
-        }
-        return try JSONDecoder().decode(Access.self, from: data)
     }
 }
 

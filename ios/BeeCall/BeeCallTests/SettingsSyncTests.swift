@@ -5,9 +5,9 @@ import XCTest
 /// The switches of the Settings app reach the server as PUT /settings (contract section 1, review finding 1).
 final class SettingsSyncTests: XCTestCase {
     @MainActor private func sync(_ store: UserDefaults, _ server: FakeServer, tokenReadable: @escaping () -> Bool = { true },
-                                 statuses: @escaping (Int) -> Void = { _ in },
+                                 signInEnded: @escaping () -> Void = {},
                                  timeZone: @escaping () -> TimeZone = { TimeZone(identifier: "Asia/Seoul")! }) -> SettingsSync {
-        SettingsSync(store: store, transport: server, tokenReadable: tokenReadable, noteStatus: statuses,
+        SettingsSync(store: store, server: server.client(signInEnded: signInEnded), tokenReadable: tokenReadable,
                      timeZone: timeZone)
     }
 
@@ -46,6 +46,39 @@ final class SettingsSyncTests: XCTestCase {
         XCTAssertNil(try server.body(of: "PUT /settings")["call_time"])
     }
 
+    /// The Settings app keeps showing a typed time the server would refuse, so the app says it was not saved
+    /// (review finding 10).
+    @MainActor func testATimeTheServerWouldRefuseIsShown() async {
+        let store = freshDefaults(self), server = FakeServer()
+        store.set("9pm", forKey: "call_time")
+        let sync = sync(store, server)
+        await sync.send().value
+        XCTAssertEqual(sync.problem, "The evening call time “9pm” was not saved: write it like 21:00 in Settings.")
+    }
+
+    @MainActor func testFixingTheTimeClearsTheProblem() async throws {
+        let store = freshDefaults(self), server = FakeServer()
+        store.set("9pm", forKey: "call_time")
+        let sync = sync(store, server)
+        await sync.send().value
+        store.set("21:30", forKey: "call_time") // fixed in the Settings app
+        await waitUntil("the fixed time is sent") { server.sent.count == 2 }
+        await waitUntil("the problem is gone") { sync.problem == nil }
+        XCTAssertEqual(try server.body(of: "PUT /settings")["call_time"] as? String, "21:30")
+    }
+
+    @MainActor func testSettingsTheServerRefusesSaySoWithItsReason() async {
+        let server = FakeServer()
+        server.replies["PUT /settings"] = .status(400, "time_zone must be an IANA time zone name, like Asia/Seoul\n")
+        let sync = sync(freshDefaults(self), server)
+        await sync.send().value
+        XCTAssertEqual(sync.problem,
+                       "Your settings were not saved: time_zone must be an IANA time zone name, like Asia/Seoul.")
+        server.replies["PUT /settings"] = nil
+        await sync.send().value
+        XCTAssertNil(sync.problem)
+    }
+
     @MainActor func testEverySendCarriesThePhonesTimeZone() async throws {
         let server = FakeServer()
         await sync(freshDefaults(self), server, timeZone: { TimeZone(identifier: "America/New_York")! }).send().value
@@ -54,8 +87,7 @@ final class SettingsSyncTests: XCTestCase {
 
     @MainActor func testTheTimeZoneIsThePhonesOwnByDefault() async throws {
         let server = FakeServer()
-        await SettingsSync(store: freshDefaults(self), transport: server, tokenReadable: { true },
-                           noteStatus: { _ in }).send().value
+        await SettingsSync(store: freshDefaults(self), server: server.client(), tokenReadable: { true }).send().value
         XCTAssertEqual(try server.body(of: "PUT /settings")["time_zone"] as? String, TimeZone.current.identifier)
     }
 
@@ -156,8 +188,8 @@ final class SettingsSyncTests: XCTestCase {
     @MainActor func testTheAnswerGoesThroughTheSignInRule() async {
         let server = FakeServer()
         server.replies["PUT /settings"] = .status(401)
-        var noted: [Int] = []
-        await sync(freshDefaults(self), server, statuses: { noted.append($0) }).send().value
-        XCTAssertEqual(noted, [401])
+        var ended = 0
+        await sync(freshDefaults(self), server, signInEnded: { ended += 1 }).send().value
+        XCTAssertEqual(ended, 1)
     }
 }

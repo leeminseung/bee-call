@@ -1,0 +1,1135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract.bee-call.invalid/schemas/defs.json",
+  "title": "Shared definitions of the Bee Call app contract (design D)",
+  "description": "Every response schema refers to these. Each concept has one definition and one wire name. See app-contract.md.",
+  "$defs": {
+    "time": {
+      "description": "A moment, ISO 8601 to the second with the UTC offset of the person's time zone, such as 2026-10-15T01:23:05+09:00.",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}[+-]\\d{2}:\\d{2}$"
+    },
+    "time_or_null": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/time"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "date": {
+      "description": "A calendar day on the person's clock, such as 2026-10-15.",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "seconds": {
+      "description": "A duration in whole seconds.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "seconds_or_null": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/seconds"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "count": {
+      "description": "A number of things.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "text_or_null": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/text"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "path": {
+      "description": "A path on the token server, starting with /. The app joins it to the server address it already uses and sends its sign-in with it.",
+      "type": "string",
+      "pattern": "^/[A-Za-z0-9._~%/-]*$"
+    },
+    "path_or_null": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/path"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "description": "The version of a response body: 16 lowercase hex characters, also sent as its ETag. It changes when anything the body shows changes, and never because time passed.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "call_id": {
+      "description": "A call's id. The LiveKit room name of the call (the same string as `room` in GET /token and the ring) for the room's first record; a later record in the same room (a voice server restarted during the call) is `<room>.2`, `<room>.3`. Stable for the life of the record.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "call_id_or_null": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/call_id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "item_id": {
+      "description": "An item's id: opaque, unique within its call, stable for the life of the record.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "marks": {
+      "description": "What kinds of results a call has, counted from its results.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report",
+        "table",
+        "chart",
+        "bee_writes"
+      ],
+      "properties": {
+        "report": {
+          "type": "boolean",
+          "description": "A finished job made a report (a file of kind report)."
+        },
+        "table": {
+          "type": "boolean",
+          "description": "A finished job made a table (a file of kind table)."
+        },
+        "chart": {
+          "type": "boolean",
+          "description": "A finished job made a chart (a file of kind chart)."
+        },
+        "bee_writes": {
+          "$ref": "#/$defs/count",
+          "description": "How many of the call's Bee writes are in Bee now (state written)."
+        }
+      }
+    },
+    "call_summary_fields": {
+      "description": "The fields of a call that the list and the view share. Used through call_summary or call_entry.",
+      "type": "object",
+      "required": [
+        "call_id",
+        "started_at",
+        "started_by",
+        "topic",
+        "title",
+        "title_source",
+        "state",
+        "duration_s",
+        "continues",
+        "marks"
+      ],
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/call_id"
+        },
+        "started_at": {
+          "$ref": "#/$defs/time",
+          "description": "When the call's record began (the AI picking up); for a missed or declined call, when it began to ring."
+        },
+        "started_by": {
+          "enum": [
+            "person",
+            "ai"
+          ],
+          "description": "Who placed the call."
+        },
+        "topic": {
+          "$ref": "#/$defs/text_or_null",
+          "description": "An AI call's topic, never null for one: what it asked about or what the person booked, or else a line in the person's language made by the function that writes the offer notification. Null for a call the person placed."
+        },
+        "title": {
+          "$ref": "#/$defs/text_or_null",
+          "description": "The call's one-line title. Null when title_source is none."
+        },
+        "title_source": {
+          "enum": [
+            "summary",
+            "topic",
+            "first_sentence",
+            "none"
+          ],
+          "description": "Where the title came from (app-contract.md, section 1)."
+        },
+        "state": {
+          "enum": [
+            "live",
+            "ended",
+            "dropped",
+            "missed",
+            "declined"
+          ],
+          "description": "Where the call is, or how it ended."
+        },
+        "duration_s": {
+          "$ref": "#/$defs/seconds_or_null",
+          "description": "How long the call lasted. Null while live, and for a missed or declined call."
+        },
+        "continues": {
+          "$ref": "#/$defs/call_id_or_null",
+          "description": "The earlier call this one picks up from (Continue this call, or a booked call), or null."
+        },
+        "marks": {
+          "$ref": "#/$defs/marks"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "title_source": {
+                "const": "none"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "title": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "title": {
+                "$ref": "#/$defs/text"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "title_source": {
+                "const": "topic"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "topic": {
+                "$ref": "#/$defs/text"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "live",
+                  "missed",
+                  "declined"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "duration_s": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "duration_s": {
+                "$ref": "#/$defs/seconds"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "missed",
+                  "declined"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "started_by": {
+                "const": "ai"
+              },
+              "title_source": {
+                "enum": [
+                  "topic",
+                  "none"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "started_by": {
+                "const": "person"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "topic": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "topic": {
+                "$ref": "#/$defs/text"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "call_summary": {
+      "$ref": "#/$defs/call_summary_fields",
+      "unevaluatedProperties": false
+    },
+    "call_entry": {
+      "description": "One call in the list: the call's summary and its results.",
+      "$ref": "#/$defs/call_summary_fields",
+      "required": [
+        "results"
+      ],
+      "properties": {
+        "results": {
+          "description": "The call's jobs and Bee writes, in thread order: the same items, with the same ids, as in the call view.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/result_item"
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "item": {
+      "description": "One thing drawn in a call's thread.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/speech"
+        },
+        {
+          "$ref": "#/$defs/job"
+        },
+        {
+          "$ref": "#/$defs/bee_write"
+        }
+      ]
+    },
+    "result_item": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/job"
+        },
+        {
+          "$ref": "#/$defs/bee_write"
+        }
+      ]
+    },
+    "speech": {
+      "description": "A run of one speaker's speech with nothing else between, as one bubble.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id",
+        "at",
+        "speaker",
+        "text",
+        "interrupted"
+      ],
+      "properties": {
+        "type": {
+          "const": "speech"
+        },
+        "id": {
+          "$ref": "#/$defs/item_id"
+        },
+        "at": {
+          "$ref": "#/$defs/time",
+          "description": "When this speech began."
+        },
+        "speaker": {
+          "enum": [
+            "person",
+            "ai"
+          ]
+        },
+        "text": {
+          "$ref": "#/$defs/text",
+          "description": "What was said, pieces joined with spaces: the person's final transcripts, the AI's words as spoken."
+        },
+        "interrupted": {
+          "type": "boolean",
+          "description": "The person cut the AI off at the end of this run. Always false for the person."
+        }
+      },
+      "if": {
+        "properties": {
+          "speaker": {
+            "const": "person"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "interrupted": {
+            "const": false
+          }
+        }
+      }
+    },
+    "job": {
+      "description": "A background job the call AI handed off.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id",
+        "at",
+        "title",
+        "state",
+        "started_at",
+        "duration_s",
+        "step",
+        "summary",
+        "files",
+        "failure"
+      ],
+      "properties": {
+        "type": {
+          "const": "job"
+        },
+        "id": {
+          "$ref": "#/$defs/item_id"
+        },
+        "at": {
+          "$ref": "#/$defs/time",
+          "description": "Where the job sits: when it finished (for a job the call outlived without an end, the call's end); while it runs, when it started (a running job is always drawn last)."
+        },
+        "title": {
+          "$ref": "#/$defs/text",
+          "description": "A few words naming the job, in the call's language."
+        },
+        "state": {
+          "enum": [
+            "running",
+            "done",
+            "failed"
+          ]
+        },
+        "started_at": {
+          "$ref": "#/$defs/time"
+        },
+        "duration_s": {
+          "$ref": "#/$defs/seconds_or_null",
+          "description": "How long it took, once it finished. While it runs the app counts from started_at."
+        },
+        "step": {
+          "$ref": "#/$defs/text_or_null",
+          "description": "The latest step, while it runs, in the call's language."
+        },
+        "summary": {
+          "$ref": "#/$defs/text_or_null",
+          "description": "What it found, in a paragraph, in the call's language, once done."
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/file"
+          }
+        },
+        "failure": {
+          "enum": [
+            "call_ended",
+            "error",
+            null
+          ],
+          "description": "Why it failed: the call ended first, or anything else."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "running"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "duration_s": {
+                "type": "null"
+              },
+              "summary": {
+                "type": "null"
+              },
+              "failure": {
+                "type": "null"
+              },
+              "files": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "done"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "duration_s": {
+                "$ref": "#/$defs/seconds"
+              },
+              "step": {
+                "type": "null"
+              },
+              "failure": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "duration_s": {
+                "$ref": "#/$defs/seconds"
+              },
+              "step": {
+                "type": "null"
+              },
+              "summary": {
+                "type": "null"
+              },
+              "failure": {
+                "enum": [
+                  "call_ended",
+                  "error"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "file": {
+      "description": "A file a job made. Charts first, then the report, tables and other files; by name within a kind.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "url",
+        "title",
+        "image_url"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$",
+          "description": "The file's real name."
+        },
+        "kind": {
+          "enum": [
+            "report",
+            "table",
+            "chart",
+            "other"
+          ]
+        },
+        "url": {
+          "$ref": "#/$defs/path",
+          "description": "The file itself: GET with the sign-in."
+        },
+        "title": {
+          "$ref": "#/$defs/text_or_null",
+          "description": "A chart's title. Null for other kinds, and for a chart whose title is not known."
+        },
+        "image_url": {
+          "$ref": "#/$defs/path_or_null",
+          "description": "A chart as a PNG image, for the thumbnail and the card. Null for other kinds."
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "chart"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "image_url": {
+            "$ref": "#/$defs/path"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "title": {
+            "type": "null"
+          },
+          "image_url": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    "bee_write": {
+      "description": "A fact or to-do the call AI wrote to the person's Bee after their spoken yes.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id",
+        "at",
+        "kind",
+        "text",
+        "state",
+        "will_retry",
+        "undoable"
+      ],
+      "properties": {
+        "type": {
+          "const": "bee_write"
+        },
+        "id": {
+          "$ref": "#/$defs/item_id"
+        },
+        "at": {
+          "$ref": "#/$defs/time",
+          "description": "When it began (its first line in bee-writes.jsonl)."
+        },
+        "kind": {
+          "enum": [
+            "todo_create",
+            "todo_accept",
+            "fact_confirm",
+            "fact_update"
+          ]
+        },
+        "text": {
+          "$ref": "#/$defs/text_or_null",
+          "description": "The item as the AI quoted it when it asked. Null only in records made before 2026-10-15."
+        },
+        "state": {
+          "enum": [
+            "written",
+            "undone",
+            "unknown",
+            "failed"
+          ],
+          "description": "From the call's bee-writes.jsonl. written: in Bee (ok, or an undo that failed). undone: taken out with \"빼 줘\". unknown: Bee may or may not have it (unknown, or applying when the process stopped), check Bee, never tried again. failed: not in Bee."
+        },
+        "will_retry": {
+          "type": "boolean",
+          "description": "A failed write of a live call: it will be tried once more right after the call. False once the call is over."
+        },
+        "undoable": {
+          "type": "boolean",
+          "description": "Saying \"빼 줘\" now would take out this write: in a live call, the last write whose status is ok (an undo that failed does not count)."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "will_retry": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "const": "failed"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "undoable": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "const": "written"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "why_calling": {
+      "description": "Why the AI called. Only for a call the AI placed; the topic is the call's own topic.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason",
+        "conversation"
+      ],
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/text_or_null",
+          "description": "Why the AI called, in a sentence or two, in the person's language."
+        },
+        "conversation": {
+          "description": "The Bee conversation behind the call, or null.",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "summary",
+                "quotes"
+              ],
+              "properties": {
+                "summary": {
+                  "$ref": "#/$defs/text_or_null",
+                  "description": "Bee's short summary of the conversation."
+                },
+                "quotes": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/quote"
+                  },
+                  "description": "The conversation's last lines, oldest first."
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "speaker",
+        "text",
+        "at"
+      ],
+      "properties": {
+        "speaker": {
+          "enum": [
+            "person",
+            "other"
+          ],
+          "description": "The person (Bee's wearer) or someone else."
+        },
+        "text": {
+          "$ref": "#/$defs/text"
+        },
+        "at": {
+          "$ref": "#/$defs/time_or_null"
+        }
+      }
+    },
+    "prep": {
+      "description": "What the AI looked at before it picked up (the card \"통화 전에 Bee에서 본 것\").",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "note",
+        "looked_up",
+        "from_bee"
+      ],
+      "properties": {
+        "note": {
+          "$ref": "#/$defs/text_or_null",
+          "description": "The note the AI wrote for itself before the call, with Bee's ids taken out. Null when it wrote none."
+        },
+        "looked_up": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/looked_up"
+          },
+          "description": "What it read, without repeats, in the order read."
+        },
+        "from_bee": {
+          "type": "boolean",
+          "description": "The call read the person's Bee. False for a person without Bee: the note then comes from earlier calls only."
+        }
+      }
+    },
+    "looked_up": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "summary",
+            "at"
+          ],
+          "properties": {
+            "type": {
+              "const": "conversation"
+            },
+            "summary": {
+              "$ref": "#/$defs/text_or_null",
+              "description": "Bee's short summary of the conversation, as in why_calling.conversation.summary."
+            },
+            "at": {
+              "$ref": "#/$defs/time_or_null",
+              "description": "When the conversation began."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "date"
+          ],
+          "properties": {
+            "type": {
+              "const": "day"
+            },
+            "date": {
+              "$ref": "#/$defs/date",
+              "description": "The day whose Bee summary was read."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "query"
+          ],
+          "properties": {
+            "type": {
+              "const": "search"
+            },
+            "query": {
+              "$ref": "#/$defs/text",
+              "description": "What Bee was searched for."
+            }
+          }
+        }
+      ]
+    },
+    "offer": {
+      "description": "A call the AI asked about, or one the person booked.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "state",
+        "topic",
+        "created_at",
+        "suggested_at",
+        "call_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^\\d{8}-\\d{6}-[0-9a-f]{4}$"
+        },
+        "state": {
+          "enum": [
+            "asked",
+            "booked",
+            "calling",
+            "declined"
+          ],
+          "description": "asked: waiting for an answer. booked: agreed for call_at, can be called off. calling: the call is being placed now, cannot be called off. declined: only in the answer to a decline."
+        },
+        "topic": {
+          "$ref": "#/$defs/text",
+          "description": "What it is about, in the person's language. Never null: the server falls back with the function that writes the offer notification."
+        },
+        "kind": {
+          "enum": [
+            "conversation",
+            "voice note",
+            null
+          ],
+          "deprecated": true,
+          "description": "Pre-D builds only (their own topic fallback). D reads topic."
+        },
+        "source": {
+          "enum": [
+            "bee",
+            "call"
+          ],
+          "deprecated": true,
+          "description": "Pre-D builds only. D does not draw it."
+        },
+        "created_at": {
+          "$ref": "#/$defs/time",
+          "description": "When it was asked, or booked."
+        },
+        "suggested_at": {
+          "$ref": "#/$defs/time_or_null",
+          "description": "The time the question suggests. Set for source bee, null for source call."
+        },
+        "call_at": {
+          "$ref": "#/$defs/time_or_null",
+          "description": "When the call rings, once agreed. Null while asked."
+        },
+        "suggested_epoch": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "deprecated": true,
+          "description": "Pre-D builds only. D reads suggested_at."
+        },
+        "call_epoch": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "deprecated": true,
+          "description": "Pre-D builds only. D reads call_at."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "asked"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "call_at": {
+                "type": "null"
+              },
+              "suggested_at": {
+                "$ref": "#/$defs/time"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "booked",
+                  "calling"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "call_at": {
+                "$ref": "#/$defs/time"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "suggested_at": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "booked",
+                  "calling",
+                  "declined"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "settings": {
+      "description": "The person's settings as the server keeps them. Owners after D: app-contract.md, section 6.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "language",
+        "voice",
+        "call_model",
+        "call_time",
+        "record_on_server",
+        "record_on_phone",
+        "time_zone",
+        "bee",
+        "daily_budget_usd"
+      ],
+      "properties": {
+        "language": {
+          "enum": [
+            "en",
+            "ko"
+          ],
+          "description": "The call language. Owner: the app (first run, settings sheet)."
+        },
+        "voice": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/voice_id"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A voice id from GET /voices for the call language, or null for that language's default. Owner: the app."
+        },
+        "call_model": {
+          "enum": [
+            "haiku",
+            "sonnet"
+          ],
+          "description": "The call AI's model. Owner: iOS Settings."
+        },
+        "call_time": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+          "description": "The evening time an offer suggests. Owner: iOS Settings."
+        },
+        "record_on_server": {
+          "type": "boolean",
+          "description": "Keep each call's audio on the server. Owner: iOS Settings."
+        },
+        "record_on_phone": {
+          "type": "boolean",
+          "description": "The app records each call on the iPhone. Owner: iOS Settings."
+        },
+        "time_zone": {
+          "type": "string",
+          "minLength": 1,
+          "description": "An IANA name such as Asia/Seoul. Owner: the phone's system time zone."
+        },
+        "bee": {
+          "type": "boolean",
+          "description": "Bee is connected. Owner: the server (the Bee approval and POST /bee/disconnect)."
+        },
+        "daily_budget_usd": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Owner: the server's operator. The app does not read it."
+        },
+        "tts": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "deprecated": true,
+          "description": "Server's operator only, being retired: the voice catalog names the provider. The app never reads it."
+        }
+      }
+    },
+    "voice_id": {
+      "type": "string",
+      "pattern": "^(en|ko)-[a-z0-9-]{1,40}$"
+    },
+    "voice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "character",
+        "sample_url",
+        "default"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/voice_id"
+        },
+        "name": {
+          "$ref": "#/$defs/text",
+          "description": "The voice's name, as written in its language."
+        },
+        "character": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ko",
+            "en"
+          ],
+          "properties": {
+            "ko": {
+              "$ref": "#/$defs/text"
+            },
+            "en": {
+              "$ref": "#/$defs/text"
+            }
+          },
+          "description": "One word for how it sounds, in Korean and in English."
+        },
+        "sample_url": {
+          "$ref": "#/$defs/path",
+          "description": "About five seconds of the voice, MP3. Public: needs no sign-in."
+        },
+        "default": {
+          "type": "boolean",
+          "description": "The language's default voice. Exactly one per language."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract.bee-call.invalid/schemas/change.json",
+  "title": "GET /changes: the data of one `changed` event",
+  "description": "The resource at `path` now has `version`. The app fetches it again if it shows it and has drawn another version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["path", "version"],
+  "properties": {
+    "path": {"type": "string", "pattern": "^/(offers|calls|calls/[A-Za-z0-9][A-Za-z0-9._-]{0,127})$"},
+    "version": {"$ref": "defs.json#/$defs/version"}
+  }
+}
