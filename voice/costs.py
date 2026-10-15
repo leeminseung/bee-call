@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from beelink.clock import parse_time
+from voice.call_folders import EVENTS, read_events
 from voice.people import Person
 
 STT_USD_PER_SECOND = 0.0001667
@@ -88,19 +89,7 @@ def call_cost(usage: dict[str, Any]) -> float:
 
 def _call_minutes(folder: Path) -> float:
     """How long the call has gone on, from the call's events.jsonl."""
-    last = 0.0
-    try:
-        with (folder / "events.jsonl").open("rb") as f:
-            for raw in f:
-                try:
-                    event = json.loads(raw)
-                except ValueError:
-                    continue
-                if isinstance(event, dict):
-                    last = max(last, _number(event.get("t")))
-    except OSError:
-        pass
-    return last / 60
+    return max((_number(event.get("t")) for event in read_events(folder / EVENTS)), default=0.0) / 60
 
 
 def job_cost(usage: dict[str, Any]) -> float:

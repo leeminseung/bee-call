@@ -28,6 +28,28 @@ def asked(tmp_path, now=NOW, workspace=None):
     return OfferStore(workspace).ask(plan, now), plan
 
 
+def test_the_offer_hold_and_the_planner_read_past_lines_still_being_written(tmp_path):
+    """Server review finding 13: a call's events.jsonl and the outbound log are appended to while they are read; a
+    half-written last line made the 30-minute hold, the planner's last call and the busy check raise."""
+    from beelink.planner import last_call
+    from voice.outbound import last_call_end, notification_wait
+
+    me = signed_in(tmp_path)
+    now = datetime(2026, 10, 15, 21, 0, tzinfo=SEOUL)
+    folder = me.workspace / "2026-10-15" / "2040"
+    folder.mkdir(parents=True)
+    started = datetime(2026, 10, 15, 20, 40, tzinfo=SEOUL)
+    (folder / "events.jsonl").write_text(
+        json.dumps({"t": 0.0, "type": "call_started", "started_at": started.isoformat()}) + "\n"
+        + json.dumps({"t": 300.0, "type": "call_ended"}) + "\n" + '{"t": 301.0, "type": "bee_wri')
+    log = me.workspace / OUTBOUND_LOG
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(json.dumps({"at": started.isoformat()}) + "\n" + '{"at": "2026-10-15T20:5')
+    assert last_call_end(me.workspace) == started + timedelta(minutes=5)
+    assert last_call(me.workspace) >= started
+    assert notification_wait(me.person, now).startswith("the last call ended at 20:45")
+
+
 def test_one_bee_conversation_leads_to_at_most_one_offer(tmp_path):
     """BC-014, at the one place every offer is made (OfferStore.ask): the rule path and the meta agent alike."""
     from voice.offers import AlreadyOffered

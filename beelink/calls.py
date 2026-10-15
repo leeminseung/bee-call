@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from beelink.clock import parse_time
-from voice.call_folders import EVENTS, read_events
+from voice.call_folders import EVENTS, call_folders, read_events
 
 MARGIN_SECONDS = 60.0
 # Bee derives facts, todos and notes from a conversation some time after it ends. What it made from one of our calls
@@ -23,8 +23,8 @@ DERIVED_AFTER_SECONDS = 600.0
 
 def our_call_windows(workspace: Path) -> list[tuple[float, float]]:
     windows = []
-    for path in workspace.glob(f"*/*/{EVENTS}"):
-        events = read_events(path)  # the call in progress may have a line still being written
+    for folder in call_folders(workspace):
+        events = read_events(folder / EVENTS)  # the call in progress may have a line still being written
         if not events:
             continue
         first = events[0]

@@ -39,6 +39,7 @@ from typing import Any
 
 from aiohttp import web
 
+from voice.call_folders import read_events
 from voice.people import People, dev_person
 
 REPO = Path(__file__).resolve().parent.parent
@@ -84,27 +85,23 @@ def read_summary(events: Path) -> dict[str, Any]:
     """What the session list needs, from one pass over events.jsonl."""
     s: dict[str, Any] = {"started_at": None, "room": None, "ended": False, "closed": False,
                          "end_t": None, "last_t": 0.0, "why": None, "first_user": None}
-    with events.open("rb") as f:
-        for raw in f:
-            event = parse_event(raw) if raw.endswith(b"\n") else None  # skip a line still being written
-            if event is None:
-                continue
-            t = number(event.get("t"))
-            if t is not None:
-                s["last_t"] = max(s["last_t"], t)
-            kind = event.get("type")
-            if kind == "call_started":
-                s["started_at"], s["room"] = event.get("started_at"), event.get("room")
-            elif kind in ("session_closed", "call_ended"):
-                s["closed"] = True
-                s["ended"] = s["ended"] or kind == "call_ended"
-                if s["end_t"] is None:
-                    s["end_t"] = t
-            elif kind == "why_calling" and not s["why"] and isinstance(event.get("summary"), str):
-                s["why"] = event["summary"]
-            elif (kind == "message" and event.get("role") == "user" and not s["first_user"]
-                  and isinstance(event.get("text"), str)):
-                s["first_user"] = event["text"]
+    for event in read_events(events):  # a line still being written is skipped
+        t = number(event.get("t"))
+        if t is not None:
+            s["last_t"] = max(s["last_t"], t)
+        kind = event.get("type")
+        if kind == "call_started":
+            s["started_at"], s["room"] = event.get("started_at"), event.get("room")
+        elif kind in ("session_closed", "call_ended"):
+            s["closed"] = True
+            s["ended"] = s["ended"] or kind == "call_ended"
+            if s["end_t"] is None:
+                s["end_t"] = t
+        elif kind == "why_calling" and not s["why"] and isinstance(event.get("summary"), str):
+            s["why"] = event["summary"]
+        elif (kind == "message" and event.get("role") == "user" and not s["first_user"]
+              and isinstance(event.get("text"), str)):
+            s["first_user"] = event["text"]
     return s
 
 
