@@ -1,36 +1,5 @@
-import Charts
+import QuickLook
 import SwiftUI
-
-/// What the conversation is made of besides calls: Bee Call asking for a call (design D, frame 1).
-struct OfferCard: Identifiable, Equatable {
-    let id: String
-    var askedAt: Date
-    var topic: String
-    var question: String // "오늘 저녁 8:30에 잠깐 통화할까요?"
-    var suggestedTime: String? // "8:30", for the yellow answer
-}
-
-/// One section of the conversation, in time order: a call, or an ask.
-enum ThreadSection: Identifiable, Equatable {
-    case call(ConversationCall)
-    case offer(OfferCard)
-
-    var id: String {
-        switch self {
-        case .call(let call): "call/\(call.id)"
-        case .offer(let offer): "offer/\(offer.id)"
-        }
-    }
-}
-
-/// Where the conversation comes from: the server's call view once its contract is settled, a stand-in until
-/// then (design D's demo).
-@MainActor
-protocol ConversationSource: AnyObject {
-    var sections: [ThreadSection] { get }
-    /// "Bee 연결됨" under the name, or nothing for a person without Bee.
-    var beeLine: String? { get }
-}
 
 /// Design D's words in the conversation, in the person's call language.
 struct ConversationWords {
@@ -38,9 +7,8 @@ struct ConversationWords {
 
     var unfold: String { korean ? "대화 펼치기" : "Show the talk" }
     var fold: String { korean ? "대화 접기" : "Hide the talk" }
+    var earlier: String { korean ? "이전 통화 보기" : "Earlier calls" }
     var wroteToBee: String { korean ? "Bee에 쓴 것" : "Written to Bee" }
-    var added: String { korean ? "넣음" : "Added" }
-    var removed: String { korean ? "뺌" : "Taken out" }
     var takeOutHint: String { korean ? "빼려면 '빼 줘'라고 말하세요" : "Say “take it out” to remove it" }
     var asks: String { korean ? "Bee Call이 물어봐요" : "Bee Call asks" }
     var now: String { korean ? "지금" : "Now" }
@@ -48,33 +16,116 @@ struct ConversationWords {
     var call: String { korean ? "전화 걸기" : "Call" }
     var inCall: String { korean ? "통화 중" : "In a call" }
     var callScreen: String { korean ? "통화 화면" : "Call screen" }
+    var notRecordedYet: String { korean ? "통화 기록을 준비하는 중이에요" : "The call's record is on its way" }
+    var noRecord: String { korean ? "이 통화는 기록이 없어요" : "This call has no record" }
+    var loading: String { korean ? "불러오는 중" : "Loading" }
 
-    func addedToBee(_ kind: String) -> String { korean ? "Bee \(kind)에 넣었어요" : "Added to Bee: \(kind)" }
-    func at(_ time: String) -> String { korean ? "\(time)에" : "At \(time)" }
+    func kind(_ kind: BeeWriteKind) -> String {
+        switch kind {
+        case .todoCreate, .todoAccept: korean ? "할 일" : "To-do"
+        case .factConfirm, .factUpdate, .unrecognized: korean ? "사실" : "Fact"
+        }
+    }
+
+    /// The line over a Bee write during the call: "Bee 할 일에 넣었어요".
+    func added(_ kind: BeeWriteKind) -> String { korean ? "Bee \(self.kind(kind))에 넣었어요" : "Added to Bee: \(self.kind(kind))" }
+
+    /// A Bee write's state, after the call or when it did not go in.
+    func state(_ write: BeeWrite) -> String {
+        switch write.state {
+        case .written: korean ? "넣음" : "Added"
+        case .undone: korean ? "뺌" : "Taken out"
+        case .unknown: korean ? "Bee에서 확인해 주세요" : "Check it in Bee"
+        case .failed: write.willRetry ? (korean ? "통화 뒤에 다시 넣어 볼게요" : "Trying again after the call")
+            : (korean ? "넣지 못함" : "Not added")
+        case .unrecognized: ""
+        }
+    }
+
     func working(for clock: String) -> String { korean ? "작업 중 · \(clock)째" : "Working · \(clock)" }
     func finished(justNow: Bool, took clock: String) -> String {
         korean ? "\(justNow ? "방금 끝남" : "작업 끝") · \(clock) 걸림" : "\(justNow ? "Just finished" : "Done") · took \(clock)"
     }
+    var didNotFinish: String { korean ? "끝내지 못한 작업" : "Didn't finish" }
+    func failure(_ failure: JobFailure?) -> String {
+        failure == .callEnded ? (korean ? "통화가 먼저 끝났어요" : "The call ended first")
+            : (korean ? "문제가 생겨 멈췄어요" : "Something went wrong")
+    }
     func step(_ text: String) -> String { korean ? "지금 \(text)" : "Now: \(text)" }
+
+    /// A file's chip, by its kind rather than its name, which the worker keeps to ASCII.
+    func file(_ file: JobFile) -> String {
+        switch file.kind {
+        case .report: korean ? "보고서" : "Report"
+        case .table: korean ? "표" : "Table"
+        case .chart: korean ? "차트" : "Chart"
+        case .other, .unrecognized: file.name
+        }
+    }
+
+    // The cards of a call's record.
+    func prepTitle(fromBee: Bool) -> String {
+        fromBee ? (korean ? "통화 전에 Bee에서 본 것" : "Read in Bee before the call")
+            : (korean ? "통화 전에 본 것" : "Read before the call")
+    }
+    var lookedUp: String { korean ? "찾아본 것" : "Looked up" }
+    var whyCalled: String { korean ? "Bee Call이 전화한 이유" : "Why Bee Call called" }
+    var me: String { korean ? "나" : "Me" }
+    var other: String { korean ? "상대" : "Them" }
+}
+
+/// One entry of a call's section or record: a bubble, a job (small inside a folded call), or a Bee write (with
+/// how to take it back while the call is on).
+struct ThreadEntryView: View {
+    let entry: CallThread.Entry
+    let words: ConversationWords
+    var live = false
+    var folded = false
+    var glowing: String?
+
+    var body: some View {
+        switch entry {
+        case .bubble(_, let speaker, let text):
+            SpeechBubble(speaker: speaker, text: text)
+        case .item(.speech(let speech)):
+            SpeechBubble(speaker: speech.speaker, text: speech.text)
+        case .item(.job(let job)):
+            if folded {
+                JobCompactRow(job: job, words: words)
+            } else {
+                JobCardView(job: job, words: words, glowing: glowing == job.id)
+            }
+        case .item(.beeWrite(let write)):
+            HStack {
+                BeeWriteView(write: write, live: live, words: words)
+                Spacer(minLength: 0)
+            }
+        case .item(.unrecognized):
+            EmptyView()
+        }
+    }
 }
 
 // MARK: - Bubbles
 
-/// A turn as a bubble: the AI's light yellow on the left, the person's blue on the right, with a tail.
-struct TurnBubble: View {
-    let turn: Turn
+/// A run of speech as a bubble: the AI's light yellow on the left, the person's blue on the right, with a tail.
+struct SpeechBubble: View {
+    let speaker: Speaker
+    let text: String
+
+    private var mine: Bool { speaker == .person }
 
     var body: some View {
         HStack {
-            if turn.mine { Spacer(minLength: 60) }
-            Text(turn.text)
+            if mine { Spacer(minLength: 60) }
+            Text(text)
                 .font(.body)
-                .foregroundStyle(turn.mine ? .white : BeeStyle.ink)
+                .foregroundStyle(mine ? .white : BeeStyle.ink)
                 .padding(.horizontal, 13)
                 .padding(.vertical, 8)
-                .background(BubbleBackground(mine: turn.mine, color: turn.mine ? BeeStyle.personBlue : BeeStyle.aiBubble))
-                .frame(maxWidth: 290, alignment: turn.mine ? .trailing : .leading)
-            if !turn.mine { Spacer(minLength: 60) }
+                .background(BubbleBackground(mine: mine, color: mine ? BeeStyle.personBlue : BeeStyle.aiBubble))
+                .frame(maxWidth: 290, alignment: mine ? .trailing : .leading)
+            if !mine { Spacer(minLength: 60) }
         }
     }
 }
@@ -142,48 +193,64 @@ struct Eyebrow: View {
     }
 }
 
-/// A background job in the conversation: running, with its newest step; or finished, with its result, chart and
-/// files. A result that just arrived glows yellow for a moment (frame 5).
+/// A background job in the conversation: running, with how long and its newest step; finished, with what it found,
+/// its chart and its files; or stopped. A result that just arrived glows yellow for a moment (frame 5).
 struct JobCardView: View {
-    let job: JobCard
+    let job: Job
     let words: ConversationWords
     var glowing = false
+    @State private var opened: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let finished = job.finishedAt {
-                Eyebrow(symbol: "checkmark.circle.fill",
-                        text: words.finished(justNow: glowing, took: CallInfo.length(finished.timeIntervalSince(job.startedAt),
-                                                                                       korean: words.korean)))
-            } else {
-                TimelineView(.periodic(from: .now, by: 1)) { clock in
-                    Eyebrow(symbol: nil, text: words.working(for: CallInfo.length(clock.date.timeIntervalSince(job.startedAt),
-                                                                                   korean: words.korean)),
-                            spinning: true)
-                }
-            }
+            eyebrow
             Text(job.title)
                 .font(.body.weight(.semibold))
                 .foregroundStyle(BeeStyle.ink)
                 .padding(.top, 3)
-            if let result = job.result, job.isDone {
-                Text(result)
-                    .font(.subheadline)
-                    .foregroundStyle(BeeStyle.ink)
-                    .padding(.top, 5)
-            } else if let step = job.step {
-                Text(words.step(step))
+            switch job.state {
+            case .done:
+                if let summary = job.summary {
+                    Text(summary)
+                        .font(.subheadline)
+                        .foregroundStyle(BeeStyle.ink)
+                        .padding(.top, 5)
+                }
+            case .failed:
+                Text(words.failure(job.failure))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(.top, 5)
+            default:
+                if let step = job.step {
+                    Text(words.step(step))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 5)
+                }
             }
-            if let chart = job.chart, job.isDone {
-                JobChartView(chart: chart)
-                    .padding(.top, 12)
+            ForEach(job.files.filter { $0.kind == .chart }, id: \.url) { chart in
+                VStack(alignment: .leading, spacing: 6) {
+                    if let title = chart.title {
+                        Text(title)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let image = chart.imageURL { ServerImage(path: image) }
+                }
+                .padding(10)
+                .background(BeeStyle.background, in: .rect(cornerRadius: 14))
+                .padding(.top, 12)
             }
-            if !job.files.isEmpty, job.isDone {
+            let chips = job.files.filter { $0.kind != .chart && $0.kind != .unrecognized }
+            if !chips.isEmpty {
                 HStack(spacing: 8) {
-                    ForEach(job.files, id: \.self) { FileChip(name: $0) }
+                    ForEach(chips, id: \.url) { file in
+                        Button { Task { opened = await ServerFiles.shared.open(file) } } label: {
+                            FileChip(label: words.file(file), kind: file.kind)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .padding(.top, 12)
             }
@@ -196,77 +263,65 @@ struct JobCardView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 20).strokeBorder(BeeStyle.yellow, lineWidth: 2.5).opacity(glowing ? 1 : 0)
         }
+        .quickLookPreview($opened)
+    }
+
+    @ViewBuilder
+    private var eyebrow: some View {
+        switch job.state {
+        case .done:
+            Eyebrow(symbol: "checkmark.circle.fill",
+                    text: words.finished(justNow: glowing, took: CallLine.length(job.durationS ?? 0, korean: words.korean)))
+        case .failed:
+            Eyebrow(symbol: "xmark.circle", text: words.didNotFinish)
+        default:
+            TimelineView(.periodic(from: .now, by: 1)) { clock in
+                Eyebrow(symbol: nil, text: words.working(for: CallLine.length(
+                    Int(clock.date.timeIntervalSince(job.startedAt.date)), korean: words.korean)), spinning: true)
+            }
+        }
     }
 }
 
-/// A file a job made, as a white chip.
+/// A file a job made, as a white chip named by its kind.
 struct FileChip: View {
-    let name: String
+    let label: String
+    let kind: FileKind
 
     var body: some View {
-        Label(name, systemImage: name.hasSuffix(".csv") ? "tablecells" : "doc.text")
+        Label(label, systemImage: kind == .table ? "tablecells" : "doc.text")
             .font(.subheadline.weight(.medium))
             .foregroundStyle(BeeStyle.ink)
             .padding(.horizontal, 12)
-            .frame(height: 36)
+            .frame(minHeight: 36)
             .background(BeeStyle.background, in: .capsule)
             .overlay(Capsule().strokeBorder(.black.opacity(0.08), lineWidth: 0.5))
     }
 }
 
-/// The small bar chart a job made: Bee yellow and grey bars, values on top.
-struct JobChartView: View {
-    let chart: JobChart
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(chart.title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Chart {
-                ForEach(chart.groups, id: \.name) { group in
-                    ForEach(Array(group.values.enumerated()), id: \.offset) { index, value in
-                        BarMark(x: .value("구성", group.name), y: .value("값", value))
-                            .foregroundStyle(by: .value("계열", chart.series[index]))
-                            .position(by: .value("계열", chart.series[index]))
-                            .annotation(position: .top) {
-                                Text(Self.short(value)).font(.system(size: 9, weight: .semibold))
-                            }
-                    }
-                }
-            }
-            .chartForegroundStyleScale(domain: chart.series, range: [BeeStyle.yellow, Color(white: 0.62)])
-            .chartYAxis(.hidden)
-            .chartXAxis { AxisMarks { AxisValueLabel() } } // names under the groups, no grid lines
-            .chartLegend(position: .bottom, alignment: .leading)
-            .frame(height: 110)
-        }
-        .padding(10)
-        .background(BeeStyle.background, in: .rect(cornerRadius: 14))
-    }
-
-    /// 1,590,000 as "159만", the design's unit.
-    static func short(_ value: Double) -> String {
-        value >= 10_000 ? "\(Int(value / 10_000))만" : "\(Int(value))"
-    }
-}
-
-/// A finished job inside a folded call: a chart thumbnail, its title and what it made.
+/// A finished job inside a folded call: its chart small, its title, and what it made.
 struct JobCompactRow: View {
-    let job: JobCard
-    let korean: Bool
+    let job: Job
+    let words: ConversationWords
 
     var body: some View {
         HStack(spacing: 12) {
-            ChartThumbnail()
-                .frame(width: 58, height: 46)
-                .background(BeeStyle.background, in: .rect(cornerRadius: 11))
+            Group {
+                if let chart = job.files.first(where: { $0.kind == .chart })?.imageURL {
+                    ServerImage(path: chart)
+                } else {
+                    Image(systemName: job.state == .failed ? "xmark.circle" : "doc.text")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 58, height: 46)
+            .background(BeeStyle.background, in: .rect(cornerRadius: 11))
             VStack(alignment: .leading, spacing: 2) {
                 Text(job.title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(BeeStyle.ink)
                     .lineLimit(1)
-                Text((job.files + (job.chart != nil ? [korean ? "차트" : "Chart"] : [])).joined(separator: " · "))
+                Text(job.state == .failed ? words.didNotFinish : job.files.map(words.file).joined(separator: " · "))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -278,22 +333,9 @@ struct JobCompactRow: View {
     }
 }
 
-/// Four little bars, the thumbnail of a result with a chart.
-struct ChartThumbnail: View {
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 3) {
-            ForEach(Array([0.45, 0.62, 0.55, 0.8].enumerated()), id: \.offset) { index, height in
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(index.isMultiple(of: 2) ? BeeStyle.yellow : Color(white: 0.62))
-                    .frame(width: 6, height: 26 * height)
-            }
-        }
-    }
-}
-
-/// Something written to Bee: during the call with how to take it back, afterwards as a plain record.
+/// Something written to Bee: during the call with how to take it back, afterwards with what became of it.
 struct BeeWriteView: View {
-    let write: BeeWriteCard
+    let write: BeeWrite
     let live: Bool
     let words: ConversationWords
 
@@ -305,22 +347,23 @@ struct BeeWriteView: View {
                 .frame(width: 30, height: 30)
                 .background(BeeStyle.yellow, in: .circle)
             VStack(alignment: .leading, spacing: 1) {
-                Text(live ? words.addedToBee(write.kind) : words.wroteToBee)
+                Text(live && write.state == .written ? words.added(write.kind) : words.wroteToBee)
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Text(live ? write.text : "\(write.kind): \(write.text)")
+                Text(live && write.state == .written ? (write.text ?? words.kind(write.kind))
+                     : [words.kind(write.kind), write.text].compactMap { $0 }.joined(separator: ": "))
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(BeeStyle.ink)
-                if live {
+                if live && write.undoable {
                     Text(words.takeOutHint)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .padding(.top, 1)
                 }
             }
-            if !live {
+            if !(live && write.state == .written) {
                 Spacer(minLength: 8)
-                Label(write.added ? words.added : words.removed, systemImage: "checkmark")
+                Label(words.state(write), systemImage: write.state == .written ? "checkmark" : "exclamationmark.circle")
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.secondary)
                     .padding(.top, 8)
@@ -336,26 +379,32 @@ struct BeeWriteView: View {
 
 /// Bee Call asking for a call, with its three answers.
 struct OfferCardView: View {
-    let offer: OfferCard
-    let words: ConversationWords
+    let offer: Offer
+    let language: String
+    let answering: Bool
     let answer: (OfferCenter.Choice) -> Void
+
+    private var words: ConversationWords { ConversationWords(korean: language == "ko") }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(offer.topic)
                 .font(.body.weight(.semibold))
                 .foregroundStyle(BeeStyle.ink)
-            Text(offer.question)
-                .font(.subheadline)
-                .foregroundStyle(BeeStyle.ink)
-                .padding(.top, 5)
+            TimelineView(.everyMinute) { clock in
+                Text(offer.askedLine(language: language, now: clock.date))
+                    .font(.subheadline)
+                    .foregroundStyle(BeeStyle.ink)
+                    .padding(.top, 5)
+            }
             HStack(spacing: 8) {
-                if let time = offer.suggestedTime {
-                    answerButton(words.at(time), filled: true) { answer(.later) }
+                if let later = offer.laterButton(language: language) {
+                    answerButton(later, filled: true) { answer(.later) }
                 }
                 answerButton(words.now, filled: false) { answer(.now) }
                 answerButton(words.notNow, filled: false) { answer(.decline) }
             }
+            .disabled(answering)
             .padding(.top, 12)
         }
         .padding(.horizontal, 14)
@@ -378,7 +427,105 @@ struct OfferCardView: View {
     }
 }
 
-/// The grey line over a section: when, who, how long; for a call it opens the call's sheet.
+/// The card of a call Bee Call placed (2.2): what it is about, why it called, and the Bee conversation behind it.
+struct WhyCallingCard: View {
+    let topic: String?
+    let why: WhyCalling
+    let words: ConversationWords
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Eyebrow(symbol: "phone.arrow.down.left", text: words.whyCalled)
+            if let topic {
+                Text(topic)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(BeeStyle.ink)
+                    .padding(.top, 4)
+            }
+            if let reason = why.reason {
+                Text(reason)
+                    .font(.subheadline)
+                    .foregroundStyle(BeeStyle.ink)
+                    .padding(.top, 5)
+            }
+            if let conversation = why.conversation {
+                Divider().padding(.vertical, 10)
+                if let summary = conversation.summary {
+                    Text(summary)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(Array(conversation.quotes.filter { $0.speaker != .unrecognized }.enumerated()), id: \.offset) { _, quote in
+                    (Text((quote.speaker == .person ? words.me : words.other) + "  ").bold() + Text(quote.text))
+                        .font(.subheadline)
+                        .foregroundStyle(BeeStyle.ink)
+                        .padding(.top, 5)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(BeeStyle.card, in: .rect(cornerRadius: 20))
+    }
+}
+
+/// What Bee Call read before the call (2.3): its note, and what it looked up.
+struct PrepCard: View {
+    let prep: Prep
+    let words: ConversationWords
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Eyebrow(symbol: "eye", text: words.prepTitle(fromBee: prep.fromBee))
+            if let note = prep.note {
+                Text(note)
+                    .font(.subheadline)
+                    .foregroundStyle(BeeStyle.ink)
+                    .padding(.top, 6)
+            }
+            let lines = prep.lookedUp.compactMap(line)
+            if !lines.isEmpty {
+                Divider().padding(.vertical, 10)
+                Text(words.lookedUp)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(lines, id: \.text) { line in
+                    Label(line.text, systemImage: line.symbol)
+                        .font(.subheadline)
+                        .foregroundStyle(BeeStyle.ink)
+                        .padding(.top, 6)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(BeeStyle.card, in: .rect(cornerRadius: 20))
+    }
+
+    private func line(_ read: LookedUp) -> (text: String, symbol: String)? {
+        let korean = words.korean
+        switch read {
+        case .conversation(let summary, let at):
+            let what = summary ?? (korean ? "Bee 대화" : "A Bee conversation")
+            let when = at.map { "\(CallLine.day($0, korean: korean, now: .now)) \(CallLine.time($0, korean: korean))" }
+            return ([what, when].compactMap { $0 }.joined(separator: ", "), "bubble.left.and.bubble.right")
+        case .day(let day):
+            let today = Calendar.current.dateComponents([.year, .month, .day], from: .now)
+            if today.year == day.year, today.month == day.month, today.day == day.day {
+                return (korean ? "오늘 요약" : "Today's summary", "calendar")
+            }
+            return (korean ? "\(day.month)월 \(day.day)일 요약" : "Summary of \(day.month)/\(day.day)", "calendar")
+        case .search(let query):
+            return (korean ? "'\(query)' 찾아봄" : "Searched “\(query)”", "magnifyingglass")
+        case .unrecognized:
+            return nil
+        }
+    }
+}
+
+/// The grey line over a section: when, who, how long; for a call it opens the call's record.
 struct Stamp: View {
     let text: String
     var live = false

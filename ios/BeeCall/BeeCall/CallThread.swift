@@ -4,15 +4,18 @@ import Foundation
 /// only puts the pieces in drawing order and applies the caption rules of section 3, so nothing here interprets a
 /// call's events.
 enum CallThread {
-    /// A section of the thread: a call, or the open question at its time.
+    /// A section of the thread: a call, the open question at its time, or the person's own call before the
+    /// server has a record of it (a call the person placed is recorded once the AI picks up).
     enum Section: Identifiable, Hashable {
         case call(CallEntry)
         case question(Offer)
+        case ownCall(room: String)
 
         var id: String {
             switch self {
             case .call(let entry): "call/\(entry.call.callID)"
             case .question(let offer): "question/\(offer.id)"
+            case .ownCall(let room): "call/\(room)"
             }
         }
 
@@ -20,6 +23,7 @@ enum CallThread {
             switch self {
             case .call(let entry): entry.call.startedAt.date
             case .question(let offer): offer.createdAt.date
+            case .ownCall: .distantFuture
             }
         }
     }

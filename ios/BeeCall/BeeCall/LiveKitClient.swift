@@ -96,6 +96,7 @@ final class LiveKitClient: NSObject {
 
     func disconnect() async {
         microphoneOn = true // the next call starts unmuted
+        captionList = CaptionList() // the next call's screen starts without this call's words
         phoneRecorder.stop()
         voices.stop()
         guard let room else { return }

@@ -16,6 +16,9 @@ final class CallManager: NSObject {
     private(set) var ringStatus = "" // whether the app can hear the AI's calls; empty while not listening
     private(set) var isInCall = false
     private(set) var isRinging = false // the AI's call, until it is answered or ends
+    /// A call is on: placed, or answered, not just ringing. Design D shows the call screen and the call bar only
+    /// then; while Bee Call's call rings, iOS shows its own screen (review of 2026-10-15, finding 5).
+    var callIsOn: Bool { isInCall && !isRinging }
     private(set) var isEnding = false
     /// "Save on this iPhone" is on but the call's recording did not start: shown until the next call joins.
     private(set) var phoneRecordingProblem: String?
@@ -586,12 +589,14 @@ extension CallManager {
         liveKit.playVoiceDemo(demo)
     }
 
-    /// Debug builds only (DesignDemo.swift): a pretend call with these lines, connected `connectedAgo` seconds
-    /// ago, for design D's call screen. Nothing goes to CallKit, no room is joined, nothing is recorded.
-    func playDesignDemo(lines: [(mine: Bool, text: String)], voice: VoiceDemo, connectedAgo: TimeInterval) {
+    /// Debug builds only (DesignDemo.swift): a pretend call in `room` with these lines, connected `connectedAgo`
+    /// seconds ago, for design D's call screen. Nothing goes to CallKit, no room is joined, nothing is recorded.
+    func playDesignDemo(lines: [(mine: Bool, text: String)], voice: VoiceDemo, connectedAgo: TimeInterval,
+                        room: String) {
         isInCall = true
         status = "Connected"
         connectedAt = Date.now.addingTimeInterval(-connectedAgo)
+        ownRoom = room
         liveKit.playDemo(lines: lines, voice: voice)
     }
 }

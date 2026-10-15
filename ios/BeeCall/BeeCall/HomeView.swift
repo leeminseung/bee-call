@@ -4,24 +4,33 @@ import SwiftUI
 /// folded to its results until "대화 펼치기"; the call that is on shows everything, with a running job at the
 /// very bottom like a typing indicator. `jump` scrolls to a card (a result that arrived during the call).
 struct ConversationThread: View {
-    let sections: [ThreadSection]
-    let words: ConversationWords
+    let source: any ConversationSource
+    let offers: OfferCenter
+    let language: String
     var glowing: String?
     @Binding var jump: String?
-    let answer: (String, OfferCenter.Choice) -> Void
-    let openCall: (ConversationCall) -> Void
+    let openCall: (String) -> Void
     var topInset: CGFloat = 0
     var bottomInset: CGFloat = 0
     @State private var expanded: Set<String> = []
 
+    private var words: ConversationWords { ConversationWords(korean: language == "ko") }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 10) {
-                    ForEach(sections) { section in
+                VStack(spacing: 10) { // not lazy: a lazy stack anchored at the bottom went blank when a card above grew
+                    if source.hasOlder {
+                        Button(words.earlier) { Task { await source.loadOlder() } }
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(BeeStyle.ink)
+                            .frame(minHeight: 44)
+                    }
+                    ForEach(source.sections) { section in
                         switch section {
-                        case .call(let call): callSection(call)
-                        case .offer(let offer): offerSection(offer)
+                        case .call(let entry): callSection(entry)
+                        case .question(let offer): questionSection(offer)
+                        case .ownCall: ownCallSection(stamp: words.inCall)
                         }
                     }
                 }
@@ -40,82 +49,90 @@ struct ConversationThread: View {
     }
 
     @ViewBuilder
-    private func callSection(_ call: ConversationCall) -> some View {
-        let isExpanded = expanded.contains(call.id)
-        VStack(spacing: 10) {
-            Button { if !call.isLive { openCall(call) } } label: {
-                Stamp(text: CallInfo.line(call, korean: words.korean, now: .now, calendar: .current), live: call.isLive,
-                      opens: !call.isLive)
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 8)
-            if !call.isLive {
-                Text(call.title)
-                    .font(call.entries.isEmpty ? .subheadline : .subheadline.weight(.semibold))
-                    .foregroundStyle(call.entries.isEmpty ? Color.secondary : BeeStyle.ink)
+    private func callSection(_ entry: CallEntry) -> some View {
+        let call = entry.call
+        if call.callID == source.ownCall { // the view's summary is newer than the list's
+            ownCallSection(stamp: CallLine.line(source.view(call.callID)?.call ?? call, korean: words.korean, now: .now))
+        } else {
+            let isExpanded = expanded.contains(call.callID) && CallThread.canUnfold(call)
+            VStack(spacing: 10) {
+                Button { openCall(call.callID) } label: {
+                    Stamp(text: CallLine.line(call, korean: words.korean, now: .now),
+                          opens: call.state == .ended || call.state == .dropped)
+                }
+                .buttonStyle(.plain)
+                .disabled(!(call.state == .ended || call.state == .dropped))
+                .padding(.top, 8)
+                Text(CallLine.title(call, korean: words.korean))
+                    .font(call.titleSource == .none ? .subheadline : .subheadline.weight(.semibold))
+                    .foregroundStyle(call.titleSource == .none ? Color.secondary : BeeStyle.ink)
                     .multilineTextAlignment(.center)
                     .padding(.top, -6)
-                if call.canUnfold {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            if isExpanded { expanded.remove(call.id) } else { expanded.insert(call.id) }
+                if CallThread.canUnfold(call) {
+                    unfoldButton(call.callID, isExpanded: isExpanded)
+                }
+                if isExpanded {
+                    if let view = source.view(call.callID) {
+                        ForEach(CallThread.expanded(view)) { item in
+                            entryView(item, live: false, folded: false).id(item.id)
                         }
-                    } label: {
-                        Label(isExpanded ? words.fold : words.unfold,
-                              systemImage: isExpanded ? "chevron.up" : "chevron.down")
-                            .labelStyle(TrailingIconLabel())
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(BeeStyle.ink)
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 30)
-                            .background(BeeStyle.card, in: .capsule)
+                    } else {
+                        ProgressView().padding(8)
                     }
-                    .buttonStyle(.plain)
-                    .frame(minHeight: 44)
-                    .padding(.vertical, -7)
+                } else {
+                    ForEach(CallThread.folded(entry)) { item in
+                        entryView(item, live: false, folded: true).id(item.id)
+                    }
                 }
             }
-            ForEach(ordered(call, expanded: isExpanded)) { entry in
-                entryView(entry, in: call, expanded: isExpanded)
-                    .id(entry.id)
-            }
+            .task(id: isExpanded) { if isExpanded { await source.show(call.callID) } }
         }
     }
 
-    /// The entries to show, with a running job of the call that is on moved to the very bottom.
-    private func ordered(_ call: ConversationCall, expanded: Bool) -> [ConversationEntry] {
-        let shown = call.shown(expanded: expanded)
-        guard call.isLive else { return shown }
-        let running = shown.filter { if case .job(let job) = $0 { !job.isDone } else { false } }
-        return shown.filter { entry in !running.contains { $0.id == entry.id } } + running
-    }
-
-    @ViewBuilder
-    private func entryView(_ entry: ConversationEntry, in call: ConversationCall, expanded: Bool) -> some View {
-        switch entry {
-        case .turn(let turn):
-            TurnBubble(turn: turn)
-        case .job(let job):
-            if !call.isLive && !expanded {
-                JobCompactRow(job: job, korean: words.korean)
-            } else {
-                JobCardView(job: job, words: words, glowing: glowing == job.id)
-            }
-        case .beeWrite(let write):
-            HStack {
-                BeeWriteView(write: write, live: call.isLive, words: words)
-                Spacer(minLength: 0)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func offerSection(_ offer: OfferCard) -> some View {
+    /// The call that is on: its view, the captions it does not hold yet, and the running job last.
+    private func ownCallSection(stamp: String) -> some View {
         VStack(spacing: 10) {
-            Stamp(text: CallInfo.day(offer.askedAt, korean: words.korean, now: .now, calendar: .current) + " "
-                  + CallInfo.time(offer.askedAt, korean: words.korean, calendar: .current) + " · " + words.asks)
+            Stamp(text: stamp, live: true)
                 .padding(.top, 8)
-            OfferCardView(offer: offer, words: words) { answer(offer.id, $0) }
+            ForEach(source.ownEntries) { item in
+                entryView(item, live: true, folded: false).id(item.id)
+            }
+        }
+        .task(id: source.ownCall) { if let id = source.ownCall { await source.show(id) } }
+    }
+
+    private func unfoldButton(_ callID: String, isExpanded: Bool) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                if isExpanded { expanded.remove(callID) } else { expanded.insert(callID) }
+            }
+        } label: {
+            Label(isExpanded ? words.fold : words.unfold, systemImage: isExpanded ? "chevron.up" : "chevron.down")
+                .labelStyle(TrailingIconLabel())
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(BeeStyle.ink)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 30)
+                .background(BeeStyle.card, in: .capsule)
+        }
+        .buttonStyle(.plain)
+        .frame(minHeight: 44)
+        .padding(.vertical, -7)
+    }
+
+    private func entryView(_ entry: CallThread.Entry, live: Bool, folded: Bool) -> some View {
+        ThreadEntryView(entry: entry, words: words, live: live, folded: folded, glowing: glowing)
+    }
+
+    @ViewBuilder
+    private func questionSection(_ offer: Offer) -> some View {
+        VStack(spacing: 10) {
+            Stamp(text: CallLine.day(offer.createdAt, korean: words.korean, now: .now) + " "
+                  + CallLine.time(offer.createdAt, korean: words.korean) + " · " + words.asks)
+                .padding(.top, 8)
+            OfferCardView(offer: offer, language: language, answering: offers.answering.contains(offer.id)) { choice in
+                Task { await offers.answer(offer.id, choice) }
+            }
         }
     }
 }
@@ -143,7 +160,7 @@ struct HomeView: View {
     @Binding var jump: String?
     let showCallScreen: () -> Void
     let openSettings: () -> Void
-    let openCall: (ConversationCall) -> Void
+    let openCall: (String) -> Void
     let startCall: () -> Void
     var zoom: Namespace.ID? // the call screen grows out of the call bar or the call button (ConversationRoot)
     @AppStorage("language") private var language = "en"
@@ -154,14 +171,12 @@ struct HomeView: View {
     var body: some View {
         ZStack {
             BeeStyle.background.ignoresSafeArea()
-            ConversationThread(sections: source.sections, words: words, glowing: glowing, jump: $jump,
-                               answer: { id, choice in Task { await offers.answer(id, choice) } },
-                               openCall: openCall,
-                               topInset: calls.isInCall ? 64 : (booked.isEmpty ? 70 : 140),
-                               bottomInset: calls.isInCall ? 110 : 170)
+            ConversationThread(source: source, offers: offers, language: language, glowing: glowing, jump: $jump,
+                               openCall: openCall, topInset: calls.callIsOn ? 64 : (booked.isEmpty ? 70 : 140),
+                               bottomInset: calls.callIsOn ? 110 : 170)
             VStack(spacing: 8) {
                 VStack(spacing: 8) {
-                    if calls.isInCall {
+                    if calls.callIsOn {
                         CallBar(calls: calls, words: words, open: showCallScreen)
                             .zoomSource("call", in: zoom)
                     } else {
@@ -182,7 +197,7 @@ struct HomeView: View {
                         .ignoresSafeArea(edges: .top)
                 }
                 Spacer()
-                if calls.isInCall {
+                if calls.callIsOn {
                     smallControls
                 } else {
                     callButton
@@ -207,7 +222,7 @@ struct HomeView: View {
                     Text("Bee Call")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(BeeStyle.ink)
-                    if let bee = source.beeLine {
+                    if let bee = source.beeLine(korean: words.korean) {
                         Text(bee)
                             .font(.caption)
                             .foregroundStyle(.secondary)

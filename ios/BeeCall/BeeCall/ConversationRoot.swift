@@ -14,10 +14,13 @@ struct ConversationRoot: View {
     @State private var presentation: CallPresentation
     @State private var preview: VoicePreview
     @State private var settingsOpen = false // the gear's sheet (frame 8)
+    @State private var opened: OpenedCall? // a call that is over, its record open as a sheet
+    @State private var continuing: String? // the call to continue once its sheet is down
+    /// A sheet is up, from its opening until its dismissal has finished: the call screen waits for it, since one
+    /// view presents one thing at a time (review of 2026-10-15, finding 6).
+    @State private var sheetUp = false
     @State private var notice = ResultNotice()
     @State private var jump: String?
-    @State private var opened: ConversationCall? // a call that is over, open as a sheet
-    @State private var continuing: String? // the call to continue once its sheet is down
     @Namespace private var zoom
 
     init(calls: CallManager, source: any ConversationSource, offers: OfferCenter, status: String,
@@ -33,30 +36,43 @@ struct ConversationRoot: View {
 
     var body: some View {
         HomeView(source: source, calls: calls, offers: offers, status: status, glowing: notice.glowing, jump: $jump,
-                 showCallScreen: { presentation.show(.callScreen) }, openSettings: { settingsOpen = true },
-                 openCall: { opened = $0 },
+                 showCallScreen: { presentation.show(.callScreen) },
+                 openSettings: {
+                     sheetUp = true
+                     settingsOpen = true
+                 },
+                 openCall: {
+                     sheetUp = true
+                     opened = OpenedCall(id: $0)
+                 },
                  startCall: { Task { await calls.startCall() } }, zoom: zoom)
-            .fullScreenCover(isPresented: Binding(get: { presentation.showsCallScreen(inCall: calls.isInCall) },
+            .fullScreenCover(isPresented: Binding(get: { presentation.showsCallScreen(inCall: calls.callIsOn) && !sheetUp },
                                                   set: { if !$0 { presentation.show(.conversation) } })) {
                 CallModeView(calls: calls, job: pill, showConversation: { presentation.show(.conversation) })
                     .zoomTransition("call", in: zoom)
             }
-            .sheet(isPresented: $settingsOpen) {
+            .sheet(isPresented: $settingsOpen, onDismiss: { sheetUp = false }) {
                 SettingsSheet(catalog: voices, preview: preview)
             }
             .sheet(item: $opened, onDismiss: continueOpenedCall) { call in
-                CallSheet(call: call) {
+                CallSheet(callID: call.id, source: source, canContinue: !calls.isInCall) {
                     continuing = call.id
                     opened = nil
                 }
             }
-            .onChange(of: calls.isInCall, initial: true) { _, inCall in
-                presentation.callChanged(inCall: inCall)
-                if !inCall { notice.callEnded() }
+            .onChange(of: calls.callIsOn, initial: true) { _, on in
+                presentation.callChanged(inCall: on)
+                if on { // the call screen goes over everything: a sheet still up is closed first
+                    settingsOpen = false
+                    opened = nil
+                    preview.stop()
+                } else {
+                    notice.callEnded()
+                }
             }
-            .onChange(of: liveCall?.finishedJobs ?? [], initial: true) { _, done in
-                guard liveCall != nil else { return }
-                notice.update(done: done, callScreenUp: presentation.showsCallScreen(inCall: calls.isInCall))
+            .onChange(of: OwnJobs(call: source.ownCall, done: doneJobs), initial: true) { _, jobs in
+                notice.update(call: jobs.call, done: jobs.done,
+                              callScreenUp: presentation.showsCallScreen(inCall: calls.callIsOn))
             }
             .onChange(of: presentation.mode) { _, mode in
                 if mode == .conversation, let id = notice.openedConversation() { jump = id }
@@ -66,32 +82,48 @@ struct ConversationRoot: View {
                 try? await Task.sleep(for: .seconds(2))
                 notice.glowEnded(id)
             }
+            .task { await source.keepFresh() }
     }
 
-    /// "이 통화 이어서 하기": the call starts once the sheet is down, so the call screen is not shown while the
-    /// sheet is still going away (one presentation at a time).
+    /// "이 통화 이어서 하기": the call starts once the sheet is down, so the call screen is not asked for while the
+    /// sheet is still going away.
     private func continueOpenedCall() {
+        sheetUp = false
         guard let id = continuing else { return }
         continuing = nil
         Task { await calls.startCall(continuing: id) }
     }
 
-    private var liveCall: ConversationCall? {
-        for case .call(let call) in source.sections.reversed() where call.isLive { return call }
-        return nil
+    private var ownJobs: [Job] {
+        guard let id = source.ownCall, let view = source.view(id) else { return [] }
+        return view.drawnItems.compactMap { if case .job(let job) = $0 { job } else { nil } }
+    }
+
+    private var doneJobs: [String] {
+        ownJobs.filter { $0.state == .done }.map(\.id)
     }
 
     /// The call screen's pill: a result waiting in the conversation, else the newest running job.
     private var pill: JobPill? {
-        guard let call = liveCall else { return nil }
-        let jobs = call.entries.compactMap { if case .job(let job) = $0 { job } else { nil } }
+        let jobs = ownJobs
         if let id = notice.unseen, let job = jobs.first(where: { $0.id == id }) {
-            return JobPill(id: job.id, label: job.short ?? job.title, startedAt: job.startedAt, arrived: true)
+            return JobPill(id: job.id, label: job.title, startedAt: job.startedAt.date, arrived: true)
         }
-        return jobs.last { !$0.isDone }.map {
-            JobPill(id: $0.id, label: $0.short ?? $0.title, startedAt: $0.startedAt, arrived: false)
+        return jobs.last { $0.state == .running }.map {
+            JobPill(id: $0.id, label: $0.title, startedAt: $0.startedAt.date, arrived: false)
         }
     }
+}
+
+/// A call whose record is open as a sheet.
+struct OpenedCall: Identifiable, Hashable {
+    let id: String
+}
+
+/// The own call's finished jobs, watched together with the call they belong to.
+private struct OwnJobs: Equatable {
+    let call: String?
+    let done: [String]
 }
 
 extension View {

@@ -204,8 +204,13 @@ struct JobPillView: View {
                     ProgressView()
                         .controlSize(.small)
                     TimelineView(.periodic(from: .now, by: 1)) { clock in
-                        Text(words.running(job.label, CallClock.text(since: job.startedAt, now: clock.date)))
-                            .monospacedDigit()
+                        HStack(spacing: 0) { // a long job title is cut, its clock never
+                            Text(job.label)
+                                .lineLimit(1)
+                            Text(words.runningFor(CallClock.text(since: job.startedAt, now: clock.date)))
+                                .monospacedDigit()
+                                .fixedSize()
+                        }
                     }
                 }
                 Image(systemName: "chevron.right")
@@ -234,7 +239,8 @@ struct CallWords {
     var end: String { korean ? "끝내기" : "End" }
     var resultArrived: String { korean ? "결과 도착 · 대화에서 보기" : "Result ready · See it" }
 
-    func running(_ label: String, _ clock: String) -> String {
-        korean ? "\(label) 중 · \(clock)" : "\(label) · \(clock)"
+    /// After a running job's title on the pill: " 중 · 1:07".
+    func runningFor(_ clock: String) -> String {
+        korean ? " 중 · \(clock)" : " · \(clock)"
     }
 }

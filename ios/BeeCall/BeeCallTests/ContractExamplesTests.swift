@@ -55,6 +55,33 @@ final class ContractExamplesTests: XCTestCase {
         XCTAssertEqual(try Contract.decode(Me.self, from: me).settings.voice, "ko-harin")
     }
 
+    /// The examples are written for 2026-10-15 in Seoul. Another day moves their times by whole days, so "오늘" and
+    /// "어제" read as they would; their clock times stay.
+    @MainActor func testTheExamplesTimesMoveToToday() async throws {
+        let nextDay = Date(timeIntervalSince1970: 1_792_129_500) // 2026-10-16 14:45 in Seoul
+        let (_, body) = try await get("/calls", from: ContractExamples(now: nextDay))
+        let list = try Contract.decode(CallList.self, from: body)
+        XCTAssertEqual(list.calls.first?.call.startedAt, ZonedTime("2026-10-16T14:22:13+09:00"))
+        let (_, view) = try await get("/calls/call-minseung-20261015-012301", from: ContractExamples(now: nextDay))
+        XCTAssertEqual(try Contract.decode(CallView.self, from: view).prep?.lookedUp.last, .day(CalendarDay(year: 2026, month: 10, day: 16)))
+    }
+
+    /// The live frames are 3:41 into the MacBook call, now: the call began 3:41 ago, and the list and the offers are
+    /// as they were then, without what came after.
+    @MainActor func testTheLiveFramesAreThreeMinutesIntoTheCall() async throws {
+        let now = Date(timeIntervalSince1970: 1_792_065_000)
+        let examples = ContractExamples(live: true, now: now)
+        let (_, view) = try await get("/calls/call-minseung-20261015-012301", from: examples)
+        let started = try Contract.decode(CallView.self, from: view).call.startedAt
+        XCTAssertEqual(started.date, now.addingTimeInterval(-221))
+        XCTAssertEqual(started.zone.secondsFromGMT(), 9 * 3600)
+        let (_, list) = try await get("/calls", from: examples)
+        XCTAssertEqual(try Contract.decode(CallList.self, from: list).calls.map(\.call.callID).first,
+                       "call-minseung-20261015-012301", "the calls after it are not there yet")
+        let (_, offers) = try await get("/offers", from: examples)
+        XCTAssertEqual(try Contract.decode(OpenOffers.self, from: offers).offers, [])
+    }
+
     /// A pick shows: the settings change in memory, and a new language without a voice goes to its default.
     @MainActor func testSettingsChangesAreKept() async throws {
         let examples = ContractExamples()
