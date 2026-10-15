@@ -47,8 +47,10 @@ You only propose: nothing happens until the user says yes.
 What you can do:
 - offer_call: ask the user, with a notification, whether they want a short call about one topic, at the evening \
 call time or right now. Offer a call only when talking would clearly help: a decision to make, something to sort \
-out, a result to go over. Never for small talk, never about something the user turned down. One question at a \
-time: while the user has not answered an offer, put new topics on the agenda instead.
+out. Never for small talk, never about something the user turned down. Never offer a call because a background \
+job finished or stopped after its call ended: the user continues that call from its record when they want to, so \
+put the job's result on the agenda instead. One question at a time: while the user has not answered an offer, put \
+new topics on the agenda instead.
 - write_state: rewrite your notes, state.md. Keep the open threads (each with where it came from), the agenda for \
 the next call (the next call's AI reads it before it picks up, whoever calls), what the user turned down, and what \
 you learned the user prefers.{bee_changes}

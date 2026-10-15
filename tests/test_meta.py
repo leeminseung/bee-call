@@ -139,6 +139,15 @@ def test_doing_nothing_is_logged_too_and_a_failure_proposes_nothing(tmp_path):
     assert len(MetaSession(ws).entries()) == 2
 
 
+def test_the_meta_agent_is_told_never_to_call_back_about_a_job_s_result():
+    """BC-039: the AI never calls back on its own to continue a call, also when a background job finishes or stops
+    after the call ended; the user continues it from the call's record."""
+    from meta.agent import INSTRUCTIONS
+
+    assert "a result to go over" not in INSTRUCTIONS
+    assert "Never offer a call because a background job finished or stopped" in INSTRUCTIONS
+
+
 def test_a_bee_conversation_that_had_an_offer_gets_no_second_one(tmp_path):
     """BC-014: one Bee conversation leads to at most one offer, also after the user declined it."""
     ws = workspace_with_a_call(tmp_path)
