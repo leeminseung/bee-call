@@ -72,6 +72,17 @@ if cmd == ["logout"]:
 
 if cmd[:1] == ["changed"]:
     out(json.load(open(os.environ["FAKE_BEE_CHANGED"])))
+# An empty Bee day (FAKE_BEE_EMPTY=1): nothing recorded, nothing pending.
+if os.environ.get("FAKE_BEE_EMPTY"):
+    if cmd[:3] == ["facts", "list", "--unconfirmed"]:
+        out({"facts": []})
+    if cmd[:2] == ["todos", "suggestions"]:
+        out({"todoSuggestions": []})
+    if cmd[:2] == ["today", "--context"]:
+        out({"date": "2026-10-13", "todayBrief": {"calendar_events": [], "emails": [], "timezone": "Asia/Seoul"},
+             "dailySummary": None, "activeTodos": [], "recentNotes": [], "recentConversations": []})
+    if cmd[:2] == ["conversations", "list"]:
+        out({"conversations": [], "next_cursor": None, "timezone": "Asia/Seoul"})
 if cmd[:3] == ["facts", "list", "--unconfirmed"]:
     out({"facts": [{"id": 7, "text": "Bonus is 15%", "tags": ["work"], "created_at": now_ms, "confirmed": False}]})
 if cmd[:2] == ["todos", "suggestions"]:

@@ -774,6 +774,97 @@ def test_the_record_server_never_serves_a_call_s_audio_or_its_raw_bee_inputs(tmp
         assert status in (403, 404) and b"RIFF" not in body and b"utterances" not in body, (name, status)
 
 
+def test_a_call_starts_on_an_empty_bee_day_and_keeps_its_prep_note(tmp_path, monkeypatch, quick, bee_log):
+    """BC-028: a person with Use Bee on and nothing in Bee today still gets their call. BC-031: the prep note is
+    kept as prep.md in the call's folder."""
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"bee": True}, allowed=("bee",))
+    monkeypatch.setenv("FAKE_BEE_EMPTY", "1")
+    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    assert call.session.said == ["Hi Matt, what's on your mind?"]
+    (folder,) = call_folders(me.workspace)
+    assert "Matt is weighing a job offer." in (folder / "prep.md").read_text()
+    assert any("today" in line for line in bee_log.read_text().splitlines())  # Bee was read, and was empty
+
+
+def test_a_call_keeps_the_language_it_started_in(tmp_path, monkeypatch, quick):
+    """BC-108: the phone sends its settings as it answers, and the voice server reads them again then (for the audio
+    switch), but a language changed meanwhile applies from the next call."""
+    me = signed_in(tmp_path)
+
+    class ChangesLanguageMidway(Converse):
+        def converse_stream(self, **request):
+            me.people.change_settings("matt", {"language": "ko"})  # the app syncs while the call is being prepared
+            return super().converse_stream(**request)
+
+    with_prep_model(monkeypatch, ChangesLanguageMidway(text(OPENING + NOTE)))
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        await call.end()
+
+    asyncio.run(main())
+    assert me.people.settings("matt").language == "ko"  # changed during the call
+    (folder,) = call_folders(me.workspace)
+    (coordinator,) = [e for e in events_of(folder) if e["type"] == "coordinator"]
+    assert coordinator["language"] == "en" and call.session.said == ["Hi Matt, what's on your mind?"]
+
+
+def test_a_call_keeps_both_voices_and_its_transcript_as_they_were_recorded(tmp_path):
+    """BC-092: with "save on the server" on, the user's and the AI's audio are kept as audio/user.wav and ai.wav.
+    BC-097: the transcript and the events only grow; nothing earlier is rewritten."""
+    import wave
+
+    from livekit import rtc
+    from tests.helpers import seoul_now
+    from voice.recorder import CallRecorder
+
+    rec = CallRecorder(tmp_path, room="r", now=seoul_now())
+    frame = rtc.AudioFrame(data=bytes(320), sample_rate=16000, num_channels=1, samples_per_channel=160)
+    for _ in range(3):
+        rec.user_audio.write(frame)
+    rec.ai_audio.write(frame)
+    rec.line("User", "Hi there.")
+    before = (rec.dir / "transcript.md").read_text(), (rec.dir / "events.jsonl").read_text()
+    rec.line("Assistant", "Hello!")
+    rec.event("note", text="later")
+    rec.close()
+    with wave.open(str(rec.dir / "audio" / "user.wav")) as user, wave.open(str(rec.dir / "audio" / "ai.wav")) as ai:
+        assert (user.getnframes(), ai.getnframes()) == (480, 160)
+    after = (rec.dir / "transcript.md").read_text(), (rec.dir / "events.jsonl").read_text()
+    assert after[0].startswith(before[0]) and after[1].startswith(before[1]) and "Hello!" in after[0]
+
+
+def test_a_started_job_cannot_be_changed(tmp_path):
+    """BC-127: the call AI is told a started job cannot be changed, and it has no tool that would change one."""
+    from types import SimpleNamespace
+
+    from livekit.agents.llm.tool_context import get_fnc_tool_names
+    from tests.helpers import seoul_now
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    agent_ = Coordinator(CallRecorder(tmp_path, room="r", now=seoul_now()), SimpleNamespace(), tmp_path,
+                         clock=seoul_now)
+    names = set(get_fnc_tool_names(agent_.tools))
+    assert {"delegate", "job_status"} <= names and not any("job" in n and n != "job_status" for n in names)
+    (delegate,) = [t for t in agent_.tools if getattr(getattr(t, "info", None), "name", None) == "delegate"]
+    assert "A started job cannot be changed" in delegate.info.description
+
+
 # ---------- where the time of each turn went (the user's request, 2026-10-15) ----------
 
 def test_each_user_turn_records_where_its_time_went(tmp_path):

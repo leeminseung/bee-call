@@ -367,6 +367,14 @@ def test_file_tools_skip_links_out_hidden_folders_and_locations(tmp_path):
     assert time.monotonic() - started < files.GREP_SECONDS + 1
 
 
+def test_the_meta_agent_only_reads_offers_and_keeps_notes():
+    """BC-048 and BC-050, pinned by name rather than against the tool list itself: read-only file and Bee tools,
+    and three ways a run ends (offer a call, rewrite its notes, nothing). No tool places a call or writes to Bee."""
+    names = {tool["toolSpec"]["name"] for tool in TOOLS}
+    assert names == {"list_files", "read_file", "grep", "bee_today", "bee_conversation", "search_bee", "bee_day",
+                     "bee_pending", "write_state", "offer_call"}
+
+
 def test_without_bee_the_meta_agent_has_no_bee_tools_or_words(tmp_path):
     """BC-057: for a person with Use Bee off, nothing in the meta agent's instructions or tools is about Bee."""
     import re

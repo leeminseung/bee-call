@@ -342,3 +342,39 @@ def test_the_voice_server_finishes_calls_before_it_stops_and_registers_as_bee_ca
     lines = unit("bee-call-agent")
     assert "ExecStart=/opt/bee-call/app/.venv/bin/python -m voice.agent start" in lines
     assert {"KillMode=mixed", "TimeoutStopSec=10min", "Environment=LIVEKIT_AGENT_NAME=bee-call"} <= set(lines)
+
+
+
+# ---------- requirement rows found built but untested (requirements review 2026-10-15) ----------
+
+INSTALL = Path(__file__).parent.parent / "deploy" / "install.sh"
+
+
+def test_from_the_internet_only_the_web_ports_answer():
+    """BC-151: the security group opens 80, 443 and 8443 and nothing else (no SSH, no 8787, no 8081)."""
+    assert deploy_server.PORTS == (80, 443, 8443)
+
+
+def test_an_update_restarts_the_voice_server_last_and_stops_if_the_settings_cannot_be_read():
+    """BC-157: the settings first (a oneshot unit, so a failed read fails the restart and `set -e` stops the update
+    with the old services still running), then the web servers and the outbound loops, the voice server last."""
+    lines = [line.strip() for line in INSTALL.read_text().splitlines()]
+    assert lines[next(i for i, line in enumerate(lines) if line and not line.startswith("#"))] == "set -euo pipefail"
+    restarts = [line for line in lines if line.startswith("systemctl restart bee-call")]
+    assert restarts == ["systemctl restart bee-call-env",
+                        "systemctl restart bee-call-token bee-call-session bee-call-outbound",
+                        "systemctl restart bee-call-agent"]
+    assert "Type=oneshot" in unit("bee-call-env")
+
+
+def test_every_tool_the_server_downloads_is_pinned_and_checked_before_use():
+    """BC-159: uv, Caddy and the Bee CLI are pinned to a version and checked against their sha256 before use."""
+    text = INSTALL.read_text()
+    for name in ("UV", "CADDY", "BEE"):
+        version = re.search(rf"^{name}_VERSION=(\S+)", text, re.MULTILINE)
+        assert version and re.fullmatch(r"[0-9.]+", version.group(1)), name
+    downloads = re.findall(r'^\s*download "[^"]+"\s*\\?\s*"\$(\w+)"', text, re.MULTILINE)
+    assert sorted(downloads) == ["BEE_TARBALL_SHA256", "CADDY_TARBALL_SHA256", "UV_INSTALLER_SHA256"]
+    for digest in ("BEE_SHA256", "CADDY_SHA256", "BEE_TARBALL_SHA256", "CADDY_TARBALL_SHA256", "UV_INSTALLER_SHA256"):
+        assert re.search(rf"^{digest}=[0-9a-f]{{64}}", text, re.MULTILINE), digest
+    assert 'check "$CADDY_SHA256"' in text and 'check "$BEE_SHA256"' in text

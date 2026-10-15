@@ -68,6 +68,14 @@ def test_an_offer_suggests_the_evening_call_time_today_or_tomorrow():
     assert call_time(datetime(2026, 10, 14, 22, 0, tzinfo=SEOUL)) == datetime(2026, 10, 15, 21, 0, tzinfo=SEOUL)
 
 
+def test_an_offer_suggests_tomorrow_when_today_s_call_time_is_less_than_ten_minutes_away():
+    """BC-010 at its boundary: ten minutes or more before the call time suggests today, less (or past) tomorrow."""
+    at = datetime(2026, 10, 15, 21, 0, tzinfo=SEOUL)
+    for minutes_before, day in ((11, 15), (10, 15), (9, 16), (0, 16), (-5, 16)):
+        now = at - timedelta(minutes=minutes_before)
+        assert call_time(now) == at.replace(day=day), minutes_before
+
+
 def test_the_evening_call_time_has_one_default(tmp_path, monkeypatch):
     """Server review 19: 21:00 was written in the person's settings, in voice/offers.py and, with an undocumented
     CALL_TIME environment setting in front of it, in the meta agent's prompt. The person's setting is the rule;

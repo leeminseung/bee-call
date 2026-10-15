@@ -1099,6 +1099,29 @@ def test_each_call_model_has_its_claude_settings_and_a_price():
     assert llm_cost("claude-haiku-5-5", million, million) == pytest.approx(0.60)
 
 
+def test_an_approved_person_starts_with_these_settings(tmp_path):
+    """BC-088 with its values written out, not read from the code's own defaults."""
+    from dataclasses import asdict
+
+    people = People(tmp_path)
+    people.add("jiwoo")
+    assert asdict(people.settings("jiwoo")) == {
+        "language": "en", "call_time": "21:00", "record_on_server": True, "record_on_phone": False,
+        "daily_budget_usd": 3.0, "bee": False, "tts": None, "voice": None, "time_zone": "Asia/Seoul",
+        "call_model": "haiku"}
+
+
+def test_a_person_s_bee_login_folder_is_theirs_alone(tmp_path, fake_bee):
+    """BC-156: the login folder Bee's CLI keeps its token in is made readable by the services' user only."""
+    import stat
+
+    from beelink import cli
+
+    folder = People(tmp_path).bee_dir("matt")
+    asyncio.run(cli.start_login(folder))
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o700
+
+
 def test_a_setting_of_the_wrong_kind_is_refused_not_a_server_error(tmp_path):
     """A list or an object where a name is expected is a bad value (400), never an unhandled error (acceptance
     BC-089 found a 500)."""
