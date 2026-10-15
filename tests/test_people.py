@@ -292,6 +292,15 @@ def test_the_development_person_is_one_rule_for_the_web_servers_and_the_voice_se
     assert asyncio.run(statuses()) == (401, 401)
 
 
+def test_the_token_server_takes_a_host_and_a_port():
+    """Outside test seam 11: the port could be set only through an undocumented TOKEN_SERVER_PORT and the host not at
+    all, so a test run could not start its own token server beside another."""
+    assert token_server.listen_on([], {}) == ("0.0.0.0", 8787)
+    assert token_server.listen_on([], {"TOKEN_SERVER_PORT": "9000"}) == ("0.0.0.0", 9000)
+    assert token_server.listen_on(["--host", "127.0.0.1", "--port", "18787"], {"TOKEN_SERVER_PORT": "9000"}) == (
+        "127.0.0.1", 18787)
+
+
 def test_without_a_sign_in_only_this_machine_gets_the_dev_person(tmp_path, monkeypatch):
     me = signed_in(tmp_path)
     dev = {"X-Bee-Call-Dev": "1"}

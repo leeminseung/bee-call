@@ -6,7 +6,7 @@ itself in without a token when they carry the header X-Bee-Call-Dev: 1 (curl, te
 browser cannot send that header to another site without asking first, and this server never says yes. The dev
 fallback is off on a server (BEE_CALL_PUBLIC_HOST set), and requests must name a known host.
 
-Run: uv run python -m voice.token_server
+Run: uv run python -m voice.token_server [--host 127.0.0.1] [--port 8787]   (port: TOKEN_SERVER_PORT, or 8787)
 
 Signing in (Sign in with Apple, voice/apple_signin.py):
 GET  /auth/nonce                         {"nonce"}: a one-time value the app hashes into Apple's sign-in request
@@ -51,12 +51,15 @@ POST /bee/connect                        {"link"}: the approval link the app ope
 POST /bee/disconnect                     logs this person's Bee out and turns "bee" off
 """
 
+import argparse
 import asyncio
 import json
 import logging
 import os
 import shutil
+import sys
 import time
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -512,14 +515,25 @@ def make_app(url: str, key: str, secret: str, people: People, room_exists=liveki
     return app
 
 
-if __name__ == "__main__":
+def listen_on(argv: list[str], env: Mapping[str, str]) -> tuple[str, int]:
+    """Where the token server listens: --host (every interface when left out) and --port (TOKEN_SERVER_PORT, or
+    8787, where Caddy on the server expects it)."""
+    parser = argparse.ArgumentParser(description="The token server for the iPhone app (voice/token_server.py).")
+    parser.add_argument("--host", default="0.0.0.0", help="the address to listen on (default: every interface)")
+    parser.add_argument("--port", type=int, default=int(env.get("TOKEN_SERVER_PORT") or 8787),
+                        help="the port (default: TOKEN_SERVER_PORT, or 8787)")
+    args = parser.parse_args(argv)
+    return args.host, args.port
+
+
+def main(argv: list[str] | None = None) -> None:
     # One line per request, so a phone that cannot reach the server is easy to tell apart.
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     bee.use_bee(None)  # Bee works only through a person's own login (beelink/cli.py)
     # The default route can be a VPN, so list the Wi-Fi addresses a phone can actually reach.
     from voice.session_server import lan_addresses
 
-    port = int(os.environ.get("TOKEN_SERVER_PORT", "8787"))
+    host, port = listen_on(sys.argv[1:] if argv is None else argv, os.environ)
     people = People()
     app = make_app(env("LIVEKIT_URL"), env("LIVEKIT_API_KEY"), env("LIVEKIT_API_SECRET"), people)
     print(f"token server on port {port}, people in {people.root.resolve()}. For the iPhone app on the same Wi-Fi:",
@@ -529,4 +543,8 @@ if __name__ == "__main__":
     if dev_person():
         print(f"requests made on this Mac without a sign-in, with the header X-Bee-Call-Dev: 1, act as {dev_person()} "
               "(BEE_CALL_DEV_PERSON)", flush=True)
-    web.run_app(app, host="0.0.0.0", port=port, print=None)
+    web.run_app(app, host=host, port=port, print=None)
+
+
+if __name__ == "__main__":
+    main()

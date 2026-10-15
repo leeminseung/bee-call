@@ -55,7 +55,7 @@ Each person's day has a budget (`daily_budget_usd`, 3 USD by default): an estima
 ## Run
 
 ```bash
-uv run python -m voice.token_server                       # tokens for the app (port 8787)
+uv run python -m voice.token_server                       # tokens for the app (port 8787; --host, --port)
 COORDINATOR_LLM=anthropic uv run python -m voice.agent dev   # the voice server (ANTHROPIC_API_KEY in .env.local)
 uv run python voice/session_server.py                     # the session screen (port 8788)
 uv run python -m voice.outbound                           # watch Bee and let the AI call when it is worth it
