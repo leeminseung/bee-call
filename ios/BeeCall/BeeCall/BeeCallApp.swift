@@ -17,7 +17,7 @@ struct BeeCallApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if case .signedIn = server.state {
+                if showsCallScreen {
                     CallScreen(calls: calls)
                 } else {
                     SignInView(server: server)
@@ -34,6 +34,19 @@ struct BeeCallApp: App {
                 else { return }
                 Task { await calls.startCall(tokenServerURL: Server.tokenURL) }
             }
+            #if DEBUG
+            .task {
+                if let demo = VoiceDemo.requested() { calls.playVoiceDemo(demo) }
+            }
+            #endif
         }
+    }
+
+    /// The call screen once signed in; in a Debug build, also for the voice demo (VoiceDemo.swift).
+    private var showsCallScreen: Bool {
+        #if DEBUG
+        if VoiceDemo.requested() != nil { return true }
+        #endif
+        return server.isSignedIn
     }
 }

@@ -182,3 +182,16 @@ extension LiveKitClient: RoomDelegate {
         }
     }
 }
+
+#if DEBUG
+extension LiveKitClient {
+    /// Debug builds only (VoiceDemo.swift): two caption bubbles and synthetic voice levels; no room is joined.
+    func playVoiceDemo(_ demo: VoiceDemo) {
+        captionList = CaptionList()
+        captionList.show("Hi, it's Bee Call. Is now still good to pick Saturday's trail?", line: "ai/demo", isMine: false,
+                         sentAt: .now)
+        captionList.show("Yes, now is fine. Dana says her knee is better,", line: "me/demo", isMine: true, sentAt: .now)
+        voices.playDemo(demo)
+    }
+}
+#endif

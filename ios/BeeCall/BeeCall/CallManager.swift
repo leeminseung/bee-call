@@ -62,6 +62,9 @@ final class CallManager: NSObject {
 
     /// Asks for the microphone while the app is on screen. A call rung by a VoIP push cannot show the prompt.
     func askForMicrophone() async {
+        #if DEBUG
+        guard VoiceDemo.requested() == nil else { return } // a pretend call needs no microphone
+        #endif
         _ = await LiveKitSDK.ensureDeviceAccess(for: [.audio])
     }
 
@@ -459,3 +462,15 @@ extension CallManager: CXProviderDelegate {
         try? AudioManager.shared.setEngineAvailability(.none)
     }
 }
+
+#if DEBUG
+extension CallManager {
+    /// Debug builds only (VoiceDemo.swift): a pretend call, so the call screen and its voice indicator can be
+    /// seen without a server. Nothing goes to CallKit, no room is joined, nothing is recorded.
+    func playVoiceDemo(_ demo: VoiceDemo) {
+        isInCall = true
+        status = "Connected"
+        liveKit.playVoiceDemo(demo)
+    }
+}
+#endif

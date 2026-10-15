@@ -85,3 +85,24 @@ final class VoiceActivity {
         if next != indicator { indicator = next }
     }
 }
+
+#if DEBUG
+extension VoiceActivity {
+    /// Debug builds only (VoiceDemo.swift): synthetic levels instead of LiveKit's audio.
+    func playDemo(_ demo: VoiceDemo) {
+        stop()
+        aiHasAnswered = true
+        let start = ContinuousClock.now
+        ticker = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let levels = demo.levels(at: start.duration(to: .now) / .seconds(1))
+                self.person.note(levels.person)
+                self.ai.note(levels.ai)
+                self.tick()
+                try? await Task.sleep(for: .seconds(1 / Self.updatesPerSecond))
+            }
+        }
+    }
+}
+#endif
