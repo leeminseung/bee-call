@@ -1,0 +1,19 @@
+/* The Bee Call page in the iOS Settings app, in English: the texts of Root.plist as they are. Without this
+   table a phone not set to Korean would get ko.lproj, the only other one. */
+
+"Calls" = "Calls";
+"The language you and the AI speak, and the evening time Bee Call suggests when it asks to call (24-hour, like 21:00). Haiku answers faster. Sonnet thinks more and answers a little slower." = "The language you and the AI speak, and the evening time Bee Call suggests when it asks to call (24-hour, like 21:00). Haiku answers faster. Sonnet thinks more and answers a little slower.";
+"Language" = "Language";
+"English" = "English";
+"한국어" = "한국어";
+"Call model" = "Call model";
+"Haiku 5.5 (faster)" = "Haiku 5.5 (faster)";
+"Sonnet 5.5 (smarter)" = "Sonnet 5.5 (smarter)";
+"Evening call time" = "Evening call time";
+"Call audio" = "Call audio";
+"The written record of each call is always kept on the server. These switches are only about the sound. Turning “Save on the server” off stops recording new calls there. Recordings made before stay. On this iPhone, recordings appear in the Files app under On My iPhone, Bee Call." = "The written record of each call is always kept on the server. These switches are only about the sound. Turning “Save on the server” off stops recording new calls there. Recordings made before stay. On this iPhone, recordings appear in the Files app under On My iPhone, Bee Call.";
+"Save on the server" = "Save on the server";
+"Save on this iPhone" = "Save on this iPhone";
+"Bee" = "Bee";
+"Lets the AI read your day from your Bee and call about it. Turn it on, open Bee Call, and approve it in the Bee app." = "Lets the AI read your day from your Bee and call about it. Turn it on, open Bee Call, and approve it in the Bee app.";
+"Use Bee" = "Use Bee";

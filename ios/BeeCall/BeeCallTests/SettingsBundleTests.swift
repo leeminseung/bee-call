@@ -62,6 +62,20 @@ final class SettingsBundleTests: XCTestCase {
         XCTAssertTrue(footer.contains("Recordings made before stay."), footer)
     }
 
+    /// With only ko.lproj, the Settings app showed the page in Korean on a phone set to English: a bundle falls
+    /// back to the only localization it has (seen on the Simulator in English, round 2's review). English is the
+    /// page's own language, so it has its own table too.
+    @MainActor func testThePageReadsInEnglishOnAPhoneNotSetToKorean() throws {
+        let english = try XCTUnwrap(NSDictionary(contentsOf: try bundle().appendingPathComponent("en.lproj/Root.strings"))
+                                    as? [String: String], "Settings.bundle/en.lproj/Root.strings")
+        for text in try texts() {
+            XCTAssertEqual(english[text], text)
+        }
+        let page = try XCTUnwrap(Bundle(url: try bundle()))
+        XCTAssertEqual(Bundle.preferredLocalizations(from: page.localizations, forPreferences: ["en-US"]).first, "en")
+        XCTAssertEqual(Bundle.preferredLocalizations(from: page.localizations, forPreferences: ["ko-KR"]).first, "ko")
+    }
+
     @MainActor func testThePageReadsInKoreanToo() throws {
         // Without this key the Settings app shows the page untranslated, whatever ko.lproj holds.
         XCTAssertEqual(try root()["StringsTable"] as? String, "Root")
