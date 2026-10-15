@@ -87,3 +87,15 @@ def test_a_hand_set_voice_moves_to_its_catalog_id():
     assert voices.catalog_id("5n5gqmaQi9Ewevrz7bOS") == "ko-sian"
     assert voices.catalog_id("ko-han") == "ko-han"
     assert voices.catalog_id("Seoyeon") is None and voices.catalog_id(None) is None
+
+
+def test_a_voice_set_by_hand_on_the_machine_is_named_as_not_used(monkeypatch):
+    """ELEVENLABS_VOICE once picked every call's voice; the catalog decides now, so a call that finds it set says so in
+    its log and its record (the coordinator event's settings_not_used), as for the call model's settings."""
+    from voice import agent
+
+    monkeypatch.setattr(agent, "COORDINATOR_LLM", "echo")
+    monkeypatch.setenv("ELEVENLABS_VOICE", "EXAVITQu4vr4xnSDxMaL")
+    assert agent.ignored_settings() == ["ELEVENLABS_VOICE"]
+    monkeypatch.delenv("ELEVENLABS_VOICE")
+    assert agent.ignored_settings() == []

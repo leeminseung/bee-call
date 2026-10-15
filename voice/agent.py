@@ -133,12 +133,13 @@ def transcribe_credentials(session: boto3.Session | None) -> Credentials | None:
 
 
 def ignored_settings() -> list[str]:
-    """The environment settings of the other modes that are set but change nothing with COORDINATOR_LLM=anthropic,
-    where voice/call_models.py alone decides the call model's settings."""
-    if COORDINATOR_LLM != "anthropic":
-        return []
-    return sorted(name for name in ("COORDINATOR_MODEL", "COORDINATOR_THINKING", "COORDINATOR_EFFORT")
-                  if os.environ.get(name, "").strip())
+    """The environment settings that are set but change nothing: ELEVENLABS_VOICE (the voice catalog decides each
+    person's voice, voice/voice_catalog.json), and with COORDINATOR_LLM=anthropic the other modes' model settings
+    (voice/call_models.py alone decides them)."""
+    names = ["ELEVENLABS_VOICE"]
+    if COORDINATOR_LLM == "anthropic":
+        names += ["COORDINATOR_MODEL", "COORDINATOR_THINKING", "COORDINATOR_EFFORT"]
+    return sorted(name for name in names if os.environ.get(name, "").strip())
 
 
 def coordinator_model(call_model: CallModel) -> str:
@@ -617,8 +618,8 @@ def open_record(ctx: JobContext, people: People, caller: Caller, meta: dict) -> 
                        now=caller.someone.now())
     unused = ignored_settings()
     if unused:
-        log.warning("%s set but not used with COORDINATOR_LLM=anthropic: the call model's settings come from "
-                    "voice/call_models.py", ", ".join(unused))
+        log.warning("%s set but not used: a call's voice comes from the voice catalog, and with "
+                    "COORDINATOR_LLM=anthropic its model's settings from voice/call_models.py", ", ".join(unused))
     rec.event("coordinator", llm=COORDINATOR_LLM, model=coordinator_model(caller.call_model),
               call_model=caller.call_model.name, language=caller.language.code, voice=caller.tts_voice.describe(),
               person=caller.id, audio_on_server=settings.record_on_server, audio_on_phone=settings.record_on_phone,
