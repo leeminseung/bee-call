@@ -55,20 +55,11 @@ enum RingStream {
         return String(rest.hasPrefix(" ") ? rest.dropFirst() : rest)
     }
 
-    private struct Line: Decodable {
-        let room: String
-        let topic: String?
-        let expiresAt: String
-        let expiresEpoch: Double? // the same moment as seconds since 1970
-    }
-
+    /// A ring as the contract writes it (RingEvent): its room, topic and expires_at, a time with the person's
+    /// offset. The pre-D expires_epoch is not read, and a time without its offset is not a ring.
     private static func parse(_ json: String) -> Ring? {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        guard let line = try? decoder.decode(Line.self, from: Data(json.utf8)),
-              let expiresAt = line.expiresEpoch.map(Date.init(timeIntervalSince1970:))
-                ?? ISO8601DateFormatter().date(from: line.expiresAt) else { return nil }
+        guard let line = try? Contract.decode(RingEvent.self, from: Data(json.utf8)) else { return nil }
         let topic = line.topic?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return Ring(room: line.room, topic: topic?.isEmpty == false ? topic : nil, expiresAt: expiresAt)
+        return Ring(room: line.room, topic: topic?.isEmpty == false ? topic : nil, expiresAt: line.expiresAt.date)
     }
 }
