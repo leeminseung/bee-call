@@ -41,6 +41,7 @@ from aiohttp import web
 
 from voice.call_folders import read_events
 from voice.people import People, dev_person
+from voice.web_headers import plain_server_name
 
 REPO = Path(__file__).resolve().parent.parent
 WEB_DIR = REPO / "web"
@@ -55,7 +56,8 @@ KEEPALIVE_SECONDS = 15.0
 LIVE_SECONDS = 120.0  # no new event for this long: the list stops calling the session live
 PREVIEW_CHARS = 160
 PLAIN_TEXT = {".md", ".txt", ".log", ".csv", ".jsonl"}  # shown as text instead of downloaded
-PAGE_CSP = "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'"
+# frame-ancestors: no other site may show the records page in a frame (black-box probe 4, 2026-10-15).
+PAGE_CSP = "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
 # Job files are made from outside content; a sandboxed response cannot run script on this origin.
 FILE_HEADERS = {"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff",
                 "Content-Security-Policy": "sandbox"}
@@ -406,6 +408,7 @@ def make_app(people: People) -> web.Application:
     app[STOPPING] = asyncio.Event()
     app.on_shutdown.append(stop_streams)
     app.on_response_prepare.append(no_cache_static)
+    app.on_response_prepare.append(plain_server_name)
     app.router.add_get("/", index)
     app.router.add_get("/api/sessions", list_sessions)
     app.router.add_get("/api/sessions/{date}/{time}/events", stream_events, allow_head=False)

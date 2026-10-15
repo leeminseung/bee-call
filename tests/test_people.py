@@ -227,6 +227,47 @@ def test_the_app_changes_its_settings(tmp_path):
     assert bad == 400 and me.people.settings("matt").daily_budget_usd == Settings().daily_budget_usd
 
 
+def test_the_token_server_s_answers_are_never_cached_and_say_nothing_about_its_software(tmp_path):
+    """Black-box probe 3 and 5 (2026-10-15): /token's answer holds a LiveKit pass and had no Cache-Control; every
+    answer named Python and aiohttp with their versions; a bad sign-in token or a body that is not JSON came back
+    with the library's own words ("Not enough segments", "Expecting value: line 1 column 13")."""
+    me = signed_in(tmp_path)
+
+    async def main():
+        async with TestClient(TestServer(app_for(me.people))) as client:
+            mine = await client.get("/me", headers=me.headers)
+            nobody = await client.get("/me")
+            nonce = (await (await client.get("/auth/nonce")).json())["nonce"]
+            forged = await client.post("/auth/apple", json={"identity_token": "not-a-jwt", "nonce": nonce})
+            broken = await client.put("/settings", data='{"language":', headers=me.headers)
+            voip = await client.post("/voip", data="{", headers=me.headers)
+            return [(r.status, dict(r.headers), await r.text()) for r in (mine, nobody, forged, broken, voip)]
+
+    answers = asyncio.run(main())
+    for status, headers, _ in answers:
+        assert headers.get("Cache-Control") == "no-store", status
+        assert "aiohttp" not in headers.get("Server", "") and "Python" not in headers.get("Server", ""), status
+    (_, _, _), (_, _, _), (forged, _, forged_text), (broken, _, broken_text), (voip, _, voip_text) = answers
+    assert forged == 401 and forged_text == "Apple's sign-in token was not accepted\n"
+    assert broken == 400 and "Expecting value" not in broken_text and "line 1" not in broken_text
+    assert voip == 400 and "Expecting" not in voip_text
+
+
+def test_the_record_page_cannot_be_framed_and_says_nothing_about_its_software(tmp_path):
+    """Black-box probe 4 and 5: the private records page could be put in another site's frame, and it named Python
+    and aiohttp too."""
+    me = signed_in(tmp_path)
+
+    async def main():
+        async with TestClient(TestServer(session_server.make_app(me.people))) as client:
+            page = await client.get("/", headers=me.headers)
+            return page.status, dict(page.headers)
+
+    status, headers = asyncio.run(main())
+    assert status == 200 and "frame-ancestors 'none'" in headers["Content-Security-Policy"]
+    assert "aiohttp" not in headers.get("Server", "")
+
+
 def test_without_a_sign_in_only_this_machine_gets_the_dev_person(tmp_path, monkeypatch):
     me = signed_in(tmp_path)
     dev = {"X-Bee-Call-Dev": "1"}

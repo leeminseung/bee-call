@@ -70,6 +70,7 @@ from beelink.clock import parse_time
 from beelink.planner import OUTBOUND_LOG
 from meta.session import add_event
 from voice import apple_signin, voip_push
+from voice.web_headers import plain_server_name
 from voice.continuation import session_dir
 from voice.costs import day_budget
 from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata, call_room_of, decline_ring, declined_rooms, \
@@ -175,7 +176,8 @@ async def apple_sign_in(request: web.Request) -> web.Response:
     try:
         identity = await asyncio.to_thread(request.app[VERIFY], identity_token, BUNDLE_ID, nonce)
     except apple_signin.SignInError as exc:
-        raise web.HTTPUnauthorized(text=f"{exc}\n")
+        log.info("a sign-in was refused: %s", exc)  # the library's words stay in the log (black-box probe 5)
+        raise web.HTTPUnauthorized(text="Apple's sign-in token was not accepted\n")
     people = request.app[PEOPLE]
     who = people.sign_in(identity.sub, identity.email, datetime.now())
     if who is None:
@@ -200,14 +202,23 @@ async def me(request: web.Request) -> web.Response:
 
 
 async def change_settings(request: web.Request) -> web.Response:
+    changes = await json_object(request)
     try:
-        changes = await request.json()
-        if not isinstance(changes, dict):
-            raise ValueError("expected a JSON object")
         settings = request.app[PEOPLE].change_settings(person(request), changes)
-    except ValueError as exc:
+    except ValueError as exc:  # our own words: which setting, and what it takes
         raise web.HTTPBadRequest(text=f"{exc}\n")
     return web.json_response({"settings": asdict(settings)})
+
+
+async def json_object(request: web.Request) -> dict:
+    """The request's JSON object; 400 for anything else, without the parser's own words (black-box probe 5)."""
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text="expected a JSON object\n")
+    return body
 
 
 # ---------- calls ----------
@@ -328,24 +339,24 @@ async def decline_call(request: web.Request) -> web.Response:
 
 
 async def voip_token(request: web.Request) -> web.Response:
+    body = await json_object(request)
     try:
-        body = await request.json()
         voip_push.save_device_token(someone(request), str(body["token"]), str(body["environment"]),
                                     session_token=bearer(request))
     except (ValueError, KeyError, TypeError) as exc:
-        raise web.HTTPBadRequest(text=f"expected a VoIP token: {exc}")
+        raise web.HTTPBadRequest(text=f"expected a VoIP token: {exc}\n")
     log.info("VoIP push token saved for %s (%s)", person(request), body["environment"])
     return web.Response(status=204)
 
 
 async def alert_token(request: web.Request) -> web.Response:
     """The app's token for plain notifications (the offers that ask before a call)."""
+    body = await json_object(request)
     try:
-        body = await request.json()
         voip_push.save_device_token(someone(request), str(body["token"]), str(body["environment"]), "alert",
                                     session_token=bearer(request))
     except (ValueError, KeyError, TypeError) as exc:
-        raise web.HTTPBadRequest(text=f"expected a notification token: {exc}")
+        raise web.HTTPBadRequest(text=f"expected a notification token: {exc}\n")
     log.info("notification token saved for %s (%s)", person(request), body["environment"])
     return web.Response(status=204)
 
@@ -470,9 +481,16 @@ async def stop_bee_logins(app: web.Application) -> None:
         task.cancel()
 
 
+async def private_answers(request: web.Request, response: web.StreamResponse) -> None:
+    """Every answer is one person's (a call pass, settings, offers): never kept by a cache (black-box probe 3)."""
+    response.headers["Cache-Control"] = "no-store"
+
+
 def make_app(url: str, key: str, secret: str, people: People, room_exists=livekit_room_exists,
              verify=apple_signin.verify) -> web.Application:
     app = web.Application(middlewares=[known_hosts_only, signed_in])
+    app.on_response_prepare.append(private_answers)
+    app.on_response_prepare.append(plain_server_name)
     app[URL], app[KEY], app[SECRET], app[ROOM_EXISTS] = url, key, secret, room_exists
     app[PEOPLE], app[NONCES], app[VERIFY], app[BEE_LOGINS] = people, apple_signin.Nonces(), verify, {}
     app.on_startup.append(resume_bee_logins)
