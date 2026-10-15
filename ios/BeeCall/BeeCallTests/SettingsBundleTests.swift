@@ -22,6 +22,16 @@ final class SettingsBundleTests: XCTestCase {
         }
     }
 
+    /// Review finding 10: the app's defaults (AppSettings.defaults, used before the Settings app has written
+    /// anything) are written apart from the page's own; they must say the same.
+    @MainActor func testTheAppsDefaultsAreThePagesDefaults() throws {
+        var page: [String: NSObject] = [:]
+        for item in try specifiers() {
+            if let key = item["Key"] as? String, let value = item["DefaultValue"] as? NSObject { page[key] = value }
+        }
+        XCTAssertEqual(page as NSDictionary, AppSettings.defaults as NSDictionary)
+    }
+
     /// The user's decision of 2026-10-15: turning "Save on the server" off keeps the recordings made before.
     @MainActor func testTheAudioFooterSaysRecordingsMadeBeforeStay() throws {
         let footer = try XCTUnwrap(specifiers().first { $0["Title"] as? String == "Call audio" }?["FooterText"] as? String)
