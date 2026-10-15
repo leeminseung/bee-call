@@ -81,13 +81,26 @@ LIMIT_NOTE = ("This job has used its {what}. Write your final answer now from wh
 PASSING_ERRORS = ("overloaded_error", "api_error", "rate_limit_error", "timeout_error")
 
 
+def transport_errors() -> tuple[type[BaseException], ...]:
+    """The errors of a connection that fails or drops while an answer streams: the SDK reads it with httpx2 (anthropic
+    1.13), whose errors are its own, not httpx's (review of 2026-10-15, finding 1)."""
+    import anthropic
+
+    found: list[type[BaseException]] = [anthropic.APIConnectionError]  # before the stream: timeouts among them
+    for name in ("httpx2", "httpx"):
+        try:
+            found.append(__import__(name).TransportError)
+        except (ImportError, AttributeError):
+            continue
+    return tuple(found)
+
+
 def retryable(exc: BaseException) -> bool:
     """A failure worth another try: the connection (also one dropped mid-stream), an overloaded or failing server,
     a rate limit."""
     import anthropic
-    import httpx
 
-    if isinstance(exc, (anthropic.APIConnectionError, httpx.TransportError)):  # timeouts among them
+    if isinstance(exc, transport_errors()):
         return True
     if isinstance(exc, anthropic.APIStatusError):
         body = exc.body if isinstance(exc.body, dict) else {}

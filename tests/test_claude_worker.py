@@ -272,23 +272,23 @@ def test_a_job_cancelled_while_a_request_runs_counts_an_estimate(tmp_path):
 
 
 def test_a_request_that_fails_midway_is_tried_again(tmp_path, monkeypatch):
-    import anthropic
-    import httpx
+    """Through the real SDK: a connection that cannot be made, and an error event in the middle of the stream (which
+    the SDK raises with the stream's own status, 200), are tried again; a refused request (400) is not."""
+    import httpx2
 
     monkeypatch.setattr(claude, "RETRY_WAITS_S", (0, 0))
-    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    broken = anthropic.APIConnectionError(request=request)
-    # An error event in the middle of the stream: the SDK raises it with the stream's own status, 200.
-    overloaded = anthropic.APIStatusError("overloaded", response=httpx.Response(200, request=request), body={
-        "type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}})
-    client = api([broken, overloaded, reply([text("Done after all.")], "end_turn")])
+    overloaded = sse(streamed("x")[:1]) + b'event: error\ndata: {"type": "error", "error": {"type": ' \
+                                          b'"overloaded_error", "message": "Overloaded"}}\n\n'
+    client, posts = sdk_client([httpx2.ConnectError("no route"), overloaded, sse(streamed("Done after all."))])
     summary, _, _ = run(job_in(tmp_path, None), client)
-    assert summary == "Done after all." and len(client.messages.sent) == 3
-    assert usage_of(job_in(tmp_path, None))["requests"] == 3  # each try counted, the failed ones as estimates
-    refused = anthropic.BadRequestError("bad", response=httpx.Response(400, request=request), body=None)
-    client = api([refused])
+    assert summary == "Done after all." and len(posts) == 3
+    assert usage_of(job_in(tmp_path, None))["requests"] == 3  # each try counted
+    refused = httpx2.Response(400, json={"type": "error", "error": {"type": "invalid_request_error", "message": "x"}})
+    client, posts = sdk_client([refused])
     failed, _, _ = run(job_in(tmp_path, None), client)
-    assert isinstance(failed, anthropic.BadRequestError) and len(client.messages.sent) == 1  # not tried again
+    import anthropic
+
+    assert isinstance(failed, anthropic.BadRequestError) and len(posts) == 1  # not tried again
 
 
 # ---------- which worker runs a person's jobs ----------
@@ -342,3 +342,72 @@ def test_a_worker_not_set_up_here_hands_the_jobs_to_one_that_is(both_workers, mo
 
     with pytest.raises(RuntimeError, match="no background worker is set up.*ANTHROPIC_API_KEY.*deploy_worker"):
         asyncio.run(nothing.run(job_in(tmp_path), lambda line: None, relay))
+
+
+# ---------- through the real SDK, on a stand-in transport ----------
+
+def sse(events: list[dict]) -> bytes:
+    return b"".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events)
+
+
+def streamed(text_out: str, stop: str = "end_turn") -> list[dict]:
+    """The stream of one answer of plain text, as the Messages API sends it."""
+    return [{"type": "message_start", "message": {
+                "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5", "content": [],
+                "stop_reason": None, "stop_sequence": None,
+                "usage": {"input_tokens": 100, "output_tokens": 1, "cache_read_input_tokens": 0,
+                          "cache_creation_input_tokens": 0}}},
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text_out}},
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None},
+             "usage": {"output_tokens": 20}},
+            {"type": "message_stop"}]
+
+
+def sdk_client(answers: list) -> tuple[object, list]:
+    """Anthropic's own async client, answering each request from `answers` over a stand-in transport: bytes are a
+    stream sent whole; (bytes, an exception) is a stream that breaks off with it after those bytes; an exception is a
+    connection that fails; a response is sent as it is."""
+    import anthropic
+    import httpx2
+
+    posts = []
+
+    class Broken(httpx2.AsyncByteStream):
+        def __init__(self, first: bytes, exc: Exception) -> None:
+            self.first, self.exc = first, exc
+
+        async def __aiter__(self):
+            yield self.first
+            raise self.exc
+
+    def handler(request):
+        posts.append(json.loads(request.content or b"{}"))
+        answer = answers.pop(0)
+        headers = {"content-type": "text/event-stream"}
+        if isinstance(answer, Exception):  # the connection itself fails
+            raise answer
+        if isinstance(answer, httpx2.Response):
+            return answer
+        if isinstance(answer, tuple):
+            return httpx2.Response(200, headers=headers, stream=Broken(*answer))
+        return httpx2.Response(200, headers=headers, content=answer)
+
+    client = anthropic.AsyncAnthropic(api_key="not-a-key", max_retries=0,
+                                      http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
+    return client, posts
+
+
+def test_a_connection_that_drops_mid_stream_is_tried_again(tmp_path, monkeypatch):
+    """Review of 2026-10-15, finding 1: the SDK reads the stream with httpx2, and a connection that drops while the
+    answer streams raises httpx2's own errors, which were not taken for a dropped connection: the job failed at once."""
+    import httpx2
+
+    monkeypatch.setattr(claude, "RETRY_WAITS_S", (0, 0))
+    first = sse(streamed("Half")[:3])
+    for drop in (httpx2.RemoteProtocolError("peer closed connection without sending complete message body"),
+                 httpx2.ReadError("connection reset"), httpx2.ReadTimeout("timed out")):
+        client, posts = sdk_client([(first, drop), sse(streamed("Done after the drop."))])
+        summary, _, _ = run(job_in(tmp_path, None), client)
+        assert summary == "Done after the drop." and len(posts) == 2, drop
