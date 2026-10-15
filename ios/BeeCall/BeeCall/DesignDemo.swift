@@ -14,6 +14,8 @@ enum DesignDemo: String {
     case resultConversation // frame 5, right: a job finishes while the conversation is up
     case record // frame 6, left: a call's sheet, at its top
     case recordEnd // frame 6, right: the same sheet at its end
+    case firstRun // frame 7, left: the first run's language step
+    case firstRunVoice // frame 7, right: the voice step, with a sample playing
 
     static func requested(in store: UserDefaults = .standard) -> DesignDemo? {
         store.string(forKey: "designD").flatMap(DesignDemo.init(rawValue:))
@@ -139,6 +141,23 @@ final class DemoConversation: ConversationSource {
     }
 }
 
+/// The first run's voices before the server has any: the design's five Korean names, which are provisional, and
+/// five English ones made up for the demo. Nothing plays.
+struct DemoVoices: VoiceCatalog, VoiceSamples {
+    func voices(for language: CallLanguage) -> [CallVoice] {
+        let voices: [(String, String, String)] = switch language {
+        case .ko: [("harin", "하린", "친근함"), ("seojun", "서준", "차분함"), ("daon", "다온", "또렷함"),
+                   ("narae", "나래", "밝음"), ("doyun", "도윤", "낮고 안정적")]
+        case .en: [("ava", "Ava", "Warm"), ("ethan", "Ethan", "Calm"), ("nora", "Nora", "Clear"),
+                   ("lily", "Lily", "Bright"), ("owen", "Owen", "Low and steady")]
+        }
+        return voices.map { CallVoice(id: $0.0, name: $0.1, manner: $0.2) }
+    }
+
+    func play(_ voice: CallVoice) {}
+    func stop() {}
+}
+
 /// One frame of design D, with the design's content.
 struct DesignDemoView: View {
     let demo: DesignDemo
@@ -148,6 +167,7 @@ struct DesignDemoView: View {
     @State private var jump: String?
     @State private var liveDemo = DemoConversation(live: true)
     @State private var presentation = CallPresentation()
+    @State private var preview = VoicePreview(samples: DemoVoices())
 
     var body: some View {
         switch demo {
@@ -175,6 +195,13 @@ struct DesignDemoView: View {
                               continueCall: {}, startAtEnd: demo == .recordEnd)
                 }
                 .task { await offers.refresh() }
+        case .firstRun, .firstRunVoice:
+            FirstRunView(catalog: DemoVoices(), preview: preview, startOn: demo == .firstRunVoice ? .voice : nil) {}
+                .task {
+                    guard demo == .firstRunVoice else { return }
+                    try? await Task.sleep(for: .milliseconds(800))
+                    if let daon = DemoVoices().voices(for: .ko).first(where: { $0.id == "daon" }) { preview.toggle(daon) }
+                }
         case .live:
             ConversationRoot(calls: calls, source: liveDemo, offers: offers, status: "")
                 .task { calls.playDesignDemo(lines: DesignDemo.callLines, voice: .both, connectedAgo: 218) }
