@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WebKit
 import XCTest
 @testable import BeeCall
@@ -70,17 +71,58 @@ final class RecordPagePolicyTests: XCTestCase {
         XCTAssertEqual(continued, ["2026-10-14/0055"])
     }
 
-    /// The web view itself: a page that leaves for another site is stopped, and the site opens in Safari.
-    @MainActor func testTheWebViewHandsOtherSitesToSafari() async throws {
-        let records = URL(string: "https://records.invalid:8443/")! // never resolves: nothing leaves this Mac
+    /// Safari only for a link the person taps in the page itself (round 2's review): a frame inside a page, such
+    /// as an embed in a job's file, or a page's own redirect, never sends the person out of the app.
+    @MainActor func testOnlyATappedLinkInThePageItselfOpensSafari() {
+        let elsewhere = URL(string: "https://example.org/")!
+        XCTAssertEqual(records.decision(for: elsewhere, tapped: true, mainFrame: true), .openInSafari)
+        XCTAssertEqual(records.decision(for: elsewhere, tapped: false, mainFrame: true), .refuse) // a redirect
+        XCTAssertEqual(records.decision(for: elsewhere, tapped: true, mainFrame: false), .refuse) // inside a frame
+        let own = URL(string: "https://call.mslee.dev:8443/api/files/x")!
+        XCTAssertEqual(records.decision(for: own, tapped: false, mainFrame: false), .stay)
+        XCTAssertEqual(records.decision(for: URL(string: "about:blank")!, tapped: true, mainFrame: true), .refuse)
+    }
+
+    /// The web view itself (with addresses under .invalid, so nothing leaves this Mac): a tapped link to another
+    /// site opens in Safari.
+    @MainActor func testTheWebViewHandsATappedLinkToSafari() async throws {
+        let records = URL(string: "https://records.invalid:8443/")!
         var opened: [URL] = []
         let coordinator = SessionPage.Coordinator(policy: RecordPagePolicy(records: records), failed: .constant(false),
                                                   onContinue: { _ in }, openOutside: { opened.append($0) })
         let view = SessionPage.webView(coordinator)
-        view.loadHTMLString("<!doctype html><script>location.href = 'https://elsewhere.invalid/page'</script>",
-                            baseURL: records)
+        view.loadHTMLString("""
+            <!doctype html><a id="out" href="https://elsewhere.invalid/page">elsewhere</a>
+            <script>document.getElementById("out").click()</script>
+            """, baseURL: records)
         await waitUntil("the other site is handed on", timeout: .seconds(10)) { !opened.isEmpty }
         XCTAssertEqual(opened, [URL(string: "https://elsewhere.invalid/page")!])
+        XCTAssertEqual(view.url?.host, "records.invalid")
+    }
+
+    /// The web view itself, on screen so that it loads frames: a frame from another site and a page's own
+    /// redirect send nobody to Safari, and the page stays.
+    @MainActor func testTheWebViewSendsNoFrameOrRedirectToSafari() async throws {
+        let records = URL(string: "https://records.invalid:8443/")!
+        var opened: [URL] = []
+        var asked: [URL] = []
+        let coordinator = SessionPage.Coordinator(policy: RecordPagePolicy(records: records), failed: .constant(false),
+                                                  onContinue: { _ in }, openOutside: { opened.append($0) })
+        coordinator.onDecision = { asked.append($0) }
+        let view = SessionPage.webView(coordinator)
+        let window = try XCTUnwrap((UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first)
+        view.frame = CGRect(x: 0, y: 0, width: 300, height: 300)
+        window.addSubview(view)
+        defer { view.removeFromSuperview() }
+        view.loadHTMLString("""
+            <!doctype html><iframe src="https://ads.invalid/frame"></iframe>
+            <script>location.href = "https://elsewhere.invalid/redirect"</script>
+            """, baseURL: records)
+        await waitUntil("both loads are decided", timeout: .seconds(10)) {
+            asked.contains(URL(string: "https://ads.invalid/frame")!)
+                && asked.contains(URL(string: "https://elsewhere.invalid/redirect")!)
+        }
+        XCTAssertEqual(opened, [])
         XCTAssertEqual(view.url?.host, "records.invalid")
     }
 }

@@ -2,8 +2,8 @@ import Foundation
 
 /// What the call record's web view lets in (review finding 8). The page shows files from background jobs, and a
 /// link in one could take the web view anywhere, inside the app and with no address bar. So the web view stays on
-/// the records server's own pages, any other web address opens in Safari, and only the records page itself can
-/// ask the app to continue a call.
+/// the records server's own pages, another site opens in Safari when the person taps a link to it, and only the
+/// records page itself can ask the app to continue a call.
 struct RecordPagePolicy {
     enum Navigation: Equatable {
         case stay // a page of the records server
@@ -16,6 +16,18 @@ struct RecordPagePolicy {
     func navigation(to url: URL) -> Navigation {
         if let origin = Origin(url), origin == Origin(records) { return .stay }
         return ["http", "https"].contains(url.scheme?.lowercased()) ? .openInSafari : .refuse
+    }
+
+    /// What to do with a load (round 2's review): the records server's own pages stay; another site opens in
+    /// Safari only for a link the person tapped in the page itself; a frame inside a page, such as an embed in a
+    /// job's file, or a page's own redirect, is stopped quietly, so nothing sends the person out of the app
+    /// without a tap.
+    func decision(for url: URL, tapped: Bool, mainFrame: Bool) -> Navigation {
+        switch navigation(to: url) {
+        case .stay: .stay
+        case .openInSafari where tapped && mainFrame: .openInSafari
+        case .openInSafari, .refuse: .refuse
+        }
     }
 
     /// "Continue this call" starts a call, so it counts only from the main frame of a page on the records server:

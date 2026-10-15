@@ -105,6 +105,8 @@ struct SessionPage: UIViewRepresentable {
         let onContinue: (String) -> Void
         let openOutside: (URL) -> Void // Safari, in the app
         var loadedAttempt: Int?
+        /// Each load the web view asks about (tests watch it).
+        var onDecision: ((URL) -> Void)?
 
         init(policy: RecordPagePolicy, failed: Binding<Bool>, onContinue: @escaping (String) -> Void,
              openOutside: @escaping (URL) -> Void = { UIApplication.shared.open($0) }) {
@@ -132,12 +134,15 @@ struct SessionPage: UIViewRepresentable {
             failed.wrappedValue = true
         }
 
-        /// Every load, the page's own and a link's: the records server's pages stay here, other sites open in
-        /// Safari, and anything else goes nowhere (RecordPagePolicy).
+        /// Every load, the page's own, a frame's and a link's: the records server's pages stay here, a tapped link
+        /// to another site opens in Safari, and anything else goes nowhere (RecordPagePolicy).
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
             guard let url = navigationAction.request.url else { return decisionHandler(.cancel) }
-            switch policy.navigation(to: url) {
+            onDecision?(url)
+            let mainFrame = navigationAction.targetFrame?.isMainFrame ?? true // none: a new window
+            switch policy.decision(for: url, tapped: navigationAction.navigationType == .linkActivated,
+                                   mainFrame: mainFrame) {
             case .stay:
                 decisionHandler(.allow)
             case .openInSafari:
@@ -148,11 +153,16 @@ struct SessionPage: UIViewRepresentable {
             }
         }
 
-        // The page opens a file's raw view in a new window (target=_blank). Show it in this one; the load goes
-        // through the policy above like any other.
+        // The page opens a file's raw view in a new window (target=_blank). Show it in this one, or, for a tapped
+        // link to another site, in Safari.
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                      for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-            webView.load(navigationAction.request)
+            guard let url = navigationAction.request.url else { return nil }
+            switch policy.decision(for: url, tapped: navigationAction.navigationType == .linkActivated, mainFrame: true) {
+            case .stay: webView.load(navigationAction.request)
+            case .openInSafari: openOutside(url)
+            case .refuse: break
+            }
             return nil
         }
     }
