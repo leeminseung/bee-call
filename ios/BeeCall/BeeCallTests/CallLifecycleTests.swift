@@ -5,9 +5,10 @@ import XCTest
 /// A call from CallKit's start or answer to its end, with stand-ins for CallKit and the LiveKit room.
 final class CallLifecycleTests: XCTestCase {
     @MainActor private func calls(_ callKit: FakeCallKit, _ room: FakeRoom, server: FakeServer = FakeServer(),
-                                  microphone: Bool = true) -> CallManager {
+                                  microphone: Bool = true, speaker: @escaping (Bool) throws -> Void = { _ in })
+        -> CallManager {
         CallManager(callKit: callKit, calls: callKit, microphone: { microphone }, room: room, beforeAnswering: {},
-                    decline: CallDecline(server: server.client()), pickUpWait: .milliseconds(300))
+                    decline: CallDecline(server: server.client()), speaker: speaker, pickUpWait: .milliseconds(300))
     }
 
     /// The person taps Call; CallKit hands the start back, as it does once the call is on its screen.
@@ -162,6 +163,62 @@ final class CallLifecycleTests: XCTestCase {
         calls.perform(CXSetMutedCallAction(call: id, muted: false))
         await waitUntil("both reach the room") { room.microphone.count == 2 }
         XCTAssertEqual(room.microphone, [false, true])
+    }
+
+    // MARK: - Design D's call screen: its own mute, speaker and clock
+
+    /// The call screen's mute goes through CallKit, so CallKit's own screen shows the same.
+    @MainActor func testMutingFromTheCallScreenGoesThroughCallKit() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room)
+        let id = try await start(calls, callKit)
+        await waitUntil("the room is joined") { calls.status == "Ringing…" }
+        room.aiAnswers()
+        await calls.setMuted(true)
+        let mute = try XCTUnwrap(callKit.requested.last as? CXSetMutedCallAction)
+        XCTAssertEqual(mute.callUUID, id)
+        XCTAssertTrue(mute.isMuted)
+        XCTAssertFalse(calls.isMuted, "muted once CallKit performs it")
+        calls.perform(mute) // what CallKit does with the request
+        await waitUntil("the microphone is off") { room.microphone == [false] }
+        XCTAssertTrue(calls.isMuted)
+    }
+
+    @MainActor func testTheSpeakerTurnsOnAndOffAndIsOffAfterTheCall() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom()
+        var routes: [Bool] = []
+        let calls = calls(callKit, room, speaker: { routes.append($0) })
+        let id = try await start(calls, callKit)
+        await waitUntil("the room is joined") { calls.status == "Ringing…" }
+        calls.setSpeaker(true)
+        XCTAssertTrue(calls.isSpeakerOn)
+        calls.setSpeaker(false)
+        XCTAssertFalse(calls.isSpeakerOn)
+        calls.setSpeaker(true)
+        calls.perform(CXEndCallAction(call: id))
+        await waitUntil("the call has ended") { !calls.isInCall }
+        XCTAssertFalse(calls.isSpeakerOn)
+        XCTAssertEqual(routes, [true, false, true])
+    }
+
+    @MainActor func testASpeakerThatCannotBeTurnedOnStaysOff() async throws {
+        struct NoSpeaker: Error {}
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room, speaker: { _ in throw NoSpeaker() })
+        _ = try await start(calls, callKit)
+        calls.setSpeaker(true)
+        XCTAssertFalse(calls.isSpeakerOn)
+    }
+
+    /// The call screen's clock runs from the moment the AI is there.
+    @MainActor func testTheCallsClockStartsWhenTheAIIsThereAndStopsWithTheCall() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room)
+        let id = try await start(calls, callKit)
+        await waitUntil("the room is joined") { calls.status == "Ringing…" }
+        XCTAssertNil(calls.connectedAt)
+        room.aiAnswers()
+        XCTAssertNotNil(calls.connectedAt)
+        calls.perform(CXEndCallAction(call: id))
+        await waitUntil("the call has ended") { !calls.isInCall }
+        XCTAssertNil(calls.connectedAt)
     }
 
     // MARK: - Microphone access (BC-142)

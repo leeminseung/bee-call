@@ -19,6 +19,9 @@ final class CallManager: NSObject {
     private(set) var isEnding = false
     /// "Save on this iPhone" is on but the call's recording did not start: shown until the next call joins.
     private(set) var phoneRecordingProblem: String?
+    private(set) var isMuted = false // as CallKit last performed it, from this app's screen or its own
+    private(set) var isSpeakerOn = false
+    private(set) var connectedAt: Date? // when the AI was there: the call screen's clock runs from here
     let liveKit: LiveKitClient // the call screen shows its captions and voice levels
 
     /// The call's room: `liveKit` in the app, a stand-in in tests.
@@ -42,6 +45,7 @@ final class CallManager: NSObject {
     @ObservationIgnored private var pickUpTimeout: Task<Void, Never>?
     @ObservationIgnored private var pickedUp = false
     @ObservationIgnored private let pickUpWait: Duration
+    @ObservationIgnored private let speaker: (Bool) throws -> Void
     @ObservationIgnored private let decline: CallDecline
     /// The name of every call, both ways, on CallKit's call screen and in the Phone app's Recents.
     private static let handle = CXHandle(type: .generic, value: "Bee Call")
@@ -53,7 +57,8 @@ final class CallManager: NSObject {
          microphone: @escaping () async -> Bool = { await LiveKitSDK.ensureDeviceAccess(for: [.audio]) },
          room: (any CallRoom)? = nil,
          beforeAnswering: @escaping () async -> Void = { await Server.shared.settings.sendBeforeAnswering() },
-         decline: CallDecline = CallDecline(), pickUpWait: Duration = .seconds(30)) {
+         decline: CallDecline = CallDecline(), speaker: @escaping (Bool) throws -> Void = CallManager.routeToSpeaker,
+         pickUpWait: Duration = .seconds(30)) {
         let provider: CXProvider? = callKit == nil ? Self.provider() : nil
         self.callKit = callKit ?? provider!
         self.calls = calls ?? CXCallController()
@@ -63,6 +68,7 @@ final class CallManager: NSObject {
         self.room = room ?? liveKit
         self.beforeAnswering = beforeAnswering
         self.decline = decline
+        self.speaker = speaker
         self.pickUpWait = pickUpWait
         super.init()
         provider?.setDelegate(self, queue: nil) // nil = main queue
@@ -117,6 +123,30 @@ final class CallManager: NSObject {
         } catch {
             finish("Could not start the call: \(error.localizedDescription)")
         }
+    }
+
+    /// The call screen's mute (design D). It asks CallKit, so CallKit's own screen shows the same; `isMuted`
+    /// follows once CallKit performs it (perform(_: CXSetMutedCallAction)).
+    func setMuted(_ muted: Bool) async {
+        guard let id = callID else { return }
+        try? await calls.request(CXTransaction(action: CXSetMutedCallAction(call: id, muted: muted)))
+    }
+
+    /// The call screen's speaker (design D): the call's sound from the iPhone's loudspeaker, or back to the
+    /// receiver or headphones. It stays off when iOS refuses.
+    func setSpeaker(_ on: Bool) {
+        guard isInCall else { return }
+        do {
+            try speaker(on)
+            isSpeakerOn = on
+        } catch {
+            isSpeakerOn = false
+        }
+    }
+
+    /// The loudspeaker on or off for the call's audio session, which CallKit has activated.
+    nonisolated static func routeToSpeaker(_ on: Bool) throws {
+        try AVAudioSession.sharedInstance().overrideOutputAudioPort(on ? .speaker : .none)
     }
 
     func endCall() async {
@@ -350,6 +380,7 @@ final class CallManager: NSObject {
         pickedUp = true
         pickUpTimeout?.cancel()
         pickUpTimeout = nil
+        connectedAt = .now
         if !rungRooms.values.contains(id) { callKit.reportConnected(id) }
         status = "Connected"
     }
@@ -394,6 +425,9 @@ final class CallManager: NSObject {
         isRinging = false
         isEnding = false
         isReconnecting = false
+        isMuted = false
+        isSpeakerOn = false
+        connectedAt = nil
         status = message
     }
 }
@@ -484,6 +518,7 @@ extension CallManager: CXProviderDelegate {
         Task {
             do {
                 try await room.setMicrophone(enabled: !action.isMuted)
+                isMuted = action.isMuted
                 action.fulfill()
             } catch {
                 action.fail()
