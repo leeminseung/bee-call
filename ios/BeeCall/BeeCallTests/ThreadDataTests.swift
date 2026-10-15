@@ -56,4 +56,23 @@ final class ThreadDataTests: XCTestCase {
         XCTAssertEqual(data.sections.filter { $0.id == "call/\(room)" }.count, 1, "listed once, where the list has it")
         XCTAssertEqual(data.ownCall, room)
     }
+
+    /// Second review of the D wiring, finding 2: the content is kept fresh by ThreadData itself, switched on and off
+    /// by the app (on screen, or in a call), not by a view the call screen covers.
+    @MainActor func testTheContentIsKeptFreshWhileSwitchedOn() async throws {
+        let server = FakeServer()
+        server.replies["GET /calls"] = .status(200, try text("calls"))
+        server.replies["GET /offers"] = .status(200, try text("offers"))
+        server.replies["GET /me"] = .status(200, try text("me"))
+        let data = try await data(server)
+        let before = server.requests.count
+        data.keepFresh(true)
+        await waitUntil("the list, the offers and the person are fetched") { server.requests.count == before + 3 }
+        data.keepFresh(true)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(server.requests.count, before + 3, "already on")
+        data.keepFresh(false)
+        data.keepFresh(true)
+        await waitUntil("fetched again on coming back") { server.requests.count == before + 6 }
+    }
 }

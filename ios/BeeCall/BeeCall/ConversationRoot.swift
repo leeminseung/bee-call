@@ -57,6 +57,9 @@ struct ConversationRoot: View {
                                                   set: { if !$0 { presentation.show(.conversation) } })) {
                 CallModeView(calls: calls, job: pill, showConversation: { presentation.show(.conversation) })
                     .zoomTransition("call", in: zoom)
+                    // The call's own view, for the pill and "결과 도착", also while the call screen covers the
+                    // conversation, whose live section asks for it too.
+                    .task(id: source.ownCall) { if let id = source.ownCall { await source.show(id) } }
             }
             .sheet(isPresented: $settingsOpen, onDismiss: { sheetUp = false }) {
                 SettingsSheet(person: person, catalog: catalog, preview: preview)
@@ -89,10 +92,8 @@ struct ConversationRoot: View {
                 try? await Task.sleep(for: .seconds(2))
                 notice.glowEnded(id)
             }
-            .task(id: scenePhase == .background) { // up to date while on screen, and again on coming back
-                guard scenePhase != .background else { return }
-                await source.keepFresh()
-            }
+            // Up to date while on screen or in a call (contract section 3), and again on coming back.
+            .onChange(of: scenePhase != .background || calls.isInCall, initial: true) { _, on in source.keepFresh(on) }
     }
 
     /// "이 통화 이어서 하기": the call starts once the sheet is down, so the call screen is not asked for while the

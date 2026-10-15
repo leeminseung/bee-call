@@ -107,7 +107,7 @@ struct DesignDemoView: View {
     private var home: some View {
         HomeView(source: data, calls: calls, offers: data.offers, status: "준비됨 · 앱을 닫아도 전화가 와요",
                  jump: $jump, showCallScreen: {}, openSettings: {}, openCall: { _ in }, startCall: {})
-            .task { await data.keepFresh() }
+            .onAppear { data.keepFresh(true) }
     }
 
     /// The MacBook call while it is on; in the result frames, its job then finishes (the view after the call, the

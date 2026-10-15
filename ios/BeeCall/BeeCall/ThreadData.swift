@@ -20,8 +20,8 @@ protocol ConversationSource: AnyObject {
     /// A call's section or record is shown: its view is fetched if the app has none or a newer one exists.
     func show(_ callID: String) async
     func loadOlder() async
-    /// Brings the content up to date and keeps it so while the task lasts.
-    func keepFresh() async
+    /// Keeps the content up to date while `on` (the app on screen, or in a call); off stops it.
+    func keepFresh(_ on: Bool)
 }
 
 /// The home thread's content in the app: the call list and views (CallStore), the open offers (OfferCenter), the
@@ -34,6 +34,9 @@ final class ThreadData: ConversationSource {
     let offers: OfferCenter
     let person: PersonStore
     let calls: CallManager
+    /// Keeping the content fresh, owned here so a call screen covering the conversation does not stop it (second
+    /// review of the D wiring, finding 2: it ran on the covered view).
+    @ObservationIgnored private var freshness: Task<Void, Never>?
 
     init(calls: CallManager, store: CallStore = CallStore(), offers: OfferCenter = .shared,
          person: PersonStore = PersonStore()) {
@@ -91,9 +94,17 @@ final class ThreadData: ConversationSource {
         await store.loadOlder()
     }
 
-    /// Brings the list, the offers and the person up to date, then keeps them so while the task lasts, through
-    /// GET /changes (not for the contract's examples, which never change).
-    func keepFresh() async {
+    func keepFresh(_ on: Bool) {
+        guard on != (freshness != nil) else { return }
+        freshness?.cancel()
+        freshness = nil
+        guard on else { return }
+        freshness = Task { [weak self] in await self?.refreshAndListen() }
+    }
+
+    /// Brings the list, the offers and the person up to date, then keeps them so through GET /changes until
+    /// cancelled (not for the contract's examples, which never change).
+    private func refreshAndListen() async {
         async let list: Void = store.refreshList()
         async let open: Void = offers.refresh()
         async let me: Void = person.refresh()
