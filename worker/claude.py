@@ -13,8 +13,8 @@ into the job folder under a free, safe name at once, and deletes it from Anthrop
 Background jobs need not be quick (the user, 2026-10-15): every request may write up to the role's max_tokens with
 thinking at effort high, a job may make MAX_REQUESTS requests and JOB_WEB_SEARCHES web searches, and at either limit,
 whatever the turn's stop, Claude is asked for its answer in one more request without tools (a paused turn is cut
-where its server tools finished first). So a job makes at most MAX_REQUESTS + 1 requests and fewer than
-JOB_WEB_SEARCHES + WEB_SEARCHES_PER_REQUEST searches. A request that fails midway (a dropped connection, an overloaded
+where its server tools finished first; a turn that left a server tool waiting beside our tools is continued first,
+as only tool results may follow it). So a job makes at most MAX_REQUESTS + LATE_LIMIT_REQUESTS + 1 requests. A request that fails midway (a dropped connection, an overloaded
 or failing server) is tried again twice. What each request used goes into usage.json at once (tokens, cache reads and
 writes, server tool uses), so the day's budget counts a job that fails, or is cancelled when the call ends (then
 the request still running counts as an estimate), as well as one that finishes (voice/costs.py job_cost).
@@ -40,6 +40,8 @@ WEB_SEARCHES_PER_REQUEST = 20  # so one request can pass the job's limit by at m
 FETCHED_TOKENS = 30_000  # at most this much of one fetched page or PDF reaches the conversation (about 120 KB)
 REQUEST_TIMEOUT_S = 1800.0  # one request, its server tools included; the stream's own wait for its next bytes
 RETRY_WAITS_S = (15, 60)  # before each new try of a request that failed midway
+# Past a limit, a turn that also left a server tool waiting is continued without the note; at most this many times.
+LATE_LIMIT_REQUESTS = 5
 
 SERVER_TOOLS: list[dict[str, Any]] = [
     # A search or fetch whose result code execution already filtered (dynamic filtering) is left out of the answer
@@ -145,7 +147,8 @@ class ClaudeWorker:
                 started = time.monotonic()
                 final = await self._request(params, job, usage)
                 made += 1
-                usage["steps"].append({"request_s": round(time.monotonic() - started, 1), "calls": []})
+                usage["steps"].append({"request_s": round(time.monotonic() - started, 1), "stop": final.stop_reason,
+                                       "calls": []})
                 usage["stop_reason"] = final.stop_reason
                 write_usage(job, usage)
                 content = anthropic_api.content_of(final)
@@ -160,6 +163,7 @@ class ClaudeWorker:
                     "requests" if made >= MAX_REQUESTS else None
                 if final.stop_reason == "pause_turn":  # a long server tool turn: sent back as it came
                     if limit:  # cut where its server tools finished, and the answer is asked for
+                        usage["limit"] = limit
                         turns.pop()
                         finished = finished_part(content)
                         if finished:
@@ -169,8 +173,17 @@ class ClaudeWorker:
                     continue
                 results = await self._use_tools(content, job, progress, relay, usage["steps"][-1]["calls"])
                 write_usage(job, usage)
+                if limit and waiting(content):
+                    # A server tool Claude called beside ours runs when our results go back, and then the message may
+                    # hold nothing else (a note would end the turn: refused with a 400). The limit applies next time.
+                    if made >= MAX_REQUESTS + LATE_LIMIT_REQUESTS:
+                        raise RuntimeError(f"the worker did not finish within {made} requests")
+                    turns.append(Turn("user", results=results))
+                    continue
                 turns.append(Turn("user", text=LIMIT_NOTE.format(what=limit) if limit else "", results=results))
                 last = bool(limit)
+                if limit:
+                    usage["limit"] = limit  # the job's record says it was asked for its answer at a limit
             usage["status"] = "completed"
         except asyncio.CancelledError:
             usage["status"] = "cancelled"
@@ -270,11 +283,16 @@ class ClaudeWorker:
                 log.warning("job %s: could not delete %s from the Files API", job.job_id, file_id, exc_info=True)
 
 
+def waiting(content: list[dict[str, Any]]) -> set[str]:
+    """The server tool calls of a turn that have no result in it yet: they run with the next request."""
+    answered = {b.get("tool_use_id") for b in content if b.get("tool_use_id")}
+    return {b.get("id") for b in content if b.get("type") == "server_tool_use" and b.get("id") not in answered}
+
+
 def finished_part(content: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """A paused turn cut where its server tools finished: a server tool use with no result yet goes, with whatever it
     started itself (calls whose caller it is, and their results); nothing is kept when no more than thinking is left."""
-    answered = {b.get("tool_use_id") for b in content if b.get("tool_use_id")}
-    gone = {b.get("id") for b in content if b.get("type") == "server_tool_use" and b.get("id") not in answered}
+    gone = waiting(content)
     while True:  # what a removed call started goes too, and so on down
         started = {b.get("id") for b in content if b.get("type") == "server_tool_use"
                    and isinstance(b.get("caller"), dict) and b["caller"].get("tool_id") in gone} - gone

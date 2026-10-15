@@ -86,6 +86,7 @@ class Messages:
 
     def stream(self, **params):
         self.sent.append(json.loads(json.dumps(params)))
+        refuse_a_turn_ended_with_a_server_tool_waiting(self.sent[-1]["messages"])
         # As the real API does: a request whose conversation names a file deleted from the Files API is refused.
         gone = [f for f in (self.files.deleted if self.files else []) if f in json.dumps(params)]
         if gone:
@@ -95,6 +96,25 @@ class Messages:
             raise anthropic.NotFoundError(f"File `{gone[0]}` not found.", body=None, response=httpx.Response(
                 404, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")))
         return Stream(self.answers.pop(0), self.hold)
+
+
+def refuse_a_turn_ended_with_a_server_tool_waiting(messages: list[dict]) -> None:
+    """As the real API does (server tools docs, "Mixing server tools and client tools in one turn"): after a turn whose
+    server tool call is still waiting for its result, the user's message may hold nothing but tool_result blocks; a
+    block after them ends the turn, and the request is refused with a 400."""
+    import anthropic
+    import httpx
+
+    for said, answer in zip(messages, messages[1:]):
+        if said["role"] != "assistant" or answer["role"] != "user" or not isinstance(said["content"], list):
+            continue
+        waiting = {b["id"] for b in said["content"] if b.get("type") == "server_tool_use"} - \
+            {b.get("tool_use_id") for b in said["content"]}
+        if waiting and any(b.get("type") != "tool_result" for b in answer["content"]):
+            raise anthropic.BadRequestError(
+                f"`web_search` tool use with id `{sorted(waiting)[0]}` was found without a corresponding "
+                "`web_search_tool_result` block", body=None,
+                response=httpx.Response(400, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")))
 
 
 class Files:
@@ -287,6 +307,23 @@ def test_at_its_search_limit_a_job_is_asked_for_its_answer_without_tools(tmp_pat
     assert final["tool_choice"] == {"type": "none"} and "tool_choice" not in client.messages.sent[0]
     note = final["messages"][-1]["content"]
     assert note[0]["type"] == "tool_result" and "web searches" in note[-1]["text"]
+
+
+def test_at_a_limit_beside_a_server_tool_still_waiting_only_the_tool_results_go_back(tmp_path, monkeypatch):
+    """Coordinator's review of 2026-10-15, item 1: when the turn that reaches a limit also called a server tool that
+    has not run yet (web_search beside progress), the next message may hold only the tool results (a note after them
+    would end the turn and the request would be refused). The limit applies one request later."""
+    monkeypatch.setattr(claude, "JOB_WEB_SEARCHES", 3)
+    waiting = {"type": "server_tool_use", "id": "srvtoolu_7", "name": "web_search", "input": {"query": "q7"}}
+    client = api([reply([waiting, tool("toolu_1", "progress", text="Searching")], searches=3),
+                  reply([{"type": "web_search_tool_result", "tool_use_id": "srvtoolu_7", "content": []},
+                         tool("toolu_2", "progress", text="Writing")], searches=1),
+                  reply([text("The Air.")], "end_turn")])
+    summary, progress, _ = run(job_in(tmp_path, None), client)
+    assert summary == "The Air." and progress == ["Searching", "Writing"]
+    second, third = client.messages.sent[1:]
+    assert [b["type"] for b in second["messages"][-1]["content"]] == ["tool_result"] and "tool_choice" not in second
+    assert third["tool_choice"] == {"type": "none"} and "web searches" in third["messages"][-1]["content"][-1]["text"]
 
 
 def test_a_paused_turn_at_either_limit_still_ends_with_the_answer(tmp_path, monkeypatch):
