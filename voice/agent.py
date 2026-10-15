@@ -93,7 +93,10 @@ DECLINE_CHECK_S = 1.0  # how often a ringing AI call looks whether the user decl
 # After a call, its failed Bee writes are tried again for at most this long: LiveKit gives a job's shutdown about
 # 10 s (shutdown_process_timeout), and the call's own record is closed first (arbitrary).
 BEE_RETRY_S = 5.0
-TURN_ENDPOINTING = {"mode": "dynamic", "min_delay": 0.5, "max_delay": 3.0}  # LiveKit 1.8.6 EndpointingOptions
+# How long LiveKit waits after the caller stops before it ends their turn, learned during the call between these
+# bounds (LiveKit 1.8.6 EndpointingOptions). The user's choice (2026-10-15): 0.5-3.0 s left most turns waiting at
+# the cap, about 2.4 s; 0.3-2.5 s.
+TURN_ENDPOINTING = {"mode": "dynamic", "min_delay": 0.3, "max_delay": 2.5}
 
 log = logging.getLogger("bee-call")
 
