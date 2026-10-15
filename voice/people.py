@@ -53,11 +53,31 @@ def data_root() -> Path:
     return Path(os.environ.get("BEE_CALL_DATA") or "data")
 
 
+def on_a_server() -> bool:
+    """A server has its public name (deploy/config.py); a Mac has none."""
+    return bool(os.environ.get("BEE_CALL_PUBLIC_HOST", "").strip())
+
+
 def dev_person() -> str | None:
     """For this Mac only: the person a request from this machine without a sign-in token is, and whose folder
-    a call without a person in its metadata uses (voice/agent.py console, probes). Never set it on a server."""
+    a call without a person in its metadata uses (voice/agent.py console, probes). None on a server, whatever the
+    environment says."""
+    if on_a_server():
+        return None
     person = (os.environ.get("BEE_CALL_DEV_PERSON") or "").strip()
     return person if PERSON_ID.fullmatch(person) else None
+
+
+def dev_fallback(people: "People", remote: str | None, proxied: bool, asked: bool) -> str | None:
+    """The person a web request without a sign-in acts as, one rule for both web servers (server review 7): only on a
+    Mac, only a request made on this machine itself (loopback, not passed on by a proxy), only when it asked to,
+    and only an approved person. The token server asks for its X-Bee-Call-Dev header, which no web page can send
+    to another site; the record server only reads, and a page elsewhere can make the browser ask but not read the
+    answer, so it lets its own page in without one (`asked` True)."""
+    person = dev_person()
+    if person is None or remote not in ("127.0.0.1", "::1") or proxied or not asked:
+        return None
+    return person if people.known(person) else None
 
 
 @dataclass

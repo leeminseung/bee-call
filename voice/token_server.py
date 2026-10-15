@@ -76,7 +76,7 @@ from voice.costs import day_budget
 from voice.dispatch import AGENT_NAME, RING_SECONDS, call_metadata, call_room_of, decline_ring, declined_rooms, \
     room_name
 from voice.offers import OfferClosed, OfferStore, UnknownChoice
-from voice.people import People, Person, dev_person, waiting_code
+from voice.people import People, Person, dev_fallback, dev_person, waiting_code
 from voice.session_server import host_allowed
 
 load_dotenv(".env.local")
@@ -112,16 +112,6 @@ def bearer(request: web.Request) -> str | None:
     return header[7:].strip() if header.startswith("Bearer ") else None
 
 
-def from_this_machine(request: web.Request) -> bool:
-    """Made on this machine itself, not passed on by a proxy in front (which adds X-Forwarded-For)."""
-    return request.remote in ("127.0.0.1", "::1") and "X-Forwarded-For" not in request.headers
-
-
-def dev_request(request: web.Request) -> bool:
-    return (not os.environ.get("BEE_CALL_PUBLIC_HOST") and from_this_machine(request)
-            and request.headers.get("X-Bee-Call-Dev") == "1")
-
-
 @web.middleware
 async def known_hosts_only(request: web.Request, handler):
     """Refuses host names other than this machine's and the server's own, so a web page cannot point its own
@@ -136,8 +126,9 @@ async def signed_in(request: web.Request, handler):
     if request.path in OPEN_PATHS:
         return await handler(request)
     person = request.app[PEOPLE].who(bearer(request))
-    if person is None and not bearer(request) and dev_request(request):
-        person = dev_person()
+    if person is None and not bearer(request):
+        person = dev_fallback(request.app[PEOPLE], request.remote, "X-Forwarded-For" in request.headers,
+                              asked=request.headers.get("X-Bee-Call-Dev") == "1")
     if person is None:
         raise web.HTTPUnauthorized(text="sign in first\n")
     request[PERSON] = person

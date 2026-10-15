@@ -40,7 +40,7 @@ from typing import Any
 from aiohttp import web
 
 from voice.call_folders import read_events
-from voice.people import People, dev_person
+from voice.people import People, dev_fallback
 from voice.web_headers import plain_server_name
 
 REPO = Path(__file__).resolve().parent.parent
@@ -357,11 +357,6 @@ async def local_hosts_only(request: web.Request, handler):
     return await handler(request)
 
 
-def from_this_machine(request: web.Request) -> bool:
-    """Made on this machine itself, not passed on by a proxy in front (which adds X-Forwarded-For)."""
-    return request.remote in ("127.0.0.1", "::1") and "X-Forwarded-For" not in request.headers
-
-
 @web.middleware
 async def signed_in(request: web.Request, handler):
     """The API is per person; the page and its static files carry no call data."""
@@ -370,8 +365,8 @@ async def signed_in(request: web.Request, handler):
     header = request.headers.get("Authorization", "")
     token = header[7:].strip() if header.startswith("Bearer ") else request.cookies.get(SESSION_COOKIE)
     person = request.app[PEOPLE].who(token)
-    if person is None and not token and from_this_machine(request) and not os.environ.get("BEE_CALL_PUBLIC_HOST"):
-        person = dev_person()  # reading only: a page elsewhere can make the browser ask, but not read the answer
+    if person is None and not token:  # reading only: voice/people.py dev_fallback
+        person = dev_fallback(request.app[PEOPLE], request.remote, "X-Forwarded-For" in request.headers, asked=True)
     if person is None:
         raise web.HTTPUnauthorized(text="sign in first\n")
     request[PERSON] = person

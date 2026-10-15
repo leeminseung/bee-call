@@ -268,6 +268,30 @@ def test_the_record_page_cannot_be_framed_and_says_nothing_about_its_software(tm
     assert "aiohttp" not in headers.get("Server", "")
 
 
+def test_the_development_person_is_one_rule_for_the_web_servers_and_the_voice_server(tmp_path, monkeypatch):
+    """Server review 7: the fallback for requests without a sign-in was written three times with three conditions.
+    One rule now: only on a Mac (never on a server, whatever the environment says), only an approved person, and
+    for the web servers only a request made on this machine itself; the token server also wants its header."""
+    from voice.agent import person_for_call
+    from voice.people import dev_person
+
+    me = signed_in(tmp_path)
+    dev = {"X-Bee-Call-Dev": "1"}
+
+    async def statuses():
+        async with TestClient(TestServer(app_for(me.people))) as token, \
+                TestClient(TestServer(session_server.make_app(me.people))) as records:
+            return (await token.get("/me", headers=dev)).status, (await records.get("/api/sessions")).status
+
+    monkeypatch.setenv("BEE_CALL_DEV_PERSON", "ghost")  # nobody approved
+    assert asyncio.run(statuses()) == (401, 401) and person_for_call({}, me.people) is None
+    monkeypatch.setenv("BEE_CALL_DEV_PERSON", "matt")
+    assert asyncio.run(statuses()) == (200, 200) and person_for_call({}, me.people) == "matt"
+    monkeypatch.setenv("BEE_CALL_PUBLIC_HOST", "localhost")  # a server, reached by its own name
+    assert dev_person() is None and person_for_call({}, me.people) is None
+    assert asyncio.run(statuses()) == (401, 401)
+
+
 def test_without_a_sign_in_only_this_machine_gets_the_dev_person(tmp_path, monkeypatch):
     me = signed_in(tmp_path)
     dev = {"X-Bee-Call-Dev": "1"}
