@@ -43,9 +43,11 @@ History rules (one adapter instance per call):
   comes, arrives later as a note.
 - A turn Claude declines (stop_reason "refusal": a safety classifier or Claude
   itself) is never committed, and words of it that went out are discarded. The
-  caller hears a short line instead (tagged as the app's), and the caller's
-  words it declined are never sent again, with a note in their place: sent
-  again, they would most likely be declined turn after turn.
+  caller hears a short line instead (tagged as the app's), and what came in with
+  the declined request (the caller's words, tool results, notes) is never sent
+  again, with a note in its place and a stand-in tool result: sent again, it
+  would most likely be declined turn after turn. Like a reply, a decline takes
+  effect once LiveKit plays its line.
 - The system prompt carries a cache breakpoint; with `auto_cache` (Anthropic's
   API) the request also carries one on its last block, so the history the call
   has built up is read from the cache by the next request.
@@ -88,6 +90,7 @@ NOTHING_NEW = "(The caller has not said anything new.)"
 STILL_RUNNING = "Still running when this turn began. If a result comes back, it will arrive as a note from the app."
 NOT_RUN = "Did not run: the reply was cut off before the tool started."
 NO_RESULT_YET = "No result yet. If one comes back, it will arrive as a note from the app."
+LEFT_OUT = "The result came back but is left out: your reply to it was stopped by a safety check."
 
 
 def default_model(region: str) -> str:
@@ -163,6 +166,7 @@ class Draft:
     item_ids: set[str] = field(default_factory=set)  # LiveKit items the messages came from
     settled: set[str] = field(default_factory=set)  # replies whose hearing these messages settle
     words: set[str] = field(default_factory=set)  # the items of the caller's words among them
+    results: set[str] = field(default_factory=set)  # the tool calls whose results they carry
 
 
 @dataclass
@@ -206,7 +210,9 @@ class ClaudeBedrockLLM(llm.LLM):
         self._last: Reply | None = None  # the last committed reply; its tool_use ids need results
         self._pending: Reply | None = None  # generated, waiting for LiveKit to schedule it
         self._cut_short: dict[str, bool] = {}  # replies stopped mid-stream after words went out -> a tool had started
-        self._declined: set[str] = set()  # the caller's words of a turn Claude declined: never sent again
+        self._declined: set[str] = set()  # what came in with a turn Claude declined: never sent again
+        self._declined_results: set[str] = set()  # tool calls whose result was declined: LEFT_OUT stands in
+        self._pending_decline: tuple[str, Draft, Any] | None = None  # a decline waiting for LiveKit to play its line
         self._tools_schema: list[dict[str, Any]] | None = None  # the call's tool list, sent unchanged every time
         self._lock = asyncio.Lock()
 
@@ -257,6 +263,9 @@ class ClaudeBedrockLLM(llm.LLM):
                 never_ran = bool(self._last and (not self._last.tools_sent or (
                     self._last.speech is not None and self._last.speech.interrupted)))
                 for tool_id in open_tools:
+                    if tool_id in self._declined_results and tool_id not in results:
+                        content.append(_tool_result(tool_id, LEFT_OUT))
+                        continue
                     content.append(results.get(tool_id) or _tool_result(
                         tool_id, NOT_RUN if never_ran else NO_RESULT_YET, is_error=never_ran))
             content += words
@@ -291,8 +300,8 @@ class ClaudeBedrockLLM(llm.LLM):
                         # The app's line after Claude declined a turn. Words of the declined reply that went out
                         # before it are discarded, as the API asks, and so are the caller's words it declined.
                         notes.append("Note from the app: your reply here was stopped by a safety check, so the app "
-                                     f'said this to the caller instead: "{self._refusal_line}". The caller\'s words '
-                                     "before it are left out of this conversation.")
+                                     f'said this to the caller instead: "{self._refusal_line}". What came in before '
+                                     "it (the caller's words, tool results, notes) is left out of this conversation.")
                         continue
                     tag = (getattr(item, "extra", None) or {}).get(TURN_TAG)
                     reply = self._replies.get(tag) if tag else None
@@ -322,6 +331,7 @@ class ClaudeBedrockLLM(llm.LLM):
                 elif answerable and (item.call_id not in results or item.call_id in stand_ins):
                     results[item.call_id] = _tool_result(item.call_id, item.output or "", bool(item.is_error))
                     stand_ins.discard(item.call_id)
+                    draft.results.add(item.call_id)
                 else:
                     notes.append(f"Note from the app: the {item.name} tool finished after the conversation "
                                  f"moved on. Result: {item.output or ''}")
@@ -382,17 +392,34 @@ class ClaudeBedrockLLM(llm.LLM):
             self._pending = reply
         return reply
 
-    def decline(self, turn_id: str, draft: Draft) -> None:
-        """Claude declined this turn (stop_reason "refusal"). History stays as it was, and the caller's words it
-        declined are never sent again: sent again, they would most likely be declined again, turn after turn."""
-        self._declined |= draft.words
-        self._emit("claude_reply_declined", turn=turn_id, words_left_out=len(draft.words))
+    def decline(self, turn_id: str, draft: Draft, speech: Any | None = None) -> None:
+        """Claude declined this turn (stop_reason "refusal"). History stays as it was, and what came in with the
+        declined request (the caller's words, tool results, the app's notes) is never sent again: sent again, it
+        would most likely be declined again, turn after turn. Like a reply, this takes effect once LiveKit plays
+        the decline's line; a preemptive request LiveKit throws away leaves nothing out."""
+        if speech is None or speech.scheduled:
+            self._apply_decline(turn_id, draft)
+        else:
+            self._pending_decline = (turn_id, draft, speech)
+
+    def _apply_decline(self, turn_id: str, draft: Draft) -> None:
+        self._declined |= draft.item_ids
+        self._declined_results |= draft.results
+        self._emit("claude_reply_declined", turn=turn_id, words_left_out=len(draft.words),
+                   items_left_out=len(draft.item_ids))
 
     def settle(self) -> None:
         """Commit or drop the reply still waiting on LiveKit, for example when the call ends."""
         self._settle_pending()
 
     def _settle_pending(self) -> None:
+        declined, self._pending_decline = self._pending_decline, None
+        if declined is not None:
+            turn_id, draft, speech = declined
+            if speech.scheduled:
+                self._apply_decline(turn_id, draft)
+            else:
+                self._emit("claude_decline_dropped", turn=turn_id)  # thrown away: nobody heard the line
         reply, self._pending = self._pending, None
         if reply is None:
             return
@@ -460,7 +487,7 @@ class ClaudeStream(llm.LLMStream):
             refused = final.stop_reason == "refusal"
             if refused:
                 reply = None
-                owner.decline(turn_id, draft)
+                owner.decline(turn_id, draft, speech)
             else:
                 reply = owner.record(turn_id, content, draft, speech, final.stop_reason)
 
