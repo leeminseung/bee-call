@@ -79,7 +79,9 @@ COORDINATOR_LLM = os.environ.get("COORDINATOR_LLM", "echo")
 # call (2026-10-13) the caller heard silence for 23-28 s whenever they kept talking meanwhile.
 COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "zai.glm-5")
 WORKER = os.environ.get("WORKER", "fake")
-FIRST_WORDS_WAIT_S = 6.0  # ringing stops when the AI starts to speak, or after this long anyway (arbitrary)
+# A call the user started rings until the AI's voice starts, and at most this long after the caller is in the
+# room: the opening is ready within OPENING_BY_S (6 s) and the voice takes about 2 s more (BC-025).
+RINGING_AT_MOST_S = 8.0
 # The ways of leaving a room that LiveKit ends the session for (livekit/agents/voice/room_io/types.py
 # DEFAULT_CLOSE_ON_DISCONNECT_REASONS): the caller hung up. Others (a lost network) it waits out.
 HANG_UPS = (rtc.DisconnectReason.CLIENT_INITIATED, rtc.DisconnectReason.ROOM_DELETED,
@@ -430,13 +432,16 @@ async def run_call(ctx: JobContext, people: People) -> None:
         never_came = None  # why the caller is gone without having been seen, for the log
         try:
             await asyncio.wait_for(ctx.wait_for_participant(), CALLER_WAIT_S)
+            seen = time.monotonic()  # the opening's 6 s and the ringing's 8 s count from here (BC-025)
         except asyncio.TimeoutError:
+            seen = time.monotonic()
             # The app's join made this room, so a caller not in it by now left before the voice server came, and no
             # disconnect will be seen. (LiveKit's console mode has no caller in a room.)
             if not ctx.is_fake_job():
                 never_came = f"no caller came into the room within {CALLER_WAIT_S:g} s"
                 left.set()
         except Exception as exc:  # LiveKit's wait raises when the room goes away meanwhile
+            seen = time.monotonic()
             never_came = f"the room closed before the caller came into it ({exc})"
             left.set()
 
@@ -446,7 +451,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
             got = await fetch_call_inputs(inbox, conversation_ids, timeout=INBOUND_READ_TIMEOUT_S, ours=ours)
             preparation = Preparation(got, meta, prep_model(COORDINATOR_LLM), spend=SpendLog(workspace), bee=uses_bee,
                                       now=someone.now(), language=language, ours=ours).start()
-            await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - started))
+            await preparation.opening(timeout=OPENING_BY_S - (time.monotonic() - seen))
             return got
 
         ready = None
@@ -589,10 +594,11 @@ async def run_call(ctx: JobContext, people: People) -> None:
         session.say(prep.opening or greeting(meta, language))
         if ringing is not None:  # ring on through the session start and the voice's first syllable
             spoke, gone = asyncio.create_task(first_words.wait()), asyncio.create_task(left.wait())
-            done, _ = await asyncio.wait({spoke, gone}, timeout=FIRST_WORDS_WAIT_S, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait({spoke, gone}, timeout=max(0.0, RINGING_AT_MOST_S - (time.monotonic() - seen)),
+                                         return_when=asyncio.FIRST_COMPLETED)
             spoke.cancel(), gone.cancel()
             if not done:
-                log.warning("no first words within %ss in room %s", FIRST_WORDS_WAIT_S, ctx.room.name)
+                log.warning("no first words %ss after the caller came, in room %s", RINGING_AT_MOST_S, ctx.room.name)
     finally:
         if ringing is not None:
             ringing.cancel()

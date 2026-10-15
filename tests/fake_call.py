@@ -11,6 +11,7 @@ with no network: the room and the job, the caller who joins and hangs up, and th
 import asyncio
 import contextvars
 import json
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -99,6 +100,7 @@ class FakeCall:
         self.deleted: str | None = None  # the room deleted, by name
         self.recording: dict | None = None  # what the job asked LiveKit's cloud recording to keep (init_recording)
         self.ringing: list[str] = []  # "start", "stop" as the voice server's ringback plays and stops
+        self.rang: float | None = None
         self.job = SimpleNamespace(metadata=json.dumps(meta), room=SimpleNamespace(name=room))
         self.proc = SimpleNamespace(userdata={"vad": None, "aws": None})
 
@@ -153,12 +155,14 @@ class FakeCall:
         self.room.emit("participant_connected", self.caller)
 
     async def ring_back(self, room) -> None:
-        """voice/ringback.py ring_back, without audio."""
+        """voice/ringback.py ring_back, without audio; `rang` is how long it rang, in seconds."""
         self.ringing.append("start")
+        started = time.monotonic()
         try:
             await asyncio.Event().wait()
         finally:
             self.ringing.append("stop")
+            self.rang = time.monotonic() - started
 
     async def end(self) -> None:
         """The job ends, as LiveKit ends it: every shutdown callback runs, each as a task the job itself starts, so

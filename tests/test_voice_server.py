@@ -32,7 +32,7 @@ def quick(monkeypatch):
     """Seconds shortened so a test call takes a fraction of a second."""
     monkeypatch.setattr(agent, "RING_SECONDS", 0.3)
     monkeypatch.setattr(agent, "OPENING_BY_S", 0.5)
-    monkeypatch.setattr(agent, "FIRST_WORDS_WAIT_S", 0.5)
+    monkeypatch.setattr(agent, "RINGING_AT_MOST_S", 1.0)
 
 
 def with_prep_model(monkeypatch, client) -> None:
@@ -60,6 +60,25 @@ def test_a_call_the_user_starts_is_picked_up_with_the_prepared_opening(tmp_path,
     kinds = [e["type"] for e in events_of(folder)]
     assert kinds[0] == "call_started" and "picked_up" in kinds and kinds[-1] == "call_ended"
     assert [e["kind"] for e in MetaSession(me.workspace).take_events()] == ["call_ended"]
+
+
+def test_the_caller_hears_ringing_for_at_most_about_8_seconds(tmp_path, monkeypatch, quick):
+    """BC-025: the opening is ready within 6 s and the ringing lasts at most about 8 s. The ringing went on after
+    the opening's 6 s for up to 6 s more while the voice had not started."""
+    me = signed_in(tmp_path)
+    with_prep_model(monkeypatch, Converse(text(OPENING + NOTE), gap=0.2))  # the opening misses its time
+    monkeypatch.setattr(agent, "RINGING_AT_MOST_S", 0.8)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"}, session=FakeSession(first_words_after=None))
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        await call.end()
+
+    asyncio.run(main())
+    assert call.session.said == ["Hi, it's Bee Call. What's on your mind?"]  # the fixed greeting, at 0.5 s
+    assert call.rang < 0.8 + 0.15
 
 
 def test_an_opening_not_ready_in_time_falls_back_to_the_fixed_greeting(tmp_path, monkeypatch, quick):
@@ -334,7 +353,7 @@ def test_a_room_that_closes_before_the_caller_is_seen_ends_the_call_quietly(tmp_
 
 
 def test_a_call_hung_up_after_the_ringing_but_before_the_ai_spoke_leaves_nothing(tmp_path, monkeypatch, quick):
-    """Review of this round's fixes, finding 3: the ringing stops after FIRST_WORDS_WAIT_S, but the watch goes on
+    """Review of this round's fixes, finding 3: the ringing stops after RINGING_AT_MOST_S, but the watch goes on
     until the AI's first words (BC-027)."""
     me = signed_in(tmp_path)
     with_prep_model(monkeypatch, Converse(text(OPENING + NOTE)))
