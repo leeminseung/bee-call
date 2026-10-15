@@ -857,9 +857,11 @@
       }
     }
 
-    // The note the AI wrote from Bee before it picked up (voice/prep.py), and the extra reads it chose.
+    // The note the AI wrote before it picked up (voice/prep.py), and the extra Bee reads it chose: how the call
+    // was made, so it shows only in the debug view.
     renderPrep(ev) {
       this.prepEvent = ev;
+      if (!this.debug) return;
       const card = el("section", "card prep");
       const head = el("div", "card-head");
       head.append(icon("search"), el("span", null, "Before picking up"));
@@ -869,7 +871,7 @@
         card.append(el("p", "prep-note", withoutIds(note)));
       } else {
         const why = ev.error ? ` (${ev.error})` : "";
-        card.append(el("p", "card-note", `No prep note${why}, so the call started with the plain Bee context.`));
+        card.append(el("p", "card-note", `No prep note${why}, so the call started without one.`));
       }
       const reads = Array.isArray(ev.reads) ? ev.reads.map(readLabel).filter(Boolean) : [];
       if (reads.length) {

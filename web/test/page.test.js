@@ -334,3 +334,30 @@ test("between calls, a missed and a declined AI call read as words, not as event
   assert.match(text, /You declined an AI call about “Saturday hike”/);
   assert.doesNotMatch(text, /call_missed|call_declined/);
 });
+
+// ---------- what a normal record leaves out (BC-034, BC-149; the 10/15 rule: the conversation, why the AI
+// called, and its jobs; everything else only in a Debug build's debug view) ----------
+
+/** A Debug build's page with the debug view switched on. */
+const debugView = (hash) => loadPage({ hash, search: "?debug=1", prefs: { debug: "1" } });
+
+test("the note the AI wrote before picking up shows only in the debug view", () => {
+  const page = loadPage({ hash: "#/s/2026-10-15/2100" });
+  page.feed(fixture(AI_CALL));
+  assert.equal(page.all("prep").length, 0);
+  assert.doesNotMatch(page.visibleText(), /Before picking up/);
+  const debug = debugView("#/s/2026-10-15/2100");
+  debug.feed(fixture(AI_CALL));
+  assert.match(debug.text(debug.one("prep")), /Before picking up Dana's knee is still sore/);
+});
+
+test("without a prep note, the debug view does not claim the call started with Bee's context", () => {
+  const page = debugView("#/s/2026-10-15/1830");
+  page.feed([
+    { t: 0, type: "call", direction: "inbound", topic: null, reason: null },
+    { t: 1, type: "call_prep", seconds: 0.4, reads: [], note: null, error: "the person does not use Bee" },
+  ]);
+  const card = page.text(page.one("prep"));
+  assert.match(card, /No prep note/);
+  assert.doesNotMatch(card, /Bee context/);
+});
