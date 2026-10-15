@@ -135,6 +135,31 @@ def test_an_ai_call_s_opening_never_waits_for_the_bee_read_kept_for_the_record(t
     assert (folder / "inputs" / "unconfirmed_facts.json").exists()  # and the record keeps the read
 
 
+def test_a_booked_call_is_told_to_the_ai_as_its_own_call_continuing_the_earlier_one(tmp_path, monkeypatch, quick):
+    """BC-042: a call booked out loud continues the call it was booked in; the AI places it, so it must not be told
+    the user started it."""
+    me = signed_in(tmp_path)
+    earlier = me.workspace / "2026-10-15" / "2100"
+    earlier.mkdir(parents=True)
+    (earlier / "events.jsonl").write_text(json.dumps({"t": 0, "type": "call_started", "room": "r"}) + "\n")
+    (earlier / "transcript.md").write_text("- 00:05.0 **User:** Call me back about the dentist at nine.\n")
+    call = FakeCall(me.people, {"direction": "outbound", "person": "matt", "topic": "the dentist",
+                                "continue_from": "2026-10-15/2100"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        instructions = call.session.started["agent"].instructions
+        await call.end()
+        return instructions
+
+    instructions = asyncio.run(main())
+    assert "The user started this call" not in instructions
+    assert "You placed this call, as the user booked it in an earlier call with you" in instructions
+    assert "dentist" in instructions  # the earlier call, as it was recorded
+
+
 def test_an_ai_call_unanswered_in_time_is_missed_and_not_called_again(tmp_path, monkeypatch, quick):
     """Confirmed rule (2026-10-15): an AI call unanswered for 60 s is recorded as missed and not called again;
     the meta agent hears of it."""

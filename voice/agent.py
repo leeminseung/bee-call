@@ -602,7 +602,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
         pending = asyncio.ensure_future(brief_once_read(inputs_task, meta))
     agent = (BeeCoordinator if uses_bee else Coordinator)(
         rec, jobs, workspace, clock=someone.now, prep_note=prep.note or call_brief(inputs, meta), pending_note=pending,
-        language=language, earlier_call=meta.get("earlier_call"))
+        language=language, earlier_call=meta.get("earlier_call"), direction=meta.get("direction", "inbound"))
 
     def abandoned() -> bool:
         """The caller hung up before the AI's first words: the call leaves no record."""

@@ -180,7 +180,8 @@ class Coordinator(Agent):
 
     def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *, clock: Callable[[], datetime],
                  prep_note: str | None = None, pending_note: "asyncio.Future[str | None] | None" = None,
-                 language: CallLanguage | None = None, earlier_call: str | None = None) -> None:
+                 language: CallLanguage | None = None, earlier_call: str | None = None,
+                 direction: str = "inbound") -> None:
         # `clock` is the person's clock (Person.now): the time the call starts goes into the instructions, and
         # book_call reads it again when the user books.
         # The date and the prep note go into the instructions before the call's first reply, and stay as they
@@ -188,9 +189,11 @@ class Coordinator(Agent):
         # AI picks up (pending_note) replaces prep_note, the plain Bee context, if it arrives before that.
         self._clock = clock
         rule = f"\n{language.rule}\n" if language and language.rule else ""
-        # A call the user continued from an earlier call's record (voice/continuation.py).
-        earlier = (f"\nThe user started this call to continue an earlier call with you. That call, as it was "
-                   f"recorded:\n{earlier_call.strip()}\n") if earlier_call else ""
+        # A call that continues an earlier one (voice/continuation.py): the user started it from that call's record,
+        # or the AI places it because the user booked it in that call (BC-042).
+        how = ("You placed this call, as the user booked it in an earlier call with you; it continues that call"
+               if direction == "outbound" else "The user started this call to continue an earlier call with you")
+        earlier = (f"\n{how}. That call, as it was recorded:\n{earlier_call.strip()}\n") if earlier_call else ""
         self._base_instructions = INSTRUCTIONS + self.NOTE_RULES + rule + earlier + \
             f"\nIt is now {now_text(clock())}. Use this for words like today, tomorrow and this Saturday.\n"
         super().__init__(instructions=self._with_note(prep_note))
