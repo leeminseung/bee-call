@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract.bee-call.invalid/schemas/auth-nonce.json",
+  "title": "GET /auth/nonce: a one-time value for Sign in with Apple",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["nonce"],
+  "properties": {"nonce": {"type": "string", "minLength": 16}}
+}

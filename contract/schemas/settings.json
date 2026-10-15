@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract.bee-call.invalid/schemas/settings.json",
+  "title": "PUT /settings: the settings after the change",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["settings"],
+  "properties": {
+    "settings": {"$ref": "defs.json#/$defs/settings"}
+  }
+}

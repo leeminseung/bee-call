@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract.bee-call.invalid/schemas/calls.json",
+  "title": "GET /calls: the call list for the home thread",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["calls", "more", "before", "version"],
+  "properties": {
+    "calls": {
+      "description": "Newest first.",
+      "type": "array",
+      "items": {"$ref": "defs.json#/$defs/call_entry"}
+    },
+    "more": {"type": "boolean", "description": "Older calls exist."},
+    "before": {
+      "description": "Pass as ?before= to get the next older page. Opaque. Null when more is false.",
+      "oneOf": [{"type": "string", "pattern": "^[A-Za-z0-9_-]{1,200}$"}, {"type": "null"}]
+    },
+    "version": {"$ref": "defs.json#/$defs/version"}
+  },
+  "if": {"properties": {"more": {"const": true}}},
+  "then": {"properties": {"before": {"type": "string"}}},
+  "else": {"properties": {"before": {"type": "null"}}}
+}

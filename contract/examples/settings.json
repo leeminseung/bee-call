@@ -1,0 +1,13 @@
+{
+  "settings": {
+    "language": "ko",
+    "voice": "ko-daon",
+    "call_model": "haiku",
+    "call_time": "20:30",
+    "record_on_server": true,
+    "record_on_phone": false,
+    "time_zone": "Asia/Seoul",
+    "bee": true,
+    "daily_budget_usd": 10.0
+  }
+}
