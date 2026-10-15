@@ -15,6 +15,11 @@ struct ConversationCall: Identifiable, Equatable {
 
     var isLive: Bool { length == nil }
 
+    /// The ids of its finished jobs, for the result notice.
+    var finishedJobs: [String] {
+        entries.compactMap { if case .job(let job) = $0, job.isDone { job.id } else { nil } }
+    }
+
     /// What the thread shows of the call: everything while it is on or unfolded; once it is over and folded, only
     /// its results (finished jobs and what went into Bee).
     func shown(expanded: Bool) -> [ConversationEntry] {

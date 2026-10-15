@@ -10,30 +10,62 @@ struct ConversationRoot: View {
     let source: any ConversationSource
     let offers: OfferCenter
     let status: String
-    @State private var presentation = CallPresentation()
+    @State private var presentation: CallPresentation
+    @State private var notice = ResultNotice()
     @State private var jump: String?
     @Namespace private var zoom
 
+    init(calls: CallManager, source: any ConversationSource, offers: OfferCenter, status: String,
+         presentation: CallPresentation = CallPresentation()) {
+        self.calls = calls
+        self.source = source
+        self.offers = offers
+        self.status = status
+        _presentation = State(initialValue: presentation)
+    }
+
     var body: some View {
-        HomeView(source: source, calls: calls, offers: offers, status: status, jump: $jump,
+        HomeView(source: source, calls: calls, offers: offers, status: status, glowing: notice.glowing, jump: $jump,
                  showCallScreen: { presentation.show(.callScreen) }, openSettings: {}, openCall: { _ in },
                  startCall: { Task { await calls.startCall() } }, zoom: zoom)
             .fullScreenCover(isPresented: Binding(get: { presentation.showsCallScreen(inCall: calls.isInCall) },
                                                   set: { if !$0 { presentation.show(.conversation) } })) {
-                CallModeView(calls: calls, job: liveJob, showConversation: { presentation.show(.conversation) })
+                CallModeView(calls: calls, job: pill, showConversation: { presentation.show(.conversation) })
                     .zoomTransition("call", in: zoom)
             }
-            .onChange(of: calls.isInCall, initial: true) { _, inCall in presentation.callChanged(inCall: inCall) }
+            .onChange(of: calls.isInCall, initial: true) { _, inCall in
+                presentation.callChanged(inCall: inCall)
+                if !inCall { notice.callEnded() }
+            }
+            .onChange(of: liveCall?.finishedJobs ?? [], initial: true) { _, done in
+                guard liveCall != nil else { return }
+                notice.update(done: done, callScreenUp: presentation.showsCallScreen(inCall: calls.isInCall))
+            }
+            .onChange(of: presentation.mode) { _, mode in
+                if mode == .conversation, let id = notice.openedConversation() { jump = id }
+            }
+            .task(id: notice.glowing) { // a result card lights up for about two seconds
+                guard let id = notice.glowing else { return }
+                try? await Task.sleep(for: .seconds(2))
+                notice.glowEnded(id)
+            }
     }
 
-    /// The newest job of the call that is on, for the call screen's pill.
-    private var liveJob: JobPill? {
-        for case .call(let call) in source.sections.reversed() where call.isLive {
-            for case .job(let job) in call.entries.reversed() {
-                return JobPill(id: job.id, label: job.short ?? job.title, startedAt: job.startedAt, arrived: job.isDone)
-            }
-        }
+    private var liveCall: ConversationCall? {
+        for case .call(let call) in source.sections.reversed() where call.isLive { return call }
         return nil
+    }
+
+    /// The call screen's pill: a result waiting in the conversation, else the newest running job.
+    private var pill: JobPill? {
+        guard let call = liveCall else { return nil }
+        let jobs = call.entries.compactMap { if case .job(let job) = $0 { job } else { nil } }
+        if let id = notice.unseen, let job = jobs.first(where: { $0.id == id }) {
+            return JobPill(id: job.id, label: job.short ?? job.title, startedAt: job.startedAt, arrived: true)
+        }
+        return jobs.last { !$0.isDone }.map {
+            JobPill(id: $0.id, label: $0.short ?? $0.title, startedAt: $0.startedAt, arrived: false)
+        }
     }
 }
 

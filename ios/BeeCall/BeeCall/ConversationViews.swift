@@ -127,6 +127,11 @@ struct Eyebrow: View {
         HStack(spacing: 6) {
             if spinning {
                 ProgressView().controlSize(.mini)
+            } else if symbol == "checkmark.circle.fill" { // a finished job: a dark check on Bee yellow
+                Image(systemName: "checkmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(BeeStyle.onYellow, BeeStyle.yellow)
+                    .font(.footnote.weight(.bold))
             } else if let symbol {
                 Image(systemName: symbol).font(.caption.weight(.bold))
             }
@@ -232,6 +237,7 @@ struct JobChartView: View {
             }
             .chartForegroundStyleScale(domain: chart.series, range: [BeeStyle.yellow, Color(white: 0.62)])
             .chartYAxis(.hidden)
+            .chartXAxis { AxisMarks { AxisValueLabel() } } // names under the groups, no grid lines
             .chartLegend(position: .bottom, alignment: .leading)
             .frame(height: 110)
         }

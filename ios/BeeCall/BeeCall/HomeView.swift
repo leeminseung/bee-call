@@ -171,11 +171,14 @@ struct HomeView: View {
                         }
                     }
                 }
-                .padding(.bottom, 28)
-                .background(alignment: .bottom) { // the conversation fades out under the top
-                    LinearGradient(colors: [BeeStyle.background, BeeStyle.background, BeeStyle.background.opacity(0)],
+                .padding(.bottom, 6)
+                .background { // the conversation fades out under the top
+                    LinearGradient(stops: [.init(color: BeeStyle.background, location: 0),
+                                           .init(color: BeeStyle.background, location: 0.62),
+                                           .init(color: BeeStyle.background.opacity(0), location: 1)],
                                    startPoint: .top, endPoint: .bottom)
                         .padding(.horizontal, -12)
+                        .padding(.bottom, -34)
                         .ignoresSafeArea(edges: .top)
                 }
                 Spacer()

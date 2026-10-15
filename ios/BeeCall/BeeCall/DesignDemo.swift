@@ -10,6 +10,8 @@ enum DesignDemo: String {
     case call // frame 2: the call screen
     case conversation // frame 3: the conversation during the call
     case live // frame 4: a pretend call, with the call screen and the conversation to go between
+    case result // frame 5, left: a job finishes while the call screen is up
+    case resultConversation // frame 5, right: a job finishes while the conversation is up
 
     static func requested(in store: UserDefaults = .standard) -> DesignDemo? {
         store.string(forKey: "designD").flatMap(DesignDemo.init(rawValue:))
@@ -88,6 +90,19 @@ final class DemoConversation: ConversationSource {
                          ])
     }
 
+    /// Frame 5: the price job of the call that is on finishes, and the AI starts on its result.
+    func finishJob() {
+        guard case .call(var call) = sections.last, call.isLive else { return }
+        call.entries = call.entries.map { entry in
+            guard case .job(let job) = entry, !job.isDone else { return entry }
+            var done = Self.priceJob(started: job.startedAt)
+            done.short = job.short
+            return .job(done)
+        }
+        call.entries.append(.turn(Turn(id: "m5", mine: false, text: "그럼 들고 다니기 좋은 게 중요하겠네요.")))
+        sections[sections.count - 1] = .call(call)
+    }
+
     /// The job of the MacBook call, finished, with its chart and files.
     static func priceJob(started: Date) -> JobCard {
         JobCard(id: "job-1", title: "코딩용 맥북 에어와 프로 한국 가격 비교", startedAt: started,
@@ -109,6 +124,8 @@ struct DesignDemoView: View {
     @State private var offers = OfferCenter(server: ServerClient(transport: OfferDemo.StandIn(
         language: "ko", topic: "도서관에서 정리한 할 일 다시 보기")))
     @State private var jump: String?
+    @State private var liveDemo = DemoConversation(live: true)
+    @State private var presentation = CallPresentation()
 
     var body: some View {
         switch demo {
@@ -127,8 +144,22 @@ struct DesignDemoView: View {
                      showCallScreen: {}, openSettings: {}, openCall: { _ in }, startCall: {})
                 .task { calls.playDesignDemo(lines: DesignDemo.callLines, voice: .person, connectedAgo: 221) }
         case .live:
-            ConversationRoot(calls: calls, source: DemoConversation(live: true), offers: offers, status: "")
+            ConversationRoot(calls: calls, source: liveDemo, offers: offers, status: "")
                 .task { calls.playDesignDemo(lines: DesignDemo.callLines, voice: .both, connectedAgo: 218) }
+        case .result, .resultConversation:
+            ConversationRoot(calls: calls, source: liveDemo, offers: offers, status: "", presentation: presentation)
+                .task {
+                    calls.playDesignDemo(lines: DesignDemo.callLines + [(true, "주로 파이썬이고 머신러닝도 조금 해요. 도서관이나 카페에서 일할 때가 많아요.")],
+                                         voice: .ai, connectedAgo: 236)
+                    if demo == .resultConversation {
+                        try? await Task.sleep(for: .milliseconds(300))
+                        presentation.show(.conversation)
+                    }
+                    try? await Task.sleep(for: .seconds(5)) // time for a screenshot of the running job, too
+                    liveDemo.finishJob()
+                    calls.liveKit.demoSay("그럼 들고 다니기 좋은 게 중요하겠네요. 에어는 159만 원부터, 프로는 239만 원부터예요.",
+                                          mine: false)
+                }
         }
     }
 }

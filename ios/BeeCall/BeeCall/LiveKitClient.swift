@@ -196,6 +196,11 @@ extension LiveKitClient {
         voices.playDemo(demo)
     }
 
+    /// Debug builds only (DesignDemo.swift): one more line, as if just said.
+    func demoSay(_ text: String, mine: Bool) {
+        captionList.show(text, line: "\(mine ? "me" : "ai")/demo-\(UUID().uuidString)", isMine: mine, sentAt: .now)
+    }
+
     /// Debug builds only (DesignDemo.swift): these caption lines and synthetic voice levels; no room is joined.
     func playDemo(lines: [(mine: Bool, text: String)], voice: VoiceDemo) {
         captionList = CaptionList()
