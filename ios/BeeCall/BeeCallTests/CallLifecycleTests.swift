@@ -1,3 +1,4 @@
+import AVFoundation
 import CallKit
 import XCTest
 @testable import BeeCall
@@ -5,10 +6,16 @@ import XCTest
 /// A call from CallKit's start or answer to its end, with stand-ins for CallKit and the LiveKit room.
 final class CallLifecycleTests: XCTestCase {
     @MainActor private func calls(_ callKit: FakeCallKit, _ room: FakeRoom, server: FakeServer = FakeServer(),
-                                  microphone: Bool = true, speaker: @escaping (Bool) throws -> Void = { _ in })
-        -> CallManager {
+                                  microphone: Bool = true, speaker: @escaping (Bool) throws -> Void = { _ in },
+                                  speakerRoute: @escaping () -> Bool = { false }) -> CallManager {
         CallManager(callKit: callKit, calls: callKit, microphone: { microphone }, room: room, beforeAnswering: {},
-                    decline: CallDecline(server: server.client()), speaker: speaker, pickUpWait: .milliseconds(300))
+                    decline: CallDecline(server: server.client()), speaker: speaker, speakerRoute: speakerRoute,
+                    pickUpWait: .milliseconds(300))
+    }
+
+    /// What iOS says when the call's sound moves: CallKit's own speaker button, AirPods put in, a route picked.
+    @MainActor private func routeChanges() {
+        NotificationCenter.default.post(name: AVAudioSession.routeChangeNotification, object: nil)
     }
 
     /// The person taps Call; CallKit hands the start back, as it does once the call is on its screen.
@@ -197,7 +204,54 @@ final class CallLifecycleTests: XCTestCase {
         calls.perform(CXEndCallAction(call: id))
         await waitUntil("the call has ended") { !calls.isInCall }
         XCTAssertFalse(calls.isSpeakerOn)
-        XCTAssertEqual(routes, [true, false, true])
+        XCTAssertEqual(routes, [true, false, true, false], "the loudspeaker is let go with the call")
+    }
+
+    /// Review of 2026-10-15, finding 2: the speaker button followed only the app's own taps. CallKit's screen has a
+    /// speaker button too, and AirPods or a picked route move the sound without the app.
+    @MainActor func testTheSpeakerButtonFollowsWhereTheSoundIs() async throws {
+        var loud = false
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room, speakerRoute: { loud })
+        _ = try await start(calls, callKit)
+        await waitUntil("the room is joined") { calls.status == "Ringing…" }
+        loud = true // CallKit's own speaker button
+        routeChanges()
+        await waitUntil("the call screen shows the speaker on") { calls.isSpeakerOn }
+        calls.setSpeaker(true)
+        loud = false // AirPods put in
+        routeChanges()
+        await waitUntil("the call screen shows the speaker off") { !calls.isSpeakerOn }
+    }
+
+    /// Turning the speaker off can fail too; then the sound is still on the loudspeaker, and the button says so.
+    @MainActor func testASpeakerThatCannotBeTurnedOffStaysOn() async throws {
+        struct Stuck: Error {}
+        var loud = false
+        let callKit = FakeCallKit(), room = FakeRoom()
+        let calls = calls(callKit, room, speaker: { on in
+            guard on else { throw Stuck() }
+            loud = true
+        }, speakerRoute: { loud })
+        _ = try await start(calls, callKit)
+        calls.setSpeaker(true)
+        XCTAssertTrue(calls.isSpeakerOn)
+        calls.setSpeaker(false)
+        XCTAssertTrue(calls.isSpeakerOn)
+    }
+
+    /// A mute CallKit asked of a call that has ended since must not mark the next call muted.
+    @MainActor func testALateMuteOfAnEndedCallLeavesTheNextCallAlone() async throws {
+        let callKit = FakeCallKit(), room = FakeRoom(), calls = calls(callKit, room)
+        let first = try await start(calls, callKit)
+        room.holdsMicrophone = true
+        calls.perform(CXSetMutedCallAction(call: first, muted: true))
+        calls.perform(CXEndCallAction(call: first))
+        await waitUntil("the first call has ended") { !calls.isInCall }
+        _ = try await start(calls, callKit)
+        room.releaseMicrophone()
+        await waitUntil("the late mute reaches the room") { room.microphone == [false] }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertFalse(calls.isMuted)
     }
 
     @MainActor func testASpeakerThatCannotBeTurnedOnStaysOff() async throws {

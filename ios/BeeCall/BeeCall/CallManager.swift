@@ -46,6 +46,9 @@ final class CallManager: NSObject {
     @ObservationIgnored private var pickedUp = false
     @ObservationIgnored private let pickUpWait: Duration
     @ObservationIgnored private let speaker: (Bool) throws -> Void
+    /// Whether the call's sound is on the iPhone's loudspeaker now, however it got there.
+    @ObservationIgnored private let speakerRoute: () -> Bool
+    @ObservationIgnored private var routeObserver: (any NSObjectProtocol)?
     @ObservationIgnored private let decline: CallDecline
     /// The name of every call, both ways, on CallKit's call screen and in the Phone app's Recents.
     private static let handle = CXHandle(type: .generic, value: "Bee Call")
@@ -58,7 +61,7 @@ final class CallManager: NSObject {
          room: (any CallRoom)? = nil,
          beforeAnswering: @escaping () async -> Void = { await Server.shared.settings.sendBeforeAnswering() },
          decline: CallDecline = CallDecline(), speaker: @escaping (Bool) throws -> Void = CallManager.routeToSpeaker,
-         pickUpWait: Duration = .seconds(30)) {
+         speakerRoute: @escaping () -> Bool = CallManager.soundIsOnSpeaker, pickUpWait: Duration = .seconds(30)) {
         let provider: CXProvider? = callKit == nil ? Self.provider() : nil
         self.callKit = callKit ?? provider!
         self.calls = calls ?? CXCallController()
@@ -69,6 +72,7 @@ final class CallManager: NSObject {
         self.beforeAnswering = beforeAnswering
         self.decline = decline
         self.speaker = speaker
+        self.speakerRoute = speakerRoute
         self.pickUpWait = pickUpWait
         super.init()
         provider?.setDelegate(self, queue: nil) // nil = main queue
@@ -81,6 +85,12 @@ final class CallManager: NSObject {
 
         self.room.onLinkChange = { [weak self] link in
             self?.linkChanged(link)
+        }
+        // The sound moves without the app too: CallKit's own speaker button, AirPods, a route picked in CallKit's
+        // menu. The call screen's speaker button shows where it is (review of 2026-10-15, finding 2).
+        routeObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification,
+                                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.routeChanged() }
         }
         pushRegistry.delegate = self
         pushRegistry.desiredPushTypes = [.voIP]
@@ -132,21 +142,35 @@ final class CallManager: NSObject {
         try? await calls.request(CXTransaction(action: CXSetMutedCallAction(call: id, muted: muted)))
     }
 
+    isolated deinit {
+        if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
+    }
+
     /// The call screen's speaker (design D): the call's sound from the iPhone's loudspeaker, or back to the
-    /// receiver or headphones. It stays off when iOS refuses.
+    /// receiver or headphones. When iOS refuses, the button shows where the sound still is.
     func setSpeaker(_ on: Bool) {
         guard isInCall else { return }
         do {
             try speaker(on)
             isSpeakerOn = on
         } catch {
-            isSpeakerOn = false
+            isSpeakerOn = speakerRoute()
         }
+    }
+
+    private func routeChanged() {
+        guard isInCall else { return }
+        isSpeakerOn = speakerRoute()
     }
 
     /// The loudspeaker on or off for the call's audio session, which CallKit has activated.
     nonisolated static func routeToSpeaker(_ on: Bool) throws {
         try AVAudioSession.sharedInstance().overrideOutputAudioPort(on ? .speaker : .none)
+    }
+
+    /// Whether the audio session's sound goes to the iPhone's loudspeaker now.
+    nonisolated static func soundIsOnSpeaker() -> Bool {
+        AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
     }
 
     func endCall() async {
@@ -426,6 +450,7 @@ final class CallManager: NSObject {
         isEnding = false
         isReconnecting = false
         isMuted = false
+        if isSpeakerOn { try? speaker(false) } // the loudspeaker is let go with the call
         isSpeakerOn = false
         connectedAt = nil
         status = message
@@ -518,7 +543,8 @@ extension CallManager: CXProviderDelegate {
         Task {
             do {
                 try await room.setMicrophone(enabled: !action.isMuted)
-                isMuted = action.isMuted
+                // A call that ended meanwhile keeps its mute to itself: the next call starts unmuted.
+                if action.callUUID == callID { isMuted = action.isMuted }
                 action.fulfill()
             } catch {
                 action.fail()
