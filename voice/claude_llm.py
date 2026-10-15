@@ -1,4 +1,6 @@
-"""Claude Sonnet 5.5 on Bedrock as the coordinator's model, for LiveKit Agents.
+"""Claude as the coordinator's model, for LiveKit Agents: Claude Haiku 5.5 on Anthropic's own API (AsyncAnthropic,
+COORDINATOR_LLM=anthropic) or Claude Sonnet 5.5 on Bedrock (AsyncAnthropicBedrock, COORDINATOR_LLM=claude); see
+make_llm in voice/agent.py. The same history rules hold for both.
 
 Why our own adapter instead of the LiveKit AWS plugin:
 - Claude 5.5 needs its thinking blocks sent back unchanged, signature included.
@@ -39,6 +41,14 @@ History rules (one adapter instance per call):
 - Every tool_use gets a tool_result in the next user message. A tool that was
   cancelled or is still running gets a stand-in result; its real result, if it
   comes, arrives later as a note.
+- A turn Claude declines (stop_reason "refusal": a safety classifier or Claude
+  itself) is never committed, and words of it that went out are discarded. The
+  caller hears a short line instead (tagged as the app's), and the caller's
+  words it declined are never sent again, with a note in their place: sent
+  again, they would most likely be declined turn after turn.
+- The system prompt carries a cache breakpoint; with `auto_cache` (Anthropic's
+  API) the request also carries one on its last block, so the history the call
+  has built up is read from the cache by the next request.
 - One request at a time, so each reply is filed under the history it was
   generated from.
 """
@@ -66,6 +76,8 @@ log = logging.getLogger("bee-call.claude")
 
 INSTRUCTIONS_ID = "lk.agent_task.instructions"
 TURN_TAG = "bee_call_turn"
+REFUSAL_TAG = "bee_call_refusal"  # on the app's line after Claude declined a turn
+REFUSAL_LINE = "Sorry, I can't help with that one."
 RUNNING_OUTPUT_SUFFIX = "_running_output"  # id of LiveKit's stand-in output for a tool still running
 # Errors Bedrock sends inside an open stream arrive with status 200; these are worth a retry.
 TRANSIENT_STREAM_ERRORS = {"throttlingException", "serviceUnavailableException", "modelStreamErrorException",
@@ -150,6 +162,7 @@ class Draft:
     messages: list[dict[str, Any]] = field(default_factory=list)
     item_ids: set[str] = field(default_factory=set)  # LiveKit items the messages came from
     settled: set[str] = field(default_factory=set)  # replies whose hearing these messages settle
+    words: set[str] = field(default_factory=set)  # the items of the caller's words among them
 
 
 @dataclass
@@ -166,15 +179,24 @@ class Reply:
 class ClaudeBedrockLLM(llm.LLM):
     def __init__(self, *, profile: str | None = None, region: str = "ap-southeast-2", model: str | None = None,
                  thinking: str | None = None, effort: str | None = None, max_tokens: int = 4096,
-                 client: Any | None = None, on_event: Callable[..., None] | None = None) -> None:
+                 client: Any | None = None, on_event: Callable[..., None] | None = None, auto_cache: bool = False,
+                 refusal_line: str = REFUSAL_LINE) -> None:
         super().__init__()
         self._model = model or os.environ.get("COORDINATOR_MODEL") or default_model(region)
-        # "adaptive" (thinking on, the default) or "between_tools" (no up-front thinking).
+        # "adaptive" (thinking on, the default), "between_tools" (no up-front thinking; Claude Sonnet 5.5 only) or
+        # "disabled" (Claude Haiku 5.5, for speed; accepted at effort high or below).
         self._thinking = thinking or os.environ.get("COORDINATOR_THINKING", "adaptive")
+        if self._thinking == "between_tools" and "sonnet-5-5" not in self._model:
+            self._thinking = "disabled"  # every other model answers "between_tools" with a 400
         # One level per call: on Bedrock, Sonnet 5.5 cannot change effort mid-conversation.
         self._effort = effort or os.environ.get("COORDINATOR_EFFORT", "low")
         self._max_tokens = max_tokens
         self._client = client or AsyncAnthropicBedrock(aws_profile=profile, aws_region=region)
+        # Anthropic's automatic caching: a cache breakpoint on the last block, so the history the call has built
+        # up is read from the cache by the next request (on top of the system prompt's own breakpoint).
+        self._auto_cache = auto_cache
+        # Said when Claude declines a turn (stop_reason "refusal"), in the call's language (voice/language.py).
+        self._refusal_line = refusal_line
         self.on_event = on_event
         self.system_prompt: str | None = None
         self.history: list[dict[str, Any]] = []
@@ -184,6 +206,7 @@ class ClaudeBedrockLLM(llm.LLM):
         self._last: Reply | None = None  # the last committed reply; its tool_use ids need results
         self._pending: Reply | None = None  # generated, waiting for LiveKit to schedule it
         self._cut_short: dict[str, bool] = {}  # replies stopped mid-stream after words went out -> a tool had started
+        self._declined: set[str] = set()  # the caller's words of a turn Claude declined: never sent again
         self._tools_schema: list[dict[str, Any]] | None = None  # the call's tool list, sent unchanged every time
         self._lock = asyncio.Lock()
 
@@ -193,7 +216,7 @@ class ClaudeBedrockLLM(llm.LLM):
 
     @property
     def provider(self) -> str:
-        return "aws-bedrock"
+        return "anthropic" if isinstance(self._client, anthropic.AsyncAnthropic) else "aws-bedrock"
 
     def chat(
         self,
@@ -246,7 +269,7 @@ class ClaudeBedrockLLM(llm.LLM):
                 notes.clear()
 
         for item in chat_ctx.items:
-            if item.id in self._committed:
+            if item.id in self._committed or item.id in self._declined:
                 continue
             kind = getattr(item, "type", None)
             if kind == "message" and item.id == INSTRUCTIONS_ID:
@@ -262,7 +285,15 @@ class ClaudeBedrockLLM(llm.LLM):
                 elif item.role == "user":
                     if text:
                         words.append(_text(text))
+                        draft.words.add(item.id)
                 elif item.role == "assistant":
+                    if (getattr(item, "extra", None) or {}).get(REFUSAL_TAG):
+                        # The app's line after Claude declined a turn. Words of the declined reply that went out
+                        # before it are discarded, as the API asks, and so are the caller's words it declined.
+                        notes.append("Note from the app: your reply here was stopped by a safety check, so the app "
+                                     f'said this to the caller instead: "{self._refusal_line}". The caller\'s words '
+                                     "before it are left out of this conversation.")
+                        continue
                     tag = (getattr(item, "extra", None) or {}).get(TURN_TAG)
                     reply = self._replies.get(tag) if tag else None
                     if reply is not None:
@@ -320,6 +351,8 @@ class ClaudeBedrockLLM(llm.LLM):
         }
         if self.system_prompt:
             params["system"] = [{"type": "text", "text": self.system_prompt, "cache_control": {"type": "ephemeral"}}]
+        if self._auto_cache:
+            params["cache_control"] = {"type": "ephemeral"}
         if self._tools_schema is None and tools_schema:
             self._tools_schema = tools_schema
         elif tools_schema and tools_schema != self._tools_schema:
@@ -348,6 +381,12 @@ class ClaudeBedrockLLM(llm.LLM):
         else:
             self._pending = reply
         return reply
+
+    def decline(self, turn_id: str, draft: Draft) -> None:
+        """Claude declined this turn (stop_reason "refusal"). History stays as it was, and the caller's words it
+        declined are never sent again: sent again, they would most likely be declined again, turn after turn."""
+        self._declined |= draft.words
+        self._emit("claude_reply_declined", turn=turn_id, words_left_out=len(draft.words))
 
     def settle(self) -> None:
         """Commit or drop the reply still waiting on LiveKit, for example when the call ends."""
@@ -418,14 +457,19 @@ class ClaudeStream(llm.LLMStream):
                     raise APIConnectionError(str(exc)) from exc
                 raise
             content = [b.model_dump(exclude_none=True) for b in final.content]
-            reply = owner.record(turn_id, content, draft, speech, final.stop_reason)
+            refused = final.stop_reason == "refusal"
+            if refused:
+                reply = None
+                owner.decline(turn_id, draft)
+            else:
+                reply = owner.record(turn_id, content, draft, speech, final.stop_reason)
 
         usage = getattr(final, "usage", None)
         cache_read = (getattr(usage, "cache_read_input_tokens", 0) or 0) if usage else 0
         owner._emit("claude_turn", turn=turn_id, stop=final.stop_reason, first_text_s=first_text,
                     input_tokens=getattr(usage, "input_tokens", None), output_tokens=getattr(usage, "output_tokens", None),
-                    cache_read_tokens=cache_read,
-                    status="empty" if reply is None else "pending" if owner._pending is reply else "committed")
+                    cache_read_tokens=cache_read, status="refused" if refused else "empty" if reply is None
+                    else "pending" if owner._pending is reply else "committed")
         if reply is not None and reply.tools:
             if reply.tools_sent:
                 calls = [llm.FunctionToolCall(name=b["name"], arguments=json.dumps(b.get("input", {})), call_id=b["id"])
@@ -437,9 +481,18 @@ class ClaudeStream(llm.LLMStream):
                 # The next request gives it a stand-in result.
                 log.warning("tool use not run: stop_reason=%s", final.stop_reason)
         if usage is not None:
-            prompt = (usage.input_tokens or 0) + cache_read + (getattr(usage, "cache_creation_input_tokens", 0) or 0)
+            cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+            prompt = (usage.input_tokens or 0) + cache_read + cache_write
             self._event_ch.send_nowait(llm.ChatChunk(id=turn_id, usage=llm.CompletionUsage(
                 completion_tokens=usage.output_tokens or 0, prompt_tokens=prompt, prompt_cached_tokens=cache_read,
-                total_tokens=prompt + (usage.output_tokens or 0))))
-        if final.stop_reason == "refusal":
+                cache_creation_tokens=cache_write, total_tokens=prompt + (usage.output_tokens or 0))))
+        if refused:
+            # Claude declined the turn (a safety classifier, or Claude itself; Claude Haiku 5.5 has no server-side
+            # fallback). The caller hears a short line, as the app's words: the next request tells Claude so.
+            details = getattr(final, "stop_details", None)
+            owner._emit("claude_refusal", turn=turn_id, category=getattr(details, "category", None),
+                        words_out=first_text is not None)
             log.warning("Claude declined this turn (stop_reason=refusal)")
+            self._event_ch.send_nowait(llm.ChatChunk(id=turn_id, delta=llm.ChoiceDelta(
+                role="assistant", content=(" " if first_text is not None else "") + owner._refusal_line,
+                extra={REFUSAL_TAG: turn_id})))
