@@ -57,7 +57,7 @@ struct CallRecordSheet: View {
 }
 
 /// WKWebView with the session screen. Loads again when `attempt` changes.
-private struct SessionPage: UIViewRepresentable {
+struct SessionPage: UIViewRepresentable {
     static let bridge = "beeCall" // window.webkit.messageHandlers.beeCall in web/app.js
     let url: URL
     let attempt: Int
@@ -65,15 +65,20 @@ private struct SessionPage: UIViewRepresentable {
     let onContinue: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(failed: $failed, onContinue: onContinue)
+        Coordinator(policy: RecordPagePolicy(records: url), failed: $failed, onContinue: onContinue)
     }
 
     func makeUIView(context: Context) -> WKWebView {
+        Self.webView(context.coordinator)
+    }
+
+    /// The web view, with the coordinator as its delegates and the page's bridge.
+    static func webView(_ coordinator: Coordinator) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        configuration.userContentController.add(context.coordinator, name: Self.bridge)
+        configuration.userContentController.add(coordinator, name: bridge)
         let view = WKWebView(frame: .zero, configuration: configuration)
-        view.navigationDelegate = context.coordinator
-        view.uiDelegate = context.coordinator
+        view.navigationDelegate = coordinator
+        view.uiDelegate = coordinator
         view.allowsBackForwardNavigationGestures = true // back from a file opened with Raw
         return view
     }
@@ -95,13 +100,18 @@ private struct SessionPage: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
+        let policy: RecordPagePolicy
         let failed: Binding<Bool>
         let onContinue: (String) -> Void
+        let openOutside: (URL) -> Void // Safari, in the app
         var loadedAttempt: Int?
 
-        init(failed: Binding<Bool>, onContinue: @escaping (String) -> Void) {
+        init(policy: RecordPagePolicy, failed: Binding<Bool>, onContinue: @escaping (String) -> Void,
+             openOutside: @escaping (URL) -> Void = { UIApplication.shared.open($0) }) {
+            self.policy = policy
             self.failed = failed
             self.onContinue = onContinue
+            self.openOutside = openOutside
         }
 
         /// "Continue this call": {"continue": "2026-10-14/0055"}. Only an id of that shape is passed on.
@@ -118,7 +128,24 @@ private struct SessionPage: UIViewRepresentable {
             failed.wrappedValue = true
         }
 
-        // The page opens a file's raw view in a new window (target=_blank). Show it in this one.
+        /// Every load, the page's own and a link's: the records server's pages stay here, other sites open in
+        /// Safari, and anything else goes nowhere (RecordPagePolicy).
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                     decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
+            guard let url = navigationAction.request.url else { return decisionHandler(.cancel) }
+            switch policy.navigation(to: url) {
+            case .stay:
+                decisionHandler(.allow)
+            case .openInSafari:
+                openOutside(url)
+                decisionHandler(.cancel)
+            case .refuse:
+                decisionHandler(.cancel)
+            }
+        }
+
+        // The page opens a file's raw view in a new window (target=_blank). Show it in this one; the load goes
+        // through the policy above like any other.
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                      for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
             webView.load(navigationAction.request)
