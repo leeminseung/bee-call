@@ -313,6 +313,34 @@ def test_a_call_back_is_booked_only_with_the_user_s_own_words_asking_for_it(tmp_
     assert asyncio.run(agent.book_call(None, topic="the interview", asked="yes nine works", at=nine)).startswith("Moved")
 
 
+@pytest.mark.parametrize("said, asked, booked", [
+    (["아니요, 전화는 안 해도 돼요."], "전화", False),  # a word out of a refusal
+    (["No thanks, don't call me back."], "call me back", False),
+    (["I went hiking yesterday."], "yes", False),
+    (["Hmm."], "m", False),
+    (["내일 아침", "여덟 시에 다시 전화해 줘"], "내일 아침 여덟 시에 다시 전화해 줘", True),  # an answer split at a pause
+    (["오늘 회의 정말 길었어요 아무튼 내일 아침 여덟 시에 다시 전화해 줄래요"], "내일 아침 여덟 시에 다시 전화해 줄래요", True),
+    (["Can you call me back at nine?", "Yes, nine works."], "Yes, nine works", True),
+    (["네."], "네", True),
+])
+def test_the_words_given_for_a_call_back_must_be_most_of_what_the_user_said(tmp_path, said, asked, booked):
+    """Review of the last stretch, finding 3: any fragment of anything the user said passed, a word out of a refusal
+    too. The words must now be most of a sentence the user said (or of sentences in a row, as an answer split at a
+    pause): at least half its letters. Whether those words ask for the call stays the call AI's reading."""
+    from types import SimpleNamespace
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    workspace = tmp_path / "workspace"
+    agent = Coordinator(CallRecorder(workspace, room="r", now=seoul_now()), SimpleNamespace(), workspace,
+                        clock=seoul_now)
+    user_said(agent, *said)
+    at = (datetime.now(SEOUL) + timedelta(days=1)).replace(hour=8, minute=0).isoformat(timespec="minutes")
+    answer = asyncio.run(agent.book_call(None, topic="a call back", asked=asked, at=at))
+    assert answer.startswith("Booked") is booked, answer
+    assert len(OfferStore(workspace).all()) == (1 if booked else 0)
+
+
 def test_a_call_back_the_user_asks_for_is_booked_and_continues_this_call(tmp_path):
     from types import SimpleNamespace
     from voice.coordinator import Coordinator
@@ -323,7 +351,8 @@ def test_a_call_back_the_user_asks_for_is_booked_and_continues_this_call(tmp_pat
     agent = Coordinator(rec, SimpleNamespace(), workspace, clock=seoul_now)
     tomorrow = (datetime.now(SEOUL) + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
     user_said(agent, "Call me tomorrow at eight about how the interview went.")
-    said = asyncio.run(agent.book_call(None, topic="how the interview went", asked="Call me tomorrow at eight",
+    said = asyncio.run(agent.book_call(None, topic="how the interview went",
+                                       asked="Call me tomorrow at eight about how the interview went.",
                                        at=tomorrow.isoformat(timespec="minutes")))
     assert said.startswith("Booked: you will call at")
     (offer,) = OfferStore(workspace).all()
@@ -332,7 +361,7 @@ def test_a_call_back_the_user_asks_for_is_booked_and_continues_this_call(tmp_pat
     assert offer.continue_from == f"{rec.dir.parent.name}/{rec.dir.name}"
     assert offer.reason.startswith("In our call at ") and offer.reason.endswith(", you asked me to call you back at "
                                                                                  "this time.")
-    asked = "Call me tomorrow at eight"
+    asked = "Call me tomorrow at eight about how the interview went."
     assert "Ask the user for a later time" in asyncio.run(agent.book_call(None, topic="x", asked=asked,
                                                                           at="2020-01-01T08:00"))
     assert "ISO 8601" in asyncio.run(agent.book_call(None, topic="x", asked=asked, at="tomorrow at 8"))

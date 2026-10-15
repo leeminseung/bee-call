@@ -186,6 +186,8 @@ def keep_reply(reply: dict[str, Any], chunk: Any) -> None:
 
 
 USER_TURNS_CHECKED = 12  # book_call's `asked` must be in one of the user's last this many turns
+SENTENCE_END = re.compile(r"[.!?。？！…\n]+")
+SENTENCES_JOINED = 3  # an answer split at pauses: up to this many of the user's sentences in a row
 
 
 def _letters(text: str) -> str:
@@ -427,14 +429,14 @@ class Coordinator(Agent):
 
         Args:
             topic: What the call is for, in a few words.
-            asked: The user's own words asking for the call or agreeing to it, exactly as they said them.
+            asked: The user's own sentence asking for the call or agreeing to it, whole, exactly as they said it.
             at: For a clock time: the local date and time to call, in ISO 8601, like 2026-10-15T08:00.
             in_minutes: For a time from now, like "in ten minutes" (10) or "in an hour" (60): minutes from now.
         """
         if not self._user_said(asked):  # checked in code, not only asked of the model (coordinator's review)
             self._recorder.event("call_booking_refused", asked=str(asked or "")[:200], topic=topic)
-            return ("Not booked: asked must be the user's own words asking for the call or agreeing to it, exactly "
-                    "as they said them in this call. Book a call only when they asked for it or agreed to it.")
+            return ("Not booked: asked must be the user's own sentence asking for the call or agreeing to it, whole "
+                    "and exactly as they said it in this call. Book a call only when they asked for it or agreed to it.")
         now = self._clock()  # the person's clock now, not the time this call started
         if (at is None) == (in_minutes is None):
             return "Give the time one way: in_minutes for a time from now, or at for a clock time."
@@ -464,13 +466,22 @@ class Coordinator(Agent):
                 "Read this time back to the user in a few words.")
 
     def _user_said(self, words: Any) -> bool:
-        """Whether `words` are among what the user said in this call (punctuation, spacing and case aside)."""
+        """Whether `words` are most of a sentence the user said in this call, or of sentences in a row (an answer
+        split at a pause): within it, and at least half its letters, punctuation, spacing and case aside. So a word
+        out of a refusal ("전화" in "아니요, 전화는 안 해도 돼요.") is not taken for a request."""
         wanted = _letters(words) if isinstance(words, str) else ""
         if not wanted:
             return False
-        said = [_letters(item.text_content or "") for item in self.chat_ctx.items
-                if getattr(item, "type", None) == "message" and item.role == "user"]
-        return any(wanted in turn for turn in said[-USER_TURNS_CHECKED:])
+        turns = [item.text_content or "" for item in self.chat_ctx.items
+                 if getattr(item, "type", None) == "message" and item.role == "user"][-USER_TURNS_CHECKED:]
+        sentences = [_letters(part) for turn in turns for part in SENTENCE_END.split(turn) if _letters(part)]
+        for start in range(len(sentences)):
+            span = ""
+            for sentence in sentences[start:start + SENTENCES_JOINED]:
+                span += sentence
+                if wanted in span and 2 * len(wanted) >= len(span):
+                    return True
+        return False
 
     @function_tool
     async def cancel_call(self, context: RunContext) -> str:
