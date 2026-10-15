@@ -1,11 +1,11 @@
 """A call's one-line title, written after the call (contract section 1, decision 7).
 
-The voice server runs it in a call's shutdown, beside the Bee retry, once the record is closed: one Claude Haiku 5.5
-request on Anthropic's API (ANTHROPIC_API_KEY) over what was said, in the call's language, only when the person
-spoke, with a hard limit of TITLE_LIMIT_S. The title is recorded as an after-call call_titled event in the call's
-events.jsonl, and the request's tokens go to the spend log (voice/costs.py). On any failure (no key, the limit, an
-error, a refusal, an empty answer) nothing is written, and the call view's title falls back to the call's topic or
-the person's first sentence (voice/call_view.py).
+The voice server runs it in a call's shutdown, beside the Bee retry, once the record is closed: one request to the
+model catalog's title role (voice/model_catalog.py: Claude Haiku 5.5, no thinking) over what was said, in the call's
+language, only when the person spoke, with a hard limit of TITLE_LIMIT_S. The title is recorded as an after-call
+call_titled event in the call's events.jsonl, and the request's tokens go to the spend log (voice/costs.py). On any
+failure (the provider not set up, the limit, an error, a refusal, an empty answer) nothing is written, and the call
+view's title falls back to the call's topic or the person's first sentence (voice/call_view.py).
 
 Older calls: uv run python -m voice.titles data/people/<id>   titles each ended call of that person without one
 """
@@ -14,19 +14,20 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any
 
+from voice import model_catalog, providers
 from voice.call_folders import EVENTS, call_folders, session_id
+from voice.call_models import coordinator_llm
 from voice.call_view import items_of, read_call, read_record
 from voice.costs import SpendLog
 from voice.language import CallLanguage, call_language
+from voice.providers import Turn, Usage
 
 log = logging.getLogger("bee-call.titles")
 
-TITLE_MODEL = "claude-haiku-5-5"
 TITLE_LIMIT_S = 5.0  # the whole request, the answer included (decision 7)
 TITLE_CHARS = 60  # as long as a title made from the person's first sentence
 SAID_CHARS = 8000  # what was said, as the model reads it: a long call keeps its start and its end
@@ -38,14 +39,15 @@ SYSTEM = ("You write the title of one phone call between a person and Bee Call, 
 QUOTES = "\"'“”‘’「」『』"
 
 
-def anthropic_client() -> Any:
-    """Anthropic's API, or None without a key (tests put a stand-in here)."""
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not key:
-        return None
-    import anthropic
+def title_choice() -> model_catalog.Choice:
+    """The title role's model as this COORDINATOR_LLM mode runs it."""
+    return model_catalog.mode_role("title", coordinator_llm()).choices[0]
 
-    return anthropic.AsyncAnthropic(api_key=key, max_retries=0, timeout=anthropic.Timeout(TITLE_LIMIT_S, connect=2.0))
+
+def ready(choice: model_catalog.Choice) -> bool:
+    """Whether the choice's provider is set up here (Anthropic's needs its key); one that is not is never asked."""
+    found = providers.adapter(choice.offering.provider)
+    return bool(getattr(found, "ready", lambda: True)())
 
 
 def what_was_said(folder: Path) -> tuple[str, bool]:
@@ -68,37 +70,33 @@ def clean_title(text: str) -> str:
     return line[:TITLE_CHARS].rstrip() if len(line) > TITLE_CHARS else line
 
 
-async def title_call(folder: Path, language: CallLanguage, *, workspace: Path, client: Any = "default") -> str | None:
+async def title_call(folder: Path, language: CallLanguage, *, workspace: Path) -> str | None:
     """Writes the call's title (call_titled) and returns it; None, with nothing written, when the person never spoke
-    or anything failed. `client`: Anthropic's API by default, None for none."""
+    or anything failed."""
     said, person_spoke = what_was_said(folder)
-    if not person_spoke:
+    choice = title_choice()
+    if not person_spoke or not ready(choice):
         return None
-    client = anthropic_client() if client == "default" else client
-    if client is None:
-        return None
-    started = time.monotonic()
+    started, usage = time.monotonic(), Usage()
     try:
-        answer = await asyncio.wait_for(client.messages.create(
-            model=TITLE_MODEL, max_tokens=80,
-            system=SYSTEM.format(language=language.name, chars=TITLE_CHARS),
-            messages=[{"role": "user", "content": said}]), TITLE_LIMIT_S)
+        answer = await asyncio.wait_for(providers.reply(
+            choice, SYSTEM.format(language=language.name, chars=TITLE_CHARS), [Turn("user", text=said)],
+            usage=usage), TITLE_LIMIT_S)
     except Exception as exc:  # the limit, a network error, an overloaded model: no title this time
         log.warning("no title for %s: %s", folder, f"{type(exc).__name__}: {exc}"[:200])
+        answer = None
+    finally:
+        if usage.input_tokens or usage.output_tokens:
+            SpendLog(workspace).add("call_title", model=choice.offering.model, input_tokens=usage.input_tokens,
+                                    output_tokens=usage.output_tokens, estimated=usage.estimated,
+                                    call=session_id(folder))
+    if answer is None or answer.stop == "refusal":
         return None
-    usage = getattr(answer, "usage", None)
-    tokens = {"input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
-              "output_tokens": int(getattr(usage, "output_tokens", 0) or 0)}
-    SpendLog(workspace).add("call_title", model=TITLE_MODEL, call=session_id(folder), **tokens)
-    if getattr(answer, "stop_reason", None) == "refusal":
-        return None
-    text = "".join(getattr(block, "text", "") for block in getattr(answer, "content", []) or []
-                   if getattr(block, "type", None) == "text")
-    title = clean_title(text)
+    title = clean_title(answer.turn.text)
     if not title:
         return None
-    append_event(folder, "call_titled", title=title, model=TITLE_MODEL, seconds=round(time.monotonic() - started, 2),
-                 **tokens)
+    append_event(folder, "call_titled", title=title, model=answer.model, seconds=round(time.monotonic() - started, 2),
+                 input_tokens=usage.input_tokens, output_tokens=usage.output_tokens)
     return title
 
 
@@ -122,9 +120,8 @@ def main(argv: list[str] | None = None) -> None:
                                      "have no title yet (one Claude Haiku 5.5 request each).")
     parser.add_argument("workspace", type=Path, help="the person's folder, data/people/<id>")
     args = parser.parse_args(argv)
-    client = anthropic_client()
-    if client is None:
-        raise SystemExit("ANTHROPIC_API_KEY is not set")
+    if not ready(title_choice()):
+        raise SystemExit(f"{title_choice().offering.provider} is not set up here (for Anthropic: ANTHROPIC_API_KEY)")
     from voice.people import Settings
 
     language = Settings.from_file(args.workspace / "settings.json").language
@@ -134,7 +131,7 @@ def main(argv: list[str] | None = None) -> None:
         record = read_record(folder)
         spoken = next((e.get("language") for _, e in record.lines if e.get("type") == "coordinator"
                        and isinstance(e.get("language"), str)), language)
-        title = asyncio.run(title_call(folder, call_language(spoken), workspace=args.workspace, client=client))
+        title = asyncio.run(title_call(folder, call_language(spoken), workspace=args.workspace))
         print(f"{session_id(folder)}: {title or '(no title)'}")
 
 

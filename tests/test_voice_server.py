@@ -536,7 +536,7 @@ def test_after_the_call_its_title_is_asked_for_once_the_record_is_closed(tmp_pat
     use_fakes(monkeypatch, call)
     asked = []
 
-    async def title_call(folder, language, *, workspace, client="default"):
+    async def title_call(folder, language, *, workspace):
         asked.append((folder, language.code, workspace, json.loads(
             (folder / "events.jsonl").read_text().splitlines()[-1])["type"]))
         return "제목"

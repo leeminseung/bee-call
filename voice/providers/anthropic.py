@@ -21,6 +21,10 @@ class Anthropic:
     def __init__(self, client: Any = None) -> None:
         self._client = client
 
+    def ready(self) -> bool:
+        """Set up here: a stand-in client, or ANTHROPIC_API_KEY."""
+        return self._client is not None or bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+
     def client(self) -> Any:
         if self._client is None:
             import anthropic
