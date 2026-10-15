@@ -11,7 +11,7 @@ import pytest
 
 from meta.session import MetaSession
 from tests.fake_call import FakeCall, FakeSession, use_fakes
-from tests.helpers import SEOUL, signed_in
+from tests.helpers import SEOUL, as_sent, signed_in
 from tests.test_prep import Converse, text
 from voice import agent, prep as prep_module
 from voice.ringback import STATE_ATTRIBUTE
@@ -891,11 +891,13 @@ def test_the_record_server_never_serves_a_call_s_audio_or_its_raw_bee_inputs(tmp
     fixture = Path(__file__).parent / "fixtures" / "sessions" / "2026-10-11" / "1930"
     shutil.copytree(fixture, me.workspace / "2026-10-11" / "1930")
     names = ("audio/user.wav", "AUDIO/USER.WAV", "audio/ai.wav", "inputs/conversation-5121.json",
-             "Inputs/unconfirmed_facts.json", "jobs/../audio/user.wav", "transcript.md")
+             "Inputs/unconfirmed_facts.json", "jobs/../audio/user.wav", "jobs/%2E%2E/audio/user.wav",
+             "%2E%2E/1930/audio/user.wav", "transcript.md")
 
     async def main():
         async with TestClient(TestServer(session_server.make_app(me.people)), headers=me.headers) as client:
-            found = {name: (await client.get(f"/api/sessions/2026-10-11/1930/files/{name}")) for name in names}
+            found = {name: await client.session.get(as_sent(client, f"/api/sessions/2026-10-11/1930/files/{name}"))
+                     for name in names}  # sent as written: the test client would resolve the dot segments first
             return {name: (r.status, await r.read()) for name, r in found.items()}
 
     answers = asyncio.run(main())

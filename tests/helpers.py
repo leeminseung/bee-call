@@ -31,6 +31,14 @@ def signed_in(root: Path, person: str = "matt") -> SimpleNamespace:
                            workspace=people.workspace(person), headers={"Authorization": f"Bearer {token}"})
 
 
+def as_sent(client, path: str):
+    """`path` exactly as the server is to see it, for client.session: the test client resolves dot segments and
+    decodes %2E before it sends a request, so a path that tries to leave a folder would never reach the server."""
+    from yarl import URL
+
+    return URL(str(client.make_url("")).rstrip("/") + path, encoded=True)
+
+
 def fake_livekit(requests: list) -> SimpleNamespace:
     """LiveKit's room API, keeping each CreateRoomRequest it gets."""
     async def create_room(request):

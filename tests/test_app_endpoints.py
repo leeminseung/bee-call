@@ -11,7 +11,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from tests.contract import check_body
-from tests.helpers import signed_in
+from tests.helpers import as_sent, signed_in
 from voice import token_server
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sessions"
@@ -33,13 +33,14 @@ def minseung(tmp_path, monkeypatch):
 
 
 def run(people, headers, requests):
-    """Each (method, path, extra headers, json body) in turn: (status, headers, body bytes) for each."""
+    """Each (method, path, extra headers, json body) in turn, the path sent exactly as written: (status, headers,
+    body bytes) for each."""
     async def main():
         app = token_server.make_app("wss://example", "APIkey", "s" * 32, people, room_exists=None)
         out = []
         async with TestClient(TestServer(app), headers=headers) as client:
             for method, path, extra, body in requests:
-                response = await client.request(method, path, headers=extra or {}, json=body)
+                response = await client.session.request(method, as_sent(client, path), headers=extra or {}, json=body)
                 out.append((response.status, response.headers, await response.read()))
         return out
 
@@ -102,12 +103,18 @@ def test_a_call_s_files_are_served_by_the_record_server_s_rule(minseung):
         (folder / private).mkdir()
         (folder / private / "secret.json").write_text("{}")
     (folder / "model-log.jsonl").write_text("{}\n")
+    (minseung.workspace / "secret.txt").write_text("outside the call")
     base = f"/calls/{MAIN}/files"
     found = get(minseung, f"{base}/jobs/01/report.md", f"{base}/jobs/01/comparison.csv", f"{base}/jobs/01/price-chart.png",
                 f"{base}/jobs/01/price-chart.svg", f"{base}/audio/secret.json", f"{base}/INPUTS/secret.json",
-                f"{base}/model-log.jsonl", f"{base}/jobs/../audio/secret.json", f"{base}/jobs/01/nothing.md")
+                f"{base}/model-log.jsonl", f"{base}/jobs/01/nothing.md")
     statuses = [s for s, _, _ in found]
-    assert statuses == [200, 200, 200, 200, 403, 403, 403, 403, 404]
+    assert statuses == [200, 200, 200, 200, 403, 403, 403, 404]
+    # Paths that try to leave by dot segments, as written or percent-encoded, reach the server as sent (the test
+    # client would resolve them first) and meet its rule.
+    leaving = get(minseung, f"{base}/jobs/../audio/secret.json", f"{base}/jobs/%2E%2E/audio/secret.json",
+                  f"{base}/%2E%2E/%2E%2E/secret.txt", f"{base}/jobs/01/..%2F..%2F..%2F..%2Fsecret.txt")
+    assert [(s, body) for s, _, body in leaving] == [(403, b"path not allowed\n")] * 4
     types = [h.get("Content-Type", "") for _, h, _ in found[:4]]
     assert types[0].startswith("text/plain") and "charset=utf-8" in types[0] and types[1].startswith("text/plain")
     assert types[2] == "image/png" and types[3].startswith("image/svg+xml")
