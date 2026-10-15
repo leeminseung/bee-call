@@ -122,6 +122,7 @@ The app signs in with Apple (`SignInView.swift`, `Server.swift`) and keeps the s
 Ways to drive and watch Bee Call without the iPhone, AWS or a real Bee, for black-box tests. None of them lets a call ring without the user's yes.
 
 - **Port and address.** `python -m voice.token_server --host 127.0.0.1 --port 18787` (the port defaults to `TOKEN_SERVER_PORT`, or 8787).
+- **A waiting sign-in.** `python -m voice.people test-sign-in [--email E]` makes what a first Sign in with Apple leaves, for a made-up Apple id, and prints `{"code", "sub"}`. It waits like any other: `approve CODE --as ID` approves it, and `session ID` then prints the token the app's next sign-in would get (the app gets no token while it waits).
 - **A test clock.** `BEE_CALL_CLOCK_FILE=<path>` names a file holding one ISO 8601 time with its zone, such as `2026-10-15T20:55:00+09:00`. From the moment the file is written, every process that has the setting believes it is that time, and the clock runs on from there; write the file again to set it again. A missing file, or one that holds anything else, leaves the real clock. Everything that is "the user's time" follows it: the suggested call time, quiet hours, the day's notifications and budget, call folder dates and booked times. The server never takes this setting from SSM.
 
 ## Privacy

@@ -962,6 +962,25 @@ def test_the_operator_changes_settings_only_for_an_approved_person(tmp_path, cap
         people_module.main(["--data", str(data), "set", "jiwoo", "daily_budget_usd", "500"])
 
 
+def test_an_operator_command_makes_a_waiting_sign_in_for_tests(tmp_path, capsys):
+    """Outside test seam 10: a waiting sign-in came only from a real Sign in with Apple. `voice.people test-sign-in`
+    makes one for a made-up Apple id and prints its code; it waits like any other until the operator approves it,
+    and `session` then gives the token the app's next sign-in would get."""
+    from voice import people as people_module
+
+    data = tmp_path / "data"
+    people_module.main(["--data", str(data), "test-sign-in", "--email", "probe@example.com"])
+    made = json.loads(capsys.readouterr().out)
+    assert len(made["code"]) == 6 and made["sub"].startswith("test:")
+    people_module.main(["--data", str(data), "waiting"])
+    assert made["code"] in capsys.readouterr().out
+    people_module.main(["--data", str(data), "approve", made["code"], "--as", "probe"])
+    capsys.readouterr()
+    people_module.main(["--data", str(data), "session", "probe"])
+    assert People(data).who(capsys.readouterr().out.strip()) == "probe"
+    assert People(data).sign_in(made["sub"], None, datetime.now()) == "probe"  # the made-up id is that person now
+
+
 def test_the_prep_of_an_ai_call_counts_where_it_runs_even_if_nobody_answers(tmp_path, monkeypatch):
     """Server review finding 4, BC-102: the prep's model use was counted only once the phone answered."""
     from tests.helpers import placing

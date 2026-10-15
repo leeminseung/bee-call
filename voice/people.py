@@ -502,6 +502,8 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="approved people and their settings")
     sub.add_parser("waiting", help="sign-ins waiting for approval")
+    test_sign_in = sub.add_parser("test-sign-in", help="for tests: a waiting sign-in for a made-up Apple id")
+    test_sign_in.add_argument("--email")
     approve = sub.add_parser("approve", help="approve a waiting sign-in by the code the app shows")
     approve.add_argument("code")
     approve.add_argument("--as", dest="person", required=True, help="a short id for the person, like jiwoo")
@@ -526,6 +528,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "list":
         for person in people.ids():
             print(f"{person}: {json.dumps(asdict(people.settings(person)), ensure_ascii=False)}")
+    elif args.command == "test-sign-in":
+        # What a first Sign in with Apple leaves, without Apple: it waits for approval like any other.
+        made_up = f"test:{secrets.token_hex(8)}"
+        people.sign_in(made_up, args.email, datetime.now())
+        print(json.dumps({"code": waiting_code(made_up), "sub": made_up}))
     elif args.command == "waiting":
         for entry in people.waiting():
             print(f"{entry['code']}  since {entry.get('at')}  {entry.get('email') or '(email hidden)'}")
