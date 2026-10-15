@@ -26,7 +26,9 @@ struct BeeCallApp: App {
             // The switches live in the Settings app. SettingsSync sends them at launch and on every change; coming
             // back to the app sends them again too, and brings Bee in line with "Use Bee".
             .task(id: scenePhase) {
-                if scenePhase == .active { await server.syncSettings() }
+                guard scenePhase == .active else { return }
+                server.readSignInAgain() // the Keychain may have been locked at launch
+                await server.syncSettings()
             }
             // A Bee Call entry tapped in the Phone app's Recents: a new call, as the Call button makes.
             .onContinueUserActivity(RecentsCall.activityType) { activity in

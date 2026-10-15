@@ -28,6 +28,7 @@ final class Server {
     @ObservationIgnored let settings = SettingsSync(tokenReadable: { Server.savedToken() != nil })
     @ObservationIgnored private let keychain: SignInKeychain
     @ObservationIgnored private let store: UserDefaults // keeps who is signed in ("person")
+    @ObservationIgnored private var keychainOpened: (any NSObjectProtocol)?
 
     /// The system Keychain and defaults, unless a test passes stand-ins.
     init(keychain: SignInKeychain = .system, store: UserDefaults = .standard) {
@@ -38,6 +39,15 @@ final class Server {
         } else {
             state = .signedOut
         }
+        keychainOpened = NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.readSignInAgain() }
+        }
+    }
+
+    isolated deinit {
+        if let keychainOpened { NotificationCenter.default.removeObserver(keychainOpened) }
     }
 
     // MARK: - Address
@@ -133,6 +143,14 @@ final class Server {
             cancelled = (error as? ASAuthorizationError)?.code == .canceled
         }
         await complete(signIn.finish(identityToken: identityToken, cancelled: cancelled))
+    }
+
+    /// The Keychain is locked from a restart until the first unlock, so a launch then (for a VoIP push) cannot read
+    /// the sign-in and starts signed out. It is read again when the Keychain opens and when the app comes to the
+    /// front (review finding 17); a sign-in that ended has no token left, and stays ended.
+    func readSignInAgain() {
+        guard case .signedOut = state, case .token = keychain.read() else { return }
+        state = .signedIn(person: store.string(forKey: "person") ?? "")
     }
 
     /// What the sign-in came to.

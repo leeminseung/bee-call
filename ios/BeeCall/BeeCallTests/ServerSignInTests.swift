@@ -1,4 +1,5 @@
 import Security
+import UIKit
 import XCTest
 @testable import BeeCall
 
@@ -22,6 +23,32 @@ final class ServerSignInTests: XCTestCase {
         XCTAssertNil(server.problem)
         await server.complete(.failed("The server did not accept the sign-in."))
         XCTAssertEqual(server.problem, "The server did not accept the sign-in.")
+    }
+
+    /// Review finding 17: the signed-in state was read once, at launch. A launch before the first unlock after a
+    /// restart, such as one for a VoIP push, cannot read the Keychain, and left the sign-in screen up for good.
+    @MainActor func testASignInUnreadableAtLaunchIsReadAgainWhenTheKeychainOpens() {
+        let store = freshDefaults(self)
+        store.set("matt", forKey: "person")
+        var read = SignInKeychain.Read.unreadable(errSecInteractionNotAllowed)
+        let server = Server(keychain: SignInKeychain(read: { read }, save: { _ in errSecSuccess }, delete: {}),
+                            store: store)
+        XCTAssertEqual(server.state, .signedOut)
+        read = .token("t")
+        NotificationCenter.default.post(name: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil)
+        XCTAssertEqual(server.state, .signedIn(person: "matt"))
+    }
+
+    @MainActor func testComingToTheFrontReadsTheSignInAgainButKeepsAnEndedOneEnded() {
+        var read = SignInKeychain.Read.unreadable(errSecInteractionNotAllowed)
+        let server = Server(keychain: SignInKeychain(read: { read }, save: { _ in errSecSuccess }, delete: {}),
+                            store: freshDefaults(self))
+        read = .none // signed out meanwhile, or never signed in
+        server.readSignInAgain()
+        XCTAssertEqual(server.state, .signedOut)
+        read = .token("t")
+        server.readSignInAgain()
+        XCTAssertEqual(server.state, .signedIn(person: ""))
     }
 
     /// Review finding 17: the result of saving the token was ignored, so a sign-in this iPhone could not keep
