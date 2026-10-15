@@ -44,6 +44,20 @@ final class PushTokensTests: XCTestCase {
         XCTAssertFalse(tokens.voipRegistered)
     }
 
+    /// Review finding 5: the tokens' delivery skipped the sign-in rule, so a 401 to it left the person looking
+    /// signed in while the server no longer knew them.
+    @MainActor func testA401ToATokenSignsThePersonOut() async {
+        for kind in [PushTokens.Kind.alert, .voip] {
+            let server = FakeServer()
+            server.replies["POST \(kind.rawValue)"] = .status(401)
+            var ended = 0
+            let tokens = PushTokens(server: server.client(signInEnded: { ended += 1 }), environment: "development")
+            await tokens.received(voipToken, kind: kind)
+            XCTAssertEqual(ended, 1, "\(kind)")
+            XCTAssertFalse(tokens.voipRegistered)
+        }
+    }
+
     @MainActor func testATakenBackTokenIsNotSent() async {
         let server = FakeServer()
         let tokens = PushTokens(server: server.client(), environment: "development")
