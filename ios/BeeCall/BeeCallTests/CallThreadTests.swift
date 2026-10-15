@@ -169,4 +169,13 @@ final class CallThreadTests: XCTestCase {
         XCTAssertEqual(CallLine.length(16, korean: false), "16 s")
         XCTAssertEqual(CallLine.length(372, korean: false), "6 min 12 s")
     }
+
+    /// Second review of the D wiring, finding 9: a starter a later server adds is not drawn as the person's call.
+    @MainActor func testAnUnknownStarterIsLeftOutOfTheLine() throws {
+        let text = String(decoding: try ContractTests.example("call-view"), as: UTF8.self)
+            .replacingOccurrences(of: "\"started_by\": \"person\"", with: "\"started_by\": \"agent\"")
+        let call = try Contract.decode(CallView.self, from: Data(text.utf8)).call
+        XCTAssertEqual(call.startedBy, .unrecognized)
+        XCTAssertEqual(CallLine.line(call, korean: true, now: now), "오늘 오전 1:23 · 7분 40초")
+    }
 }

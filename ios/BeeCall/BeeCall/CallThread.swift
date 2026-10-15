@@ -103,8 +103,9 @@ enum CallLine {
         let who = switch (call.startedBy, korean) {
         case (.ai, true): "Bee Call이 건 전화"
         case (.ai, false): "Bee Call called"
-        case (_, true): "내가 건 전화"
-        case (_, false): "You called"
+        case (.person, true): "내가 건 전화"
+        case (.person, false): "You called"
+        case (.unrecognized, _): "" // a starter a later server adds: left out, not drawn as the person
         }
         let how: String
         switch call.state {
@@ -138,8 +139,11 @@ enum CallLine {
     /// The record sheet's line under its title: the line above the call, and how it ended.
     static func sheetLine(_ call: CallSummary, korean: Bool, now: Date) -> String {
         let when = "\(day(call.startedAt, korean: korean, now: now)) \(time(call.startedAt, korean: korean))"
-        let who = call.startedBy == .ai ? (korean ? "Bee Call이 건 전화" : "Bee Call called")
-            : (korean ? "내가 건 전화" : "You called")
+        let who: String? = switch call.startedBy {
+        case .ai: korean ? "Bee Call이 건 전화" : "Bee Call called"
+        case .person: korean ? "내가 건 전화" : "You called"
+        case .unrecognized: nil
+        }
         return [when, who, call.durationS.map { length($0, korean: korean) }, ending(call.state, korean: korean)]
             .compactMap { $0 }.joined(separator: " · ")
     }

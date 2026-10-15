@@ -15,7 +15,11 @@ final class VoiceCatalog {
     }
 
     func load(_ language: CallLanguage) async {
-        guard voices[language] == nil, language != .unrecognized else { return }
+        guard voices[language] == nil else { return }
+        guard language != .unrecognized else { // a language a later server adds: this build has no list for it
+            failed.insert(language)
+            return
+        }
         guard case .ok(200, let data) = await server.send("/voices?language=\(language.rawValue)"),
               let list = try? Contract.decode(VoiceList.self, from: data), !list.voices.isEmpty else {
             failed.insert(language)

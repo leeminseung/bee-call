@@ -21,7 +21,8 @@ struct SettingsSheet: View {
     #endif
 
     private var language: CallLanguage {
-        picked ?? person.settings?.language ?? CallLanguage(rawValue: appLanguage) ?? .en
+        let held = person.settings?.language
+        return picked ?? (held == .unrecognized ? nil : held) ?? CallLanguage(rawValue: appLanguage) ?? .en
     }
 
     private var korean: Bool { language == .ko }

@@ -67,4 +67,11 @@ final class VoicesTests: XCTestCase {
         player.stop()
         XCTAssertFalse(player.isPlaying)
     }
+
+    /// A language a later server adds has no list here: it says so instead of waiting for ever.
+    @MainActor func testAnUnknownLanguageSaysItsVoicesCannotBeLoaded() async {
+        let catalog = VoiceCatalog(server: FakeServer().client())
+        await catalog.load(.unrecognized)
+        XCTAssertTrue(catalog.failed.contains(.unrecognized))
+    }
 }
