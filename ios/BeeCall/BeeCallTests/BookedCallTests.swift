@@ -50,13 +50,16 @@ final class BookedCallTests: XCTestCase {
         XCTAssertEqual(sunday.bookedLine(language: "en", now: now), "Call booked for Sunday, October 18, 9:00\u{00A0}PM")
     }
 
-    /// The Korean times of day are the server's own (voice/offers.py clock_label): 오전, 오후, 저녁, 밤.
+    /// The Korean times of day: 오전, 오후, 저녁, 밤, and 새벽 after midnight. "내일 밤 12:20" reads as the night of
+    /// tomorrow, a day later than meant (round 2's review); "내일 새벽 12:20" is the early hours of tomorrow.
     @MainActor func testTimesAroundNoonAndMidnight() {
         let afternoon = booked("2026-10-15T13:05:00+09:00", 1792037100)
         XCTAssertEqual(afternoon.bookedLine(language: "ko", now: now), "오늘 오후 1:05 전화 예정")
         XCTAssertEqual(afternoon.bookedLine(language: "en", now: now), "Call booked for today, 1:05\u{00A0}PM")
         let pastMidnight = booked("2026-10-16T00:20:00+09:00", 1792077600)
-        XCTAssertEqual(pastMidnight.bookedLine(language: "ko", now: now), "내일 밤 12:20 전화 예정")
+        XCTAssertEqual(pastMidnight.bookedLine(language: "ko", now: now), "내일 새벽 12:20 전화 예정")
+        let late = booked("2026-10-15T23:50:00+09:00", 1792075800)
+        XCTAssertEqual(late.bookedLine(language: "ko", now: now), "오늘 밤 11:50 전화 예정")
         XCTAssertEqual(pastMidnight.bookedLine(language: "en", now: now), "Call booked for tomorrow, 12:20\u{00A0}AM")
     }
 

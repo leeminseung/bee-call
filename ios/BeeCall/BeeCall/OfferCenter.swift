@@ -267,9 +267,12 @@ private struct OfferRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if offer.state == "booked" { // when, then about what (BookedCall.swift)
-                Text(offer.bookedLine(language: language))
-                    .font(.headline)
-                    .lineLimit(2)
+                // Drawn again each minute, so "today" does not stay on screen past midnight.
+                TimelineView(.everyMinute) { clock in
+                    Text(offer.bookedLine(language: language, now: clock.date))
+                        .font(.headline)
+                        .lineLimit(2)
+                }
                 Text(offer.about(language: language))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

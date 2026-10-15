@@ -71,8 +71,9 @@ extension OfferCenter.Offer {
         let clock = "\(hour % 12 == 0 ? 12 : hour % 12):" + String(format: "%02d", minute)
         if korean {
             let date = daysAway == 0 ? "오늘" : daysAway == 1 ? "내일" : "\(month)월 \(day)일 \(Self.koreanWeekdays[weekday - 1])"
-            // The server's times of day (voice/offers.py clock_label).
-            let period = hour >= 20 || hour < 5 ? "밤" : hour >= 17 ? "저녁" : hour >= 12 ? "오후" : "오전"
+            // As the server's (voice/offers.py clock_label), but 새벽 after midnight: "내일 밤 12:20" would read as
+            // the night of tomorrow, a day later than meant.
+            let period = hour < 5 ? "새벽" : hour >= 20 ? "밤" : hour >= 17 ? "저녁" : hour >= 12 ? "오후" : "오전"
             return "\(date) \(period) \(clock)"
         }
         let date = daysAway == 0 ? "today" : daysAway == 1 ? "tomorrow"
