@@ -20,12 +20,10 @@ It is an estimate from what the processes write down, not AWS's bill:
 A call still going on has no usage.json yet; it counts by its minutes so far at CALL_USD_PER_MINUTE. A call's
 call_prep event only shows the prep on the call's record; its cost is in state/spend.jsonl.
 
-Prices in USD, checked 2026-10-14:
+Prices in USD, checked 2026-10-14: the models' prices are in the model catalog (voice/model_catalog.py); here
   Amazon Transcribe streaming: 0.0001667 a second (AWS price file, published 2026-09-11)
   Amazon Polly, Sydney: neural 16 and standard 4 per million characters (AWS price file); generative 30
   (us-east-1's published price; Sydney's file does not list it)
-  GLM 5 on Bedrock: 1.00 per million input tokens, 3.20 per million output (third-party price lists; AWS's model
-  card points to the Bedrock pricing page without the figures)
   Nova Web Grounding: 0.03 a search (AWS, checked 2026-10-12)
 ElevenLabs is paid with prepaid credits, so it adds nothing here.
 """
@@ -39,20 +37,11 @@ from typing import Any
 
 from beelink.clock import parse_time
 from voice.call_folders import EVENTS, read_events
+from voice.model_catalog import price
 from voice.people import Person
 
 STT_USD_PER_SECOND = 0.0001667
 POLLY_USD_PER_CHAR = {"standard": 4 / 1_000_000, "neural": 16 / 1_000_000, "generative": 30 / 1_000_000}
-LLM_USD_PER_TOKEN = {  # (input, output)
-    "zai.glm-5": (1.00 / 1_000_000, 3.20 / 1_000_000),
-    # Anthropic's list price for prompts of 100K tokens or fewer (each request of a call is far below that).
-    "claude-haiku-5-5": (0.10 / 1_000_000, 0.50 / 1_000_000),
-    "claude-sonnet-5-5": (2.00 / 1_000_000, 10.00 / 1_000_000),
-}
-# Prompt caching (Anthropic): a cache read costs this share of an input token, a 5-minute cache write this much.
-CACHE_READ_SHARE, CACHE_WRITE_SHARE = 0.1, 1.25
-# A model not in the table is priced like this: above every model we use (Claude Sonnet 5.5 is 2.00 / 10.00).
-UNKNOWN_LLM_USD_PER_TOKEN = (3.00 / 1_000_000, 15.00 / 1_000_000)
 WEB_SEARCH_USD = 0.03
 # A call without its usage.json yet (arbitrary until calls are measured: speech recognition alone is 0.01 a minute,
 # and GLM 5 reads the whole conversation again at every turn).
@@ -60,12 +49,14 @@ CALL_USD_PER_MINUTE = 0.10
 
 
 def llm_cost(model: str | None, input_tokens: Any, output_tokens: Any, cached: Any = 0, cache_writes: Any = 0) -> float:
-    """`input_tokens` counts every prompt token, `cached` (cache reads) and `cache_writes` among them."""
-    price_in, price_out = LLM_USD_PER_TOKEN.get(model or "", UNKNOWN_LLM_USD_PER_TOKEN)
+    """A model's tokens at the model catalog's prices, by the provider's model id (voice/model_catalog.py; a model it
+    does not list costs more than any it does). `input_tokens` counts every prompt token, `cached` (cache reads) and
+    `cache_writes` among them."""
+    offer = price(model)
     cached, cache_writes = _number(cached), _number(cache_writes)
     fresh = max(0.0, _number(input_tokens) - cached - cache_writes)
-    prompt = fresh + CACHE_READ_SHARE * cached + CACHE_WRITE_SHARE * cache_writes
-    return price_in * prompt + price_out * _number(output_tokens)
+    prompt = fresh + offer.cache_read_share * cached + offer.cache_write_share * cache_writes
+    return offer.usd_in * prompt + offer.usd_out * _number(output_tokens)
 
 
 def _number(value: Any) -> float:
