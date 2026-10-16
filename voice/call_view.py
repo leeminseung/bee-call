@@ -28,7 +28,7 @@ from beelink.planner import OFFERS_DIR, OUTBOUND_LOG
 from voice.audio_tags import strip_tags
 from voice.call_folders import CALL_ID, EVENTS, call_ids, read_events, session_id
 from voice.offers import topic_line
-from worker.chart import chart_of_dark, pictures, svg_title
+from worker.chart import chart_of_dark, owner, pictures, svg_title
 from worker.report_page import PAGE, REPORT
 from worker.runner import USAGE
 
@@ -505,7 +505,9 @@ def _files(call_id: str, call: Call, job: Job) -> list[dict[str, Any]]:
         light_png, dark_png = pictures(f"{stem}.svg")
         if suffix == ".svg" and light_png in folder.names:
             kind, title, image = "chart", folder.chart_titles.get(name), _url(call_id, f"jobs/{job.id}/{light_png}")
-            if dark_png in folder.names:  # a chart drawn before dark PNGs has none until the one-off command
+            # A chart drawn before dark PNGs has none until the one-off command; nor does one whose dark PNG's name is
+            # another chart's own picture.
+            if dark_png in folder.names and not owner(dark_png, folder.names):
                 dark = _url(call_id, f"jobs/{job.id}/{dark_png}")
         elif suffix in IMAGES:
             kind, title, image = "chart", folder.chart_titles.get(name), _url(call_id, path)

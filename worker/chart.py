@@ -20,6 +20,7 @@ import io
 import math
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Collection
 from html import escape, unescape
 from pathlib import Path
 from typing import Any
@@ -175,6 +176,13 @@ def chart_of_dark(name: str) -> str | None:
     return f"{stem}.svg" if stem and stem != name else None
 
 
+def owner(png: str, names: Collection[str]) -> str | None:
+    """The chart among `names` whose own (light) PNG a file of this name is: rain-dark.png is rain-dark.svg's, never
+    rain.svg's dark one, where a job drew both charts (before save_chart refused names ending in -dark)."""
+    svg = f"{png.removesuffix('.png')}.svg"
+    return svg if svg in names else None
+
+
 def svg_to_png(svg: str, scale: int = PNG_SCALE, dark: bool = False) -> bytes:
     """The PNG of an SVG render_svg drew: its rectangles, lines, polylines and text, at `scale` times its size; with
     `dark`, each colour swapped for its dark one (DARK) and the background left out. ValueError for anything that is
@@ -260,6 +268,9 @@ def main(argv: list[str] | None = None) -> None:
     for svg in sorted(args.workspace.glob("*/*/jobs/*/*.svg")):
         for name, dark in zip(pictures(svg.name), (False, True)):
             png = svg.with_name(name)
+            if dark and (other := owner(name, {p.name for p in svg.parent.iterdir()})):
+                print(f"{svg}: left without a dark PNG ({name} is the picture of {other})")
+                continue
             if png.exists():
                 continue
             try:

@@ -265,6 +265,21 @@ def test_older_charts_get_their_pngs_from_the_one_off_command(tmp_path, capsys):
     assert "both.png" not in out and "both-dark.png" not in out
 
 
+def test_the_one_off_command_never_draws_over_another_chart_s_picture(tmp_path, capsys):
+    """Charts rain and rain-dark from before save_chart refused such names: rain-dark.png is rain-dark's own picture,
+    so rain gets no dark PNG and the command says so; rain-dark gets its own (rain-dark-dark.png)."""
+    jobs = tmp_path / "2026-10-14" / "1226" / "jobs" / "01"
+    jobs.mkdir(parents=True)
+    for name in ("rain", "rain-dark"):
+        (jobs / f"{name}.svg").write_text(render_svg(name, "bar", SERIES))
+        (jobs / f"{name}.png").write_bytes(b"light")
+    chart.main([str(tmp_path)])
+    assert (jobs / "rain-dark.png").read_bytes() == b"light"
+    assert Image.open(jobs / "rain-dark-dark.png").mode == "RGBA"
+    out = capsys.readouterr().out
+    assert f"{jobs / 'rain.svg'}: left without a dark PNG (rain-dark.png is the picture of rain-dark.svg)" in out
+
+
 def test_a_chart_the_worker_saves_shows_in_the_call_view_with_its_title_and_picture(tmp_path):
     """save_chart writes the SVG and its PNG; the call view lists the chart with its title and the PNG to show."""
     import asyncio

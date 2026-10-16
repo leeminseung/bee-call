@@ -303,6 +303,24 @@ def test_a_finished_job_lists_its_files_charts_first_and_never_its_bookkeeping(t
     assert item["files"][3]["url"] == f"{base}/report.md"
 
 
+def test_a_chart_named_like_another_s_dark_png_never_lends_it_its_picture(tmp_path):
+    """Before save_chart refused such names, a job could draw charts rain and rain-dark: rain-dark.png is then the
+    second chart's own picture, never the first's dark one (review of the dark charts, 2026-10-16)."""
+    names = ("rain.png", "rain.svg", "rain-dark.png", "rain-dark.svg", "rain-dark-dark.png")
+    folder = record(tmp_path, [INBOUND, {"t": 5, "type": "job_started", "job_id": "01", "task": "x", "title": "X"},
+                               {"t": 9, "type": "job_done", "job_id": "01", "summary": "Done.",
+                                "files": [f"jobs/01/{n}" for n in names[:4]]}, CLOSED, ENDED])
+    job = folder / "jobs" / "01"
+    job.mkdir(parents=True)
+    for name in names:
+        (job / name).write_text("x")
+    (item,) = [i for i in view(tmp_path)["items"] if i["type"] == "job"]
+    base = "/calls/call-matt-1/files/jobs/01"
+    assert [(f["name"], f["image_url"], f["image_url_dark"]) for f in item["files"]] == [
+        ("rain-dark.svg", f"{base}/rain-dark.png", f"{base}/rain-dark-dark.png"),
+        ("rain.svg", f"{base}/rain.png", None)]
+
+
 def test_a_chart_s_dark_png_or_a_report_s_page_made_later_shows_at_once(tmp_path):
     """The one-off commands draw a dark PNG for a chart from before dark PNGs and render the page of a report from
     before pages: the view has them at once, by a new version, though the job's record never named the files."""
