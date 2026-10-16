@@ -387,6 +387,7 @@ Each setting has one owner after D:
 | `voice` | **In the app** | `PUT` when the person picks it | `/me`, with `/voices` for its name and character; null means the entry marked `default` | The AI's voice |
 | `call_model` | **In the app**: the settings sheet, from `GET /models?role=call` | `PUT` when the person picks it | `/me` | The call AI's model |
 | `worker_model` | **In the app**: the settings sheet, from `GET /models?role=worker` | `PUT` when the person picks it | `/me` | The background worker's model |
+| `noise_cancellation` | **In the app**: the settings sheet, a switch | `PUT` when the person flips it | `/me` | Noise cancellation on the person's audio in their calls: background noise and other people's voices are taken out before speech recognition and turn-taking hear it. Default true. A call keeps the value it started with |
 | `call_time` | **iOS Settings** | Same | Its own field | The time an offer suggests |
 | `record_on_server` | **iOS Settings** | Same, and before joining an answered call (at most 2 s) | Its own switch | Keeping call audio |
 | `record_on_phone` | **iOS Settings** | Same | Its own switch: the app records the call itself | Noted in the record |

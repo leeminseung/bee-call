@@ -1050,7 +1050,8 @@
         "time_zone",
         "bee",
         "daily_budget_usd",
-        "worker_model"
+        "worker_model",
+        "noise_cancellation"
       ],
       "properties": {
         "language": {
@@ -1114,6 +1115,10 @@
         "worker_model": {
           "$ref": "#/$defs/model_id",
           "description": "The background worker's model: an id from GET /models?role=worker. Owner: the app (settings sheet)."
+        },
+        "noise_cancellation": {
+          "type": "boolean",
+          "description": "Noise cancellation on the person's audio in calls: background noise and other people's voices are taken out before speech recognition and turn-taking hear it. Default true. Owner: the app (settings sheet)."
         }
       }
     },

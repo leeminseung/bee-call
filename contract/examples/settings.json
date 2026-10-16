@@ -9,6 +9,7 @@
     "voice": "ko-yooni",
     "time_zone": "Asia/Seoul",
     "call_model": "haiku",
-    "worker_model": "sonnet"
+    "worker_model": "sonnet",
+    "noise_cancellation": true
   }
 }
