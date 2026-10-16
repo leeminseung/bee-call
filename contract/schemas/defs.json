@@ -568,7 +568,8 @@
         "url",
         "title",
         "image_url",
-        "image_url_dark"
+        "image_url_dark",
+        "page_url"
       ],
       "properties": {
         "name": {
@@ -599,6 +600,10 @@
         "image_url_dark": {
           "$ref": "#/$defs/path_or_null",
           "description": "A chart drawn for dark mode as a PNG (transparent background, the dark chart palette). Null for other kinds, and for a chart drawn before dark charts existed that the one-off command has not redrawn; the app then shows image_url on a white plate."
+        },
+        "page_url": {
+          "$ref": "#/$defs/path_or_null",
+          "description": "A report rendered as a readable page (HTML with its own light and dark styles: headings, lists, tables, links). Null for other kinds, and for a report made before pages existed that the one-off command has not rendered; the app then shows the report's text as it is."
         }
       },
       "if": {
@@ -627,7 +632,27 @@
             "type": "null"
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "not": {
+                  "const": "report"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "page_url": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "bee_write": {
       "description": "A fact or to-do the call AI wrote to the person's Bee after their spoken yes.",
