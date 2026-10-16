@@ -16,6 +16,7 @@ struct SettingsSheet: View {
     @State private var picked: CallLanguage?
     @State private var pickedVoice: String?
     @State private var pickedModels: [ModelRole: String] = [:] // tapped, before the server's answer
+    @State private var pickedNoise: Bool? // flipped, before the server's answer
     @State private var opened: ModelRole? // a model list open from the start, for Debug builds' design frames
     #if DEBUG
     @AppStorage(Server.typedAddressKey) private var typedAddress = "" // a Debug build's token server, typed
@@ -61,6 +62,7 @@ struct SettingsSheet: View {
                             SettingRow(label: words.model(role), value: chosen(role)?.name ?? "")
                         }
                     }
+                    noiseSwitch
                 } header: {
                     Text(words.calls)
                 } footer: {
@@ -117,6 +119,30 @@ struct SettingsSheet: View {
             await models.load(.call)
             await models.load(.worker)
         }
+    }
+
+    /// Noise cancellation on the person's audio in calls, on unless they turn it off; the server reads it when a call
+    /// starts, so a flip applies from the next call. A flip the server refuses goes back, and the footer says why.
+    private var noiseSwitch: some View {
+        Toggle(isOn: Binding(get: { pickedNoise ?? person.settings?.noiseCancellation ?? true }, set: { on in
+            pickedNoise = on
+            Task {
+                _ = await person.choose(noiseCancellation: on)
+                pickedNoise = nil // the server's answer, or what it still holds
+            }
+        })) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(words.noise)
+                    .foregroundStyle(BeeStyle.ink)
+                Text(words.noiseDetail)
+                    .font(.footnote)
+                    .foregroundStyle(BeeStyle.secondaryInk)
+            }
+        }
+        .tint(Color(.systemGreen)) // iOS's own switch, as in the Settings app; the sheet's ink tint is white in dark
+        .disabled(person.settings == nil) // what the server holds is not known yet
+        .accessibilityLabel(words.noise)
+        .accessibilityHint(words.noiseDetail)
     }
 
     /// The model shown as chosen for a role: the pick, the server's, or the role's default.
@@ -230,6 +256,10 @@ struct SettingsWords {
     var callModel: String { korean ? "통화 모델" : "Call model" }
     var workerModel: String { korean ? "일꾼 모델" : "Worker model" }
     func model(_ role: ModelRole) -> String { role == .worker ? workerModel : callModel }
+    var noise: String { korean ? "주변 소리 줄이기" : "Reduce background noise" }
+    var noiseDetail: String {
+        korean ? "통화할 때 주변 소음과 다른 사람 목소리를 줄여요." : "Filters out noise and other voices around you during calls."
+    }
     var modelsFailed: String { korean ? "모델 목록을 불러오지 못했어요." : "The models could not be loaded." }
     var openSettings: String { korean ? "iOS 설정 열기" : "Open iOS Settings" }
     var close: String { korean ? "닫기" : "Close" }

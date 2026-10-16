@@ -83,6 +83,35 @@ final class PersonStoreTests: XCTestCase {
         XCTAssertEqual(person.settings?.workerModel, worker)
     }
 
+    /// Noise cancellation, a switch in the settings sheet (contract section 6): flipped, it is sent, and the
+    /// server's answer is what shows. It applies from the next call; the server reads it when a call starts.
+    @MainActor func testFlippingNoiseCancellationSendsIt() async throws {
+        let server = FakeServer()
+        let held = try Examples.decode(Me.self, "me").settings.noiseCancellation
+        server.replies["GET /me"] = .status(200, try Examples.text("me"))
+        server.replies["PUT /settings"] = .status(200, try answer(["noise_cancellation": !held]))
+        let person = PersonStore(server: server.client(), store: freshDefaults(self))
+        await person.refresh()
+        XCTAssertEqual(person.settings?.noiseCancellation, held)
+        let saved = await person.choose(noiseCancellation: !held)
+        XCTAssertTrue(saved)
+        XCTAssertEqual(try server.body(of: "PUT /settings") as NSDictionary, ["noise_cancellation": !held] as NSDictionary)
+        XCTAssertEqual(person.settings?.noiseCancellation, !held)
+    }
+
+    @MainActor func testARefusedFlipKeepsTheSwitchAndSaysWhy() async throws {
+        let server = FakeServer()
+        let held = try Examples.decode(Me.self, "me").settings.noiseCancellation
+        server.replies["GET /me"] = .status(200, try Examples.text("me"))
+        server.replies["PUT /settings"] = .status(503, "")
+        let person = PersonStore(server: server.client(), store: freshDefaults(self))
+        await person.refresh()
+        let saved = await person.choose(noiseCancellation: !held)
+        XCTAssertFalse(saved)
+        XCTAssertEqual(person.settings?.noiseCancellation, held, "what the server holds")
+        XCTAssertNotNil(person.problem)
+    }
+
     /// A pick the server refuses keeps what was there, on the screen too, and says why.
     @MainActor func testARefusedPickKeepsWhatWasThereAndSaysSo() async throws {
         let server = FakeServer(), store = freshDefaults(self)

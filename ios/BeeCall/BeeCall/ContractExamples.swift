@@ -218,7 +218,9 @@ final class ContractExamples: HTTPTransport {
                 settings["voice"] = NSNull()
             }
         }
-        for key in ["voice", "call_model", "worker_model"] where changes[key] != nil { settings[key] = changes[key] }
+        for key in ["voice", "call_model", "worker_model", "noise_cancellation"] where changes[key] != nil {
+            settings[key] = changes[key]
+        }
         person["settings"] = settings
         me = person
         let answer = (try? JSONSerialization.data(withJSONObject: ["settings": settings])) ?? Data()

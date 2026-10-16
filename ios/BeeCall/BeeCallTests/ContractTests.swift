@@ -202,6 +202,7 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(me.settings.voice, rawSettings["voice"] as? String)
         XCTAssertEqual(me.settings.callModel, rawSettings["call_model"] as? String)
         XCTAssertEqual(me.settings.workerModel, rawSettings["worker_model"] as? String)
+        XCTAssertEqual(me.settings.noiseCancellation, rawSettings["noise_cancellation"] as? Bool)
         XCTAssertEqual(me.settings.bee, rawSettings["bee"] as? Bool)
         XCTAssertEqual(me.beeConnecting, try Examples.object("me")["bee_connecting"] as? Bool)
         let ring = try Examples.decode(RingEvent.self, "ring"), rawRing = try Examples.object("ring")
@@ -292,6 +293,11 @@ final class ContractTests: XCTestCase {
             settings.removeValue(forKey: "voice")
             body["settings"] = settings
         }))
+        XCTAssertThrowsError(try Contract.decode(Me.self, from: without("me") { body in
+            var settings = body["settings"] as? [String: Any] ?? [:]
+            settings.removeValue(forKey: "noise_cancellation") // a server from before the switch
+            body["settings"] = settings
+        }), "noise_cancellation is required")
         XCTAssertThrowsError(try Contract.decode(CallList.self, from: without("calls") { $0.removeValue(forKey: "before") }))
     }
 

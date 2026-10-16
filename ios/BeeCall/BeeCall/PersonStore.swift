@@ -1,9 +1,9 @@
 import Foundation
 import Observation
 
-/// The signed-in person as the server holds them (contract section 6): GET /me, and the two settings the app owns
-/// after D, the call language and the voice, sent with PUT /settings when the person picks them (never again from
-/// the Settings app). The screens' words follow the call language, which is kept in the defaults ("language") for
+/// The signed-in person as the server holds them (contract section 6): GET /me, and the settings the app owns after
+/// D (the call language, the voice, the call and worker models, noise cancellation), sent with PUT /settings when the
+/// person picks them (never again from the Settings app). The screens' words follow the call language, which is kept in the defaults ("language") for
 /// them. Through ContractServer, like the rest of design D.
 @Observable
 final class PersonStore {
@@ -53,6 +53,12 @@ final class PersonStore {
     /// Sends the model picked for a role, by its catalog id (GET /models).
     func choose(model id: String, for role: ModelRole) async -> Bool {
         await change([role == .worker ? "worker_model" : "call_model": id])
+    }
+
+    /// Noise cancellation on the person's audio, a switch in the settings sheet; the server reads it when a call
+    /// starts, so it applies from the next call.
+    func choose(noiseCancellation on: Bool) async -> Bool {
+        await change(["noise_cancellation": on])
     }
 
     private func change(_ fields: [String: Any]) async -> Bool {
