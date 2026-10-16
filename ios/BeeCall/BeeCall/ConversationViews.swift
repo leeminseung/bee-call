@@ -200,6 +200,7 @@ struct JobCardView: View {
     let words: ConversationWords
     var glowing = false
     @Environment(FilePreview.self) private var files: FilePreview? // where a file opens, when the screen holds one
+    @Environment(\.colorScheme) private var scheme
     @State private var opened: URL? // else here
 
     var body: some View {
@@ -237,7 +238,7 @@ struct JobCardView: View {
                             .font(.caption)
                             .foregroundStyle(BeeStyle.secondaryInk)
                     }
-                    if let image = chart.imageURL { ServerImage(path: image) }
+                    if let picture = ChartPicture(chart, dark: scheme == .dark) { ChartPictureView(picture: picture) }
                 }
                 .padding(10)
                 .background(BeeStyle.raised, in: .rect(cornerRadius: 14))
@@ -289,7 +290,42 @@ struct JobCardView: View {
     }
 }
 
-/// A file a job made, as a white chip named by its kind.
+/// Which picture of a chart to show (contract 2.6): in dark mode the one drawn for it, transparent in the dark
+/// chart palette; a chart drawn before dark charts existed has none, so its light picture sits on a white plate, as
+/// a picture would. In light mode, the light picture.
+struct ChartPicture: Equatable {
+    let path: String
+    let onWhitePlate: Bool
+
+    init?(_ file: JobFile, dark: Bool) {
+        if dark, let darkPicture = file.imageURLDark {
+            path = darkPicture
+            onWhitePlate = false
+        } else if let lightPicture = file.imageURL {
+            path = lightPicture
+            onWhitePlate = dark
+        } else {
+            return nil
+        }
+    }
+}
+
+/// A chart's picture, on a white plate when it is a light picture in dark mode.
+struct ChartPictureView: View {
+    let picture: ChartPicture
+
+    var body: some View {
+        if picture.onWhitePlate {
+            ServerImage(path: picture.path)
+                .padding(8)
+                .background(Color.white, in: .rect(cornerRadius: 10))
+        } else {
+            ServerImage(path: picture.path)
+        }
+    }
+}
+
+/// A file a job made, as a chip named by its kind.
 struct FileChip: View {
     let label: String
     let kind: FileKind
@@ -309,19 +345,25 @@ struct FileChip: View {
 struct JobCompactRow: View {
     let job: Job
     let words: ConversationWords
+    @Environment(\.colorScheme) private var scheme
+
+    private var picture: ChartPicture? {
+        job.files.first { $0.kind == .chart }.flatMap { ChartPicture($0, dark: scheme == .dark) }
+    }
 
     var body: some View {
         HStack(spacing: 12) {
             Group {
-                if let chart = job.files.first(where: { $0.kind == .chart })?.imageURL {
-                    ServerImage(path: chart)
+                if let picture {
+                    ServerImage(path: picture.path)
+                        .padding(picture.onWhitePlate ? 4 : 0)
                 } else {
                     Image(systemName: job.state == .failed ? "xmark.circle" : "doc.text")
                         .foregroundStyle(BeeStyle.secondaryInk)
                 }
             }
             .frame(width: 58, height: 46)
-            .background(BeeStyle.raised, in: .rect(cornerRadius: 11))
+            .background(picture?.onWhitePlate == true ? Color.white : BeeStyle.raised, in: .rect(cornerRadius: 11))
             .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(BeeStyle.separator, lineWidth: 0.5))
             VStack(alignment: .leading, spacing: 2) {
                 Text(job.title)
