@@ -17,6 +17,7 @@ from pathlib import Path
 import regex
 
 from voice.call_folders import PRIVATE
+from worker.report_page import PAGE
 
 MAX_READ_CHARS = 12000  # one read_file answer (arbitrary: about 3K tokens)
 MAX_LIST = 200
@@ -24,11 +25,12 @@ MAX_MATCHES = 50
 MAX_FILE_BYTES = 5_000_000
 GREP_SECONDS = 3.0  # a whole grep (arbitrary)
 LINE_SECONDS = 0.05  # one line against the pattern (arbitrary)
-# Secrets (push tokens, keys, a Bee CLI login: token-prod, pairing-prod.json), audio, half-written files, and a call's
-# private parts (voice/call_folders.py PRIVATE: its audio, the raw Bee inputs, the model log, Claude's history): the
-# timeline shows what the meta agent reads, and the model log would fill every search.
+# Secrets (push tokens, keys, a Bee CLI login: token-prod, pairing-prod.json), audio, half-written files, a call's
+# private parts (voice/call_folders.py PRIVATE: its audio, the raw Bee inputs, the model log, Claude's history), and a
+# job's report page (its report.md rendered for the app, which a search would find twice): the timeline shows what
+# the meta agent reads, and the model log would fill every search.
 HIDDEN = ("*token*", "pairing-*", "proxy-*", "*.p8", "*.wav", "*.mp3", "*.m4a", "*.tmp", ".*", "fake-claude.jsonl",
-          *PRIVATE)
+          PAGE, *PRIVATE)
 LOCATION = re.compile(r'"(primary_location|location|address|latitude|longitude|lat|lng|lon)"\s*:\s*'
                       r'(\{[^{}]*\}|"[^"]*"|-?\d+(?:\.\d+)?)', re.IGNORECASE)
 
