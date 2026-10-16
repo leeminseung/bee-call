@@ -1,7 +1,7 @@
 """What the call AI is told about the conversation itself, after the user's calls of 2026-10-16 (build 5): it said "민승
 님" in 15 of 24 turns, offered to end a call he made because he was bored, and wrapped up right after a research job.
-Whether the model follows these is measured with real calls in text (server-progress.md, "Call quality"); these pin
-the words that carry each rule."""
+Whether the model follows these was measured with calls in text against the real model (2026-10-16); these pin the
+words that carry each rule."""
 
 from datetime import datetime
 from zoneinfo import ZoneInfo

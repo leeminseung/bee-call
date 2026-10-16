@@ -133,7 +133,10 @@ def noise_setting(env: Mapping[str, str] = os.environ) -> str:
     return value
 
 
-NOISE_CANCELLATION = noise_setting()  # off until it is compared in a real call (server-progress.md, "Call quality")
+# Off until it is compared in a real call. Replaying recorded calls through LiveKit Cloud (2026-10-16): about 20 ms
+# later, the caller's words transcribed the same; BVC took out faint voices that were not the caller's, NC turned
+# two sounds that had no words into "음".
+NOISE_CANCELLATION = noise_setting()
 
 log = logging.getLogger("bee-call")
 
