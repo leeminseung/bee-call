@@ -56,17 +56,27 @@ struct CallsListSheet: View {
 
     @ViewBuilder
     private var content: some View {
-        let days = CallsList.days(source.listed, korean: korean, now: .now)
-        if days.isEmpty && source.listLoaded && source.olderPages == .done {
+        switch CallsList.Content(source.listed, loaded: source.listLoaded, older: source.olderPages,
+                                 problem: source.problem, korean: korean, now: .now) {
+        case .loading:
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .failed: // the first page could not be had (review of the calls list, finding 3)
+            Button { Task { await source.reloadList() } } label: {
+                Text(words.couldNotLoad)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(BeeStyle.ink)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        case .empty:
             ContentUnavailableView {
                 Label(words.emptyTitle, systemImage: "phone")
             } description: {
                 Text(words.emptyText)
             }
             .foregroundStyle(BeeStyle.ink)
-        } else if days.isEmpty && !source.listLoaded {
-            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
+        case .days(let days):
             ScrollViewReader { proxy in
                 List {
                     ForEach(days) { day in

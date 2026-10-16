@@ -17,7 +17,8 @@ final class CallStore {
     private(set) var problem: String? // the last fetch that did not come through, in words
     private var olderLoaded = false // an older page has come
     private var olderCursor: String? // the next older page after the last one loaded
-    private var loadingOlder = false // a second ask waits for the page on its way
+    private var loadingOlder = false // an older page is on its way
+    @ObservationIgnored private var olderPage: Task<Void, Never>? // the page on its way; a second ask waits for it
     private var olderFailed = false // the last older page did not come
     @ObservationIgnored private let fetches = OneFetchAtATime<String>() // by path: the list, and each view
     @ObservationIgnored private let server: ServerClient
@@ -82,11 +83,24 @@ final class CallStore {
         }
     }
 
+    /// Loads the next older page. Its fetch runs on its own, so the calls list's foot, whose task ends when the row
+    /// leaves the screen, cannot cancel it into a failure (review of the calls list, finding 1); a second ask waits
+    /// for the page on its way.
     func loadOlder() async {
-        guard !loadingOlder, let before = olderLoaded ? olderCursor : list?.before else { return }
+        if let olderPage { return await olderPage.value }
+        guard let before = olderLoaded ? olderCursor : list?.before else { return }
+        let page = Task { await fetchOlder(before) }
+        olderPage = page
+        await page.value
+    }
+
+    private func fetchOlder(_ before: String) async {
         loadingOlder = true
         olderFailed = false
-        defer { loadingOlder = false }
+        defer {
+            loadingOlder = false
+            olderPage = nil
+        }
         var query = URLComponents()
         query.queryItems = [URLQueryItem(name: "before", value: before)]
         guard let page: CallList = await fetch("/calls?" + (query.percentEncodedQuery ?? ""), holding: nil) else {

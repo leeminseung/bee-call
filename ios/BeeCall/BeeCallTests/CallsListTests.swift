@@ -147,4 +147,20 @@ final class CallsListTests: XCTestCase {
             XCTAssertEqual(row.opens == .nothing, ["missed", "declined"].contains(file["state"] as? String), entry.id)
         }
     }
+
+    // MARK: - What the sheet shows
+
+    /// Review of the calls list, finding 3: before the first page, a spinner; if it could not be had, the failure line
+    /// with its retry; once loaded, the days, or iOS's empty view when there are no calls at all.
+    @MainActor func testWhatTheSheetShows() throws {
+        let calls = try Examples.decode(CallList.self, "calls").calls
+        XCTAssertEqual(CallsList.Content([], loaded: false, older: .done, problem: nil, korean: true, now: now), .loading)
+        XCTAssertEqual(CallsList.Content([], loaded: false, older: .done, problem: "Bee Call's server cannot be reached.",
+                                         korean: true, now: now), .failed)
+        XCTAssertEqual(CallsList.Content([], loaded: true, older: .done, problem: nil, korean: true, now: now), .empty)
+        XCTAssertEqual(CallsList.Content(calls, loaded: true, older: .more, problem: nil, korean: true, now: now),
+                       .days(CallsList.days(calls, korean: true, now: now)))
+        XCTAssertEqual(CallsList.Content(calls, loaded: true, older: .failed, problem: "x", korean: true, now: now),
+                       .days(CallsList.days(calls, korean: true, now: now)), "the calls stay; the foot says the failure")
+    }
 }

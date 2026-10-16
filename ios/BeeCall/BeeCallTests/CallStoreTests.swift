@@ -366,4 +366,30 @@ final class CallStoreTests: XCTestCase {
         await again.value
         XCTAssertEqual(store.olderPages, .done)
     }
+
+    /// Review of the calls list, finding 1: the list's foot asks for the next page from a task that ends when the
+    /// row leaves the screen. Leaving must not cancel the page and show a failure, or set the server problem line.
+    @MainActor func testAnOlderPageIsNotCancelledWithTheRowThatAskedForIt() async throws {
+        let server = FakeServer()
+        server.replies["GET /calls"] = .status(200, try Examples.changed("calls") { body in
+            body["more"] = true
+            if body["before"] is NSNull { body["before"] = "older" }
+        })
+        let store = CallStore(server: server.client())
+        await store.refreshList()
+        var older = try XCTUnwrap((try Examples.object("calls")["calls"] as? [[String: Any]])?.last)
+        older["call_id"] = "call-test-19990101-090000"
+        older["started_at"] = "1999-01-01T09:00:00+09:00"
+        let page = String(decoding: try JSONSerialization.data(withJSONObject: [
+            "calls": [older], "more": false, "before": NSNull(), "version": "0000000000000001",
+        ]), as: UTF8.self)
+        server.replies["GET /calls"] = .slow(.milliseconds(200), page)
+        let asked = Task { await store.loadOlder() }
+        try await Task.sleep(for: .milliseconds(50))
+        asked.cancel() // the foot scrolled away
+        await asked.value
+        await waitUntil("the page has come") { store.olderPages == .done }
+        XCTAssertTrue(store.calls.contains { $0.id == "call-test-19990101-090000" })
+        XCTAssertNil(store.problem, "no server problem was shown")
+    }
 }

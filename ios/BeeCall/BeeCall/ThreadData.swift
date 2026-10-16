@@ -26,6 +26,8 @@ protocol ConversationSource: AnyObject {
     /// A call's section or record is shown: its view is fetched, or asked again with the version held.
     func show(_ callID: String) async
     func loadOlder() async
+    /// Asks for the first page of the list again, after it could not be had.
+    func reloadList() async
     /// Keeps the content up to date while `on` (the app on screen, or in a call); off stops it.
     func keepFresh(_ on: Bool)
 }
@@ -124,6 +126,10 @@ final class ThreadData: ConversationSource {
 
     func loadOlder() async {
         await store.loadOlder()
+    }
+
+    func reloadList() async {
+        await store.refreshList()
     }
 
     func keepFresh(_ on: Bool) {

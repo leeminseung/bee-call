@@ -12,6 +12,24 @@ enum CallsList {
         let calls: [CallEntry]
     }
 
+    /// What the sheet shows: a spinner until the first page comes; the failure line with its retry when it could not
+    /// be had; iOS's empty view when there are no calls at all; else the days.
+    enum Content: Equatable {
+        case loading, failed, empty
+        case days([Day])
+
+        init(_ calls: [CallEntry], loaded: Bool, older: CallStore.OlderPages, problem: String?, korean: Bool, now: Date) {
+            let days = CallsList.days(calls, korean: korean, now: now)
+            if !days.isEmpty {
+                self = .days(days)
+            } else if !loaded {
+                self = problem == nil ? .loading : .failed
+            } else {
+                self = older == .done ? .empty : .days([])
+            }
+        }
+    }
+
     /// The calls by day, newest day first, each day's calls in the list's order (newest first).
     static func days(_ calls: [CallEntry], korean: Bool, now: Date) -> [Day] {
         var days: [Day] = []
