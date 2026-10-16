@@ -1,6 +1,8 @@
-"""Noise cancellation on the caller's audio (NOISE_CANCELLATION = bvc | nc | off, voice/agent.py): LiveKit Cloud's
-enhanced noise cancellation (livekit-plugins-noise-cancellation) on what the voice server hears of the caller, before
-speech recognition, turn detection and interruptions see it. Off until it is compared in a real call."""
+"""Noise cancellation on the caller's audio: LiveKit Cloud's enhanced noise cancellation (livekit-plugins-noise-cancellation)
+on what the voice server hears of the caller, before speech recognition, turn detection and interruptions hear it. Each
+person has a switch in the app (setting noise_cancellation, on by default, contract section 6), read once as a call
+starts; the server's NOISE_CANCELLATION names the model a switched-on call uses (bvc or nc, bvc when unset), and off
+turns it off for everyone (the operator's kill switch). A call's record says which filter it used."""
 
 import asyncio
 import json
@@ -13,9 +15,10 @@ from tests.test_voice_server import call_folders, events_of, quick  # noqa: F401
 from voice import agent
 
 
-@pytest.mark.parametrize("value, setting", [(None, "off"), ("", "off"), ("off", "off"), (" BVC ", "bvc"),
+@pytest.mark.parametrize("value, setting", [(None, "bvc"), ("", "bvc"), ("off", "off"), (" BVC ", "bvc"),
                                             ("nc", "nc")])
-def test_the_setting_is_bvc_nc_or_off_and_off_when_unset(value, setting):
+def test_the_server_s_setting_is_bvc_nc_or_off_and_bvc_when_unset(value, setting):
+    """Unset, a switched-on call still gets a filter: the app shows the switch on by default."""
     env = {} if value is None else {"NOISE_CANCELLATION": value}
     assert agent.noise_setting(env) == setting
 
@@ -39,11 +42,13 @@ def test_bvc_and_nc_filter_the_caller_s_audio_and_off_leaves_it_as_it_was():
     assert not is_given(off.auto_gain_control)  # LiveKit's default without noise cancellation: on, as before
 
 
-@pytest.mark.parametrize("setting", ["bvc", "off"])
-def test_a_call_hears_the_caller_through_the_setting_and_its_record_says_which(tmp_path, monkeypatch, quick,
-                                                                               setting):
+@pytest.mark.parametrize("switch, server, used", [(True, "bvc", "bvc"), (True, "nc", "nc"), (False, "bvc", "off"),
+                                                 (True, "off", "off"), (False, "off", "off")])
+def test_a_call_hears_the_caller_through_the_person_s_switch_and_its_record_says_which(tmp_path, monkeypatch, quick,
+                                                                                       switch, server, used):
     me = signed_in(tmp_path)
-    monkeypatch.setattr(agent, "NOISE_CANCELLATION", setting)
+    me.people.change_settings("matt", {"noise_cancellation": switch})
+    monkeypatch.setattr(agent, "NOISE_CANCELLATION", server)
     call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
     use_fakes(monkeypatch, call)
 
@@ -55,11 +60,33 @@ def test_a_call_hears_the_caller_through_the_setting_and_its_record_says_which(t
 
     asyncio.run(main())
     filtered = call.session.started["room_options"].audio_input.noise_cancellation
-    assert (filtered is not None) is (setting != "off")
+    assert (filtered is not None) is (used != "off")
+    if used != "off":
+        assert filtered.options == agent.noise_filter(used).options
     (folder,) = call_folders(me.workspace)
     (coordinator,) = [e for e in events_of(folder) if e["type"] == "coordinator"]
-    assert coordinator["noise_cancellation"] == setting
+    assert coordinator["noise_cancellation"] == used
     assert json.dumps(coordinator)  # the record stays plain JSON
+
+
+def test_a_call_keeps_the_switch_it_started_with(tmp_path, monkeypatch, quick):
+    """Contract section 6: the switch flipped during a call changes the next call, not this one."""
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(agent, "NOISE_CANCELLATION", "bvc")
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        me.people.change_settings("matt", {"noise_cancellation": False})  # flipped in the app mid-call
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    assert call.session.started["room_options"].audio_input.noise_cancellation is not None
+    (folder,) = call_folders(me.workspace)
+    assert [e["noise_cancellation"] for e in events_of(folder) if e["type"] == "coordinator"] == ["bvc"]
 
 
 def test_a_noise_filter_that_cannot_load_never_stops_a_call(tmp_path, monkeypatch, quick):

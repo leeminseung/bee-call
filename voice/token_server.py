@@ -17,9 +17,10 @@ POST /auth/signout                       ends this sign-in; the push tokens it r
 GET  /me                                 who is signed in, their settings and today's estimated spend
 PUT  /settings {"language": "ko", ...}   the settings the app may change (voice/people.py APP_SETTINGS), with
                                          time_zone, the phone's IANA zone (400 for a name zoneinfo does not know),
-                                         call_model and worker_model, ids from GET /models, and voice, a
-                                         catalog id of the call language's voices or null (400 for another
-                                         language's; a change of language alone resets it unless it fits)
+                                         call_model and worker_model, ids from GET /models, noise_cancellation,
+                                         a boolean (400 otherwise), and voice, a catalog id of the call
+                                         language's voices or null (400 for another language's; a change of
+                                         language alone resets it unless it fits)
 
 Calls:
 GET  /token                              a token for a new call the user starts; the voice server is dispatched

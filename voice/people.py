@@ -117,6 +117,9 @@ class Settings:
     # the job), so a person who never picked follows the catalog when its default changes (voice/model_catalog.py).
     call_model: str | None = None
     worker_model: str | None = None
+    # Noise cancellation on the person's audio in their calls, a switch in the app (contract section 6); the model is
+    # the server's NOISE_CANCELLATION (voice/agent.py). A settings.json from before it reads as on.
+    noise_cancellation: bool = True
 
     def zone(self) -> ZoneInfo:
         return ZoneInfo(self.time_zone)
@@ -156,7 +159,7 @@ class Settings:
         elif name == "call_time":
             if not isinstance(value, str) or not CALL_TIME.fullmatch(value):
                 raise ValueError("call_time must look like 21:00")
-        elif name in ("record_on_server", "record_on_phone", "bee"):
+        elif name in ("record_on_server", "record_on_phone", "bee", "noise_cancellation"):
             if not isinstance(value, bool):
                 raise ValueError(f"{name} must be true or false")
         elif name == "daily_budget_usd":
@@ -193,7 +196,7 @@ class Settings:
 
 
 APP_SETTINGS = ("language", "voice", "call_time", "record_on_server", "record_on_phone", "time_zone",
-                "call_model", "worker_model")  # the app's
+                "call_model", "worker_model", "noise_cancellation")  # the app's
 
 
 def settings_body(settings: Settings) -> dict[str, Any]:

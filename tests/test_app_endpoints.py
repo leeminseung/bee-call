@@ -348,8 +348,27 @@ def test_me_and_settings_answer_the_contract_s_settings_and_the_voice_follows_th
     stored = json.loads((minseung.people.folder("minseung") / "settings.json").read_text())
     assert (stored["call_model"], stored["worker_model"]) == (None, None)
     assert json.loads(english)["settings"]["voice"] is None and json.loads(both)["settings"]["voice"] == "ko-anna"
+    assert shown["noise_cancellation"] is True  # on by default
     write_example("settings", json.loads(picked_body))
     write_example("me", json.loads(me_body))
+
+
+def test_the_noise_cancellation_switch_is_put_and_read_back(minseung):
+    """Contract section 6: the app's switch, PUT when the person flips it and read from /me; 400 for a value that is
+    not a boolean, which changes nothing."""
+    found = run(minseung.people, minseung.headers, [
+        ("PUT", "/settings", None, {"noise_cancellation": False}),
+        ("GET", "/me", None, None),
+        ("PUT", "/settings", None, {"noise_cancellation": "off"}),
+        ("PUT", "/settings", None, {"noise_cancellation": 1}),
+        ("GET", "/me", None, None)])
+    (off, _, off_body), (me, _, me_body), (text, _, text_body), (number, _, _), (_, _, after) = found
+    check_body("settings", json.loads(off_body))
+    check_body("me", json.loads(me_body))
+    assert (off, me, text, number) == (200, 200, 400, 400) and b"noise_cancellation must be true or false" in text_body
+    assert json.loads(off_body)["settings"]["noise_cancellation"] is False
+    assert json.loads(me_body)["settings"]["noise_cancellation"] is False
+    assert json.loads(after)["settings"]["noise_cancellation"] is False
 
 
 # ---------- models ----------
