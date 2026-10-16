@@ -5,6 +5,8 @@ media, speech recognition or voice. For tests from outside, and a quick look at 
   uv run python -m voice.text_call <person> --continue <call id> "Where were we?"  one that continues an earlier call
   uv run python -m voice.text_call <person> --answer <room> "Hello"                answers the AI's call ringing there
   --wait <seconds>  waits that long after the last line before hanging up (for background jobs to report)
+  --pause <seconds>[,<seconds>...]  waits that long after the AI's answer before each line after the first (the last
+                    value repeats), so a background job's news can come in between
 
 What runs is what a call runs: the person's settings and the day's budget, the call AI of COORDINATOR_LLM (echo and
 fake need no network), Bee through BEE_BIN when the person uses Bee, WORKER's background jobs, the call's record in
@@ -145,9 +147,10 @@ async def prepared_meta(people: People, person: str, room: str) -> tuple[str, di
 
 
 async def text_call(people: People, person: str, lines: list[str], *, answer: str | None = None,
-                    continue_from: str | None = None, wait_s: float = 0.0,
+                    continue_from: str | None = None, wait_s: float = 0.0, pauses: list[float] | None = None,
                     say: Callable[[str], None] = print) -> dict[str, Any]:
-    """Runs one call in text; returns {"call_id", "record"} (record None for a call that was not answered)."""
+    """Runs one call in text; returns {"call_id", "record"} (record None for a call that was not answered).
+    `pauses`: seconds the person waits after the AI's answer before each line after the first (the last repeats)."""
     room, meta = await prepared_meta(people, person, answer) if answer else meta_for(people, person, continue_from)
     job = TextJob(room, meta)
     closed, spoke = asyncio.Event(), asyncio.Event()
@@ -176,7 +179,7 @@ async def text_call(people: People, person: str, lines: list[str], *, answer: st
     session = job.session
     try:
         if session is not None and not closed.is_set():
-            await converse(session, person, lines, spoke, closed, say)
+            await converse(session, person, lines, spoke, closed, say, pauses or [])
             if wait_s and not closed.is_set():
                 await asyncio.sleep(wait_s)
     finally:  # however the conversation went, the call ends as a call does
@@ -189,14 +192,20 @@ async def text_call(people: People, person: str, lines: list[str], *, answer: st
 
 
 async def converse(session: AgentSession, person: str, lines: list[str], spoke: asyncio.Event, closed: asyncio.Event,
-                   say: Callable[[str], None]) -> None:
+                   say: Callable[[str], None], pauses: list[float] = ()) -> None:
     """The person's lines, one turn each, until they run out or the AI ends the call. A turn whose answer fails is a
-    failed turn, as in a call: the next line goes on."""
+    failed turn, as in a call: the next line goes on. Before each line after the first, the person waits its pause
+    (`pauses`, the last one repeating) while the call goes on: a background job's news can come meanwhile."""
     try:  # the person speaks after the AI's first words, as they would after hearing them
         await asyncio.wait_for(spoke.wait(), FIRST_WORDS_S)
     except TimeoutError:
         pass
-    for line in lines:
+    for n, line in enumerate(lines):
+        if n and pauses and not closed.is_set():
+            try:  # the call goes on meanwhile; it may end
+                await asyncio.wait_for(closed.wait(), pauses[min(n - 1, len(pauses) - 1)])
+            except TimeoutError:
+                pass
         if closed.is_set() or ending(session):  # the AI ended the call
             break
         say(f"{person}: {line}")
@@ -228,12 +237,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--answer", metavar="ROOM", help="answer the AI's call ringing in this room")
     parser.add_argument("--continue", dest="continue_from", metavar="CALL_ID", help="continue this earlier call")
     parser.add_argument("--wait", type=float, default=0.0, help="seconds to wait after the last line")
+    parser.add_argument("--pause", default="", help="seconds to wait after the AI's answer before each line after "
+                        "the first; a comma-separated list, the last value repeating")
     args = parser.parse_args(argv)
+    try:
+        pauses = [float(value) for value in args.pause.split(",")] if args.pause.strip() else []
+    except ValueError:
+        parser.error(f"--pause takes seconds separated by commas, not {args.pause!r}")
     people = People()
     if not people.known(args.person):
         raise SystemExit(f"{args.person} is not an approved person")
     found = asyncio.run(text_call(people, args.person, args.lines, answer=args.answer,
-                                  continue_from=args.continue_from, wait_s=args.wait))
+                                  continue_from=args.continue_from, wait_s=args.wait, pauses=pauses))
     print(json.dumps(found), flush=True)
 
 
