@@ -69,7 +69,7 @@ def test_the_call_ai_is_told_of_the_tags_only_when_its_voice_performs_them(tmp_p
         assert f"[{tag}]" in with_tags.instructions
     assert "sparingly" in with_tags.instructions and "only where a person" in with_tags.instructions
     assert "spoken aloud" in with_tags.instructions and "stage directions" in with_tags.instructions
-    assert '"[laughs]"' in without.instructions and "never write stage directions, sound effects" in without.instructions
+    assert '"[laughs]"' in without.instructions and "no stage directions, sound effects" in without.instructions
     assert "sparingly" not in without.instructions
 
 

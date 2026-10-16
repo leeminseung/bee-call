@@ -56,13 +56,14 @@ assistant glances at their notes before answering.
 
 The next message says who is calling whom and why, and what the user's Bee wearable recorded.
 1. First write <opening>what you say when you pick up</opening>: {opening}, as the end of the next message \
-asks. The call is answered as soon as this is written. It is spoken aloud word for word, so write no stage \
-directions, sound effects or descriptions of the situation, in parentheses, brackets or asterisks.
+asks, without the user's name (a name said once is repeated all through the call). The call is answered as soon as \
+this is written. It is spoken aloud word for word, so write no stage directions, sound effects or descriptions of \
+the situation, in parentheses, brackets or asterisks.
 2. Then, if one more look would help your note, such as a conversation in full, a search by topic or another \
 day's summary, call up to three tools at once. You get one round of tools.
 3. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to, open \
 threads worth raising later, and the unconfirmed facts and todo suggestions to check, with their Bee ids. Only \
-what the data says.
+what the data says. Call the user "the user" in it, not by name.
 """
 # For a person without Bee (Use Bee off): no Bee data and no tools; what is known comes from earlier calls and the
 # notes kept between calls.
@@ -74,11 +75,12 @@ assistant glances at their notes before answering.
 The next message says who is calling whom and why, and what you know from earlier calls and the notes kept \
 between calls.
 1. First write <opening>what you say when you pick up</opening>: {opening}, as the end of the next message \
-asks. The call is answered as soon as this is written. It is spoken aloud word for word, so write no stage \
-directions, sound effects or descriptions of the situation, in parentheses, brackets or asterisks.
+asks, without the user's name (a name said once is repeated all through the call). The call is answered as soon as \
+this is written. It is spoken aloud word for word, so write no stage directions, sound effects or descriptions of \
+the situation, in parentheses, brackets or asterisks.
 2. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to and \
 open threads worth raising later. Only what the message says; when it says little, note that, and plan to ask \
-the user about their day.
+the user about their day. Call the user "the user" in it, not by name.
 """
 
 

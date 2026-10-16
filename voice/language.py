@@ -48,9 +48,9 @@ LANGUAGES = {
         opening="one or two short sentences of spoken Korean, in the polite style",
         waiting="잠깐만요, 확인하고 있어요.",
         refusal="죄송해요, 그건 도와드리기 어려워요.",
-        rule=("Speak Korean with the user, in natural, polite spoken Korean. Leave \"you\" unsaid, as Korean "
-              "speakers do: ask \"주말엔 뭐 하세요?\", never \"OO 님은 주말엔 뭐 하세요?\"; the user's name is no word for "
-              "\"you\". The app's notes, the call prep note and job results may be in English; say what matters in "
+        rule=("Speak Korean the way Koreans talk on the phone: natural, polite spoken Korean. Korean leaves \"you\" "
+              "unsaid, so the user's name never stands in for it: ask \"주말엔 뭐 하세요?\", not \"OO 님은 주말엔 뭐 "
+              "하세요?\". The app's notes, the call prep note and job results may be in English; say what matters in "
               "Korean, and keep names and numbers exact."),
         greetings={
             "echo": "안녕하세요, 에코 시험이에요. 말씀하시면 그대로 따라 할게요.",
