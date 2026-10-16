@@ -199,9 +199,14 @@ def keep_reply(reply: dict[str, Any], chunk: Any) -> None:
 
 
 # What ends a sentence or a clause in what the user said, for book_call's `asked` (a turn's end does too). A dot
-# ends one only before a space or the end, and never the dot that closes "a.m.", "p.m." or "U.S.", so they stay
-# whole with what follows them: a "no" right after "9 a.m." is in what a quote of "Call me at 9 a.m." leaves out.
-CLAUSE_END = re.compile(r"(?:[!?。？！…,，、;\n]|(?<!\b[A-Za-z]\.[A-Za-z])\.(?=\s|$))+")
+# ends one only before a space or the end, so "7 a.m." and "U.S." stay whole.
+CLAUSE_END = re.compile(r"(?:[!?。？！…,，、;\n]|\.(?=\s|$))+")
+# The dot closing "a.m.", "p.m." or "U.S." also ends a sentence, or does not: a quote that ends there is refused when
+# the same turn's next words take it back ("Call me at 9 a.m. no actually don't."), and booked when they go on
+# ("Call me at 9 a.m. I'll be up by then.", "... Not earlier, please.").
+ABBREVIATION_END = re.compile(r"\b[A-Za-z]\.[A-Za-z]$")
+TAKEN_BACK = re.compile(r"^\W*(?:no\b|nope\b|nah\b|don'?t\b|do not\b|never ?mind\b|wait,? no\b|actually,? no\b|"
+                        r"cancel\b|forget it\b|scratch that\b|not now\b)", re.IGNORECASE)
 # Words that turn around the words beside them: "Don't call me back", "No need to call", "전화 안 해도 돼요".
 NEGATION = re.compile(r"\b(?:no|not|never|nope|dont|cannot)\b|n['’]t\b|(?<!\S)(?:안|못)(?!\S)", re.IGNORECASE)
 HANGUL = re.compile(r"[\uac00-\ud7a3\u3131-\u318e]")
@@ -526,10 +531,16 @@ class Coordinator(Agent):
             return False
         turns = [item.text_content or "" for item in self.chat_ctx.items
                  if getattr(item, "type", None) == "message" and item.role == "user"]
-        pieces = [(part, _letters(part)) for turn in turns for part in CLAUSE_END.split(turn) if _letters(part)]
-        for start, (first_text, first) in enumerate(pieces):
+        # Each piece: its text, its letters, and the same turn's next piece when it ended at an abbreviation's dot.
+        pieces: list[tuple[str, str, str | None]] = []
+        for turn in turns:
+            parts = [part for part in CLAUSE_END.split(turn) if _letters(part)]
+            for n, part in enumerate(parts):
+                after_dot = n + 1 < len(parts) and ABBREVIATION_END.search(part.rstrip())
+                pieces.append((part, _letters(part), parts[n + 1] if after_dot else None))
+        for start, (first_text, first, _) in enumerate(pieces):
             run = ""
-            for last_text, last in pieces[start:]:
+            for last_text, last, next_text in pieces[start:]:
                 run += last
                 if len(run) > 2 * len(wanted):  # the words would be less than half of what the user said
                     break
@@ -538,7 +549,8 @@ class Coordinator(Agent):
                     after = len(run) - at - len(wanted)
                     if at < len(first) and after < len(last):  # within the first piece and the last one
                         lead, tail = _lead(first_text, at), _tail(last_text, after)  # what the words leave out
-                        if not NEGATION.search(f"{lead} {tail}") and not HANGUL.search(tail):
+                        if not NEGATION.search(f"{lead} {tail}") and not HANGUL.search(tail) \
+                                and not (after == 0 and next_text and TAKEN_BACK.search(next_text)):
                             return True
                     at = run.find(wanted, at + 1)
         return False
