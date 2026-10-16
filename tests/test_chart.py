@@ -1,5 +1,6 @@
-"""Charts the worker draws (worker/chart.py): an SVG, and a PNG drawn from it for the app, which cannot show SVG
-without a web view (contract 2.4, decision 4); the chart's title kept for the call view."""
+"""Charts the worker draws (worker/chart.py): an SVG, and two PNGs drawn from it for the app, which cannot show SVG
+without a web view (contract 2.4, decision 4), one for light mode and one for dark mode; the chart's title kept for
+the call view."""
 
 import io
 import json
@@ -7,16 +8,123 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from PIL import Image, ImageFont
+import pytest
+from PIL import Image, ImageChops, ImageFont
 
 from worker import chart
 from worker.chart import FONT, render_svg, svg_to_png, svg_title
 
 SERIES = [{"label": "MacBook Air", "points": [["8GB/256GB", 1590000], ["16GB/512GB", 2190000]]},
           {"label": "MacBook Pro", "points": [["8GB/256GB", 2390000], ["16GB/512GB", 2990000]]}]
+SIX = [{"label": f"구성 {n + 1}", "points": [["기본", 10 + n], ["최상", 20 + n]]} for n in range(6)]
 TITLE = "한국 가격(원), 에어 & 프로"
 # A chart as the worker drew it before charts had PNGs or kept their title (the renderer up to 35275c1).
 BEFORE_PNGS = Path(__file__).parent / "fixtures" / "chart-before-pngs.svg"
+# A chart of 2026-10-15, two series, drawn before charts had a dark PNG.
+BEFORE_DARK = Path(__file__).parent / "fixtures" / "sessions" / "2026-10-15" / "0123" / "jobs" / "01" / "price-chart.svg"
+# What a dark PNG sits on in the app (the dark mode design): the screen, a card, the chart plate, the plate in a sheet.
+DARK_PLATES = ("#000000", "#1C1C1E", "#2C2C2E", "#3A3A3C")
+
+
+def rgb(colour: str) -> tuple[int, int, int]:
+    digits = colour.lstrip("#")
+    digits = "".join(d * 2 for d in digits) if len(digits) == 3 else digits
+    return tuple(int(digits[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def contrast(a: str, b: str) -> float:
+    """WCAG 2's contrast ratio of two colours."""
+    def luminance(colour: str) -> float:
+        r, g, b = (v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in (c / 255 for c in rgb(colour)))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    high, low = sorted((luminance(a), luminance(b)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def opaque_colours(image: Image.Image) -> set[tuple[int, int, int]]:
+    return {c[:3] for _, c in image.getcolors(maxcolors=1 << 21) if c[3] == 255}
+
+
+def test_a_chart_s_two_pictures_are_named_by_one_rule():
+    """price.svg's PNGs are price.png (light) and price-dark.png (dark), beside it (contract 2.4)."""
+    assert chart.pictures("price-chart.svg") == ("price-chart.png", "price-chart-dark.png")
+    assert chart.chart_of_dark("price-chart-dark.png") == "price-chart.svg"
+    assert [chart.chart_of_dark(n) for n in ("price-chart.png", "price-chart-dark.svg", "-dark.png")] == [None] * 3
+
+
+def test_the_dark_png_is_the_same_drawing_in_the_dark_palette_on_a_transparent_background():
+    """The dark mode design (2026-10-15): no background, so the app's own plate shows through; text #ABABB0, grid
+    #48484A, the series yellow, grey, orange, purple, green, red (no blue, the person's own colour); every mark where
+    the light PNG has it."""
+    svg = render_svg(TITLE, "bar", SIX, "구성", "원")
+    light = Image.open(io.BytesIO(svg_to_png(svg)))
+    dark = Image.open(io.BytesIO(svg_to_png(svg, dark=True)))
+    assert (light.mode, dark.mode, dark.size) == ("RGB", "RGBA", light.size)
+    assert dark.getpixel((0, 0)) == (0, 0, 0, 0)
+    drawn = opaque_colours(dark)
+    assert {rgb(c) for c in [*chart.DARK_COLORS, chart.DARK_TEXT, chart.DARK_GRID]} <= drawn
+    assert not drawn & {rgb(c) for c in [*chart.COLORS, chart.TEXT, chart.GRID, chart.BACKGROUND]}
+    # A letter's soft edge is the letter's colour, less opaque: no dark or white fringe, whatever plate is under it.
+    assert {c[:3] for _, c in dark.getcolors(maxcolors=1 << 21) if 0 < c[3] < 255} == {rgb(chart.DARK_TEXT)}
+    off_white = ImageChops.difference(light, Image.new("RGB", light.size, chart.BACKGROUND)).split()
+    drawn_light = ImageChops.lighter(ImageChops.lighter(*off_white[:2]), off_white[2]).point(lambda v: 255 if v else 0)
+    drawn_dark = dark.getchannel("A").point(lambda a: 255 if a else 0)
+    assert drawn_dark.tobytes() == drawn_light.tobytes()
+
+
+def test_a_line_chart_with_a_turned_axis_name_draws_dark_too():
+    """A line, and the y axis's name turned on its side: the same letters, in the dark text colour."""
+    svg = render_svg("토요일 강수 확률(%)", "line", [{"label": "북한산", "points": [[6, 10], [12, 20], [16, 70]]}],
+                     "시", "강수 확률(%)")
+    dark = Image.open(io.BytesIO(svg_to_png(svg, dark=True)))
+    assert rgb(chart.DARK_COLORS[0]) in opaque_colours(dark)
+    turned = dark.crop((0, 2 * chart.TOP, 2 * 24, 2 * (chart.HEIGHT - chart.BOTTOM)))
+    assert turned.getchannel("A").getextrema()[1] == 255  # the turned name is drawn
+    assert {c[:3] for _, c in turned.getcolors(maxcolors=1 << 21) if c[3]} == {rgb(chart.DARK_TEXT)}
+
+
+def test_a_chart_drawn_before_dark_pngs_gets_its_dark_png_slot_for_slot():
+    """Charts drawn before 2026-10-16 (blue first) get the dark colours by series: a price chart with two series and
+    a rain chart from before PNGs with one."""
+    for svg, series in ((BEFORE_DARK.read_text(), 2), (BEFORE_PNGS.read_text(), 1)):
+        drawn = opaque_colours(Image.open(io.BytesIO(svg_to_png(svg, dark=True))))
+        assert {rgb(c) for c in chart.DARK_COLORS[:series]} <= drawn
+        assert not drawn & {rgb(c) for c in chart.DARK_COLORS[series:]}
+        assert not drawn & {(47, 111, 223), (224, 112, 42), (255, 255, 255)}  # their light colours and background
+
+
+def test_an_svg_in_colours_this_code_never_drew_gets_no_dark_png():
+    """Its dark picture would have to guess: the light PNG is drawn as before, the dark one refused."""
+    svg = render_svg(TITLE, "bar", SERIES).replace(chart.COLORS[0], "#123456")
+    assert Image.open(io.BytesIO(svg_to_png(svg))).format == "PNG"
+    with pytest.raises(ValueError):
+        svg_to_png(svg, dark=True)
+
+
+def test_the_palettes_are_the_design_s_and_readable_where_the_app_shows_them():
+    """The token table of the dark mode design (ui-mockups/dark-mode.html: chart1-6, chartText, chartGrid; the light
+    series are the colours charts were drawn in before it). Text keeps 4.5:1 and marks 3:1 on what they sit on: white
+    for the light PNG, any dark plate the app lays the dark one on. Every colour a chart was ever drawn in has its
+    dark colour, slot for slot."""
+    assert chart.DARK_COLORS == ["#FFD900", "#AEAEB2", "#FF9F0A", "#BF5AF2", "#30D158", "#FF6961"]
+    assert (chart.TEXT, chart.GRID, chart.DARK_TEXT, chart.DARK_GRID) == ("#555555", "#e5e5e5", "#ABABB0", "#48484A")
+    assert contrast(chart.TEXT, chart.BACKGROUND) >= 4.5
+    assert min(contrast(c, chart.BACKGROUND) for c in chart.COLORS) >= 3
+    for plate in DARK_PLATES:
+        assert contrast(chart.DARK_TEXT, plate) >= 4.5, plate
+        assert min(contrast(c, plate) for c in chart.DARK_COLORS) >= 3, plate
+    assert [chart.DARK[c.lower()] for c in chart.COLORS] == chart.DARK_COLORS
+    assert {chart.DARK[c] for c in (chart.TEXT, *chart.EARLIER_TEXT)} == {chart.DARK_TEXT}
+
+
+def test_every_text_of_the_light_chart_is_the_chart_text_colour():
+    """chartText #555555 for the title too, as the design draws a chart's title, axes and legend alike; charts drawn
+    before had their title in #222 and their axis names and legend in #333."""
+    image = Image.open(io.BytesIO(svg_to_png(render_svg(TITLE, "bar", SERIES, "구성", "원"))))
+    title_band = image.crop((2 * chart.LEFT, 0, 2 * chart.WIDTH, 2 * chart.TOP))
+    greys = {c for _, c in title_band.getcolors(maxcolors=1 << 21)}  # the title's letters blended into white
+    assert all(r == g == b for r, g, b in greys) and min(greys) == rgb(chart.TEXT) and max(greys) == (255, 255, 255)
+    assert not {c for _, c in image.getcolors(maxcolors=1 << 21)} & {rgb("#222"), rgb("#333")}
 
 
 def test_the_svg_keeps_the_chart_s_title():
@@ -94,23 +202,33 @@ def test_a_chart_a_job_saves_is_drawn_off_the_call_s_event_loop(tmp_path, monkey
     assert (tmp_path / "rain.png").read_bytes() == b"PNG" and (tmp_path / "rain.svg").exists()
 
 
-def test_older_charts_get_their_png_from_the_one_off_command(tmp_path, capsys):
-    """`python -m worker.chart data/people/<id>` draws the PNG of each chart the worker drew before PNGs existed;
-    one already drawn, and an SVG this code did not make, are left alone."""
+def test_older_charts_get_their_pngs_from_the_one_off_command(tmp_path, capsys):
+    """`python -m worker.chart data/people/<id>` draws each picture a chart the worker drew is missing: both for a
+    chart from before PNGs, the dark one for a chart from before dark PNGs. A picture already there is left alone, an
+    SVG this code did not make gets none, and one in colours this code never drew gets only its light PNG."""
     jobs = tmp_path / "2026-10-14" / "1226" / "jobs" / "01"
     jobs.mkdir(parents=True)
     (jobs / "rain.svg").write_text(render_svg("비 확률", "line", [{"label": "서울", "points": [[8, 10], [12, 40]]}]))
     (jobs / "wind.svg").write_text(BEFORE_PNGS.read_text())
     (jobs / "done.svg").write_text(render_svg("done", "bar", SERIES))
     (jobs / "done.png").write_bytes(b"kept")
+    (jobs / "both.svg").write_text(render_svg("both", "bar", SERIES))
+    (jobs / "both.png").write_bytes(b"kept")
+    (jobs / "both-dark.png").write_bytes(b"kept too")
+    (jobs / "odd.svg").write_text(render_svg("odd", "bar", SERIES).replace(chart.COLORS[0], "#123456"))
     (jobs / "foreign.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'><circle r='4'/></svg>")
     (jobs / "broken.svg").write_text("<svg")
     chart.main([str(tmp_path)])
-    assert Image.open(jobs / "rain.png").size == (2 * chart.WIDTH, 2 * chart.HEIGHT)
-    assert Image.open(jobs / "wind.png").size == (2 * chart.WIDTH, 2 * chart.HEIGHT)
-    assert (jobs / "done.png").read_bytes() == b"kept"
-    assert not (jobs / "foreign.png").exists() and not (jobs / "broken.png").exists()
-    assert "rain.png" in capsys.readouterr().out
+    for name in ("rain.png", "rain-dark.png", "wind.png", "wind-dark.png", "done-dark.png", "odd.png"):
+        assert Image.open(jobs / name).size == (2 * chart.WIDTH, 2 * chart.HEIGHT), name
+    assert [Image.open(jobs / n).mode for n in ("wind.png", "wind-dark.png")] == ["RGB", "RGBA"]
+    assert [(jobs / n).read_bytes() for n in ("done.png", "both.png", "both-dark.png")] == [b"kept", b"kept",
+                                                                                          b"kept too"]
+    assert not [p.name for p in jobs.iterdir() if p.name.startswith(("odd-", "foreign", "broken")) and
+                p.suffix == ".png"]
+    out = capsys.readouterr().out
+    assert "rain.png: drawn" in out and "done-dark.png: drawn" in out and "odd-dark.png: left alone" in out
+    assert "both.png" not in out and "both-dark.png" not in out
 
 
 def test_a_chart_the_worker_saves_shows_in_the_call_view_with_its_title_and_picture(tmp_path):
