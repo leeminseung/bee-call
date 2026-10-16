@@ -574,13 +574,21 @@ class Coordinator(Agent):
         if not wanted:
             return False
         turns = self._user_turns()
-        # Each piece: its text, its letters, and the same turn's next piece when it ended at an abbreviation's dot.
+        # Each piece: its text, its letters, and the rest of the same turn when it ended at an abbreviation's dot
+        # (all of it: "Wait, no." is split at its comma).
         pieces: list[tuple[str, str, str | None]] = []
         for turn in turns:
-            parts = [part for part in CLAUSE_END.split(turn) if _letters(part)]
-            for n, part in enumerate(parts):
-                after_dot = n + 1 < len(parts) and ABBREVIATION_END.search(part.rstrip())
-                pieces.append((part, _letters(part), parts[n + 1] if after_dot else None))
+            spans, at = [], 0
+            for mark in CLAUSE_END.finditer(turn):
+                spans.append((at, mark.start()))
+                at = mark.end()
+            spans.append((at, len(turn)))
+            for start, end in spans:
+                part = turn[start:end]
+                if not _letters(part):
+                    continue
+                rest = turn[end:] if ABBREVIATION_END.search(part.rstrip()) else ""
+                pieces.append((part, _letters(part), rest if _letters(rest) else None))
         for start, (first_text, first, _) in enumerate(pieces):
             run = ""
             for last_text, last, next_text in pieces[start:]:

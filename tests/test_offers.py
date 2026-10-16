@@ -334,6 +334,8 @@ def test_a_call_back_is_booked_only_with_the_user_s_own_words_asking_for_it(tmp_
     (["Call me at 9 a.m. no actually don't."], "Call me at 9 a.m.", False),
     (["Call me at 9 p.m. no wait, never mind."], "Call me at 9 p.m.", False),
     (["Call me at 9 a.m. Never mind, don't."], "Call me at 9 a.m.", False),
+    (["Call me at 9 p.m. Wait, no."], "Call me at 9 p.m.", False),  # second review, finding 5: the comma forms
+    (["Call me at 9 a.m. Actually, no, don't."], "Call me at 9 a.m.", False),
     (["Call me at 9 a.m. I'll be up by then."], "Call me at 9 a.m.", True),
     (["Call me at 7 p.m. My meeting ends at 6."], "Call me at 7 p.m.", True),
     (["I'm not free until 10 a.m. Call me back then."], "Call me back then", True),
