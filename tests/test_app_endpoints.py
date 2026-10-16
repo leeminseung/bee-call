@@ -107,9 +107,9 @@ def test_a_call_s_files_are_served_by_the_record_server_s_rule(minseung):
     (minseung.workspace / "secret.txt").write_text("outside the call")
     base = f"/calls/{MAIN}/files"
     found = get(minseung, f"{base}/jobs/01/report.md", f"{base}/jobs/01/comparison.csv", f"{base}/jobs/01/price-chart.png",
-                f"{base}/jobs/01/price-chart.svg", f"{base}/jobs/01/price-chart-dark.png", f"{base}/jobs/01/report.html",
-                f"{base}/audio/secret.json", f"{base}/INPUTS/secret.json", f"{base}/model-log.jsonl",
-                f"{base}/jobs/01/nothing.md")
+                f"{base}/jobs/01/price-chart.svg", f"{base}/jobs/01/price-chart-dark.png",
+                f"{base}/jobs/01/report.html", f"{base}/audio/secret.json", f"{base}/INPUTS/secret.json",
+                f"{base}/model-log.jsonl", f"{base}/jobs/01/nothing.md")
     statuses = [s for s, _, _ in found]
     assert statuses == [200, 200, 200, 200, 200, 200, 403, 403, 403, 404]
     # Paths that try to leave by dot segments, as written or percent-encoded, reach the server as sent (the test

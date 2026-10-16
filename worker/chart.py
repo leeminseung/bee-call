@@ -37,7 +37,7 @@ COLORS = ["#2f6fdf", "#e0702a", "#2a9d6f", "#a347c2", "#c43d4b", "#6b7a8f"]  # t
 DARK_TEXT, DARK_GRID = "#ABABB0", "#48484A"
 # Yellow, grey, orange, purple, green, red: no blue, which is the person's own colour in the app.
 DARK_COLORS = ["#FFD900", "#AEAEB2", "#FF9F0A", "#BF5AF2", "#30D158", "#FF6961"]
-EARLIER_TEXT = ("#222", "#333", "#555")  # a chart drawn before 2026-10-16: its title, its axis names and legend, the rest
+EARLIER_TEXT = ("#222", "#333", "#555")  # before 2026-10-16: a chart's title, its axis names and legend, the rest
 # Each colour a chart was ever drawn in, and what the dark PNG has in its place (None: nothing).
 DARK = {light.lower(): dark for light, dark in [(BACKGROUND, None), (TEXT, DARK_TEXT), (GRID, DARK_GRID),
                                                  *[(text, DARK_TEXT) for text in EARLIER_TEXT],
@@ -53,6 +53,7 @@ DRAWN_TITLE = re.compile(r'\s*<svg xmlns="http://www.w3.org/2000/svg" viewBox="0
                          r'<text [^>]*font-weight="bold"[^>]*>(.*?)</text>', re.S)
 ANCHORS = {"start": "ls", "middle": "ms", "end": "rs"}  # SVG's text-anchor, on the baseline, as Pillow names it
 ROTATED = re.compile(r"rotate\(\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*\)")
+SPACES = re.compile(r"[ \t\r\n]+")  # XML's white space, which SVG text shows as one space
 
 
 def _num(value: Any) -> float | None:
@@ -216,8 +217,9 @@ def svg_to_png(svg: str, scale: int = PNG_SCALE, dark: bool = False) -> bytes:
             if len(points) > 1:
                 draw.line(points, fill=stroke, width=max(1, round(_f(element, "stroke-width", 1.0) * scale)),
                           joint="curve")
-        elif tag == "text" and element.text and (fill := ink(element, "fill")):
-            _text(image, element, element.text, base, scale, fill)
+        elif tag == "text" and (words := SPACES.sub(" ", element.text or "").strip()):
+            if fill := ink(element, "fill"):
+                _text(image, element, words, base, scale, fill)  # on one line, as a browser shows the SVG
     out = io.BytesIO()
     (image if dark else image.convert("RGB")).save(out, "PNG", optimize=True)
     return out.getvalue()

@@ -21,7 +21,8 @@ TITLE = "한국 가격(원), 에어 & 프로"
 # A chart as the worker drew it before charts had PNGs or kept their title (the renderer up to 35275c1).
 BEFORE_PNGS = Path(__file__).parent / "fixtures" / "chart-before-pngs.svg"
 # A chart of 2026-10-15, two series, drawn before charts had a dark PNG.
-BEFORE_DARK = Path(__file__).parent / "fixtures" / "sessions" / "2026-10-15" / "0123" / "jobs" / "01" / "price-chart.svg"
+BEFORE_DARK = Path(__file__).parent / "fixtures" / "sessions" / "2026-10-15" / "0123" / "jobs" / "01" / \
+    "price-chart.svg"
 # What a dark PNG sits on in the app (the dark mode design): the screen, a card, the chart plate, the plate in a sheet.
 DARK_PLATES = ("#000000", "#1C1C1E", "#2C2C2E", "#3A3A3C")
 
@@ -70,6 +71,16 @@ def test_the_dark_png_is_the_same_drawing_in_the_dark_palette_on_a_transparent_b
     drawn_light = ImageChops.lighter(ImageChops.lighter(*off_white[:2]), off_white[2]).point(lambda v: 255 if v else 0)
     drawn_dark = dark.getchannel("A").point(lambda a: 255 if a else 0)
     assert drawn_dark.tobytes() == drawn_light.tobytes()
+
+
+def test_a_line_break_in_a_chart_s_words_draws_as_the_svg_shows_it():
+    """A browser shows a line break in SVG text as a space, so both PNGs do: drawing only the first line made
+    "오전\\n6시" and "오전\\n9시" both read "오전" (review of the dark charts, 2026-10-16)."""
+    broken = [{"label": "북한산\n정상", "points": [["오전\n6시", 10], ["오전\n9시", 20]]}]
+    joined = [{"label": "북한산 정상", "points": [["오전 6시", 10], ["오전 9시", 20]]}]
+    for dark in (False, True):
+        assert svg_to_png(render_svg("서울 강수\n 확률", "bar", broken, "시\n각", "%"), dark=dark) == \
+            svg_to_png(render_svg("서울 강수 확률", "bar", joined, "시 각", "%"), dark=dark)
 
 
 def test_a_line_chart_with_a_turned_axis_name_draws_dark_too():
