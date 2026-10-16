@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, AsyncIterable, Callable, Iterable
+from typing import Any, AsyncIterable, Callable, Iterable, Sequence
 
 from livekit import rtc
 from livekit.agents import Agent, ModelSettings, RunContext, function_tool, llm
@@ -207,6 +207,32 @@ CLAUSE_END = re.compile(r"(?:[!?。？！…,，、;\n]|\.(?=\s|$))+")
 ABBREVIATION_END = re.compile(r"\b[A-Za-z]\.[A-Za-z]$")
 TAKEN_BACK = re.compile(r"^\W*(?:no\b|nope\b|nah\b|don'?t\b|do not\b|never ?mind\b|wait,? no\b|actually,? no\b|"
                         r"cancel\b|forget it\b|scratch that\b|not now\b)", re.IGNORECASE)
+# What the user says when they are done with the call: a goodbye, that they have to go, or to hang up, in Korean or
+# English. end_call goes through only when the user's last turn, or the one before it, says so (the AI may have asked
+# "끊을까요?" and heard "응."). The model ended calls the user had not ended: Claude Haiku 5.5 on "Nice." and "응."
+# before rule 10, and after it right after starting the job the user asked for, in 1 of 27 calls in text; in a real
+# call it took "아니야, 조사 끝나는 대로 다시 알려줘." for a goodbye (2026-10-16). Words that only look alike stay out
+# ("끊겨", "이만큼", "조사 끝내고 알려줘"). A goodbye in other words leaves the line open after the AI's own goodbye,
+# and the user hangs up.
+USER_DONE = re.compile(
+    r"\b(?:(?:good)?bye|good ?night|see (?:you|ya)|take care|catch you|signing off|hang up|end (?:the|this) call|"
+    r"let you go|(?:talk|speak|chat)(?: to you| with you)? (?:later|soon|then|tomorrow)|"
+    r"(?:gotta|got to|have to|need to|must) (?:go|run|get going|head off)|i['’]?m (?:done|off)|we['’]?re done|"
+    r"that['’]?s all|that['’]?s it for|that(?:['’]ll| will) be all|(?:busy|driving) (?:right )?now)\b|"
+    r"끊(?!었|겨|기|김)|안녕|바이바이|바이(?![가-힣])|빠이|이만(?!큼| ?원)|그만(?!큼|두|둬|뒀)|수고|잘 ?(?:있어|자|지내)|"
+    r"(?:다음에|나중에) ?(?:또 |다시 )?(?:얘기|이야기|통화|연락|전화|봐|보자|만나)|"
+    r"(?:(?:이제|그럼|먼저|슬슬|곧|일단) ?|(?<![가-힣])(?:나|저) )가 ?(?:봐야|야|볼게)|"
+    r"(?:통화|전화|오늘|이제|여기서|그럼) ?(?:은 |는 )?(?:끝(?:내|낼)|마무리)|끝내자|끝낼게|끝낼까|"
+    r"마무리 ?(?:할게|하자|하죠|할까)|마칠(?:게|까|래)|마치자|마치겠|종료|이제 ?됐|"
+    r"그때 ?(?:\S{1,2} )?(?:얘기|이야기|통화|봐|보|연락|전화)|지금 ?(?:좀 )?바(?:빠|쁘)",
+    re.IGNORECASE)
+
+
+def user_is_done(turns: Sequence[str]) -> bool:
+    """Whether the user's last turn, or the one before it, says goodbye or that they are done (USER_DONE)."""
+    return any(USER_DONE.search(turn) for turn in turns[-2:])
+
+
 # Words that turn around the words beside them: "Don't call me back", "No need to call", "전화 안 해도 돼요".
 NEGATION = re.compile(r"\b(?:no|not|never|nope|dont|cannot)\b|n['’]t\b|(?<!\S)(?:안|못)(?!\S)", re.IGNORECASE)
 HANGUL = re.compile(r"[\uac00-\ud7a3\u3131-\u318e]")
@@ -358,8 +384,17 @@ class Coordinator(Agent):
         reply: dict[str, Any] = {"text": "", "tool_calls": []}
         ended = "error"
         speech, names = SpeechFilter(), NameGuard(self._user_names)
+        answer = Agent.default.llm_node(self, chat_ctx, tools, model_settings)
+        first = True
         try:
-            async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+            async for chunk in answer:
+                if first and self.ending:
+                    # Asked for before end_call ran (job news while the AI said goodbye) and answered after it: the
+                    # Claude adapter sends one request at a time. The goodbye stays the last thing said.
+                    ended = "after end_call"
+                    await answer.aclose()
+                    return
+                first = False
                 keep_reply(reply, chunk)
                 if isinstance(chunk, llm.ChatChunk) and chunk.delta and chunk.delta.content:
                     kept = names.feed(speech.feed(chunk.delta.content))
@@ -518,6 +553,11 @@ class Coordinator(Agent):
         return (f"{verb}: you will call at {when:%-I:%M %p} {day} ({when:%A, %B %-d}); it is {now:%-I:%M %p} now. "
                 "Read this time back to the user in a few words.")
 
+    def _user_turns(self) -> list[str]:
+        """What the user said in this call, turn by turn."""
+        return [item.text_content or "" for item in self.chat_ctx.items
+                if getattr(item, "type", None) == "message" and item.role == "user"]
+
     def _user_said(self, words: Any) -> bool:
         """Whether `words` are what the user said in this call (punctuation, spacing and case aside): most of a
         sentence or a clause between commas, or of several in a row (an answer split at pauses, over turns too).
@@ -529,8 +569,7 @@ class Coordinator(Agent):
         wanted = _letters(words) if isinstance(words, str) else ""
         if not wanted:
             return False
-        turns = [item.text_content or "" for item in self.chat_ctx.items
-                 if getattr(item, "type", None) == "message" and item.role == "user"]
+        turns = self._user_turns()
         # Each piece: its text, its letters, and the same turn's next piece when it ended at an abbreviation's dot.
         pieces: list[tuple[str, str, str | None]] = []
         for turn in turns:
@@ -567,8 +606,14 @@ class Coordinator(Agent):
         return "Called off. Tell the user in a few words."
 
     @function_tool
-    async def end_call(self, context: RunContext) -> str:
+    async def end_call(self, context: RunContext) -> str | llm.ToolResult:
         """End the call, only after the user said goodbye or that they are done. Say goodbye first."""
+        turns = self._user_turns()
+        if not user_is_done(turns):  # checked in code, not only asked of the model (USER_DONE)
+            self._recorder.event("end_call_refused", heard=" / ".join(turns[-2:])[-200:])
+            # Into the conversation without asking for a reply: what the AI said stands, and it waits for the user.
+            return llm.ToolResult("Not ended: the user has not said goodbye or that they are done, so the call goes "
+                                  "on. Wait for them, and end the call only after they say so.", reply_required=False)
         self._recorder.event("end_call_requested")
         self.ending = True
         self.session.shutdown(drain=True)

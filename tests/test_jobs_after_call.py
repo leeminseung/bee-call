@@ -232,3 +232,64 @@ def test_once_the_ai_said_goodbye_it_says_nothing_more(tmp_path):
 
     said, asked = asyncio.run(main())
     assert said == ["Bye, take care!"] and asked == 1
+
+
+def test_a_reply_queued_before_the_goodbye_is_not_said_after_it(tmp_path):
+    """The same race the other way round, in calls in text with Claude Sonnet 5.5 (2026-10-16): a search ended while
+    the AI was answering "Alright, bye.", so its news queued a reply before end_call ran. LiveKit asks for a queued
+    reply at once, and the Claude adapter sends one request at a time (voice/claude_llm.py), so the reply's words came
+    after end_call and were said after the goodbye: "The call has ended, but your exhibition search is in". A reply
+    whose first words come once end_call ran is never said; the result reaches the person's phone instead (above)."""
+    import pytest
+    from types import SimpleNamespace
+
+    from livekit.agents import AgentSession
+    from livekit.agents.llm import StopResponse
+    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+
+    from tests.helpers import ScriptedLLM, _ScriptedStream, seoul_now
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    class Held(_ScriptedStream):
+        wait: asyncio.Event | None = None
+
+        async def _run(self) -> None:
+            if self.wait is not None:
+                await self.wait.wait()
+            await super()._run()
+
+    class OneAtATime(ScriptedLLM):
+        """Answers its second request only once `release` is set, as if it waited for the first."""
+
+        def __init__(self, replies):
+            super().__init__(replies)
+            self.release = asyncio.Event()
+
+        def chat(self, *, chat_ctx, tools=None, **kwargs):
+            self.requests.append(chat_ctx.copy())
+            stream = Held(self, chat_ctx=chat_ctx, tools=tools or [], conn_options=DEFAULT_API_CONNECT_OPTIONS)
+            stream.wait = self.release if len(self.requests) == 2 else None
+            return stream
+
+    async def main():
+        rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+        coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
+        model = OneAtATime([["Bye, take care!"], ["The call has ended, but your search is in."]])
+        async with AgentSession(llm=model) as session:
+            await session.start(coordinator)
+            await session.run(user_input="Alright, bye.")
+            news = session.generate_reply()  # the search's news, before end_call ran
+            while len(model.requests) < 2:  # the reply was asked for and waits for its turn
+                await asyncio.sleep(0.01)
+            with pytest.raises(StopResponse):
+                await coordinator.end_call(None)
+            model.release.set()
+            await news
+            said = [i.text_content for i in session.history.items if getattr(i, "role", None) == "assistant"]
+        rec.close()
+        return said, [json.loads(line) for line in (rec.dir / "model-log.jsonl").read_text().splitlines()]
+
+    said, log = asyncio.run(main())
+    assert said == ["Bye, take care!"]
+    assert [entry["ended"] for entry in log] == ["done", "after end_call"]  # the model log keeps what was not said
