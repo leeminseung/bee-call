@@ -25,8 +25,13 @@ REPORT, PAGE = "report.md", "report.html"
 # Where a link may go. Its value is written in double quotes and escaped, so an apostrophe is harmless (Wikipedia
 # has them); a double quote, angle brackets and white space are never in an address the renderer writes.
 LINK = re.compile(r"(?:https?://|mailto:)[^\s\"<>`]*", re.I)
-# An address written out in the text: ASCII only, so it ends where Korean words begin ("https://apple.com/kr에서").
-BARE = re.compile(r"https?://[A-Za-z0-9][A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]*", re.I)
+# An address written out in the text. ASCII and letters with accents (Schrödinger) belong to it; Korean and other
+# scripts go on only where a path segment or a query value begins (namu.wiki/w/맥북, ?query=맥북), so an address ends
+# before the Korean words written right after it ("https://apple.com/kr에서").
+URL_CHAR = r"[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%\u00c0-\u024f]"
+OTHER_LETTER = r"[^\x00-\x7f\u00c0-\u024f\s\u3000-\u303f\uff00-\uffef]"  # not CJK punctuation or full-width forms
+BARE = re.compile(rf"https?://[A-Za-z0-9]{URL_CHAR}*(?:(?<=[/=?#&+_\-]){OTHER_LETTER}+{URL_CHAR}*)*", re.I)
+LONGEST_ADDRESS = 2048  # a longer one stays words
 REL = "noopener noreferrer nofollow"  # a followed link never carries this page's address (a call's id in it)
 HANGUL = re.compile(r"[가-힣]")
 CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
@@ -95,15 +100,21 @@ TAGS: dict[str, dict[str, re.Pattern]] = {
 
 def _trim(address: str) -> str:
     """An address as written, without what ends the sentence around it: a full stop, a closing bracket it never
-    opened."""
-    while True:
-        before = address
-        address = address.rstrip(".,;:!?'\"*")
-        for close, opening in ((")", "("), ("]", "[")):
-            if address.endswith(close) and address.count(opening) < address.count(close):
-                address = address[:-1]
-        if address == before:
-            return address
+    opened. One pass from the end, counting the brackets once (counting them again for each one taken off made a run
+    of them quadratic)."""
+    opened = {")": address.count("("), "]": address.count("[")}
+    closed = {")": address.count(")"), "]": address.count("]")}
+    end = len(address)
+    while end:
+        last = address[end - 1]
+        if last in ".,;:!?'\"*":
+            end -= 1
+        elif last in closed and closed[last] > opened[last]:
+            closed[last] -= 1
+            end -= 1
+        else:
+            break
+    return address[:end]
 
 
 def _text(content: str) -> Token:
@@ -116,7 +127,8 @@ def _linked(token: Token, md: MarkdownIt) -> Iterator[Token]:
     for found in BARE.finditer(text):
         address = _trim(found.group())
         href = md.normalizeLink(address)
-        if not (LINK.fullmatch(href) and md.validateLink(href)) or len(address) <= len("https://"):
+        if not (LINK.fullmatch(href) and md.validateLink(href)) or not len("https://") < len(address) <= \
+                LONGEST_ADDRESS:
             continue
         if found.start() > at:
             yield _text(text[at:found.start()])

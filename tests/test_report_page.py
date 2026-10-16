@@ -133,6 +133,33 @@ def test_an_address_with_an_apostrophe_stays_a_link():
     assert [attrs["href"] for t, attrs in Tags(page).found if t == "a"] == [cat, cat]
 
 
+def test_an_address_with_korean_in_its_path_links_to_its_own_page():
+    """Review of the pages: a bare address stopped at its first letter outside ASCII, so Korean sources and
+    Schrödinger's_cat linked to another page. Letters with accents belong to an address; Korean and other scripts go
+    on where a path segment or a query value begins, so "https://apple.com/kr에서" still ends before "에서"."""
+    from urllib.parse import unquote
+
+    page = page_html("https://namu.wiki/w/맥북 https://ko.wikipedia.org/wiki/서울특별시 "
+                     "https://search.naver.com/search.naver?query=맥북&where=web "
+                     "https://en.wikipedia.org/wiki/Schrödinger's_cat (https://ru.wikipedia.org/wiki/Москва). "
+                     "https://apple.com/kr에서\n")
+    assert [unquote(attrs["href"]) for t, attrs in Tags(page).found if t == "a"] == [
+        "https://namu.wiki/w/맥북", "https://ko.wikipedia.org/wiki/서울특별시",
+        "https://search.naver.com/search.naver?query=맥북&where=web", "https://en.wikipedia.org/wiki/Schrödinger's_cat",
+        "https://ru.wikipedia.org/wiki/Москва", "https://apple.com/kr"]
+    assert "</a>에서" in page and "Москва</a>)." in page
+
+
+def test_a_report_made_to_be_slow_renders_in_time_proportional_to_its_length():
+    """Review of the pages: trimming an address counted it whole again for each closing bracket it took off, so an
+    address followed by 80 KB of brackets took 4 s (hours at the 5 MB a file may have)."""
+    import time
+
+    start = time.perf_counter()
+    page_html("https://a.b/" + ")" * 80_000)
+    assert time.perf_counter() - start < 1.0
+
+
 def test_every_page_passes_the_tag_check_and_a_page_that_would_not_is_never_made():
     """The HTML that comes out is checked against the tags and attributes the renderer makes; anything else stops
     the page (the app then shows the report's text as it is)."""
