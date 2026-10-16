@@ -1,10 +1,8 @@
 import SwiftUI
 
-/// A call's record as a sheet (design D, frame 6), opened from the line above a call that is over: its title and
-/// how it went, why Bee Call called (its own calls), what it read before the call, then the same bubbles and cards
-/// as the conversation, all unfolded, the call's end marked, and the round yellow "이 통화 이어서 하기" where the
-/// call button is on the home screen. Scrolled down, the title moves up into the bar. In the app this sheet takes
-/// the place of the web record page, which stays for the Mac.
+/// A call's record as a sheet (design D, frame 6), opened from the line above a call that is over: the record
+/// (CallRecord) with a close button. In the app this sheet takes the place of the web record page, which stays for
+/// the Mac.
 struct CallSheet: View {
     let callID: String
     let source: any ConversationSource
@@ -14,59 +12,80 @@ struct CallSheet: View {
     var startAtEnd = false // Debug demo: the sheet scrolled to its end
     @Environment(\.dismiss) private var dismiss
     @AppStorage("language") private var language = "en"
-    @State private var titleUp = false
     @State private var files = FilePreview() // a job's file, opened over this sheet
+
+    var body: some View {
+        NavigationStack {
+            CallRecord(callID: callID, source: source, canContinue: canContinue, continueCall: continueCall,
+                       startAtEnd: startAtEnd)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(BeeStyle.ink)
+                        }
+                        .accessibilityLabel(language == "ko" ? "닫기" : "Close")
+                    }
+                }
+        }
+        .filePreviews(files)
+        .presentationDragIndicator(.visible)
+    }
+}
+
+/// A call's record (design D, frame 6): its title and how it went, why Bee Call called (its own calls), what it read
+/// before the call, then the same bubbles and cards as the conversation, all unfolded, the call's end marked, and the
+/// round yellow "이 통화 이어서 하기" where the call button is on the home screen. Scrolled down, the title moves up
+/// into the bar. Shown in its own sheet (CallSheet), or pushed in the calls list.
+struct CallRecord: View {
+    let callID: String
+    let source: any ConversationSource
+    let canContinue: Bool
+    let continueCall: () -> Void
+    var startAtEnd = false
+    @AppStorage("language") private var language = "en"
+    @State private var titleUp = false
 
     private var korean: Bool { language == "ko" }
     private var words: ConversationWords { ConversationWords(korean: korean) }
     private var view: CallView? { source.view(callID) }
 
     var body: some View {
-        NavigationStack {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        if let view {
-                            content(view)
-                        } else {
-                            Text(source.isMissing(callID) ? words.noRecord : words.loading)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.top, 40)
-                        }
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let view {
+                        content(view)
+                    } else {
+                        Text(source.isMissing(callID) ? words.noRecord : words.loading)
+                            .font(.subheadline)
+                            .foregroundStyle(BeeStyle.secondaryInk)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 40)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 170)
-                    Color.clear.frame(height: 0).id("end") // the very end, under room for the button
                 }
-                .scrollIndicators(.hidden)
-                .titleMovesUp($titleUp)
-                .onChange(of: view != nil) { _, loaded in
-                    if loaded, startAtEnd { proxy.scrollTo("end", anchor: .bottom) }
-                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 170)
+                Color.clear.frame(height: 0).id("end") // the very end, under room for the button
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text(view.map { CallLine.title($0.call, korean: korean) } ?? "")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .opacity(titleUp ? 1 : 0)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(BeeStyle.ink)
-                    }
-                    .accessibilityLabel(korean ? "닫기" : "Close")
-                }
+            .scrollIndicators(.hidden)
+            .titleMovesUp($titleUp)
+            .onChange(of: view != nil) { _, loaded in
+                if loaded, startAtEnd { proxy.scrollTo("end", anchor: .bottom) }
             }
-            .overlay(alignment: .bottom) { continueButton }
         }
-        .filePreviews(files)
-        .presentationDragIndicator(.visible)
+        .background(BeeStyle.background)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(view.map { CallLine.title($0.call, korean: korean) } ?? "")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .opacity(titleUp ? 1 : 0)
+            }
+        }
+        .overlay(alignment: .bottom) { continueButton }
         .task { await source.show(callID) }
     }
 
@@ -95,7 +114,7 @@ struct CallSheet: View {
                 .foregroundStyle(BeeStyle.ink)
             infoLine(call)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BeeStyle.secondaryInk)
                 .accessibilityLabel(call.state == .ended ? CallLine.sheetLine(call, korean: korean, now: .now)
                                     : CallLine.line(call, korean: korean, now: .now))
         }
@@ -117,7 +136,7 @@ struct CallSheet: View {
                     .foregroundStyle(BeeStyle.onYellow)
                     .frame(width: 78, height: 78)
                     .background(BeeStyle.yellow, in: .circle)
-                    .background(Circle().fill(BeeStyle.yellow.opacity(0.22)).frame(width: 98, height: 98))
+                    .modifier(CallButtonHalo())
             }
             .buttonStyle(.plain)
             .disabled(!canContinue)

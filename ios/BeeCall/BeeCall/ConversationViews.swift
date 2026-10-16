@@ -85,8 +85,8 @@ struct ThreadEntryView: View {
 
     var body: some View {
         switch entry {
-        case .bubble(_, let speaker, let text):
-            SpeechBubble(speaker: speaker, text: text)
+        case .bubble(_, let speaker, let text, let arriving):
+            SpeechBubble(speaker: speaker, text: text, arriving: arriving)
         case .item(.speech(let speech)):
             SpeechBubble(speaker: speech.speaker, text: speech.text)
         case .item(.job(let job)):
@@ -112,21 +112,50 @@ struct ThreadEntryView: View {
 struct SpeechBubble: View {
     let speaker: Speaker
     let text: String
+    var arriving = false
 
     private var mine: Bool { speaker == .person }
 
     var body: some View {
         HStack {
             if mine { Spacer(minLength: 60) }
-            Text(text)
+            ArrivingText(text: text, arriving: arriving)
                 .font(.body)
-                .foregroundStyle(mine ? .white : BeeStyle.ink)
+                .foregroundStyle(mine ? .white : BeeStyle.aiBubbleText)
                 .padding(.horizontal, 13)
                 .padding(.vertical, 8)
                 .background(BubbleBackground(mine: mine, color: mine ? BeeStyle.personBlue : BeeStyle.aiBubble))
                 .frame(maxWidth: 290, alignment: mine ? .trailing : .leading)
             if !mine { Spacer(minLength: 60) }
         }
+    }
+}
+
+/// Words still arriving, in full ink with a blinking bar at their end (the dark-mode design): faded words, as design
+/// D first drew them, fall under 4.5:1. With Reduce Motion the bar stays still.
+struct ArrivingText: View {
+    let text: String
+    let arriving: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Group {
+            if arriving && !reduceMotion {
+                TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                    withBar(shown: Int(context.date.timeIntervalSinceReferenceDate * 2).isMultiple(of: 2))
+                }
+            } else {
+                withBar(shown: arriving)
+            }
+        }
+        .accessibilityLabel(text) // the bar is not read out
+    }
+
+    /// The text and, while it arrives, the bar, which keeps its place when it blinks off so the text does not move.
+    private func withBar(shown: Bool) -> Text {
+        guard arriving else { return Text(text) }
+        let bar = Text("\u{2009}\u{258F}")
+        return Text(text) + (shown ? bar : bar.foregroundStyle(.clear))
     }
 }
 
@@ -189,7 +218,7 @@ struct Eyebrow: View {
             Text(text)
         }
         .font(.footnote.weight(.semibold))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(BeeStyle.secondaryInk)
     }
 }
 
@@ -200,6 +229,7 @@ struct JobCardView: View {
     let words: ConversationWords
     var glowing = false
     @Environment(FilePreview.self) private var files: FilePreview? // where a file opens, when the screen holds one
+    @Environment(\.colorScheme) private var scheme
     @State private var opened: URL? // else here
 
     var body: some View {
@@ -220,13 +250,13 @@ struct JobCardView: View {
             case .failed:
                 Text(words.failure(job.failure))
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                     .padding(.top, 5)
             default:
                 if let step = job.step {
                     Text(words.step(step))
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BeeStyle.secondaryInk)
                         .padding(.top, 5)
                 }
             }
@@ -235,12 +265,12 @@ struct JobCardView: View {
                     if let title = chart.title {
                         Text(title)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(BeeStyle.secondaryInk)
                     }
-                    if let image = chart.imageURL { ServerImage(path: image) }
+                    if let picture = ChartPicture(chart, dark: scheme == .dark) { ChartPictureView(picture: picture) }
                 }
                 .padding(10)
-                .background(BeeStyle.background, in: .rect(cornerRadius: 14))
+                .background(BeeStyle.raised, in: .rect(cornerRadius: 14))
                 .padding(.top, 12)
             }
             let chips = job.files.filter { $0.kind != .chart && $0.kind != .unrecognized }
@@ -289,7 +319,42 @@ struct JobCardView: View {
     }
 }
 
-/// A file a job made, as a white chip named by its kind.
+/// Which picture of a chart to show (contract 2.6): in dark mode the one drawn for it, transparent in the dark
+/// chart palette; a chart drawn before dark charts existed has none, so its light picture sits on a white plate, as
+/// a picture would. In light mode, the light picture.
+struct ChartPicture: Equatable {
+    let path: String
+    let onWhitePlate: Bool
+
+    init?(_ file: JobFile, dark: Bool) {
+        if dark, let darkPicture = file.imageURLDark {
+            path = darkPicture
+            onWhitePlate = false
+        } else if let lightPicture = file.imageURL {
+            path = lightPicture
+            onWhitePlate = dark
+        } else {
+            return nil
+        }
+    }
+}
+
+/// A chart's picture, on a white plate when it is a light picture in dark mode.
+struct ChartPictureView: View {
+    let picture: ChartPicture
+
+    var body: some View {
+        if picture.onWhitePlate {
+            ServerImage(path: picture.path)
+                .padding(8)
+                .background(Color.white, in: .rect(cornerRadius: 10))
+        } else {
+            ServerImage(path: picture.path)
+        }
+    }
+}
+
+/// A file a job made, as a chip named by its kind.
 struct FileChip: View {
     let label: String
     let kind: FileKind
@@ -300,8 +365,8 @@ struct FileChip: View {
             .foregroundStyle(BeeStyle.ink)
             .padding(.horizontal, 12)
             .frame(minHeight: 36)
-            .background(BeeStyle.background, in: .capsule)
-            .overlay(Capsule().strokeBorder(.black.opacity(0.08), lineWidth: 0.5))
+            .background(BeeStyle.raised, in: .capsule)
+            .overlay(Capsule().strokeBorder(BeeStyle.separator, lineWidth: 0.5))
     }
 }
 
@@ -309,19 +374,26 @@ struct FileChip: View {
 struct JobCompactRow: View {
     let job: Job
     let words: ConversationWords
+    @Environment(\.colorScheme) private var scheme
+
+    private var picture: ChartPicture? {
+        job.files.first { $0.kind == .chart }.flatMap { ChartPicture($0, dark: scheme == .dark) }
+    }
 
     var body: some View {
         HStack(spacing: 12) {
             Group {
-                if let chart = job.files.first(where: { $0.kind == .chart })?.imageURL {
-                    ServerImage(path: chart)
+                if let picture {
+                    ServerImage(path: picture.path)
+                        .padding(picture.onWhitePlate ? 4 : 0)
                 } else {
                     Image(systemName: job.state == .failed ? "xmark.circle" : "doc.text")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BeeStyle.secondaryInk)
                 }
             }
             .frame(width: 58, height: 46)
-            .background(BeeStyle.background, in: .rect(cornerRadius: 11))
+            .background(picture?.onWhitePlate == true ? Color.white : BeeStyle.raised, in: .rect(cornerRadius: 11))
+            .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(BeeStyle.separator, lineWidth: 0.5))
             VStack(alignment: .leading, spacing: 2) {
                 Text(job.title)
                     .font(.subheadline.weight(.semibold))
@@ -329,7 +401,7 @@ struct JobCompactRow: View {
                     .lineLimit(1)
                 Text(job.state == .failed ? words.didNotFinish : job.files.map(words.file).joined(separator: " · "))
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -355,7 +427,7 @@ struct BeeWriteView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(live && write.state == .written ? words.added(write.kind) : words.wroteToBee)
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                 Text(live && write.state == .written ? (write.text ?? words.kind(write.kind))
                      : [words.kind(write.kind), write.text].compactMap { $0 }.joined(separator: ": "))
                     .font(.callout.weight(.semibold))
@@ -363,7 +435,7 @@ struct BeeWriteView: View {
                 if live && write.undoable {
                     Text(words.takeOutHint)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BeeStyle.secondaryInk)
                         .padding(.top, 1)
                 }
             }
@@ -371,7 +443,7 @@ struct BeeWriteView: View {
                 Spacer(minLength: 8)
                 Label(words.state(write), systemImage: write.state == .written ? "checkmark" : "exclamationmark.circle")
                     .font(.footnote.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                     .padding(.top, 8)
             }
         }
@@ -426,8 +498,8 @@ struct OfferCardView: View {
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(filled ? BeeStyle.onYellow : BeeStyle.ink)
                 .frame(maxWidth: .infinity, minHeight: 44)
-                .background(filled ? BeeStyle.yellow : BeeStyle.background, in: .capsule)
-                .overlay(Capsule().strokeBorder(.black.opacity(filled ? 0 : 0.08), lineWidth: 0.5))
+                .background(filled ? BeeStyle.yellow : BeeStyle.raised, in: .capsule)
+                .overlay(Capsule().strokeBorder(BeeStyle.separator, lineWidth: 0.5).opacity(filled ? 0 : 1))
         }
         .buttonStyle(.plain)
     }
@@ -459,7 +531,7 @@ struct WhyCallingCard: View {
                 if let summary = conversation.summary {
                     Text(summary)
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BeeStyle.secondaryInk)
                 }
                 ForEach(Array(conversation.quotes.filter { $0.speaker != .unrecognized }.enumerated()), id: \.offset) { _, quote in
                     (Text((quote.speaker == .person ? words.me : words.other) + "  ").bold() + Text(quote.text))
@@ -495,7 +567,7 @@ struct PrepCard: View {
                 Divider().padding(.vertical, 10)
                 Text(words.lookedUp)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                 ForEach(lines, id: \.text) { line in
                     Label(line.text, systemImage: line.symbol)
                         .font(.subheadline)
@@ -549,7 +621,7 @@ struct Stamp: View {
             }
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(BeeStyle.secondaryInk)
         .frame(maxWidth: .infinity)
     }
 }
@@ -573,7 +645,7 @@ struct BookedPin: View {
                 }
                 Text(offer.topic)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
@@ -581,10 +653,10 @@ struct BookedPin: View {
                 Button(action: cancel) {
                     Text(Offer.cancelButton(language: language))
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(BeeStyle.red)
+                        .foregroundStyle(BeeStyle.redText)
                         .padding(.horizontal, 13)
                         .frame(height: 36)
-                        .background(Color(.tertiarySystemFill), in: .capsule)
+                        .background(BeeStyle.subtleFill, in: .capsule)
                 }
                 .buttonStyle(.plain)
             }
@@ -592,7 +664,6 @@ struct BookedPin: View {
         .padding(.leading, 14)
         .padding(.trailing, 9)
         .padding(.vertical, 8)
-        .background(BeeStyle.background, in: .rect(cornerRadius: 24))
-        .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+        .beeGlass(in: .rect(cornerRadius: 24))
     }
 }

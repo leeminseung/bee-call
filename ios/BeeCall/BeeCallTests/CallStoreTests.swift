@@ -340,4 +340,56 @@ final class CallStoreTests: XCTestCase {
         XCTAssertEqual(server.requests.count, 2)
         XCTAssertEqual(ifNoneMatch(server), "\"\(olderVersion)\"", "asked again with what the first brought")
     }
+
+    // MARK: - The calls list's older pages
+
+    /// The list's foot says where the older pages are: more to load, loading ("더 불러오는 중"), failed ("불러오지
+    /// 못했어요 · 다시 시도"), or all loaded ("처음 통화까지 다 봤어요").
+    @MainActor func testOlderPagesSayWhereTheyAre() async throws {
+        let server = FakeServer()
+        server.replies["GET /calls"] = .status(200, try Examples.changed("calls") { body in
+            body["more"] = true
+            if body["before"] is NSNull { body["before"] = "older" }
+        })
+        let store = CallStore(server: server.client())
+        XCTAssertEqual(store.olderPages, .done, "nothing listed yet: no foot")
+        await store.refreshList()
+        XCTAssertEqual(store.olderPages, .more)
+        server.replies["GET /calls"] = .status(503)
+        await store.loadOlder()
+        XCTAssertEqual(store.olderPages, .failed)
+        server.replies["GET /calls"] = .slow(.milliseconds(200),
+                                             "{\"calls\": [], \"more\": false, \"before\": null, \"version\": \"0000000000000001\"}")
+        let again = Task { await store.loadOlder() }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(store.olderPages, .loading)
+        await again.value
+        XCTAssertEqual(store.olderPages, .done)
+    }
+
+    /// Review of the calls list, finding 1: the list's foot asks for the next page from a task that ends when the
+    /// row leaves the screen. Leaving must not cancel the page and show a failure, or set the server problem line.
+    @MainActor func testAnOlderPageIsNotCancelledWithTheRowThatAskedForIt() async throws {
+        let server = FakeServer()
+        server.replies["GET /calls"] = .status(200, try Examples.changed("calls") { body in
+            body["more"] = true
+            if body["before"] is NSNull { body["before"] = "older" }
+        })
+        let store = CallStore(server: server.client())
+        await store.refreshList()
+        var older = try XCTUnwrap((try Examples.object("calls")["calls"] as? [[String: Any]])?.last)
+        older["call_id"] = "call-test-19990101-090000"
+        older["started_at"] = "1999-01-01T09:00:00+09:00"
+        let page = String(decoding: try JSONSerialization.data(withJSONObject: [
+            "calls": [older], "more": false, "before": NSNull(), "version": "0000000000000001",
+        ]), as: UTF8.self)
+        server.replies["GET /calls"] = .slow(.milliseconds(200), page)
+        let asked = Task { await store.loadOlder() }
+        try await Task.sleep(for: .milliseconds(50))
+        asked.cancel() // the foot scrolled away
+        await asked.value
+        await waitUntil("the page has come") { store.olderPages == .done }
+        XCTAssertTrue(store.calls.contains { $0.id == "call-test-19990101-090000" })
+        XCTAssertNil(store.problem, "no server problem was shown")
+    }
 }

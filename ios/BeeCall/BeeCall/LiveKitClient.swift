@@ -55,12 +55,15 @@ final class LiveKitClient: NSObject {
         // stream in chunks; a user line is re-sent in full as a new stream each time it improves.
         try await room.registerTextStreamHandler(for: "lk.transcription") { [weak self, weak room] reader, sender in
             let segment = reader.info.attributes["lk.segment_id"] ?? reader.info.id
+            let final = reader.info.attributes["lk.transcription_final"] == "true"
             var text = ""
             for try await chunk in reader {
                 text += chunk
                 guard let self, let room else { return }
                 await self.show(text, segment: segment, from: sender, sentAt: reader.info.timestamp, in: room)
             }
+            guard let self, let room else { return }
+            await self.streamEnded(segment: segment, from: sender, final: final, in: room)
         }
         try Task.checkCancellation() // the call ended while we got the room ready
         try await room.connect(url: access.url, token: access.token)
@@ -115,6 +118,12 @@ final class LiveKitClient: NSObject {
         guard room === self.room else { return } // a late line from an earlier call
         let isMine = sender == room.localParticipant.identity
         captionList.show(text, line: "\(sender.stringValue)/\(segment)", isMine: isMine, sentAt: sentAt)
+    }
+
+    /// A line's stream has ended: the AI's line is complete, a person's line once its final version has come.
+    private func streamEnded(segment: String, from sender: Participant.Identity, final: Bool, in room: Room) {
+        guard room === self.room else { return }
+        captionList.streamEnded(line: "\(sender.stringValue)/\(segment)", final: final)
     }
 
     // MARK: - Token server
@@ -221,21 +230,32 @@ extension LiveKitClient {
         captionList = CaptionList()
         captionList.show("Hi, it's Bee Call. Is now still good to pick Saturday's trail?", line: "ai/demo", isMine: false,
                          sentAt: .now)
+        captionList.streamEnded(line: "ai/demo", final: true)
         captionList.show("Yes, now is fine. Dana says her knee is better,", line: "me/demo", isMine: true, sentAt: .now)
         voices.playDemo(demo)
     }
 
-    /// Debug builds only (DesignDemo.swift): one more line, as if just said.
+    /// Debug builds only (DesignDemo.swift): one more line, as if just said in full.
     func demoSay(_ text: String, mine: Bool) {
-        captionList.show(text, line: "\(mine ? "me" : "ai")/demo-\(UUID().uuidString)", isMine: mine, sentAt: .now)
+        let id = "\(mine ? "me" : "ai")/demo-\(UUID().uuidString)"
+        captionList.show(text, line: id, isMine: mine, sentAt: .now)
+        captionList.streamEnded(line: id, final: true)
     }
 
-    /// Debug builds only (DesignDemo.swift): these caption lines and synthetic voice levels; no room is joined.
-    func playDemo(lines: [(mine: Bool, text: String)], voice: VoiceDemo) {
-        captionList = CaptionList()
+    /// Debug builds only (DesignDemo.swift): these caption lines, said in full, and synthetic voice levels; no room
+    /// is joined. With `held`, they are numbered as the last lines the call view holds, and `growing` follows them,
+    /// still arriving.
+    func playDemo(lines: [(mine: Bool, text: String)], voice: VoiceDemo, held: CaptionCounts? = nil,
+                  growing: CaptionLine? = nil) {
+        captionList = held.map { CaptionList(numberedAfter: CaptionCounts(person: $0.person - 1, ai: $0.ai - 1)) }
+            ?? CaptionList()
         for (index, line) in lines.enumerated() {
-            captionList.show(line.text, line: "\(line.mine ? "me" : "ai")/demo\(index)", isMine: line.mine,
-                             sentAt: .now)
+            let id = "\(line.mine ? "me" : "ai")/demo\(index)"
+            captionList.show(line.text, line: id, isMine: line.mine, sentAt: .now)
+            captionList.streamEnded(line: id, final: true)
+        }
+        if let growing {
+            captionList.show(growing.text, line: "me/demo-growing", isMine: growing.speaker == .person, sentAt: .now)
         }
         voices.playDemo(voice)
     }

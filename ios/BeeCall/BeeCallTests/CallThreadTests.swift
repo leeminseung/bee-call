@@ -161,6 +161,29 @@ final class CallThreadTests: XCTestCase {
         XCTAssertEqual(CallThread.live(view: live, captions: more, captionsShown: false).count, live.drawnItems.count)
     }
 
+    /// The newest caption line, while it is still arriving, marks its bubble, which draws a blinking bar at its end;
+    /// a line done arriving does not, and neither does a bubble that another came after.
+    @MainActor func testTheBubbleOfALineStillArrivingIsMarked() throws {
+        let captions = [CaptionLine(speaker: .ai, number: 1, text: "안녕하세요."),
+                        CaptionLine(speaker: .person, number: 1, text: "안녕하세요,"),
+                        CaptionLine(speaker: .person, number: 2, text: "오늘 날씨", arriving: true)]
+        XCTAssertEqual(CallThread.live(view: nil, captions: captions, captionsShown: true), [
+            .bubble(id: "caption-ai-1", speaker: .ai, text: "안녕하세요."),
+            .bubble(id: "caption-person-1", speaker: .person, text: "안녕하세요, 오늘 날씨", arriving: true),
+        ])
+        let stuck = [CaptionLine(speaker: .person, number: 1, text: "안녕하세요,", arriving: true), // never final
+                     CaptionLine(speaker: .ai, number: 1, text: "안녕하세요.")]
+        XCTAssertEqual(CallThread.live(view: nil, captions: stuck, captionsShown: true), [
+            .bubble(id: "caption-person-1", speaker: .person, text: "안녕하세요,"),
+            .bubble(id: "caption-ai-1", speaker: .ai, text: "안녕하세요."),
+        ])
+        let live = try view("call-view-live"), (_, last) = try dock(live)
+        let growing = CaptionLine(speaker: last.speaker, number: next(last.speaker, in: live), text: "그리고", arriving: true)
+        let entries = CallThread.live(view: live, captions: [growing], captionsShown: true)
+        XCTAssertTrue(entries.contains(.bubble(id: last.id, speaker: last.speaker, text: last.text + " 그리고", arriving: true)),
+                      "the view's last speech, joined by the line still arriving")
+    }
+
     // MARK: - Words
 
     /// The line above each call: when (on the person's clock), who placed it, and how it went.

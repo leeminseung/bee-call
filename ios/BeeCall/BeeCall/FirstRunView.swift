@@ -123,7 +123,7 @@ struct ProblemLine: View {
     var body: some View {
         if let problem {
             Text(words.notSaved(MessageWords.words(problem, korean: words.korean)))
-                .foregroundStyle(BeeStyle.red)
+                .foregroundStyle(BeeStyle.redText)
         }
     }
 }
@@ -144,7 +144,7 @@ struct LanguageRows: View {
                             .foregroundStyle(BeeStyle.ink)
                         Text(option.otherName)
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(BeeStyle.secondaryInk)
                     }
                     Spacer()
                     if picked {
@@ -177,7 +177,7 @@ struct VoicesSection: View {
             } else if catalog.failed.contains(language) {
                 HStack {
                     Text(words.voicesFailed)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BeeStyle.secondaryInk)
                     Spacer()
                     Button(words.tryAgain) { Task { await catalog.load(language) } }
                         .buttonStyle(.borderless)
@@ -216,7 +216,7 @@ struct VoiceRows: View {
                                 .foregroundStyle(BeeStyle.ink)
                             Text(words.manner(voice, playing: playing))
                                 .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(BeeStyle.secondaryInk)
                         }
                         Spacer(minLength: 0)
                     }
@@ -287,13 +287,13 @@ private struct StepHeader: View {
                 }
                 Text(step)
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                 Text(title)
                     .font(.largeTitle.bold())
                     .padding(.top, 2)
                 Text(lead)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                     .padding(.top, 8)
             }
             .accessibilityElement(children: .combine)
@@ -301,7 +301,7 @@ private struct StepHeader: View {
             if let group {
                 Text(group)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                     .padding(.leading, 12) // where iOS puts a group's name: over the rows' text
                     .padding(.top, 26)
                     .padding(.bottom, 7)

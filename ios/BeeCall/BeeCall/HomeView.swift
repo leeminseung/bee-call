@@ -65,7 +65,7 @@ struct ConversationThread: View {
                 .padding(.top, 8)
                 Text(CallLine.title(call, korean: words.korean))
                     .font(call.titleSource == .none ? .subheadline : .subheadline.weight(.semibold))
-                    .foregroundStyle(call.titleSource == .none ? Color.secondary : BeeStyle.ink)
+                    .foregroundStyle(call.titleSource == .none ? BeeStyle.secondaryInk : BeeStyle.ink)
                     .multilineTextAlignment(.center)
                     .padding(.top, -6)
                 if CallThread.canUnfold(call) {
@@ -113,7 +113,7 @@ struct ConversationThread: View {
                 .foregroundStyle(BeeStyle.ink)
                 .padding(.horizontal, 12)
                 .frame(minHeight: 30)
-                .background(BeeStyle.card, in: .capsule)
+                .background(BeeStyle.controlFill, in: .capsule)
         }
         .buttonStyle(.plain)
         .frame(minHeight: 44)
@@ -160,6 +160,7 @@ struct HomeView: View {
     var glowing: String?
     @Binding var jump: String?
     let showCallScreen: () -> Void
+    let openCalls: () -> Void
     let openSettings: () -> Void
     let openCall: (String) -> Void
     let startCall: () -> Void
@@ -178,8 +179,12 @@ struct HomeView: View {
             VStack(spacing: 8) {
                 VStack(spacing: 8) {
                     if calls.callIsOn {
-                        CallBar(calls: calls, words: words, open: showCallScreen)
-                            .zoomSource("call", in: zoom)
+                        HStack(spacing: 8) {
+                            listButton
+                            CallBar(calls: calls, words: words, open: showCallScreen)
+                                .zoomSource("call", in: zoom)
+                        }
+                        .padding(.top, 4)
                     } else {
                         topBar
                         ForEach(booked) { offer in
@@ -188,14 +193,17 @@ struct HomeView: View {
                     }
                 }
                 .padding(.bottom, 6)
-                .background { // the conversation fades out under the top
-                    LinearGradient(stops: [.init(color: BeeStyle.background, location: 0),
-                                           .init(color: BeeStyle.background, location: 0.62),
-                                           .init(color: BeeStyle.background.opacity(0), location: 1)],
-                                   startPoint: .top, endPoint: .bottom)
-                        .padding(.horizontal, -12)
-                        .padding(.bottom, -34)
-                        .ignoresSafeArea(edges: .top)
+                .background { // the conversation is hidden under the top and fades in just below it, so the
+                    // glass of the pills and the pinned call never shows text through it
+                    VStack(spacing: 0) {
+                        BeeStyle.background
+                        LinearGradient(colors: [BeeStyle.background, BeeStyle.background.opacity(0)],
+                                       startPoint: .top, endPoint: .bottom)
+                            .frame(height: 34)
+                    }
+                    .padding(.horizontal, -12)
+                    .padding(.bottom, -34)
+                    .ignoresSafeArea(edges: .top)
                 }
                 Spacer()
                 if calls.callIsOn {
@@ -226,30 +234,42 @@ struct HomeView: View {
                     if let bee = source.beeLine(korean: words.korean) {
                         Text(bee)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(BeeStyle.secondaryInk)
                     }
                 }
             }
             .padding(.leading, 6)
             .padding(.trailing, 16)
             .padding(.vertical, 6)
-            .background(BeeStyle.background, in: .capsule)
-            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+            .beeGlass(in: .capsule)
             HStack {
+                listButton
                 Spacer()
                 Button(action: openSettings) {
                     Image(systemName: "gearshape")
                         .font(.title3)
                         .foregroundStyle(BeeStyle.ink)
                         .frame(width: 44, height: 44)
-                        .background(BeeStyle.background, in: .circle)
-                        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+                        .beeGlass(in: .circle)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(words.korean ? "설정" : "Settings")
             }
         }
         .padding(.top, 4)
+    }
+
+    /// "통화 목록": every call by day, in a sheet (calls-list.html).
+    private var listButton: some View {
+        Button(action: openCalls) {
+            Image(systemName: "list.bullet")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(BeeStyle.ink)
+                .frame(width: 44, height: 44)
+                .beeGlass(in: .circle)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(CallsListWords(korean: words.korean).open)
     }
 
     private var callButton: some View {
@@ -260,7 +280,7 @@ struct HomeView: View {
                     .foregroundStyle(BeeStyle.onYellow)
                     .frame(width: 78, height: 78)
                     .background(BeeStyle.yellow, in: .circle)
-                    .background(Circle().fill(BeeStyle.yellow.opacity(0.22)).frame(width: 98, height: 98))
+                    .modifier(CallButtonHalo())
             }
             .buttonStyle(.plain)
             .zoomSource("call", in: zoom)
@@ -270,12 +290,12 @@ struct HomeView: View {
                 .foregroundStyle(BeeStyle.ink)
             Text(status)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BeeStyle.secondaryInk)
                 .multilineTextAlignment(.center)
             if let problem {
                 Text(problem)
                     .font(.caption)
-                    .foregroundStyle(BeeStyle.red)
+                    .foregroundStyle(BeeStyle.redText)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
             }
@@ -326,18 +346,15 @@ struct CallBar: View {
                 Label(words.callScreen, systemImage: "chevron.up")
                     .labelStyle(TrailingIconLabel())
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
             }
             .padding(.leading, 8)
             .padding(.trailing, 13)
             .frame(height: 44)
-            .background(.regularMaterial, in: .capsule)
+            .beeGlass(in: .capsule)
             .overlay(Capsule().strokeBorder(BeeStyle.yellow, lineWidth: 1.5))
-            .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 4)
-        .padding(.top, 4)
     }
 }
 
@@ -356,10 +373,10 @@ struct SmallCallControl: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(tint != nil ? .white : on ? BeeStyle.background : BeeStyle.ink)
                     .frame(width: 52, height: 52)
-                    .background(tint ?? (on ? BeeStyle.ink : BeeStyle.card), in: .circle)
+                    .background(tint ?? (on ? BeeStyle.ink : BeeStyle.controlFill), in: .circle)
                 Text(label)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
             }
         }
         .buttonStyle(.plain)
