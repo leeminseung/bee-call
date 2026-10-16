@@ -340,4 +340,30 @@ final class CallStoreTests: XCTestCase {
         XCTAssertEqual(server.requests.count, 2)
         XCTAssertEqual(ifNoneMatch(server), "\"\(olderVersion)\"", "asked again with what the first brought")
     }
+
+    // MARK: - The calls list's older pages
+
+    /// The list's foot says where the older pages are: more to load, loading ("더 불러오는 중"), failed ("불러오지
+    /// 못했어요 · 다시 시도"), or all loaded ("처음 통화까지 다 봤어요").
+    @MainActor func testOlderPagesSayWhereTheyAre() async throws {
+        let server = FakeServer()
+        server.replies["GET /calls"] = .status(200, try Examples.changed("calls") { body in
+            body["more"] = true
+            if body["before"] is NSNull { body["before"] = "older" }
+        })
+        let store = CallStore(server: server.client())
+        XCTAssertEqual(store.olderPages, .done, "nothing listed yet: no foot")
+        await store.refreshList()
+        XCTAssertEqual(store.olderPages, .more)
+        server.replies["GET /calls"] = .status(503)
+        await store.loadOlder()
+        XCTAssertEqual(store.olderPages, .failed)
+        server.replies["GET /calls"] = .slow(.milliseconds(200),
+                                             "{\"calls\": [], \"more\": false, \"before\": null, \"version\": \"0000000000000001\"}")
+        let again = Task { await store.loadOlder() }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(store.olderPages, .loading)
+        await again.value
+        XCTAssertEqual(store.olderPages, .done)
+    }
 }

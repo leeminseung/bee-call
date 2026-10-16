@@ -17,7 +17,8 @@ final class CallStore {
     private(set) var problem: String? // the last fetch that did not come through, in words
     private var olderLoaded = false // an older page has come
     private var olderCursor: String? // the next older page after the last one loaded
-    @ObservationIgnored private var loadingOlder = false // a second tap waits for the page on its way
+    private var loadingOlder = false // a second ask waits for the page on its way
+    private var olderFailed = false // the last older page did not come
     @ObservationIgnored private let fetches = OneFetchAtATime<String>() // by path: the list, and each view
     @ObservationIgnored private let server: ServerClient
 
@@ -33,6 +34,17 @@ final class CallStore {
     /// Older calls exist that are not loaded.
     var hasOlder: Bool {
         olderLoaded ? olderCursor != nil : list?.more == true
+    }
+
+    /// Where the older pages are, for the foot of the calls list.
+    enum OlderPages: Equatable {
+        case more, loading, failed, done
+    }
+
+    var olderPages: OlderPages {
+        if loadingOlder { return .loading }
+        if olderFailed { return .failed }
+        return hasOlder ? .more : .done
     }
 
     // MARK: - Fetching
@@ -73,10 +85,12 @@ final class CallStore {
     func loadOlder() async {
         guard !loadingOlder, let before = olderLoaded ? olderCursor : list?.before else { return }
         loadingOlder = true
+        olderFailed = false
         defer { loadingOlder = false }
         var query = URLComponents()
         query.queryItems = [URLQueryItem(name: "before", value: before)]
         guard let page: CallList = await fetch("/calls?" + (query.percentEncodedQuery ?? ""), holding: nil) else {
+            olderFailed = true
             return
         }
         for entry in page.calls where known[entry.id] == nil { known[entry.id] = entry } // the first page is newer
