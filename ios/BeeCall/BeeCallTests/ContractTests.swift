@@ -153,6 +153,7 @@ final class ContractTests: XCTestCase {
                     XCTAssertEqual(job.files.map(\.kind.rawValue), files.compactMap { $0["kind"] as? String })
                     XCTAssertEqual(job.files.map(\.imageURL), files.map { $0["image_url"] as? String })
                     XCTAssertEqual(job.files.map(\.imageURLDark), files.map { $0["image_url_dark"] as? String })
+                    XCTAssertEqual(job.files.map(\.pageURL), files.map { $0["page_url"] as? String })
                 case .beeWrite(let write):
                     XCTAssertEqual(file["type"] as? String, "bee_write")
                     XCTAssertEqual(write.kind.rawValue, file["kind"] as? String)
@@ -273,6 +274,14 @@ final class ContractTests: XCTestCase {
             items[job]["files"] = files
             body["items"] = items
         }), "image_url_dark is required, null when there is none")
+        XCTAssertThrowsError(try Contract.decode(CallView.self, from: without("call-view") { body in
+            var items = body["items"] as? [[String: Any]] ?? []
+            guard let job = items.firstIndex(where: { ($0["files"] as? [[String: Any]])?.isEmpty == false }) else { return }
+            var files = items[job]["files"] as? [[String: Any]] ?? []
+            files[0].removeValue(forKey: "page_url") // a server from before report pages
+            items[job]["files"] = files
+            body["items"] = items
+        }), "page_url is required, null when there is none")
         XCTAssertThrowsError(try Contract.decode(OpenOffers.self, from: without("offers") { body in
             var offers = body["offers"] as? [[String: Any]] ?? []
             offers[0].removeValue(forKey: "suggested_at")
