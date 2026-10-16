@@ -73,6 +73,8 @@ def test_the_prep_frames_a_call_the_same_way():
     ["안녕히 계세요."], ["오늘은 이만할게."], ["나 이제 가봐야 돼."], ["나중에 통화하자."], ["수고하세요."],
     ["Okay, talk to you later."], ["Gotta go, thanks!"], ["That's all for now."], ["I’m done for today."],
     ["See you at seven then."], ["Sorry, I'm driving right now."],
+    ["내일 봐!"], ["이따 다시 통화해."], ["다음에 또 얘기하자."], ["네, 들어가세요."], ["주말 잘 보내, 안녕."],
+    ["I'll call you later."], ["Nothing else, thanks."], ["I'm all set."], ["I gotta hop off now."],
     ["나 이제 가봐야 돼.", "응."],  # the AI asked whether to end, and heard a yes
 ])
 def test_end_call_goes_through_when_the_user_said_goodbye_or_that_they_are_done(turns):
@@ -88,6 +90,8 @@ def test_end_call_goes_through_when_the_user_said_goodbye_or_that_they_are_done(
     ["나중에 결과만 알려줘."], ["조사 끝내고 알려줘."], ["조사 마무리되면 말해 줘."],
     ["그 전시는 꼭 가봐야겠다."], ["이만큼이나 많아?"], ["그만큼 비싸?"], ["담배는 작년에 끊었어."], ["소리가 좀 끊겨."],
     ["바이러스 때문에 못 갔어."], ["Tell me more about it later."],
+    ["나중에 얘기해 줘."], ["나중에 결과 얘기해 줘."], ["내일 봐야 할 게 있어."], ["집에 들어가는 길이야."],
+    ["네, 안녕하세요."],  # a greeting (real calls open with it)
 ])
 def test_end_call_is_refused_when_the_user_said_no_goodbye(turns):
     assert not user_is_done(turns)

@@ -217,14 +217,18 @@ TAKEN_BACK = re.compile(r"^\W*(?:no\b|nope\b|nah\b|don'?t\b|do not\b|never ?mind
 USER_DONE = re.compile(
     r"\b(?:(?:good)?bye|good ?night|see (?:you|ya)|take care|catch you|signing off|hang up|end (?:the|this) call|"
     r"let you go|(?:talk|speak|chat)(?: to you| with you)? (?:later|soon|then|tomorrow)|"
-    r"(?:gotta|got to|have to|need to|must) (?:go|run|get going|head off)|i['’]?m (?:done|off)|we['’]?re done|"
-    r"that['’]?s all|that['’]?s it for|that(?:['’]ll| will) be all|(?:busy|driving) (?:right )?now)\b|"
-    r"끊(?!었|겨|기|김)|안녕|바이바이|바이(?![가-힣])|빠이|이만(?!큼| ?원)|그만(?!큼|두|둬|뒀)|수고|잘 ?(?:있어|자|지내)|"
-    r"(?:다음에|나중에) ?(?:또 |다시 )?(?:얘기|이야기|통화|연락|전화|봐|보자|만나)|"
+    r"call you (?:back )?(?:later|tomorrow|soon)|"
+    r"(?:gotta|got to|have to|need to|must) (?:go|run|get going|head off|head out|hop off|jump off)|"
+    r"i['’]?m (?:done|off|all set)|we['’]?re done|that['’]?s all|that['’]?s it for|that['’]?s everything|"
+    r"that(?:['’]ll| will) be all|nothing else|(?:busy|driving) (?:right )?now)\b|"
+    r"끊(?!었|겨|기|김)|안녕(?!하)|바이바이|바이(?![가-힣])|빠이|이만(?!큼| ?원)|그만(?!큼|두|둬|뒀)|수고|잘 ?(?:있어|자|지내)|"
+    r"들어가(?:세요|십시오)|"
+    # "그때 (네) 얘기를 해보자", "내일 봐", "이따 다시 통화해"; not "나중에 얘기해 줘" (tell me later), "내일 봐야 할 게"
+    r"(?:다음에|나중에|내일|이따가?|그때|다음 ?주에?|주말에) ?(?:(?:네|어|음|그|좀|또|다시) )*"
+    r"(?:(?:얘기|이야기|통화|연락|전화)(?!\s?(?:해\s?)?(?:줘|주세요|줄래|줄 수|주실))|봐(?!야)|보자|봬|뵐|뵙|만나)|"
     r"(?:(?:이제|그럼|먼저|슬슬|곧|일단) ?|(?<![가-힣])(?:나|저) )가 ?(?:봐야|야|볼게)|"
     r"(?:통화|전화|오늘|이제|여기서|그럼) ?(?:은 |는 )?(?:끝(?:내|낼)|마무리)|끝내자|끝낼게|끝낼까|"
-    r"마무리 ?(?:할게|하자|하죠|할까)|마칠(?:게|까|래)|마치자|마치겠|종료|이제 ?됐|"
-    r"그때 ?(?:\S{1,2} )?(?:얘기|이야기|통화|봐|보|연락|전화)|지금 ?(?:좀 )?바(?:빠|쁘)",
+    r"마무리 ?(?:할게|하자|하죠|할까)|마칠(?:게|까|래)|마치자|마치겠|종료|이제 ?됐|지금 ?(?:좀 )?바(?:빠|쁘)",
     re.IGNORECASE)
 
 
