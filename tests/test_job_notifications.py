@@ -101,6 +101,41 @@ def test_a_report_that_cannot_become_a_page_still_ends_its_job_done(tmp_path, mo
     assert [(n.status, n.files) for n in news] == [("completed", ["report.md"])]
 
 
+def test_a_call_ending_while_the_page_renders_keeps_the_job_s_whole_end_on_record(tmp_path, monkeypatch):
+    """The page is the only wait between the job's end and the call AI hearing it, and it comes after everything the
+    record says about that end: a call ending meanwhile still leaves job_done and the summary the user would have
+    heard (relay) on record, as before pages existed."""
+    import threading
+
+    from worker import runner
+
+    entered, release = threading.Event(), threading.Event()
+
+    def slow(folder):
+        entered.set()
+        release.wait(5)
+
+    monkeypatch.setattr(runner, "write_page", slow)
+    events = []
+
+    async def ignore(n: JobNotification) -> None:
+        pass
+
+    async def main() -> None:
+        jobs = JobRunner(tmp_path, lambda name, **f: events.append(name), Worker(relay_text=None), ignore,
+                         clock=seoul_now)
+        jobs.start(TASK)
+        while not entered.is_set():
+            await asyncio.sleep(0.01)
+        ending = asyncio.create_task(jobs.cancel_all())
+        await asyncio.sleep(0.05)
+        release.set()
+        await ending
+
+    asyncio.run(main())
+    assert events[-2:] == ["job_done", "relay"]
+
+
 def test_a_job_that_never_relayed_ends_with_its_summary(tmp_path):
     _, news = run_one_job(tmp_path, Worker(relay_text=None))
     assert [(n.status, n.summary, n.files) for n in news] == [("completed", "Both forecasts say dry.", ["report.md"])]
