@@ -1147,7 +1147,23 @@ def test_an_approved_person_starts_with_these_settings(tmp_path):
     assert asdict(people.settings("jiwoo")) == {
         "language": "en", "call_time": "21:00", "record_on_server": True, "record_on_phone": False,
         "daily_budget_usd": 3.0, "bee": False, "voice": None, "time_zone": "Asia/Seoul",
-        "call_model": None, "worker_model": None}  # no pick: each role's default where it is used
+        "call_model": None, "worker_model": None,  # no pick: each role's default where it is used
+        "noise_cancellation": True}
+
+
+def test_noise_cancellation_is_a_switch_on_by_default_also_for_people_stored_before_it(tmp_path):
+    """Contract section 6 (2026-10-16): a boolean the app's settings sheet owns; a settings.json written before the
+    setting existed reads as on."""
+    people = People(tmp_path)
+    people.add("jiwoo")
+    (people.folder("jiwoo") / "settings.json").write_text(json.dumps({"language": "ko", "record_on_server": True}))
+    assert people.settings("jiwoo").noise_cancellation is True
+    assert people.change_settings("jiwoo", {"noise_cancellation": False}).noise_cancellation is False
+    assert people.settings("jiwoo").noise_cancellation is False
+    for bad in ("no", 0, None, "false"):
+        with pytest.raises(ValueError, match="noise_cancellation must be true or false"):
+            people.change_settings("jiwoo", {"noise_cancellation": bad})
+    assert people.settings("jiwoo").noise_cancellation is False
 
 
 def test_a_model_id_the_catalog_no_longer_has_reads_as_the_role_s_default(tmp_path):
