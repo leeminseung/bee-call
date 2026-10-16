@@ -32,9 +32,9 @@ def test_the_name_is_said_at_most_once_near_the_start():
     """After the first change Haiku 5.5 still said "Take care, Minseung" at the goodbye, and in Korean put "민승 씨"
     where English says "you" (4 and 8 times in a call)."""
     assert "name at most once in the whole call, near its start" in INSTRUCTIONS
-    assert "not even in a goodbye" in INSTRUCTIONS
-    korean = call_language("ko").rule
-    assert 'no word for "you"' in korean and "never use the user's name in its place" in korean
+    assert "not even in a goodbye" in INSTRUCTIONS and 'never as a word for "you"' in INSTRUCTIONS
+    korean = call_language("ko").rule  # the rule alone did not do it: Haiku 5.5 still wrote "민승 씨는 ..." (2 to 8 a call)
+    assert 'Leave "you" unsaid' in korean and '"주말엔 뭐 하세요?", never "OO 님은 주말엔 뭐 하세요?"' in korean
 
 
 def test_end_call_says_when_it_may_be_called():
