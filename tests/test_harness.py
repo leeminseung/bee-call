@@ -276,6 +276,7 @@ def test_save_chart_draws_svg_and_file_names_are_checked(tmp_path):
     asyncio.run(main())
     svg = (tmp_path / "rain_by_hour.svg").read_text()
     assert svg.startswith("<svg") and "Rain chance" in svg and "polyline" in svg
+    assert (tmp_path / "rain_by_hour.png").exists() and (tmp_path / "rain_by_hour-dark.png").exists()
     assert (tmp_path / "request.md").read_text() == "original"
     results = [b["toolResult"]["status"] for b in harness.requests[2]["messages"][0]["content"]]
     assert results == ["error", "error"]

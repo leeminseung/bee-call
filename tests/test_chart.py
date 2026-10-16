@@ -181,9 +181,9 @@ def test_a_chart_a_job_saves_is_drawn_off_the_call_s_event_loop(tmp_path, monkey
 
     drawn_on = []
 
-    def png(svg: str) -> bytes:
-        drawn_on.append(threading.get_ident())
-        return b"PNG"
+    def png(svg: str, dark: bool = False) -> bytes:
+        drawn_on.append((threading.get_ident(), dark))
+        return b"DARK" if dark else b"PNG"
 
     monkeypatch.setattr(tools, "svg_to_png", png)
     job = Job(job_id="01", dir=tmp_path, task="t", now=datetime.now(SEOUL))
@@ -198,8 +198,31 @@ def test_a_chart_a_job_saves_is_drawn_off_the_call_s_event_loop(tmp_path, monkey
         return loop_thread, ok
 
     loop_thread, ok = asyncio.run(main())
-    assert ok and drawn_on and drawn_on[0] != loop_thread
-    assert (tmp_path / "rain.png").read_bytes() == b"PNG" and (tmp_path / "rain.svg").exists()
+    assert ok and sorted(dark for _, dark in drawn_on) == [False, True]
+    assert all(thread != loop_thread for thread, _ in drawn_on)
+    assert (tmp_path / "rain.png").read_bytes() == b"PNG" and (tmp_path / "rain-dark.png").read_bytes() == b"DARK"
+    assert (tmp_path / "rain.svg").exists()
+
+
+def test_a_chart_is_never_named_as_another_chart_s_dark_picture(tmp_path):
+    """A chart named rain-dark would draw its light PNG over rain's dark one (rain-dark.png), in any case of letters
+    (macOS folders do not tell them apart): refused, nothing written, the name not repeated back."""
+    import asyncio
+
+    from tests.helpers import SEOUL
+    from worker import tools
+    from worker.runner import Job
+
+    job = Job(job_id="01", dir=tmp_path, task="t", now=datetime.now(SEOUL))
+
+    async def relay(words):
+        pass
+
+    for name in ("rain-dark", "Rain-DARK.svg"):
+        said, ok = asyncio.run(tools.use_tool("save_chart", {"name": name, "title": "비", "kind": "bar",
+                                                             "series": SERIES}, job, lambda line: None, relay))
+        assert not ok and "rain" not in said.lower() and "-dark" in said
+    assert not list(tmp_path.iterdir())
 
 
 def test_older_charts_get_their_pngs_from_the_one_off_command(tmp_path, capsys):

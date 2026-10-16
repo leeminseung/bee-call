@@ -3,8 +3,8 @@
   progress(text)                       a line on the job card
   relay_to_user(text)                  one or two sentences for the voice to tell the user
   save_file(name, content)             a text result file in the job folder (report.md, a CSV table)
-  save_chart(name, title, kind, ...)   a chart from numbers; this Mac draws it as SVG, and the same drawing as PNG
-                                       for the app (worker/chart.py)
+  save_chart(name, title, kind, ...)   a chart from numbers; this Mac draws it as SVG, and the same drawing as two
+                                       PNGs for the app, light and dark (worker/chart.py)
 
 The job folder stays on this Mac with one writer per file: a worker's model writes into it only through these tools
 (and the Claude worker's code execution files, which this Mac saves under a free, safe name). Also here: the job's
@@ -21,7 +21,7 @@ from typing import Any, Awaitable, Callable
 
 from beelink.clock import now_text
 from voice.language import LANGUAGES
-from worker.chart import render_svg, svg_to_png
+from worker.chart import chart_of_dark, pictures, render_svg, svg_to_png
 from worker.runner import USAGE, Job
 
 log = logging.getLogger("bee-call.worker")
@@ -33,6 +33,8 @@ LONGEST_NAME = 81  # what SAFE_NAME allows
 NOT_A_NAME = ("Not saved: that is not an allowed file name. Use letters, digits, dots, dashes and underscores, at "
               "most 81, with no folders, such as report.md or prices.csv.")
 NO_SUCH_TOOL = "There is no tool by that name. Use one of: {tools}."
+DARK_NAME = ("Not saved: a chart's name cannot end in -dark, which names each chart's picture for dark mode. Use "
+             "another name, such as prices_by_size.")
 RESERVED = {"request.md", "events.jsonl", "usage.json"}  # written by this Mac, never by a worker's model
 MAX_FILE_BYTES = 5_000_000
 
@@ -136,16 +138,20 @@ async def use_tool(name: str, args: dict[str, Any], job: Job, progress: Callable
         file_name = f"{str(args.get('name', 'chart')).removesuffix('.svg')}.svg"
         if not allowed_name(file_name):
             return NOT_A_NAME, False
+        light, dark = pictures(file_name)
+        if chart_of_dark(light.casefold()):  # its PNG would be another chart's dark one (macOS ignores case)
+            return DARK_NAME, False
         svg = render_svg(str(args.get("title", "")), str(args.get("kind", "line")), args.get("series") or [],
                          str(args.get("x_label", "")), str(args.get("y_label", "")))
         (job.dir / file_name).write_text(svg)
-        try:  # the picture the app shows (contract 2.4); without it the chart is listed as a plain file
-            # Drawn in a worker thread: a job runs in the call's process, and drawing takes 40-170 ms (on an M1),
-            # near LiveKit's 200 ms of outgoing audio.
-            png = await asyncio.to_thread(svg_to_png, svg)
-            (job.dir / file_name).with_suffix(".png").write_bytes(png)
-        except Exception:
-            log.exception("could not draw %s as PNG", file_name)
+        for picture, in_dark in ((light, False), (dark, True)):
+            try:  # the pictures the app shows (contract 2.4); without the light one the chart is a plain file
+                # Drawn in a worker thread: a job runs in the call's process, and drawing takes 40-170 ms (on an
+                # M1), near LiveKit's 200 ms of outgoing audio.
+                png = await asyncio.to_thread(svg_to_png, svg, dark=in_dark)
+                (job.dir / picture).write_bytes(png)
+            except Exception:
+                log.exception("could not draw %s", picture)
         return f"Saved {file_name}. Mention it in the report.", True
     raise KeyError(name)
 
