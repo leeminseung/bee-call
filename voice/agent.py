@@ -49,12 +49,13 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import boto3
 from dotenv import load_dotenv
 from livekit import rtc
-from livekit.agents import AgentServer, AgentSession, JobContext, JobProcess, RecordingOptions, cli, inference, llm
+from livekit.agents import (AgentServer, AgentSession, JobContext, JobProcess, RecordingOptions, cli, inference, llm,
+                            room_io)
 from livekit.plugins import aws, silero
 from livekit.plugins.aws.stt import Credentials
 
@@ -118,6 +119,21 @@ CAPTIONS_ATTRIBUTE = "bee_call.captions"
 # bounds (LiveKit 1.8.6 EndpointingOptions). The user's choice (2026-10-15): 0.5-3.0 s left most turns waiting at
 # the cap, about 2.4 s; 0.3-2.5 s.
 TURN_ENDPOINTING = {"mode": "dynamic", "min_delay": 0.3, "max_delay": 2.5}
+NOISE_CANCELLATIONS = ("bvc", "nc", "off")
+
+
+def noise_setting(env: Mapping[str, str] = os.environ) -> str:
+    """NOISE_CANCELLATION: LiveKit Cloud's enhanced noise cancellation on the caller's audio, before speech recognition,
+    turn detection and interruptions hear it (livekit-plugins-noise-cancellation, Krisp's models): bvc takes out other
+    people's voices as well as noise, nc noise only, off (the default, also when unset) nothing. A call's record keeps
+    the audio the voice server heard, so audio/user.wav is the cleaned audio when it is on."""
+    value = (env.get("NOISE_CANCELLATION") or "").strip().lower() or "off"
+    if value not in NOISE_CANCELLATIONS:
+        raise SystemExit(f"NOISE_CANCELLATION must be one of {', '.join(NOISE_CANCELLATIONS)}, not {value!r}")
+    return value
+
+
+NOISE_CANCELLATION = noise_setting()  # off until it is compared in a real call (server-progress.md, "Call quality")
 
 log = logging.getLogger("bee-call")
 
@@ -451,6 +467,18 @@ def prewarm(proc: JobProcess) -> None:
 server = AgentServer(setup_fnc=prewarm, num_idle_processes=1)
 
 
+def caller_audio(setting: str) -> room_io.RoomOptions:
+    """What the call's session hears of the caller (NOISE_CANCELLATION): LiveKit's room input, through noise
+    cancellation when it is on. The gain is left to LiveKit: on without noise cancellation, as before, and off with it,
+    since the models set the level themselves (livekit/agents#7064)."""
+    if setting == "off":
+        return room_io.RoomOptions(audio_input=room_io.AudioInputOptions())
+    from livekit.plugins import noise_cancellation  # loads the filter into LiveKit's native layer, only when used
+
+    model = noise_cancellation.BVC() if setting == "bvc" else noise_cancellation.NC()
+    return room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=model))
+
+
 def make_session(ctx: JobContext, language: CallLanguage, tts_voice, rec: CallRecorder,
                  call_model: CallModel) -> AgentSession:
     """The call's speech recognition, model, voice and turn-taking (tests put a stand-in here)."""
@@ -657,7 +685,7 @@ def open_record(ctx: JobContext, people: People, caller: Caller, meta: dict) -> 
     rec.event("coordinator", llm=COORDINATOR_LLM, model=coordinator_model(caller.call_model),
               call_model=caller.call_model.name, language=caller.language.code, voice=caller.tts_voice.describe(),
               person=caller.id, audio_on_server=settings.record_on_server, audio_on_phone=settings.record_on_phone,
-              **({"settings_not_used": unused} if unused else {}))
+              noise_cancellation=NOISE_CANCELLATION, **({"settings_not_used": unused} if unused else {}))
     rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"),
               kind=meta.get("kind"), continue_from=meta.get("continue_from") if meta.get("earlier_call") else None)
     return rec, settings
@@ -871,7 +899,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
     try:
         # LiveKit's own recording (audio, transcript, traces) stays off whatever the LiveKit project says: call
         # audio is kept only by our recorder, and only while the person keeps record_on_server on.
-        await session.start(room=ctx.room, agent=call.agent, record=False)
+        await session.start(room=ctx.room, agent=call.agent, record=False,
+                            room_options=caller_audio(NOISE_CANCELLATION))
         session.say(prep.opening or greeting(meta, caller.language))
         if ringing is not None:  # ring on through the session start and the voice's first syllable
             spoke, gone = asyncio.create_task(first_words.wait()), asyncio.create_task(pickup.left.wait())
