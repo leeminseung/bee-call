@@ -46,6 +46,38 @@ def test_the_stand_ins_test_job_starts_a_job_in_a_call_in_text(tmp_path, monkeyp
         assert started and started[0]["title"], mode
 
 
+def test_a_pause_lets_a_background_job_report_before_the_next_line(tmp_path, monkeypatch):
+    """--pause: the person waits that long after the AI's answer before saying the next line, as someone holding on
+    for a result would, so a background job's news comes in between (to see what the AI says after a result)."""
+    from worker.fake import FakeWorker
+
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(agent, "COORDINATOR_LLM", "echo")
+    monkeypatch.setattr(agent, "WORKER", "fake")
+    monkeypatch.setattr(agent, "FakeWorker", lambda: FakeWorker(step_seconds=0.1))
+    said: list[str] = []
+    asyncio.run(text_call.text_call(me.people, "matt", ["test job", "Thanks.", "Bye."], pauses=[2.0, 0.0],
+                                    say=said.append))
+    news = next(i for i, line in enumerate(said) if line.startswith("AI: ") and "42" in line)
+    assert news < said.index("matt: Thanks.") < said.index("matt: Bye."), said
+
+
+def test_the_pause_option_gives_seconds_before_each_line_after_the_first(tmp_path, monkeypatch):
+    signed_in(tmp_path)
+    monkeypatch.setenv("BEE_CALL_DATA", str(tmp_path / "data"))
+    seen: dict = {}
+
+    async def run(people, person, lines, **options):
+        seen.update(options, lines=lines)
+        return {"call_id": "x", "record": None}
+
+    monkeypatch.setattr(text_call, "text_call", run)
+    text_call.main(["matt", "Hi", "Tell me more.", "Cool.", "--pause", "30,0"])
+    assert seen["lines"] == ["Hi", "Tell me more.", "Cool."] and seen["pauses"] == [30.0, 0.0]
+    text_call.main(["matt", "Hi"])
+    assert seen["pauses"] == []
+
+
 def test_an_ai_call_placed_in_a_room_is_answered_in_text(tmp_path, monkeypatch):
     """Outside test seam 4: an agreed AI call is placed in a room (voice/dispatch.py, its LiveKit side faked here), and
     voice.text_call --answer <room> answers it as the app would: the voice server's call runs with what it would be

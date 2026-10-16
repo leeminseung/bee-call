@@ -327,6 +327,33 @@ def test_a_call_back_is_booked_only_with_the_user_s_own_words_asking_for_it(tmp_
     (["다시 전화 안 해 줘도 돼요."], "해 줘도 돼요", False),
     (["Then my friend said she'd call me back."], "call me back", False),
     (["Call me back tomorrow — actually no."], "Call me back tomorrow", False),
+    (["You cannot call me back tomorrow."], "call me back tomorrow", False),
+    # A quote that ends at the dot closing "a.m." or "p.m." is refused when the next words of the same turn take it
+    # back (review of the final fixes: "Call me at 9 a.m." out of the first one booked). The next sentence is still a
+    # sentence of its own: a constraint or a reason after "a.m." takes nothing back (review of 2026-10-16).
+    (["Call me at 9 a.m. no actually don't."], "Call me at 9 a.m.", False),
+    (["Call me at 9 p.m. no wait, never mind."], "Call me at 9 p.m.", False),
+    (["Call me at 9 a.m. Never mind, don't."], "Call me at 9 a.m.", False),
+    (["Call me at 9 p.m. Wait, no."], "Call me at 9 p.m.", False),  # second review, finding 5: the comma forms
+    (["Call me at 9 a.m. Actually, no, don't."], "Call me at 9 a.m.", False),
+    # Third review, finding 5: a plain full stop too, however the time is written, and in Korean; but words after the
+    # request that only add to it take nothing back.
+    (["Call me at 9 PM. Wait, no."], "Call me at 9 PM", False),
+    (["Call me at nine. Actually, no."], "Call me at nine", False),
+    (["Call me back tomorrow. No, wait, never mind."], "Call me back tomorrow", False),
+    (["Call me tomorrow at 8 about the dentist. No wait, never mind."], "Call me tomorrow at 8", False),
+    (["내일 아침 9시에 전화해 줘. 아니다, 하지 마."], "내일 아침 9시에 전화해 줘", False),
+    (["내일 아침 9시에 전화해 줘. 아니, 10시로 해 줘."], "내일 아침 9시에 전화해 줘", False),
+    (["Call me at 9 p.m. Don't be late."], "Call me at 9 p.m.", True),
+    (["Call me at 9 p.m. No rush though."], "Call me at 9 p.m.", True),
+    (["Call me at nine. I'll be up by then."], "Call me at nine", True),
+    (["내일 아침 9시에 전화해 줘. 아니면 10시도 괜찮아."], "내일 아침 9시에 전화해 줘", True),
+    (["Call me at 9 a.m. I'll be up by then."], "Call me at 9 a.m.", True),
+    (["Call me at 7 p.m. My meeting ends at 6."], "Call me at 7 p.m.", True),
+    (["I'm not free until 10 a.m. Call me back then."], "Call me back then", True),
+    (["I can't talk at 9 a.m. Call me at 10."], "Call me at 10", True),
+    (["Call me back at 8 a.m. Not earlier, please."], "Call me back at 8 a.m.", True),
+    (["I'm in the U.S. this week. Call me tomorrow."], "Call me tomorrow", True),
     (["I went hiking yesterday."], "yes", False),
     (["Hmm."], "m", False),
     # Whole sentences or clauses, one or several in a row (an answer split at pauses, over turns too), or most of

@@ -50,35 +50,37 @@ NOTE_SECONDS = 20.0  # after this the note is given up; the call keeps the plain
 MAX_READS = 3
 
 PREP_INSTRUCTIONS = """\
-You are the voice of Bee Call, an assistant that talks with the user on the phone. A call is about to start, \
-and the phone is ringing on their side while you get ready. Use these seconds the way a good assistant glances \
-at their notes before answering.
+You are the voice of Bee Call, which the user talks with on the phone, to chat or to get something done. A call \
+is about to start, and the phone is ringing on their side while you get ready. Use these seconds the way a good \
+assistant glances at their notes before answering.
 
 The next message says who is calling whom and why, and what the user's Bee wearable recorded.
 1. First write <opening>what you say when you pick up</opening>: {opening}, as the end of the next message \
-asks. The call is answered as soon as this is written. It is spoken aloud word for word, so write no stage \
-directions, sound effects or descriptions of the situation, in parentheses, brackets or asterisks.
+asks, without the user's name (a name said once is repeated all through the call). The call is answered as soon as \
+this is written. It is spoken aloud word for word, so write no stage directions, sound effects or descriptions of \
+the situation, in parentheses, brackets or asterisks.
 2. Then, if one more look would help your note, such as a conversation in full, a search by topic or another \
 day's summary, call up to three tools at once. You get one round of tools.
 3. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to, open \
 threads worth raising later, and the unconfirmed facts and todo suggestions to check, with their Bee ids. Only \
-what the data says.
+what the data says. Call the user "the user" in it, not by name.
 """
 # For a person without Bee (Use Bee off): no Bee data and no tools; what is known comes from earlier calls and the
 # notes kept between calls.
 PREP_INSTRUCTIONS_WITHOUT_BEE = """\
-You are the voice of Bee Call, an assistant that talks with the user on the phone. A call is about to start, \
-and the phone is ringing on their side while you get ready. Use these seconds the way a good assistant glances \
-at their notes before answering.
+You are the voice of Bee Call, which the user talks with on the phone, to chat or to get something done. A call \
+is about to start, and the phone is ringing on their side while you get ready. Use these seconds the way a good \
+assistant glances at their notes before answering.
 
 The next message says who is calling whom and why, and what you know from earlier calls and the notes kept \
 between calls.
 1. First write <opening>what you say when you pick up</opening>: {opening}, as the end of the next message \
-asks. The call is answered as soon as this is written. It is spoken aloud word for word, so write no stage \
-directions, sound effects or descriptions of the situation, in parentheses, brackets or asterisks.
+asks, without the user's name (a name said once is repeated all through the call). The call is answered as soon as \
+this is written. It is spoken aloud word for word, so write no stage directions, sound effects or descriptions of \
+the situation, in parentheses, brackets or asterisks.
 2. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to and \
 open threads worth raising later. Only what the message says; when it says little, note that, and plan to ask \
-the user about their day.
+the user about their day. Call the user "the user" in it, not by name.
 """
 
 
@@ -144,18 +146,18 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: b
             why += f" (topic: {meta['topic']})"
         if meta.get("agreed"):  # voice/offers.py: the AI calls only when the user said yes
             why += f". They agreed to this call: {meta['agreed']}"
-            ask = "In the opening, greet the user and say in a few words that you are calling as agreed, and about what."
+            ask = "In the opening, greet the user without their name and say in a few words that you are calling as agreed, and about what."
         else:
-            ask = ("In the opening, greet the user, say in a few words why you are calling, and ask if they have a "
+            ask = ("In the opening, greet the user without their name, say in a few words why you are calling, and ask if they have a "
                    "minute.")
     elif meta.get("earlier_call"):
         why = "The user is calling you from the app to continue an earlier call with you"
-        ask = ("In the opening, greet the user and pick up where the earlier call left off: in a few words, what you "
+        ask = ("In the opening, greet the user without their name and pick up where the earlier call left off: in a few words, what you "
                "were on, and what came of its background jobs. Then let the user lead.")
     else:
         why = "The user is calling you from the app"
-        ask = ("In the opening, greet the user and ask what is on their mind. At most a light nod to their day: "
-               "they called, so let them bring their own topic.")
+        ask = ("In the opening, greet the user without their name and ask what is on their mind; they may just want to chat. At most a "
+               "light nod to their day: they called, so let them bring their own topic.")
     name = f" The user's first name is {inputs.first_name}." if inputs.first_name else ""
     parts = [f"It is now {now_text(now)}. {why}.{name}"]
     if meta.get("earlier_call"):

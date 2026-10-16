@@ -148,6 +148,9 @@ def _event_line(workspace: Path, event: dict[str, Any]) -> str:
         return line + (f"\n  also changed: {others}" if others else "")
     if kind == "call_ended":
         return f"[{at}] A call ended: {event.get('call')} ({event.get('direction', '?')}); record in {event.get('call')}/"
+    if kind == "job_ended":  # a background job that outlived its call (voice/agent.py job_end_alert)
+        return (f"[{at}] A background job of call {event.get('call')} ended after the call: \"{event.get('title')}\" "
+                f"({event.get('outcome')}); its result is in {event.get('call')}/jobs/{event.get('job')}/")
     if kind == "offer_answered":
         return f"[{at}] The user answered offer {event.get('offer')} about \"{event.get('topic')}\": {event.get('choice')}"
     if kind == "call_missed":

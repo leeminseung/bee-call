@@ -437,7 +437,7 @@
         },
         "at": {
           "$ref": "#/$defs/time",
-          "description": "Where the job sits: when it finished (for a job the call outlived without an end, the call's end); while it runs, when it started (a running job is always drawn last)."
+          "description": "Where the job sits: when it finished; for a job with no end on record, the call's end if it stopped with its call, or when its own log went quiet if that was after the call (its process was killed); while it runs, when it started (a running job is always drawn last)."
         },
         "title": {
           "$ref": "#/$defs/text",

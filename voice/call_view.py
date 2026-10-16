@@ -30,7 +30,7 @@ from voice.call_folders import CALL_ID, EVENTS, call_ids, read_events, session_i
 from voice.offers import topic_line
 from worker.chart import chart_of_dark, owner, pictures, svg_title
 from worker.report_page import PAGE, REPORT
-from worker.runner import USAGE
+from worker.runner import JOB_STALE_S, USAGE
 
 LIVE_S = 120  # no new line or file refresh for this long, and no end: the call no longer reads as live
 RECENT_S = 600  # an ended call is still announced by /changes on connect for this long (contract section 3)
@@ -75,6 +75,7 @@ class BadRequest(ValueError):
 class JobFolder:
     names: set[str]  # the files in jobs/<NN>/
     chart_titles: dict[str, str]  # chart file -> its title, kept in the chart's SVG
+    log_mtime: float | None = None  # when the job's own log last showed life (a running job touches it, HEARTBEAT_S)
 
 
 @dataclass
@@ -143,7 +144,11 @@ def read_record(folder: Path) -> Record:
                     title = None
                 if title:
                     titles[name] = title
-        jobs[job.name] = JobFolder(names, titles)
+        try:
+            log_mtime = (job / "events.jsonl").stat().st_mtime
+        except OSError:
+            log_mtime = None
+        jobs[job.name] = JobFolder(names, titles, log_mtime)
     writes = read_events(folder / WRITES) if (folder / WRITES).exists() else None
     try:
         mtime = (folder / EVENTS).stat().st_mtime
@@ -524,15 +529,24 @@ def _files(call_id: str, call: Call, job: Job) -> list[dict[str, Any]]:
     return sorted(out, key=lambda f: (KIND_ORDER[f["kind"]], f["name"]))
 
 
-def _job_item(call_id: str, call: Call, job: Job, state: str, zone: tzinfo) -> tuple[dict[str, Any], tuple]:
-    """The job's card and where it sits: a finished job where it finished, a running one last."""
+def _job_item(call_id: str, call: Call, job: Job, state: str, zone: tzinfo,
+              wall: float) -> tuple[dict[str, Any], tuple]:
+    """The job's card and where it sits: a finished job where it finished, a running one last. A job outlives its
+    call (2026-10-16): with no end on record it runs while the call is live or its own log shows life
+    (worker/runner.py JOB_STALE_S)."""
     started = call.when(job.started_t)
-    if job.end is None and state == "live":
+    folder = call.record.jobs.get(job.id)
+    quiet = folder.log_mtime if folder else None  # its log's last sign of life
+    if job.end is None and (state == "live" or (quiet is not None and wall - quiet <= JOB_STALE_S)):
         item = {"type": "job", "id": f"job-{job.id}", "at": _iso(started, zone), "title": job.title,
                 "state": "running", "started_at": _iso(started, zone), "duration_s": None, "step": job.step,
                 "summary": None, "files": [], "failure": None}
         return item, (LAST, job.started_t, job.line)
-    if job.end is None:  # the call ended or dropped without the job's end: it did not outlive the call
+    quiet_t = quiet - call.started.timestamp() if quiet is not None else None
+    if job.end is None and quiet_t is not None and quiet_t > call.end_t() + 1.0:
+        # It outlived its call, then stopped with no end on record: its process was killed (a restart).
+        end_t, end_line, outcome, failure = quiet_t, LAST, "failed", "error"
+    elif job.end is None:  # it stopped by its call's end: a dropped call, or a call from before jobs outlived calls
         end_t, end_line, outcome, failure = call.end_t(), LAST, "failed", "call_ended"
     else:
         end_t, end_line, outcome = job.end_t, job.end_line, job.end
@@ -551,7 +565,7 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
     placed: list[tuple[tuple, Any]] = [((p.t, p.line), p) for p in call.pieces]
     docked = []
     for job in call.jobs:
-        item, where = _job_item(call_id, call, job, state, zone)
+        item, where = _job_item(call_id, call, job, state, zone, wall)
         (docked if item["state"] == "running" else placed).append((where, item))
     live = state == "live"
     last_ok = next((w for w in reversed(call.writes) if w.ok), None) if live else None
