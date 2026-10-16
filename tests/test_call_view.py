@@ -273,26 +273,50 @@ def test_running_jobs_come_last_and_a_job_without_a_title_is_named_by_its_task(t
 
 
 def test_a_finished_job_lists_its_files_charts_first_and_never_its_bookkeeping(tmp_path):
+    """A chart is listed once, by its SVG, with its PNG and its dark PNG (null for a chart drawn before dark PNGs, or a
+    picture that is no chart of the worker's); its PNGs are never files of their own, even where a record lists them."""
     folder = record(tmp_path, [INBOUND, {"t": 5, "type": "job_started", "job_id": "01", "task": "x", "title": "X"},
                                {"t": 9, "type": "job_done", "job_id": "01", "summary": "Done.",
                                 "files": [f"jobs/01/{n}" for n in ("b.csv", "a.tsv", "notes.txt", "old.svg",
-                                                                   "photo.png", "price.png", "price.svg", "report.md",
-                                                                   "usage.json", "request.md", "gone.md")]},
+                                                                   "photo.png", "price.png", "price.svg",
+                                                                   "price-dark.png", "rain.png", "rain.svg",
+                                                                   "report.md", "usage.json", "request.md", "gone.md")]},
                                CLOSED, ENDED])
     job = folder / "jobs" / "01"
     job.mkdir(parents=True)
-    for name in ("b.csv", "a.tsv", "notes.txt", "old.svg", "photo.png", "price.png", "report.md", "usage.json",
-                 "request.md"):
+    for name in ("b.csv", "a.tsv", "notes.txt", "old.svg", "photo.png", "price.png", "price-dark.png", "rain.png",
+                 "rain.svg", "report.md", "usage.json", "request.md"):
         (job / name).write_text("x")
     (job / "price.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><title>Prices</title></svg>')
     (item,) = [i for i in view(tmp_path)["items"] if i["type"] == "job"]
-    assert [(f["name"], f["kind"], f["title"], f["image_url"]) for f in item["files"]] == [
-        ("photo.png", "chart", None, "/calls/call-matt-1/files/jobs/01/photo.png"),
-        ("price.svg", "chart", "Prices", "/calls/call-matt-1/files/jobs/01/price.png"),
-        ("report.md", "report", None, None),
-        ("a.tsv", "table", None, None), ("b.csv", "table", None, None),
-        ("notes.txt", "other", None, None), ("old.svg", "other", None, None)]
-    assert item["files"][2]["url"] == "/calls/call-matt-1/files/jobs/01/report.md"
+    base = "/calls/call-matt-1/files/jobs/01"
+    assert [(f["name"], f["kind"], f["title"], f["image_url"], f["image_url_dark"]) for f in item["files"]] == [
+        ("photo.png", "chart", None, f"{base}/photo.png", None),
+        ("price.svg", "chart", "Prices", f"{base}/price.png", f"{base}/price-dark.png"),
+        ("rain.svg", "chart", None, f"{base}/rain.png", None),
+        ("report.md", "report", None, None, None),
+        ("a.tsv", "table", None, None, None), ("b.csv", "table", None, None, None),
+        ("notes.txt", "other", None, None, None), ("old.svg", "other", None, None, None)]
+    assert item["files"][3]["url"] == f"{base}/report.md"
+
+
+def test_a_chart_s_dark_png_drawn_later_shows_at_once(tmp_path):
+    """The one-off command draws a dark PNG for a chart from before dark PNGs: the view has it at once, by a new
+    version, though the job's record never named the file."""
+    folder = record(tmp_path, [INBOUND, {"t": 5, "type": "job_started", "job_id": "01", "task": "x", "title": "X"},
+                               {"t": 9, "type": "job_done", "job_id": "01", "summary": "Done.",
+                                "files": ["jobs/01/rain.png", "jobs/01/rain.svg"]}, CLOSED, ENDED])
+    job = folder / "jobs" / "01"
+    job.mkdir(parents=True)
+    for name in ("rain.png", "rain.svg"):
+        (job / name).write_text("x")
+    before = view(tmp_path)
+    (job / "rain-dark.png").write_text("x")
+    after = view(tmp_path)
+    files = [[f["image_url_dark"] for f in i["files"]] for body in (before, after) for i in body["items"]
+             if i["type"] == "job"]
+    assert files == [[None], ["/calls/call-matt-1/files/jobs/01/rain-dark.png"]]
+    assert before["version"] != after["version"]
 
 
 # ---------- Bee writes ----------

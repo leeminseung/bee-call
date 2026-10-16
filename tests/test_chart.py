@@ -287,9 +287,12 @@ def test_a_chart_the_worker_saves_shows_in_the_call_view_with_its_title_and_pict
     with events.open("a") as f:
         f.write(json.dumps({"t": 60, "type": "session_closed", "reason": "user_initiated"}) + "\n")
     assert Image.open(folder / "jobs" / "01" / "prices.png").format == "PNG"
+    assert Image.open(folder / "jobs" / "01" / "prices-dark.png").mode == "RGBA"
     view = call_view.call_view(tmp_path, "call-matt-1", zone=seoul, language="ko",
                                now=datetime(2026, 10, 15, 21, 0, tzinfo=seoul))
     (job,) = [i for i in view["items"] if i["type"] == "job"]
+    assert [f["name"] for f in job["files"]] == ["prices.svg", "report.md"]  # the chart once, by its SVG
     assert job["files"][0] == {"name": "prices.svg", "kind": "chart", "title": TITLE,
                                "url": "/calls/call-matt-1/files/jobs/01/prices.svg",
-                               "image_url": "/calls/call-matt-1/files/jobs/01/prices.png"}
+                               "image_url": "/calls/call-matt-1/files/jobs/01/prices.png",
+                               "image_url_dark": "/calls/call-matt-1/files/jobs/01/prices-dark.png"}
