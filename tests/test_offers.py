@@ -336,6 +336,18 @@ def test_a_call_back_is_booked_only_with_the_user_s_own_words_asking_for_it(tmp_
     (["Call me at 9 a.m. Never mind, don't."], "Call me at 9 a.m.", False),
     (["Call me at 9 p.m. Wait, no."], "Call me at 9 p.m.", False),  # second review, finding 5: the comma forms
     (["Call me at 9 a.m. Actually, no, don't."], "Call me at 9 a.m.", False),
+    # Third review, finding 5: a plain full stop too, however the time is written, and in Korean; but words after the
+    # request that only add to it take nothing back.
+    (["Call me at 9 PM. Wait, no."], "Call me at 9 PM", False),
+    (["Call me at nine. Actually, no."], "Call me at nine", False),
+    (["Call me back tomorrow. No, wait, never mind."], "Call me back tomorrow", False),
+    (["Call me tomorrow at 8 about the dentist. No wait, never mind."], "Call me tomorrow at 8", False),
+    (["내일 아침 9시에 전화해 줘. 아니다, 하지 마."], "내일 아침 9시에 전화해 줘", False),
+    (["내일 아침 9시에 전화해 줘. 아니, 10시로 해 줘."], "내일 아침 9시에 전화해 줘", False),
+    (["Call me at 9 p.m. Don't be late."], "Call me at 9 p.m.", True),
+    (["Call me at 9 p.m. No rush though."], "Call me at 9 p.m.", True),
+    (["Call me at nine. I'll be up by then."], "Call me at nine", True),
+    (["내일 아침 9시에 전화해 줘. 아니면 10시도 괜찮아."], "내일 아침 9시에 전화해 줘", True),
     (["Call me at 9 a.m. I'll be up by then."], "Call me at 9 a.m.", True),
     (["Call me at 7 p.m. My meeting ends at 6."], "Call me at 7 p.m.", True),
     (["I'm not free until 10 a.m. Call me back then."], "Call me back then", True),

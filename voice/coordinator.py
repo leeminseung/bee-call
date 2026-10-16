@@ -202,12 +202,14 @@ def keep_reply(reply: dict[str, Any], chunk: Any) -> None:
 # What ends a sentence or a clause in what the user said, for book_call's `asked` (a turn's end does too). A dot
 # ends one only before a space or the end, so "7 a.m." and "U.S." stay whole.
 CLAUSE_END = re.compile(r"(?:[!?。？！…,，、;\n]|\.(?=\s|$))+")
-# The dot closing "a.m.", "p.m." or "U.S." also ends a sentence, or does not: a quote that ends there is refused when
-# the same turn's next words take it back ("Call me at 9 a.m. no actually don't."), and booked when they go on
-# ("Call me at 9 a.m. I'll be up by then.", "... Not earlier, please.").
-ABBREVIATION_END = re.compile(r"\b[A-Za-z]\.[A-Za-z]$")
-TAKEN_BACK = re.compile(r"^\W*(?:no\b|nope\b|nah\b|don'?t\b|do not\b|never ?mind\b|wait,? no\b|actually,? no\b|"
-                        r"cancel\b|forget it\b|scratch that\b|not now\b)", re.IGNORECASE)
+# What takes back the request it follows in the same turn: "Call me at nine. Wait, no.", "Call me at 9 a.m. no
+# actually don't.", "내일 아침 9시에 전화해 줘. 아니다, 하지 마." Words that only add to it take nothing back ("No rush
+# though.", "Don't be late.", "Not earlier, please.", "아니면 10시도 괜찮아.").
+TAKEN_BACK = re.compile(
+    r"^\W*(?:no(?=\s*(?:[,.!?]|$)|\s+(?:wait|actually|don'?t|do not|never|cancel|forget|scratch|not)\b)|nope\b|nah\b|"
+    r"(?:don'?t|do not)(?=\s*(?:[,.!?]|$)|\s+(?:call|bother|do it|worry about it)\b)|never ?mind\b|wait,? no\b|"
+    r"actually,? no\b|cancel\b|forget it\b|scratch that\b|not now\b|"
+    r"아니(?:다|야|요)?(?=[\s,.!?]|$)|아냐|아뇨|하지 ?마|하지 ?말|취소)", re.IGNORECASE)
 # Words that turn around the words beside them: "Don't call me back", "No need to call", "전화 안 해도 돼요".
 NEGATION = re.compile(r"\b(?:no|not|never|nope|dont|cannot)\b|n['’]t\b|(?<!\S)(?:안|못)(?!\S)", re.IGNORECASE)
 HANGUL = re.compile(r"[\uac00-\ud7a3\u3131-\u318e]")
@@ -546,14 +548,15 @@ class Coordinator(Agent):
         What they leave out of the first may be a lead-in such as "so" or "그럼", and of the last an English tail
         such as "about the dentist", but never a "not", a "don't" or a "안", and never the end of Korean words, where
         Korean says no: "call me back" out of "Don't call me back." is refused, and so are "내일은 전화하지" out of
-        "내일은 전화하지 마세요." and "전화" out of "아니요, 전화는 안 해도 돼요.". Whether the words ask for a
-        call stays the call AI's reading."""
+        "내일은 전화하지 마세요." and "전화" out of "아니요, 전화는 안 해도 돼요.". Words the rest of the same turn
+        takes back are refused too ("Call me at nine. Wait, no.", TAKEN_BACK). Whether the words ask for a call stays
+        the call AI's reading."""
         wanted = _letters(words) if isinstance(words, str) else ""
         if not wanted:
             return False
         turns = self._user_turns()
-        # Each piece: its text, its letters, and the rest of the same turn when it ended at an abbreviation's dot
-        # (all of it: "Wait, no." is split at its comma).
+        # Each piece: its text, its letters, and the rest of the same turn after it (all of it: "Wait, no." is split
+        # at its comma), which may take back words that end in this piece.
         pieces: list[tuple[str, str, str | None]] = []
         for turn in turns:
             spans, at = [], 0
@@ -565,7 +568,7 @@ class Coordinator(Agent):
                 part = turn[start:end]
                 if not _letters(part):
                     continue
-                rest = turn[end:] if ABBREVIATION_END.search(part.rstrip()) else ""
+                rest = turn[end:]
                 pieces.append((part, _letters(part), rest if _letters(rest) else None))
         for start, (first_text, first, _) in enumerate(pieces):
             run = ""
@@ -579,7 +582,7 @@ class Coordinator(Agent):
                     if at < len(first) and after < len(last):  # within the first piece and the last one
                         lead, tail = _lead(first_text, at), _tail(last_text, after)  # what the words leave out
                         if not NEGATION.search(f"{lead} {tail}") and not HANGUL.search(tail) \
-                                and not (after == 0 and next_text and TAKEN_BACK.search(next_text)):
+                                and not (next_text and TAKEN_BACK.search(next_text)):
                             return True
                     at = run.find(wanted, at + 1)
         return False
