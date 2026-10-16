@@ -11,6 +11,12 @@ protocol ConversationSource: AnyObject {
     /// What the own call's section draws: its view, the captions it does not hold yet, the running job last.
     var ownEntries: [CallThread.Entry] { get }
     var hasOlder: Bool { get }
+    /// The calls for the calls list, newest first: the list's, with the person's call that is on as its view tells it.
+    var listed: [CallEntry] { get }
+    /// The first page of the list has come.
+    var listLoaded: Bool { get }
+    /// Where the older pages are, for the calls list's foot.
+    var olderPages: CallStore.OlderPages { get }
     /// The last fetch that did not come through, in words.
     var problem: String? { get }
     func beeLine(korean: Bool) -> String?
@@ -86,6 +92,19 @@ final class ThreadData: ConversationSource {
 
     var hasOlder: Bool { store.hasOlder }
     var problem: String? { store.problem }
+    var listLoaded: Bool { store.list != nil }
+    var olderPages: CallStore.OlderPages { store.olderPages }
+
+    var listed: [CallEntry] {
+        var listed = store.calls
+        guard let id = ownCall, let view = store.views[id] else { return listed }
+        if let index = listed.firstIndex(where: { $0.id == id }) { // the view's summary is newer than the list's
+            listed[index] = CallEntry(call: view.call, results: listed[index].results)
+        } else {
+            listed.insert(CallEntry(call: view.call, results: []), at: 0) // recorded, not listed yet
+        }
+        return listed
+    }
 
     func beeLine(korean: Bool) -> String? {
         person.beeLine(korean: korean)

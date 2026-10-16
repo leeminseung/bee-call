@@ -16,6 +16,8 @@ struct ConversationRoot: View {
     @State private var presentation: CallPresentation
     @State private var preview: VoicePreview
     @State private var settingsOpen = false // the gear's sheet (frame 8)
+    @State private var callsOpen = false // the list button's sheet (calls-list.html)
+    @State private var returning = false // the calls list closes to go back to the call that is on
     @State private var opened: OpenedCall? // a call that is over, its record open as a sheet
     @State private var continuing: String? // the call to continue once its sheet is down
     /// A sheet is up, from its opening until its dismissal has finished: the call screen waits for it, since one
@@ -45,6 +47,10 @@ struct ConversationRoot: View {
         HomeView(source: source, calls: calls, offers: offers, status: status, problem: problem, glowing: notice.glowing,
                  jump: $jump,
                  showCallScreen: { presentation.show(.callScreen) },
+                 openCalls: {
+                     sheetUp = true
+                     callsOpen = true
+                 },
                  openSettings: {
                      sheetUp = true
                      settingsOpen = true
@@ -67,6 +73,17 @@ struct ConversationRoot: View {
             .sheet(isPresented: $settingsOpen, onDismiss: { sheetUp = false }) {
                 SettingsSheet(person: person, catalog: catalog, preview: preview)
             }
+            .sheet(isPresented: $callsOpen, onDismiss: callsListClosed) {
+                CallsListSheet(source: source, canContinue: !calls.isInCall,
+                               backToCall: {
+                                   returning = true
+                                   callsOpen = false
+                               },
+                               continueCall: { id in
+                                   continuing = id
+                                   callsOpen = false
+                               })
+            }
             .sheet(item: $opened, onDismiss: continueOpenedCall) { call in
                 CallSheet(callID: call.id, source: source, canContinue: !calls.isInCall) {
                     continuing = call.id
@@ -77,6 +94,7 @@ struct ConversationRoot: View {
                 presentation.callChanged(inCall: on)
                 if on { // the call screen goes over everything: what is still up is closed first
                     settingsOpen = false
+                    callsOpen = false
                     opened = nil
                     files.url = nil
                     offers.keepBooked() // the cancel question's alert
@@ -99,6 +117,18 @@ struct ConversationRoot: View {
             }
             // Up to date while on screen or in a call (contract section 3), and again on coming back.
             .onChange(of: scenePhase != .background || calls.isInCall, initial: true) { _, on in source.keepFresh(on) }
+    }
+
+    /// The calls list is down: back to the call that is on, if its row was tapped, or a record's "이 통화 이어서
+    /// 하기", once the sheet is down, as from the record's own sheet.
+    private func callsListClosed() {
+        if returning {
+            returning = false
+            sheetUp = false
+            presentation.show(.callScreen)
+            return
+        }
+        continueOpenedCall()
     }
 
     /// "이 통화 이어서 하기": the call starts once the sheet is down, so the call screen is not asked for while the

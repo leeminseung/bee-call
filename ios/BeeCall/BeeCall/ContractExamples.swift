@@ -32,6 +32,8 @@ enum ContractServer {
 final class ContractExamples: HTTPTransport {
     private let bundle: Bundle
     var live: Bool // the MacBook call while it is on (call-view-live.json) instead of after (call-view.json)
+    var olderPagesWait = false // an older page of the list is on its way and stays so (the list's foot, loading)
+    var beforeFirstCall = false // the list as it was before the person's first call: empty
     private let now: Date
     private var me: [String: Any]?
 
@@ -48,9 +50,12 @@ final class ContractExamples: HTTPTransport {
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let reply: (Int, Data)
         switch (method, path) {
+        case ("GET", "/calls") where query.contains { $0.name == "before" }:
+            while olderPagesWait { try await Task.sleep(for: .seconds(1)) } // until the request is cancelled
+            reply = (400, Data("The examples have one page.".utf8))
         case ("GET", "/calls"):
-            reply = query.contains { $0.name == "before" } ? (400, Data("The examples have one page.".utf8))
-                : versioned(asOfTheCall(example("calls"), list: "calls", time: "started_at"), for: request)
+            reply = versioned(beforeFirstCall ? noCalls(example("calls"))
+                              : asOfTheCall(example("calls"), list: "calls", time: "started_at"), for: request)
         case ("GET", _) where path.hasPrefix("/calls/") && path.split(separator: "/").count == 2:
             reply = view(String(path.dropFirst("/calls/".count))).map { versioned($0, for: request) } ?? (404, Data())
         case ("GET", "/offers"):
@@ -145,6 +150,15 @@ final class ContractExamples: HTTPTransport {
             guard let time = (entry[field] as? String).flatMap(ZonedTime.init) else { return true }
             return time.date <= start.date
         }
+        return (try? JSONSerialization.data(withJSONObject: whole)) ?? body
+    }
+
+    /// The list with no call in it, as before the first.
+    private func noCalls(_ body: Data) -> Data {
+        guard var whole = object(body) else { return body }
+        whole["calls"] = [Any]()
+        whole["more"] = false
+        whole["before"] = NSNull()
         return (try? JSONSerialization.data(withJSONObject: whole)) ?? body
     }
 

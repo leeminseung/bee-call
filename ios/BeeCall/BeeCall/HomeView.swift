@@ -160,6 +160,7 @@ struct HomeView: View {
     var glowing: String?
     @Binding var jump: String?
     let showCallScreen: () -> Void
+    let openCalls: () -> Void
     let openSettings: () -> Void
     let openCall: (String) -> Void
     let startCall: () -> Void
@@ -178,8 +179,12 @@ struct HomeView: View {
             VStack(spacing: 8) {
                 VStack(spacing: 8) {
                     if calls.callIsOn {
-                        CallBar(calls: calls, words: words, open: showCallScreen)
-                            .zoomSource("call", in: zoom)
+                        HStack(spacing: 8) {
+                            listButton
+                            CallBar(calls: calls, words: words, open: showCallScreen)
+                                .zoomSource("call", in: zoom)
+                        }
+                        .padding(.top, 4)
                     } else {
                         topBar
                         ForEach(booked) { offer in
@@ -238,6 +243,7 @@ struct HomeView: View {
             .padding(.vertical, 6)
             .beeGlass(in: .capsule)
             HStack {
+                listButton
                 Spacer()
                 Button(action: openSettings) {
                     Image(systemName: "gearshape")
@@ -251,6 +257,19 @@ struct HomeView: View {
             }
         }
         .padding(.top, 4)
+    }
+
+    /// "통화 목록": every call by day, in a sheet (calls-list.html).
+    private var listButton: some View {
+        Button(action: openCalls) {
+            Image(systemName: "list.bullet")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(BeeStyle.ink)
+                .frame(width: 44, height: 44)
+                .beeGlass(in: .circle)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(CallsListWords(korean: words.korean).open)
     }
 
     private var callButton: some View {
@@ -336,8 +355,6 @@ struct CallBar: View {
             .overlay(Capsule().strokeBorder(BeeStyle.yellow, lineWidth: 1.5))
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 4)
-        .padding(.top, 4)
     }
 }
 

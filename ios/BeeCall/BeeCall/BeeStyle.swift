@@ -33,6 +33,9 @@ enum BeeStyle {
         /// The name pill, the pinned call, the call bar and the round buttons over the conversation, before iOS 26's
         /// own glass.
         static let glass = UIColor(light: UIColor(hex: 0xFFFFFF, alpha: 0.76), dark: UIColor(hex: 0x1E1E20, alpha: 0.74))
+        /// A call's result pill in the calls list ("보고서", "Bee 할 일 1"), with ink text and its icon.
+        static let resultPill = UIColor(light: 0xFFF4C2, dark: 0x2C2C2E, sheet: 0x3A3A3C)
+        static let resultPillIcon = UIColor(light: 0x21200B, dark: 0xFFD900)
         /// A quiet button's fill on glass, as the pinned call's "전화 취소".
         static let subtleFill = UIColor(light: UIColor(hex: 0x767680, alpha: 0.13), dark: UIColor(hex: 0xFFFFFF, alpha: 0.09))
     }
@@ -53,6 +56,8 @@ enum BeeStyle {
     static let separator = Color(uiColor: Palette.separator)
     static let glass = Color(uiColor: Palette.glass)
     static let subtleFill = Color(uiColor: Palette.subtleFill)
+    static let resultPill = Color(uiColor: Palette.resultPill)
+    static let resultPillIcon = Color(uiColor: Palette.resultPillIcon)
 }
 
 extension UIColor {

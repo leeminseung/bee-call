@@ -48,6 +48,8 @@ final class BeeStyleTests: XCTestCase {
             (BeeStyle.Palette.redText, "redText", "#D70015", "#FF6961", "#FF6961"),
             (BeeStyle.Palette.separator, "separator", "#C6C6C8", "#38383A", "#48484A"),
             (BeeStyle.Palette.glass, "glass", "#FFFFFF@0.76", "#1E1E20@0.74", "#1E1E20@0.74"),
+            (BeeStyle.Palette.resultPill, "resultPill", "#FFF4C2", "#2C2C2E", "#3A3A3C"), // calls-list.html's tags
+            (BeeStyle.Palette.resultPillIcon, "resultPillIcon", "#21200B", "#FFD900", "#FFD900"),
         ]
         for (color, name, light, dark, darkSheet) in table {
             XCTAssertEqual(hex(color, .light), light, name)
@@ -99,6 +101,7 @@ final class BeeStyleTests: XCTestCase {
         }
         pairs += [
             ("aiBubbleText on aiBubble", P.aiBubbleText, [P.aiBubble], Look.allCases),
+            ("ink on a result pill", P.ink, [P.card, P.resultPill], Look.allCases),
             ("white on personBlue", .white, [P.personBlue], Look.allCases),
             ("onYellow on yellow", P.onYellow, [P.yellow], Look.allCases),
             ("redText on the pinned call's cancel button", P.redText, [P.glass, P.subtleFill], Look.allCases),

@@ -20,6 +20,9 @@ enum DesignDemo: String {
     case settings // frame 8: the gear's settings sheet
     case callModels // frame 8: the sheet's call model list
     case workerModels // frame 8: the sheet's worker model list
+    case callsList // calls-list.html: the calls list during the call
+    case callsListOlder // calls-list.html: the list scrolled to its foot, the next older page on its way
+    case callsListEmpty // calls-list.html: the list before the first call
 
     static func requested(in store: UserDefaults = .standard) -> DesignDemo? {
         store.string(forKey: "designD").flatMap(DesignDemo.init(rawValue:))
@@ -27,7 +30,7 @@ enum DesignDemo: String {
 
     /// The frames with the live example's call on (call-view-live.json).
     var isLive: Bool {
-        [.call, .conversation, .live, .result, .resultConversation].contains(self)
+        [.call, .conversation, .live, .result, .resultConversation, .callsList].contains(self)
     }
 
     /// The call the live frames and the record frames are in: the live example's call (call-view-live.json).
@@ -88,6 +91,8 @@ struct DesignDemoView: View {
         self.demo = demo
         self.calls = calls
         let examples = ContractExamples(live: demo.isLive)
+        examples.olderPagesWait = demo == .callsListOlder
+        examples.beforeFirstCall = demo == .callsListEmpty
         let server = ServerClient(transport: examples)
         _examples = State(initialValue: examples)
         _data = State(initialValue: ThreadData(calls: calls, store: CallStore(server: server),
@@ -112,6 +117,12 @@ struct DesignDemoView: View {
                 CallSheet(callID: DesignDemo.liveCall, source: data, canContinue: true, continueCall: {},
                           startAtEnd: demo == .recordEnd)
             }
+        case .callsList, .callsListOlder, .callsListEmpty:
+            home.sheet(isPresented: .constant(true)) {
+                CallsListSheet(source: data, canContinue: !calls.isInCall, backToCall: {}, continueCall: { _ in },
+                               startAtEnd: demo == .callsListOlder)
+            }
+            .task { if demo == .callsList { await playLiveCall() } }
         case .settings, .callModels, .workerModels:
             home.sheet(isPresented: .constant(true)) {
                 SettingsSheet(person: data.person, catalog: catalog, preview: preview,
@@ -139,7 +150,7 @@ struct DesignDemoView: View {
 
     private var home: some View {
         HomeView(source: data, calls: calls, offers: data.offers, status: "준비됨 · 앱을 닫아도 전화가 와요",
-                 jump: $jump, showCallScreen: {}, openSettings: {}, openCall: { _ in }, startCall: {})
+                 jump: $jump, showCallScreen: {}, openCalls: {}, openSettings: {}, openCall: { _ in }, startCall: {})
             .onAppear { data.keepFresh(true) }
     }
 
