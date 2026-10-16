@@ -84,4 +84,15 @@ def test_the_names_a_call_knows():
     assert user_names("Minseung", "민승 님, 안녕하세요. 무슨 일로 전화 주셨어요?") == ["Minseung", "민승"]
     assert user_names("Minseung", "Hey Minseung, good to hear from you!") == ["Minseung"]
     assert user_names(None, "민승 씨, 안녕하세요!") == ["민승"]
+    assert user_names(None, "안녕하세요, 민승 님. 무슨 일로 전화 주셨어요?") == ["민승"]
     assert user_names(None, "안녕하세요, Bee Call입니다.") == [] and user_names(" ", None) == []
+
+
+def test_only_the_name_the_opening_greets_the_user_with_counts():
+    """Another person named with 님 in the opening (an AI call about a conversation with one's team lead) is no form of
+    the user's name: taking it out of every reply would lose who the call is about."""
+    opening = "안녕하세요, 민승 님. 아까 팀장님과 나눈 이야기 때문에 전화드렸어요."
+    assert user_names("Minseung", opening) == ["Minseung", "민승"]
+    assert user_names(None, "안녕하세요. 어머님은 좀 괜찮아지셨어요?") == []
+    assert said("팀장님과 다시 얘기해 보시는 건 어때요?", user_names("Minseung", opening)) == \
+        "팀장님과 다시 얘기해 보시는 건 어때요?"

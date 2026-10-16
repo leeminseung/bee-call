@@ -21,13 +21,16 @@ from collections.abc import Iterable
 
 HONORIFIC = r"\s?(?:님|씨)[가-힣]{0,4}"  # 님 or 씨 and the particles fixed to them: 님은, 씨처럼, 님한테는
 ENDS = ".!?。！？…"
-GREETED = re.compile(r"(?<![가-힣])([가-힣]{2,4})\s?(?:님|씨)")  # the name an opening greets with: 민승 in "민승 님,"
+# The name an opening greets the user with: 민승 in "민승 님, 안녕하세요." or "안녕하세요, 민승 님.", said to them (a comma or
+# the sentence's end right after it) in the opening's first sentence. "팀장님과" later in it is someone else.
+GREETED = re.compile(r"(?:^|[\s,])([가-힣]{2,4})\s?(?:님|씨)\s*(?=[,.!?。！？]|$)")
 
 
 def user_names(first_name: str | None, opening: str | None) -> list[str]:
     """The forms of the user's name a call knows: Bee's first name, and the Korean name the opening greeted with."""
     names = [first_name.strip()] if first_name and first_name.strip() else []
-    names += [found for found in GREETED.findall(opening or "") if found not in names]
+    first = re.split(r"(?<=[.!?。！？])\s", (opening or "").strip(), maxsplit=1)[0]
+    names += [found for found in GREETED.findall(first) if found not in names]
     return names
 
 
