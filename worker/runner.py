@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
 from voice.language import LANGUAGES
+from worker.chart import chart_of_dark
 
 EmitEvent = Callable[..., None]  # recorder.event(name, **fields)
 log = logging.getLogger("worker.runner")
@@ -105,9 +106,11 @@ OWN_FILES = ("request.md", "events.jsonl")  # what this runner writes into a job
 
 
 def made_files(job: Job) -> list[str]:
-    """The files a worker made in the job's folder: neither the runner's own nor its usage."""
-    return [p.name for p in job.dir.iterdir() if p.is_file() and p.name not in OWN_FILES
-            and not USAGE.fullmatch(p.name) and not p.name.startswith(".")]
+    """The files a worker made in the job's folder: neither the runner's own nor its usage, nor a chart's dark PNG,
+    which is for the app (contract 2.4: the call view finds it beside its chart)."""
+    names = [p.name for p in job.dir.iterdir() if p.is_file() and p.name not in OWN_FILES
+             and not USAGE.fullmatch(p.name) and not p.name.startswith(".")]
+    return [name for name in names if chart_of_dark(name) not in names]
 
 
 USAGE = re.compile(r"usage(?:\.\d+)?\.json")  # a job's usage.json, and an earlier attempt's usage.1.json

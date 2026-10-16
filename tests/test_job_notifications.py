@@ -57,6 +57,20 @@ def test_the_answer_comes_while_the_job_runs_and_the_end_brings_only_the_files(t
     assert runner.status_text().startswith(f"Job 01 | completed after 0 s | task: {TASK} | files: report.md")
 
 
+def test_a_chart_s_dark_picture_is_not_one_of_the_files_a_job_made(tmp_path):
+    """A chart is its SVG and its PNG, as before; its dark PNG is for the app, which the call view finds beside the
+    chart, so the call AI and the session screen never hear of it. A file whose name only ends the same is listed."""
+    class Charting(Worker):
+        async def run(self, job, progress, relay) -> str:
+            for name in ("rain.svg", "rain.png", "rain-dark.png", "logo-dark.png"):
+                (job.dir / name).write_bytes(b"x")
+            return "Charted."
+
+    runner, news = run_one_job(tmp_path, Charting())
+    assert news[-1].files == ["logo-dark.png", "rain.png", "rain.svg"]
+    assert runner.status_text().endswith("files: logo-dark.png, rain.png, rain.svg")
+
+
 def test_a_job_that_never_relayed_ends_with_its_summary(tmp_path):
     _, news = run_one_job(tmp_path, Worker(relay_text=None))
     assert [(n.status, n.summary, n.files) for n in news] == [("completed", "Both forecasts say dry.", ["report.md"])]
