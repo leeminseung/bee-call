@@ -48,8 +48,10 @@ LANGUAGES = {
         opening="one or two short sentences of spoken Korean, in the polite style",
         waiting="잠깐만요, 확인하고 있어요.",
         refusal="죄송해요, 그건 도와드리기 어려워요.",
-        rule=("Speak Korean with the user, in natural, polite spoken Korean. The app's notes, the call prep note "
-              "and job results may be in English; say what matters in Korean, and keep names and numbers exact."),
+        rule=("Speak Korean with the user, in natural, polite spoken Korean. Korean needs no word for \"you\": leave "
+              "it out, as Korean speakers do on the phone, and never use the user's name in its place. The app's "
+              "notes, the call prep note and job results may be in English; say what matters in Korean, and keep names "
+              "and numbers exact."),
         greetings={
             "echo": "안녕하세요, 에코 시험이에요. 말씀하시면 그대로 따라 할게요.",
             "voice note": "안녕하세요, Bee Call이에요. 새 음성 메모 때문에 전화드렸어요. 잠깐 통화 괜찮으세요?",

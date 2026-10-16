@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from beelink.context import CallInputs
 from voice.coordinator import INSTRUCTIONS, instructions
+from voice.language import call_language
 from voice.prep import PREP_INSTRUCTIONS, PREP_INSTRUCTIONS_WITHOUT_BEE, seed_text
 
 NOW = datetime(2026, 10, 16, 13, 5, tzinfo=ZoneInfo("Asia/Seoul"))
@@ -18,6 +19,7 @@ def test_a_call_needs_no_task_and_chatting_is_a_reason_for_one():
     assert "to chat" in first and "a call needs no task" in first
     assert "one concrete thing" not in INSTRUCTIONS and "Lead with the conclusion" not in INSTRUCTIONS
     assert "be curious" in INSTRUCTIONS and "a light opinion of your own" in INSTRUCTIONS
+    assert "or answers in a word, be curious" in INSTRUCTIONS  # "Cool.", "응.": where it handed the call back
 
 
 def test_the_ai_never_steers_toward_ending_and_a_goodbye_still_ends_the_call():
@@ -27,7 +29,18 @@ def test_the_ai_never_steers_toward_ending_and_a_goodbye_still_ends_the_call():
 
 
 def test_the_name_is_said_at_most_once_near_the_start():
-    assert "name at most once" in INSTRUCTIONS and "your first words count" in INSTRUCTIONS
+    """After the first change Haiku 5.5 still said "Take care, Minseung" at the goodbye, and in Korean put "민승 씨"
+    where English says "you" (4 and 8 times in a call)."""
+    assert "name at most once in the whole call, near its start" in INSTRUCTIONS
+    assert "not even in a goodbye" in INSTRUCTIONS
+    korean = call_language("ko").rule
+    assert 'no word for "you"' in korean and "never use the user's name in its place" in korean
+
+
+def test_end_call_says_when_it_may_be_called():
+    from voice.coordinator import Coordinator
+
+    assert "only after the user said goodbye or that they are done" in Coordinator.end_call.info.description
 
 
 def test_after_a_job_s_result_the_conversation_goes_on_and_a_job_lasts_as_long_as_the_call():

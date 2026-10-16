@@ -154,8 +154,8 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: b
                "were on, and what came of its background jobs. Then let the user lead.")
     else:
         why = "The user is calling you from the app"
-        ask = ("In the opening, greet the user as a friend would and ask what is on their mind; they may just want "
-               "to chat. At most a light nod to their day: they called, so let them bring their own topic.")
+        ask = ("In the opening, greet the user and ask what is on their mind; they may just want to chat. At most a "
+               "light nod to their day: they called, so let them bring their own topic.")
     name = f" The user's first name is {inputs.first_name}." if inputs.first_name else ""
     parts = [f"It is now {now_text(now)}. {why}.{name}"]
     if meta.get("earlier_call"):

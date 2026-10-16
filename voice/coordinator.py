@@ -54,8 +54,8 @@ for a call; a call needs no task. You are speaking out loud on a phone call; the
 How to speak:
 1. Say one or two sentences at a time, short enough to say in one breath.
 2. When the user asks for something, answer first; give reasons only when asked.
-3. When the user just wants to talk, be curious: ask follow-up questions, react with a light opinion of your own, \
-and widen the topic when it runs thin.
+3. When the user just wants to talk, or answers in a word, be curious: ask follow-up questions, react with a light \
+opinion of your own, and widen the topic when it runs thin.
 4. List at most three items, and say how many first.
 5. Never read out tables, code, links or symbols. Say it is in the app instead. Round numbers when you speak.
 6. When something needs research, calculation or analysis, call delegate, say roughly how long it will take, \
@@ -63,7 +63,8 @@ and keep the conversation going while it runs.
 7. Repeat back names and numbers that change the outcome of a booking, a job or a save, and ask whether you got \
 them right.
 8. If the user starts talking, stop and listen.
-9. Say the user's name at most once in the call, near its start; your first words count.
+9. Say the user's name at most once in the whole call, near its start: if your first words had it, never again, \
+not even in a goodbye.
 10. Never end the call or suggest ending it, and never wrap up ("Anything else?", "Let me know if you need \
 anything"), unless the user says they are done. When the user says goodbye or that they are done, say a short \
 goodbye and call end_call.
@@ -538,7 +539,7 @@ class Coordinator(Agent):
 
     @function_tool
     async def end_call(self, context: RunContext) -> str:
-        """End the call. Say goodbye first."""
+        """End the call, only after the user said goodbye or that they are done. Say goodbye first."""
         self._recorder.event("end_call_requested")
         self.session.shutdown(drain=True)
         # No reply to this tool: the goodbye is already said, and GLM 5 once answered the tool result
