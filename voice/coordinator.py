@@ -283,6 +283,8 @@ class Coordinator(Agent):
         self._note_open = pending_note is not None  # until the first reply
         self._note_task: asyncio.Task | None = None
         self._booked: str | None = None  # the call back booked in this call (book_call), if any
+        # end_call ran: the goodbye is said, and nothing more is (a reply queued by job news before it would follow)
+        self.ending = False
 
     @property
     def user_names(self) -> tuple[str, ...]:
@@ -345,6 +347,8 @@ class Coordinator(Agent):
         # Every request, whatever the model, goes into the call's model log as the model received it, with what
         # came back before the filter (voice/recorder.py MODEL_LOG).
         # The user's name is left out of every reply too (voice/name_guard.py): the first words alone may say it.
+        if self.ending:  # the AI said goodbye (end_call): its model is not asked again
+            return
         sent = model_request(self, chat_ctx, tools)
         reply: dict[str, Any] = {"text": "", "tool_calls": []}
         ended = "error"
@@ -554,6 +558,7 @@ class Coordinator(Agent):
     async def end_call(self, context: RunContext) -> str:
         """End the call, only after the user said goodbye or that they are done. Say goodbye first."""
         self._recorder.event("end_call_requested")
+        self.ending = True
         self.session.shutdown(drain=True)
         # No reply to this tool: the goodbye is already said, and GLM 5 once answered the tool result
         # by saying "end_call" out loud (2026-10-13).

@@ -116,6 +116,9 @@ BEE_RETRY_S = 5.0
 # gets one plain notification. LiveKit gives a job's process shutdown_process_timeout to end once it is asked to
 # close (10 s by default, and LiveKit may ask as soon as the room is gone): the server's is set past this.
 AFTER_CALL_JOBS_S = 30 * 60
+# A result that came in the call's last seconds may not have been heard (it ended while the AI said goodbye, once):
+# a job that ended this long before the call did is notified as well (arbitrary).
+RECENT_RESULT_S = 20.0
 # Changed after each reconnect of the voice server's own room connection (it is "1" from the pick-up on): captions
 # are not sent while it is away, though what it hears is still recorded, so the app stops matching caption lines to
 # the call view's counts for that call (app contract section 3, rule 6).
@@ -761,7 +764,8 @@ class Call:
 
 
 async def tell_about_job(call: Call, news: JobNotification) -> None:
-    if call.over:  # the call ended while the job ran: its end reaches the person's phone
+    if call.over or (call.agent is not None and call.agent.ending):  # the call is over or ending: no more speech,
+        # and its end reaches the person's phone
         if news.status in ("completed", "failed"):
             await job_end_alert(call, news.job_id, done=news.status == "completed")
         return
@@ -794,7 +798,14 @@ async def job_end_alert(call: Call, job_id: str, *, done: bool) -> None:
 
 async def finish_jobs(call: Call) -> None:
     """The call's jobs still running at its end run to their end, at most AFTER_CALL_JOBS_S more; any still running
-    then stops, fails saying so, and its notification says it could not finish."""
+    then stops, fails saying so, and its notification says it could not finish. A job that ended in the call's last
+    RECENT_RESULT_S is notified now (its news may have come as the AI said goodbye)."""
+    if call.jobs:
+        now = time.monotonic()
+        for job in call.jobs.jobs.values():
+            if job.status in ("completed", "failed") and job.ended_at is not None \
+                    and now - job.ended_at <= RECENT_RESULT_S:
+                await job_end_alert(call, job.job_id, done=job.status == "completed")
     running = call.jobs.running() if call.jobs else []
     if not running:
         return

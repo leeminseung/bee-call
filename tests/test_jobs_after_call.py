@@ -17,9 +17,10 @@ from voice import agent
 from worker.fake import FakeWorker
 
 
-def in_a_call(monkeypatch, me, step_s: float, *, title: str = "Price check"):
-    """A call that starts one job (the fake worker, `step_s` a step) and ends while it runs; returns the pushes sent,
-    the replies asked of the call AI after it ended, and the call."""
+def in_a_call(monkeypatch, me, step_s: float, *, title: str = "Price check", hang_up_after: float = 0.0):
+    """A call that starts one job (the fake worker, `step_s` a step) and ends `hang_up_after` seconds later (while it
+    runs, unless it took less); returns the pushes sent, the replies asked of the call AI after it ended, and the
+    call."""
     monkeypatch.setattr(agent, "WORKER", "fake")
     monkeypatch.setattr(agent, "FakeWorker", lambda: FakeWorker(step_seconds=step_s))
     pushes: list = []
@@ -38,6 +39,7 @@ def in_a_call(monkeypatch, me, step_s: float, *, title: str = "Price check"):
         await agent.run_call(call, me.people)
         coordinator = call.session.started["agent"]
         await coordinator.delegate(None, task="Compare MacBook prices in Korea", title=title)
+        await asyncio.sleep(hang_up_after)
         call.session.generate_reply = lambda **kwargs: asked_after.append(kwargs)  # from the call's end on
         call.hang_up()
         await call.end()
@@ -183,3 +185,50 @@ def test_a_job_started_in_a_call_in_text_finishes_after_the_person_hangs_up(tmp_
     pushes = [json.loads(l) for l in (me.workspace / "state" / "pushes.jsonl").read_text().splitlines()]
     (result,) = [p for p in pushes if p["type"] == "alert"]
     assert result["payload"]["aps"]["alert"]["body"].startswith("Results are in: ")
+
+
+def test_a_result_that_came_in_the_call_s_last_moments_is_notified_too(tmp_path, monkeypatch, quick):
+    """In a call in text, a search ended while the AI said goodbye: its news came 0.4 s before end_call, and the AI
+    read it out after "Bye, take care!". The person may not hear a result told in the call's last seconds, so a job
+    that ended within RECENT_RESULT_S of the call's end is notified as well; one that ended earlier is not."""
+    me = signed_in(tmp_path)
+    pushes, _, _ = in_a_call(monkeypatch, me, step_s=0.01, hang_up_after=0.3)  # done before the call ends
+    ((payload, _),) = pushes
+    assert payload["aps"]["alert"]["body"] == "Results are in: Price check"
+    monkeypatch.setattr(agent, "RECENT_RESULT_S", 0.1)
+    me = signed_in(tmp_path / "earlier")
+    pushes, _, _ = in_a_call(monkeypatch, me, step_s=0.01, hang_up_after=0.5)
+    assert pushes == []
+
+
+def test_once_the_ai_said_goodbye_it_says_nothing_more(tmp_path):
+    """end_call drains the goodbye; a reply queued by job news before it (the race above) would still be spoken after
+    the goodbye. Once end_call ran, the call AI's model is not asked again and nothing more is said."""
+    import pytest
+    from types import SimpleNamespace
+
+    from livekit.agents import AgentSession
+    from livekit.agents.llm import StopResponse
+
+    from tests.helpers import ScriptedLLM, seoul_now
+    from voice.coordinator import Coordinator
+    from voice.recorder import CallRecorder
+
+    async def main():
+        rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
+        coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
+        model = ScriptedLLM([["Bye, take care!"], ["The search found three shows."]])
+        async with AgentSession(llm=model) as session:
+            await session.start(coordinator)
+            await session.run(user_input="Alright, bye.")
+            assert not coordinator.ending
+            with pytest.raises(StopResponse):
+                await coordinator.end_call(None)
+            assert coordinator.ending
+            await session.generate_reply()  # job news queued a reply
+            said = [i.text_content for i in session.history.items if getattr(i, "role", None) == "assistant"]
+        rec.close()
+        return said, len(model.requests)
+
+    said, asked = asyncio.run(main())
+    assert said == ["Bye, take care!"] and asked == 1
