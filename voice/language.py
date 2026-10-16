@@ -50,8 +50,9 @@ LANGUAGES = {
         refusal="죄송해요, 그건 도와드리기 어려워요.",
         rule=("Speak Korean the way Koreans talk on the phone: natural, polite spoken Korean. Korean leaves \"you\" "
               "unsaid, so the user's name never stands in for it: ask \"주말엔 뭐 하세요?\", not \"OO 님은 주말엔 뭐 "
-              "하세요?\". The app's notes, the call prep note and job results may be in English; say what matters in "
-              "Korean, and keep names and numbers exact."),
+              "하세요?\". A Korean goodbye is often a wish or a courtesy, such as \"좋은 하루 되세요\", \"들어가세요\" or "
+              "\"수고하세요\"; it ends the call as any goodbye does. The app's notes, the call prep note and job results "
+              "may be in English; say what matters in Korean, and keep names and numbers exact."),
         greetings={
             "echo": "안녕하세요, 에코 시험이에요. 말씀하시면 그대로 따라 할게요.",
             "voice note": "안녕하세요, Bee Call이에요. 새 음성 메모 때문에 전화드렸어요. 잠깐 통화 괜찮으세요?",

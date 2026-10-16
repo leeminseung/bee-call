@@ -38,7 +38,9 @@ def test_a_call_needs_no_task_and_chatting_is_a_reason_for_one():
 def test_the_ai_never_steers_toward_ending_and_a_goodbye_still_ends_the_call():
     for text in (instructions(False), instructions(True)):
         assert "never end the call or suggest ending it" in text and "unless the user says they are done" in text
-        assert "When they say goodbye or that they are done, say a short goodbye and call end_call." in text
+        assert "When they say goodbye, in whatever words" in text and "say a short goodbye and call end_call." in text
+    korean = call_language("ko").rule  # Haiku 5.5 said goodbye to "좋은 하루 되세요" and "응, 들어가" but kept the line open
+    assert '"좋은 하루 되세요", "들어가세요" or "수고하세요"; it ends the call as any goodbye does' in korean
 
 
 def test_the_name_is_said_at_most_once_and_the_prep_greets_without_it():
@@ -51,6 +53,11 @@ def test_the_name_is_said_at_most_once_and_the_prep_greets_without_it():
     assert 'Korean leaves "you" unsaid' in korean and '"주말엔 뭐 하세요?", not "OO 님은 주말엔 뭐 하세요?"' in korean
     for text in (PREP_INSTRUCTIONS, PREP_INSTRUCTIONS_WITHOUT_BEE):
         assert "without the user's name" in text and 'Call the user "the user" in it, not by name.' in text
+    # Told so only in the instructions, every Korean opening still greeted by name: the seed's last words ask too.
+    for meta in ({"direction": "inbound"}, {"direction": "outbound"}, {"direction": "outbound", "agreed": "yes"},
+                 {"direction": "inbound", "earlier_call": "..."}):
+        seed = seed_text(CallInputs(first_name="Minseung"), meta, NOW, bee=True)
+        assert "greet the user without their name" in seed, meta
 
 
 def test_end_call_says_when_it_may_be_called():
@@ -63,7 +70,7 @@ def test_after_a_job_s_result_the_conversation_goes_on_and_a_job_outlives_the_ca
     """A job keeps running after its call (tests/test_jobs_after_call.py). The friend's "조사 끝나는 대로 다시 알려줘" was
     taken for a goodbye and the job died with the call; now the AI says where the result will come, and ends the call
     only if the user wants to."""
-    assert "then keep talking about it, or about whatever the user wants" in INSTRUCTIONS
+    assert "then keep talking about it, asking what they make of it, or about whatever the user wants" in INSTRUCTIONS
     assert "A job keeps running if the call ends" in INSTRUCTIONS
     assert "say the result will come to the app with a notification" in INSTRUCTIONS
     assert "end the call only if they want to" in INSTRUCTIONS
@@ -117,7 +124,7 @@ def test_after_a_goodbye_end_call_ends_the_call(tmp_path):
 
 
 def test_end_call_goes_through_whenever_the_ai_calls_it(tmp_path):
-    """Whether the user is done is the call AI's reading, as the instructions ask (rule 10). A check of the user's
+    """Whether the user is done is the call AI's reading, as the instructions ask. A check of the user's
     words in code (2026-10-16, taken out the same day) refused 30 of 50 polite goodbyes a review tried ("좋은 하루
     되세요", "응, 들어가", "That's it, thanks", "Okay, by.") and let "아직 끊지 마" through; a goodbye it refused left
     the line silent after the AI's own. A wrong hang-up loses no work: a job keeps running after its call

@@ -146,17 +146,17 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: b
             why += f" (topic: {meta['topic']})"
         if meta.get("agreed"):  # voice/offers.py: the AI calls only when the user said yes
             why += f". They agreed to this call: {meta['agreed']}"
-            ask = "In the opening, greet the user and say in a few words that you are calling as agreed, and about what."
+            ask = "In the opening, greet the user without their name and say in a few words that you are calling as agreed, and about what."
         else:
-            ask = ("In the opening, greet the user, say in a few words why you are calling, and ask if they have a "
+            ask = ("In the opening, greet the user without their name, say in a few words why you are calling, and ask if they have a "
                    "minute.")
     elif meta.get("earlier_call"):
         why = "The user is calling you from the app to continue an earlier call with you"
-        ask = ("In the opening, greet the user and pick up where the earlier call left off: in a few words, what you "
+        ask = ("In the opening, greet the user without their name and pick up where the earlier call left off: in a few words, what you "
                "were on, and what came of its background jobs. Then let the user lead.")
     else:
         why = "The user is calling you from the app"
-        ask = ("In the opening, greet the user and ask what is on their mind; they may just want to chat. At most a "
+        ask = ("In the opening, greet the user without their name and ask what is on their mind; they may just want to chat. At most a "
                "light nod to their day: they called, so let them bring their own topic.")
     name = f" The user's first name is {inputs.first_name}." if inputs.first_name else ""
     parts = [f"It is now {now_text(now)}. {why}.{name}"]
