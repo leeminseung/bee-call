@@ -8,7 +8,7 @@
         "ko": "차분함",
         "en": "Calm"
       },
-      "sample_url": "/voices/samples/ko-sian-225fbd22.mp3",
+      "sample_url": "/voices/samples/ko-sian-d1146501.mp3",
       "default": true
     },
     {
@@ -18,7 +18,7 @@
         "ko": "친근함",
         "en": "Friendly"
       },
-      "sample_url": "/voices/samples/ko-han-c67d6873.mp3",
+      "sample_url": "/voices/samples/ko-han-cdfacf48.mp3",
       "default": false
     },
     {
@@ -28,7 +28,7 @@
         "ko": "다정함",
         "en": "Tender"
       },
-      "sample_url": "/voices/samples/ko-anna-c5f42cea.mp3",
+      "sample_url": "/voices/samples/ko-anna-96eb04b8.mp3",
       "default": false
     },
     {
@@ -38,7 +38,7 @@
         "ko": "또렷함",
         "en": "Clear"
       },
-      "sample_url": "/voices/samples/ko-yooni-4176e159.mp3",
+      "sample_url": "/voices/samples/ko-yooni-e07d0920.mp3",
       "default": false
     },
     {
@@ -48,7 +48,7 @@
         "ko": "안정감",
         "en": "Steady"
       },
-      "sample_url": "/voices/samples/ko-seulki-668d9801.mp3",
+      "sample_url": "/voices/samples/ko-seulki-7c0cfddc.mp3",
       "default": false
     },
     {
@@ -58,7 +58,7 @@
         "ko": "묵직함",
         "en": "Deep"
       },
-      "sample_url": "/voices/samples/ko-kyle-6dbe380f.mp3",
+      "sample_url": "/voices/samples/ko-kyle-3aac40d0.mp3",
       "default": false
     },
     {
@@ -68,7 +68,7 @@
         "ko": "자연스러움",
         "en": "Natural"
       },
-      "sample_url": "/voices/samples/ko-mrk-e61cfa94.mp3",
+      "sample_url": "/voices/samples/ko-mrk-f2c86f7f.mp3",
       "default": false
     },
     {
@@ -78,7 +78,7 @@
         "ko": "잔잔함",
         "en": "Soothing"
       },
-      "sample_url": "/voices/samples/ko-jason-eb7756da.mp3",
+      "sample_url": "/voices/samples/ko-jason-76917f2b.mp3",
       "default": false
     }
   ]

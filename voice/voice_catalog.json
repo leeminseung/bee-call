@@ -10,7 +10,7 @@
    "default": true,
    "provider": "elevenlabs",
    "provider_voice": "5n5gqmaQi9Ewevrz7bOS",
-   "sample": "ko-sian-225fbd22.mp3",
+   "sample": "ko-sian-d1146501.mp3",
    "tuning": {}
   },
   {
@@ -23,7 +23,7 @@
    "default": false,
    "provider": "elevenlabs",
    "provider_voice": "8jHHF8rMqMlg8if2mOUe",
-   "sample": "ko-han-c67d6873.mp3",
+   "sample": "ko-han-cdfacf48.mp3",
    "tuning": {}
   },
   {
@@ -36,7 +36,7 @@
    "default": false,
    "provider": "elevenlabs",
    "provider_voice": "uyVNoMrnUku1dZyVEXwD",
-   "sample": "ko-anna-c5f42cea.mp3",
+   "sample": "ko-anna-96eb04b8.mp3",
    "tuning": {}
   },
   {
@@ -49,7 +49,7 @@
    "default": false,
    "provider": "elevenlabs",
    "provider_voice": "n2fbxG88jqAoaVPUy3IG",
-   "sample": "ko-yooni-4176e159.mp3",
+   "sample": "ko-yooni-e07d0920.mp3",
    "tuning": {}
   },
   {
@@ -62,7 +62,7 @@
    "default": false,
    "provider": "elevenlabs",
    "provider_voice": "ksaI0TCD9BstzEzlxj4q",
-   "sample": "ko-seulki-668d9801.mp3",
+   "sample": "ko-seulki-7c0cfddc.mp3",
    "tuning": {}
   },
   {
@@ -75,7 +75,7 @@
    "default": false,
    "provider": "elevenlabs",
    "provider_voice": "RU7aSi6lT4uQBXMLgDxK",
-   "sample": "ko-kyle-6dbe380f.mp3",
+   "sample": "ko-kyle-3aac40d0.mp3",
    "tuning": {}
   },
   {
@@ -88,7 +88,7 @@
    "default": false,
    "provider": "elevenlabs",
    "provider_voice": "LKOcTG4J4tYTPR9DnLeM",
-   "sample": "ko-mrk-e61cfa94.mp3",
+   "sample": "ko-mrk-f2c86f7f.mp3",
    "tuning": {}
   },
   {
@@ -101,7 +101,7 @@
    "default": false,
    "provider": "elevenlabs",
    "provider_voice": "YBRudLRm83BV5Mazcr42",
-   "sample": "ko-jason-eb7756da.mp3",
+   "sample": "ko-jason-76917f2b.mp3",
    "tuning": {}
   }
  ],
@@ -116,7 +116,7 @@
    "default": true,
    "provider": "elevenlabs",
    "provider_voice": "jqcCZkN6Knx8BJ5TBdYR",
-   "sample": "en-zara-5c7ac050.mp3",
+   "sample": "en-zara-cd1d7c8e.mp3",
    "tuning": {}
   },
   {
@@ -129,7 +129,7 @@
    "default": false,
    "provider": "elevenlabs",
    "provider_voice": "ZF6FPAbjXT4488VcRRnw",
-   "sample": "en-amelia-38d0dc98.mp3",
+   "sample": "en-amelia-e6558619.mp3",
    "tuning": {}
   },
   {
@@ -142,7 +142,7 @@
    "default": false,
    "provider": "elevenlabs",
    "provider_voice": "uYXf8XasLslADfZ2MB4u",
-   "sample": "en-hope-f1323db9.mp3",
+   "sample": "en-hope-c5b7073b.mp3",
    "tuning": {}
   },
   {
@@ -155,7 +155,7 @@
    "default": false,
    "provider": "elevenlabs",
    "provider_voice": "bIHbv24MWmeRgasZH58o",
-   "sample": "en-will-756c2123.mp3",
+   "sample": "en-will-f05ecb6b.mp3",
    "tuning": {}
   },
   {
@@ -168,7 +168,7 @@
    "default": false,
    "provider": "elevenlabs",
    "provider_voice": "iP95p4xoKVk53GoZ742B",
-   "sample": "en-chris-75f501af.mp3",
+   "sample": "en-chris-2273eaa8.mp3",
    "tuning": {}
   }
  ]

@@ -8,7 +8,7 @@
         "ko": "따뜻함",
         "en": "Warm"
       },
-      "sample_url": "/voices/samples/en-zara-5c7ac050.mp3",
+      "sample_url": "/voices/samples/en-zara-cd1d7c8e.mp3",
       "default": true
     },
     {
@@ -18,7 +18,7 @@
         "ko": "생기",
         "en": "Lively"
       },
-      "sample_url": "/voices/samples/en-amelia-38d0dc98.mp3",
+      "sample_url": "/voices/samples/en-amelia-e6558619.mp3",
       "default": false
     },
     {
@@ -28,7 +28,7 @@
         "ko": "발랄함",
         "en": "Bubbly"
       },
-      "sample_url": "/voices/samples/en-hope-f1323db9.mp3",
+      "sample_url": "/voices/samples/en-hope-c5b7073b.mp3",
       "default": false
     },
     {
@@ -38,7 +38,7 @@
         "ko": "여유로움",
         "en": "Relaxed"
       },
-      "sample_url": "/voices/samples/en-will-756c2123.mp3",
+      "sample_url": "/voices/samples/en-will-f05ecb6b.mp3",
       "default": false
     },
     {
@@ -48,7 +48,7 @@
         "ko": "소탈함",
         "en": "Down-to-earth"
       },
-      "sample_url": "/voices/samples/en-chris-75f501af.mp3",
+      "sample_url": "/voices/samples/en-chris-2273eaa8.mp3",
       "default": false
     }
   ]
