@@ -79,7 +79,6 @@ from voice.echo_llm import EchoLLM
 from voice.fake_claude import FakeAnthropic
 from voice.fallback_llm import FirstRequestFallback
 from voice.language import CallLanguage, call_language
-from voice.name_guard import user_names
 from voice.people import People, Person, Settings, data_root, dev_person
 from voice.prep import INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_role
 from voice.recorder import CallRecorder
@@ -1009,7 +1008,6 @@ async def run_call(ctx: JobContext, people: People) -> None:
         rec, call.jobs, workspace, clock=caller.someone.now, prep_note=prep.note or call_brief(inputs, meta),
         pending_note=pending, language=caller.language, earlier_call=meta.get("earlier_call"),
         direction=meta.get("direction", "inbound"), audio_tags=caller.tts_voice.performs_tags,
-        user_names=user_names(inputs.first_name or prep.first_name, prep.opening, prep.spoken_name),
         budget=lambda: day_budget(caller.someone, caller.someone.now()))
 
     async def shutdown() -> None:

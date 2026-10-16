@@ -55,11 +55,9 @@ is about to start, and the phone is ringing on their side while you get ready. U
 assistant glances at their notes before answering.
 
 The next message says who is calling whom and why, and what the user's Bee wearable recorded.
-1. First, when the next message gives the user's first name, write <name>that name as you will say it in this \
-call</name>, in the call's language. Then write <opening>what you say when you pick up</opening>: {opening}, as \
-the end of the next message asks. The call is answered as soon as this is written. It is spoken aloud word for \
-word, so write no stage directions, sound effects or descriptions of the situation, in parentheses, brackets or \
-asterisks.
+1. First write <opening>what you say when you pick up</opening>: {opening}, as the end of the next message \
+asks. The call is answered as soon as this is written. It is spoken aloud word for word, so write no stage \
+directions, sound effects or descriptions of the situation, in parentheses, brackets or asterisks.
 2. Then, if one more look would help your note, such as a conversation in full, a search by topic or another \
 day's summary, call up to three tools at once. You get one round of tools.
 3. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to, open \
@@ -98,8 +96,6 @@ TOOLS = [
 ]
 NOTE = re.compile(r"<note>(.*?)</note>", re.S | re.I)
 OPENING = re.compile(r"<opening>(.*?)</opening>", re.S | re.I)
-NAME = re.compile(r"<name>(.*?)</name>", re.S | re.I)
-SPOKEN_NAME = re.compile(r"[^\W\d_]{2,12}(?: [^\W\d_]{2,12})?")  # a first name: one or two words of letters
 
 
 @dataclass
@@ -119,8 +115,6 @@ class Prep:
     input_tokens: int = 0  # the prep's model use, for the person's daily budget (voice/costs.py)
     output_tokens: int = 0
     usage_estimated: bool = False  # a request was cut short before Bedrock counted it; its share is an estimate
-    first_name: str | None = None  # the user's first name as Bee has it, which the opening may greet with
-    spoken_name: str | None = None  # that name as the call says it, in its language (<name>, voice/name_guard.py)
 
     def to_meta(self) -> dict[str, Any]:
         return asdict(self)
@@ -130,7 +124,7 @@ class Prep:
         if not isinstance(data, dict):
             return None
         names = ("note", "opening", "reads", "bee", "standby_reason", "seconds", "opening_s", "model", "error",
-                 "input_tokens", "output_tokens", "usage_estimated", "first_name", "spoken_name")
+                 "input_tokens", "output_tokens", "usage_estimated")
         return cls(**{k: data[k] for k in names if k in data})
 
 
@@ -214,13 +208,6 @@ def parse_opening(text: str) -> str | None:
     return speech_only(spoken)[:300] or None  # no stage directions either (voice/speech_filter.py)
 
 
-def parse_name(text: str) -> str | None:
-    """The user's name as the prep says the call will say it: plain letters, one or two words, or None."""
-    found = NAME.search(text)
-    name = " ".join(found.group(1).split()) if found else ""
-    return name if SPOKEN_NAME.fullmatch(name) else None
-
-
 def parse_note(text: str) -> str | None:
     found = NOTE.search(text)
     return (found.group(1).strip() or None) if found else None
@@ -271,8 +258,7 @@ class Preparation:
                  bee: bool, now: datetime, language: CallLanguage | None = None,
                  ours: OurCalls | None = None) -> None:
         """`role`: the prep's role as the mode runs it (prep_role); None, no model: no note and no opening."""
-        self.prep = Prep(model=role.choices[0].offering.model if role else None, bee=bee,
-                         first_name=inputs.first_name)
+        self.prep = Prep(model=role.choices[0].offering.model if role else None, bee=bee)
         if bee:  # what was read before the prep: the conversations behind the call, and the day's summary
             self.prep.reads += [conversation_read(conv_id, conv, now.tzinfo) for conv_id, conv, _ in inputs.conversations]
             if inputs.today is not None:
@@ -307,8 +293,6 @@ class Preparation:
             self._task.cancel()
 
     def _on_text(self, text: str) -> None:
-        if self.prep.spoken_name is None and self._inputs.first_name:
-            self.prep.spoken_name = parse_name(text)
         if self.prep.opening is None and (opening := parse_opening(text)):
             self.prep.opening = opening
             self.prep.opening_s = round(time.monotonic() - self._started, 2)

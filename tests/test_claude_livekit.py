@@ -214,34 +214,3 @@ def test_when_claude_fails_the_first_request_glm_answers_and_the_model_log_says_
     (choice,) = [e for e in events if e["type"] == "coordinator_model"]
     assert choice["model"] == "zai.glm-5" and "401" in choice["reason"]
     assert not [e for e in events if e["type"] == "error"]  # the failed first try is no failed turn
-
-
-def test_the_call_ai_s_replies_are_said_without_the_user_s_name(tmp_path):
-    """voice/name_guard.py in the coordinator's llm_node: the name in a reply (split across pieces, as it streams) is
-    neither said nor captioned nor kept in the conversation; the model log keeps the reply as written, and the record
-    counts what was left out."""
-    import json
-    from types import SimpleNamespace
-
-    from tests.helpers import ScriptedLLM, seoul_now
-    from voice.coordinator import Coordinator
-    from voice.recorder import CallRecorder
-
-    async def main():
-        rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
-        coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now,
-                                  user_names=["Minseung", "민승"])
-        model = ScriptedLLM([["알겠어요, 민", "승 님. 민승 님은 ", "주말에 뭐 하세요?"]])
-        async with AgentSession(llm=model) as session:
-            await session.start(coordinator)
-            await session.run(user_input="오늘 좀 피곤하네")
-            said = [i.text_content for i in session.history.items if getattr(i, "role", None) == "assistant"]
-        rec.close()
-        return rec, said
-
-    rec, said = asyncio.run(main())
-    assert said == ["알겠어요. 주말에 뭐 하세요?"]
-    log = [json.loads(line) for line in (rec.dir / "model-log.jsonl").read_text().splitlines()]
-    assert log[0]["reply"]["text"] == "알겠어요, 민승 님. 민승 님은 주말에 뭐 하세요?"
-    events = [json.loads(line) for line in (rec.dir / "events.jsonl").read_text().splitlines()]
-    assert [e["times"] for e in events if e["type"] == "name_left_out"] == [2]
