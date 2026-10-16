@@ -45,6 +45,25 @@ enum DesignDemo: String {
     /// The defaults a frame writes to, apart from the app's own.
     static let store = UserDefaults(suiteName: "BeeCallDesignDemo") ?? .standard
 
+    /// The conversation frame's line still arriving: the contract's worked example, the person's next caption line
+    /// after the live view's counts, which is what the ended view's version of their last speech adds.
+    static func growingLine(live: CallView, ended: CallView) -> CaptionLine? {
+        let speech = live.drawnItems.compactMap { if case .speech(let speech) = $0 { speech } else { nil } }
+        guard let last = speech.last(where: { $0.speaker == .person }),
+              let after = ended.drawnItems.lazy.compactMap({ item -> Speech? in
+                  if case .speech(let speech) = item, speech.id == last.id { speech } else { nil }
+              }).first,
+              after.text.hasPrefix(last.text), after.text.count > last.text.count else { return nil }
+        let added = after.text.dropFirst(last.text.count).trimmingCharacters(in: .whitespaces)
+        return CaptionLine(speaker: .person, number: live.captionsIncluded.person + 1, text: added, arriving: true)
+    }
+
+    /// The ended view of the live example's call, bundled with the examples.
+    static var endedView: CallView? {
+        Bundle.main.url(forResource: "call-view", withExtension: "json").flatMap { try? Data(contentsOf: $0) }
+            .flatMap { try? Contract.decode(CallView.self, from: $0) }
+    }
+
     /// The call screen's captions in the live frames: the last two speech runs of the live view, as LiveKit
     /// would have sent them.
     static func lastLines(of view: CallView?) -> [(mine: Bool, text: String)] {
@@ -129,8 +148,12 @@ struct DesignDemoView: View {
     private func playLiveCall() async {
         await data.store.refreshView(DesignDemo.liveCall)
         let view = data.store.views[DesignDemo.liveCall]
+        let growing = demo == .conversation ? view.flatMap { live in
+            DesignDemo.endedView.flatMap { DesignDemo.growingLine(live: live, ended: $0) }
+        } : nil
         calls.playDesignDemo(lines: DesignDemo.lastLines(of: view), voice: demo == .conversation ? .person : .ai,
-                             connectedAgo: 221, room: DesignDemo.liveCall)
+                             connectedAgo: 221, room: DesignDemo.liveCall, held: view?.captionsIncluded,
+                             growing: growing)
         if demo == .conversation || demo == .resultConversation {
             try? await Task.sleep(for: .milliseconds(300))
             presentation.show(.conversation)

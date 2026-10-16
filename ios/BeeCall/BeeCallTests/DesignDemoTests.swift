@@ -18,4 +18,21 @@ final class DesignDemoTests: XCTestCase {
         XCTAssertEqual(DesignDemo.sampleVoice(settings: me, in: voices), shown)
         XCTAssertEqual(DesignDemo.sampleVoice(settings: nil, in: voices), voices.first(where: \.isDefault))
     }
+
+    /// The conversation frame is the contract's worked example: the person's line after the live view's counts, still
+    /// arriving, is what the ended view's version of their last speech adds to the live one.
+    @MainActor func testTheGrowingLineIsWhatTheEndedViewAdds() throws {
+        let live = try Examples.decode(CallView.self, "call-view-live"), ended = try Examples.decode(CallView.self, "call-view")
+        let growing = try XCTUnwrap(DesignDemo.growingLine(live: live, ended: ended))
+        let last = try XCTUnwrap(live.items.lazy.compactMap { item -> Speech? in
+            if case .speech(let speech) = item, speech.speaker == .person { speech } else { nil }
+        }.last)
+        let after = try XCTUnwrap(ended.items.lazy.compactMap { item -> Speech? in
+            if case .speech(let speech) = item, speech.id == last.id { speech } else { nil }
+        }.first)
+        XCTAssertEqual(last.text + " " + growing.text, after.text)
+        XCTAssertEqual(growing.speaker, .person)
+        XCTAssertEqual(growing.number, live.captionsIncluded.person + 1)
+        XCTAssertTrue(growing.arriving)
+    }
 }

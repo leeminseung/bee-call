@@ -230,21 +230,32 @@ extension LiveKitClient {
         captionList = CaptionList()
         captionList.show("Hi, it's Bee Call. Is now still good to pick Saturday's trail?", line: "ai/demo", isMine: false,
                          sentAt: .now)
+        captionList.streamEnded(line: "ai/demo", final: true)
         captionList.show("Yes, now is fine. Dana says her knee is better,", line: "me/demo", isMine: true, sentAt: .now)
         voices.playDemo(demo)
     }
 
-    /// Debug builds only (DesignDemo.swift): one more line, as if just said.
+    /// Debug builds only (DesignDemo.swift): one more line, as if just said in full.
     func demoSay(_ text: String, mine: Bool) {
-        captionList.show(text, line: "\(mine ? "me" : "ai")/demo-\(UUID().uuidString)", isMine: mine, sentAt: .now)
+        let id = "\(mine ? "me" : "ai")/demo-\(UUID().uuidString)"
+        captionList.show(text, line: id, isMine: mine, sentAt: .now)
+        captionList.streamEnded(line: id, final: true)
     }
 
-    /// Debug builds only (DesignDemo.swift): these caption lines and synthetic voice levels; no room is joined.
-    func playDemo(lines: [(mine: Bool, text: String)], voice: VoiceDemo) {
-        captionList = CaptionList()
+    /// Debug builds only (DesignDemo.swift): these caption lines, said in full, and synthetic voice levels; no room
+    /// is joined. With `held`, they are numbered as the last lines the call view holds, and `growing` follows them,
+    /// still arriving.
+    func playDemo(lines: [(mine: Bool, text: String)], voice: VoiceDemo, held: CaptionCounts? = nil,
+                  growing: CaptionLine? = nil) {
+        captionList = held.map { CaptionList(numberedAfter: CaptionCounts(person: $0.person - 1, ai: $0.ai - 1)) }
+            ?? CaptionList()
         for (index, line) in lines.enumerated() {
-            captionList.show(line.text, line: "\(line.mine ? "me" : "ai")/demo\(index)", isMine: line.mine,
-                             sentAt: .now)
+            let id = "\(line.mine ? "me" : "ai")/demo\(index)"
+            captionList.show(line.text, line: id, isMine: line.mine, sentAt: .now)
+            captionList.streamEnded(line: id, final: true)
+        }
+        if let growing {
+            captionList.show(growing.text, line: "me/demo-growing", isMine: growing.speaker == .person, sentAt: .now)
         }
         voices.playDemo(voice)
     }

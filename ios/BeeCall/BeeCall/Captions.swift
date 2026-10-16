@@ -37,6 +37,15 @@ struct CaptionList {
     private(set) var captions: [Caption] = []
     private var counts: [Bool: Int] = [:] // lines so far per side, keyed by isMine
 
+    init() {}
+
+    #if DEBUG
+    /// Debug builds only (DesignDemo): the next lines numbered as if each side had said `before` lines already.
+    init(numberedAfter before: CaptionCounts) {
+        counts = [true: before.person, false: before.ai]
+    }
+    #endif
+
     /// Every line, numbered per speaker, in the order they first arrived: what the thread draws beyond the
     /// lines the call view holds already.
     var lines: [CaptionLine] {
