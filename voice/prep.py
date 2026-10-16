@@ -50,9 +50,9 @@ NOTE_SECONDS = 20.0  # after this the note is given up; the call keeps the plain
 MAX_READS = 3
 
 PREP_INSTRUCTIONS = """\
-You are the voice of Bee Call, an assistant that talks with the user on the phone. A call is about to start, \
-and the phone is ringing on their side while you get ready. Use these seconds the way a good assistant glances \
-at their notes before answering.
+You are the voice of Bee Call, which the user talks with on the phone, to chat or to get something done. A call \
+is about to start, and the phone is ringing on their side while you get ready. Use these seconds the way a good \
+assistant glances at their notes before answering.
 
 The next message says who is calling whom and why, and what the user's Bee wearable recorded.
 1. First write <opening>what you say when you pick up</opening>: {opening}, as the end of the next message \
@@ -67,9 +67,9 @@ what the data says.
 # For a person without Bee (Use Bee off): no Bee data and no tools; what is known comes from earlier calls and the
 # notes kept between calls.
 PREP_INSTRUCTIONS_WITHOUT_BEE = """\
-You are the voice of Bee Call, an assistant that talks with the user on the phone. A call is about to start, \
-and the phone is ringing on their side while you get ready. Use these seconds the way a good assistant glances \
-at their notes before answering.
+You are the voice of Bee Call, which the user talks with on the phone, to chat or to get something done. A call \
+is about to start, and the phone is ringing on their side while you get ready. Use these seconds the way a good \
+assistant glances at their notes before answering.
 
 The next message says who is calling whom and why, and what you know from earlier calls and the notes kept \
 between calls.
@@ -154,8 +154,8 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: b
                "were on, and what came of its background jobs. Then let the user lead.")
     else:
         why = "The user is calling you from the app"
-        ask = ("In the opening, greet the user and ask what is on their mind. At most a light nod to their day: "
-               "they called, so let them bring their own topic.")
+        ask = ("In the opening, greet the user as a friend would and ask what is on their mind; they may just want "
+               "to chat. At most a light nod to their day: they called, so let them bring their own topic.")
     name = f" The user's first name is {inputs.first_name}." if inputs.first_name else ""
     parts = [f"It is now {now_text(now)}. {why}.{name}"]
     if meta.get("earlier_call"):
