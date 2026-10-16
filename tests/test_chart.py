@@ -292,7 +292,8 @@ def test_a_chart_the_worker_saves_shows_in_the_call_view_with_its_title_and_pict
                                now=datetime(2026, 10, 15, 21, 0, tzinfo=seoul))
     (job,) = [i for i in view["items"] if i["type"] == "job"]
     assert [f["name"] for f in job["files"]] == ["prices.svg", "report.md"]  # the chart once, by its SVG
-    assert job["files"][0] == {"name": "prices.svg", "kind": "chart", "title": TITLE,
+    assert job["files"][0] == {"name": "prices.svg", "kind": "chart", "title": TITLE, "page_url": None,
                                "url": "/calls/call-matt-1/files/jobs/01/prices.svg",
                                "image_url": "/calls/call-matt-1/files/jobs/01/prices.png",
                                "image_url_dark": "/calls/call-matt-1/files/jobs/01/prices-dark.png"}
+    assert job["files"][1]["page_url"] == "/calls/call-matt-1/files/jobs/01/report.html"  # the job's report, paged

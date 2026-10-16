@@ -96,8 +96,9 @@ def test_a_call_that_is_not_this_person_s_has_no_record_or_is_malformed_is_404(m
 
 
 def test_a_call_s_files_are_served_by_the_record_server_s_rule(minseung):
-    """Contract 2.6: text as plain text, charts as PNG (light and dark) and SVG (sandboxed), never a private part or a
-    path out of the call's folder (403), 404 for anything else not there."""
+    """Contract 2.6: text as plain text, charts as PNG (light and dark) and SVG, a report's page as HTML (all
+    sandboxed, so nothing in them runs), never a private part or a path out of the call's folder (403), 404 for
+    anything else not there."""
     folder = minseung.workspace / "2026-10-15" / "0123"
     for private in ("audio", "inputs"):
         (folder / private).mkdir()
@@ -106,20 +107,22 @@ def test_a_call_s_files_are_served_by_the_record_server_s_rule(minseung):
     (minseung.workspace / "secret.txt").write_text("outside the call")
     base = f"/calls/{MAIN}/files"
     found = get(minseung, f"{base}/jobs/01/report.md", f"{base}/jobs/01/comparison.csv", f"{base}/jobs/01/price-chart.png",
-                f"{base}/jobs/01/price-chart.svg", f"{base}/jobs/01/price-chart-dark.png", f"{base}/audio/secret.json",
-                f"{base}/INPUTS/secret.json", f"{base}/model-log.jsonl", f"{base}/jobs/01/nothing.md")
+                f"{base}/jobs/01/price-chart.svg", f"{base}/jobs/01/price-chart-dark.png", f"{base}/jobs/01/report.html",
+                f"{base}/audio/secret.json", f"{base}/INPUTS/secret.json", f"{base}/model-log.jsonl",
+                f"{base}/jobs/01/nothing.md")
     statuses = [s for s, _, _ in found]
-    assert statuses == [200, 200, 200, 200, 200, 403, 403, 403, 404]
+    assert statuses == [200, 200, 200, 200, 200, 200, 403, 403, 403, 404]
     # Paths that try to leave by dot segments, as written or percent-encoded, reach the server as sent (the test
     # client would resolve them first) and meet its rule.
     leaving = get(minseung, f"{base}/jobs/../audio/secret.json", f"{base}/jobs/%2E%2E/audio/secret.json",
                   f"{base}/%2E%2E/%2E%2E/secret.txt", f"{base}/jobs/01/..%2F..%2F..%2F..%2Fsecret.txt")
     assert [(s, body) for s, _, body in leaving] == [(403, b"path not allowed\n")] * 4
-    types = [h.get("Content-Type", "") for _, h, _ in found[:5]]
+    types = [h.get("Content-Type", "") for _, h, _ in found[:6]]
     assert types[0].startswith("text/plain") and "charset=utf-8" in types[0] and types[1].startswith("text/plain")
     assert types[2] == types[4] == "image/png" and types[3].startswith("image/svg+xml")
+    assert types[5] == "text/html; charset=utf-8" and found[5][2].startswith(b"<!doctype html>")
     assert all(h["Content-Security-Policy"] == "sandbox" and h["X-Content-Type-Options"] == "nosniff"
-               for _, h, _ in found[:5])
+               for _, h, _ in found[:6])
     assert found[0][2].startswith("# 코딩용".encode())
 
 

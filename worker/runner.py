@@ -4,6 +4,7 @@ The boundary with any worker backend is one job folder:
   jobs/<NN>/request.md     what the coordinator asked for, its title and the call's language (written here)
   jobs/<NN>/events.jsonl   the job's own progress log (written here, append-only)
   jobs/<NN>/report.md      the backend's final report (written by the backend)
+  jobs/<NN>/report.html    the report as a readable page for the app (written here when the job is done)
   jobs/<NN>/...            any files the backend made (charts, tables)
 
 A backend only needs `async run(job, progress, relay) -> str` returning a
@@ -39,6 +40,7 @@ from typing import Awaitable, Callable, Protocol
 
 from voice.language import LANGUAGES
 from worker.chart import chart_of_dark
+from worker.report_page import PAGE, REPORT, write_page
 
 EmitEvent = Callable[..., None]  # recorder.event(name, **fields)
 log = logging.getLogger("worker.runner")
@@ -106,11 +108,12 @@ OWN_FILES = ("request.md", "events.jsonl")  # what this runner writes into a job
 
 
 def made_files(job: Job) -> list[str]:
-    """The files a worker made in the job's folder: neither the runner's own nor its usage, nor a chart's dark PNG,
-    which is for the app (contract 2.4: the call view finds it beside its chart)."""
+    """The files a worker made in the job's folder: neither the runner's own nor its usage, nor a chart's dark PNG or
+    the report's page, which are for the app (contract 2.4: the call view finds them beside the chart and the
+    report)."""
     names = [p.name for p in job.dir.iterdir() if p.is_file() and p.name not in OWN_FILES
              and not USAGE.fullmatch(p.name) and not p.name.startswith(".")]
-    return [name for name in names if chart_of_dark(name) not in names]
+    return [name for name in names if chart_of_dark(name) not in names and not (name == PAGE and REPORT in names)]
 
 
 USAGE = re.compile(r"usage(?:\.\d+)?\.json")  # a job's usage.json, and an earlier attempt's usage.1.json
@@ -229,6 +232,13 @@ class JobRunner:
             files = [str((job.dir / name).relative_to(self.session_dir)) for name in job.files]
             self.emit("job_done", job_id=job.job_id, summary=summary, files=files)
             self._job_log(job, "done", summary=summary, files=files)
+            # The report as a readable page for the app (contract 2.4), whoever wrote it, before the call AI hears the
+            # job is done. Rendered off the call's event loop, after the job's end is on record: a call ending now
+            # cuts only the wait, never the job's result.
+            try:
+                await asyncio.to_thread(write_page, job.dir)
+            except Exception:
+                log.exception("job %s: its report was left without a page", job.job_id)
             if relayed:  # the user already heard the answer; this says only that the job and its files are done
                 await tell(JobNotification(job.job_id, "completed", task, files=job.files, note=job.note))
                 return

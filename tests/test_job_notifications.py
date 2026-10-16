@@ -71,6 +71,36 @@ def test_a_chart_s_dark_picture_is_not_one_of_the_files_a_job_made(tmp_path):
     assert runner.status_text().endswith("files: logo-dark.png, rain.png, rain.svg")
 
 
+def test_a_finished_job_s_report_gets_its_page_which_is_not_one_of_its_files(tmp_path):
+    """The report as a readable page for the app (contract 2.4, page_url), rendered when the job ends, whoever wrote
+    report.md (a worker's save_file, its fallback report, the search worker); there by the time the call AI hears the
+    job is done, which hears only of the report, as does the session screen."""
+    seen = []
+
+    async def on_notify(n: JobNotification) -> None:
+        seen.append((n.status, n.files, (tmp_path / "jobs" / "01" / "report.html").exists()))
+
+    async def main() -> None:
+        runner = JobRunner(tmp_path, lambda name, **f: None, Worker(relay_text=None), on_notify, clock=seoul_now)
+        runner.start(TASK)
+        await asyncio.gather(*runner.tasks.values())
+
+    asyncio.run(main())
+    assert seen == [("completed", ["report.md"], True)]
+    assert "<h1>Report</h1>" in (tmp_path / "jobs" / "01" / "report.html").read_text()
+
+
+def test_a_report_that_cannot_become_a_page_still_ends_its_job_done(tmp_path, monkeypatch):
+    from worker import runner
+
+    def refuse(folder):
+        raise ValueError("a tag the renderer never makes: x")
+
+    monkeypatch.setattr(runner, "write_page", refuse)
+    _, news = run_one_job(tmp_path, Worker(relay_text=None))
+    assert [(n.status, n.files) for n in news] == [("completed", ["report.md"])]
+
+
 def test_a_job_that_never_relayed_ends_with_its_summary(tmp_path):
     _, news = run_one_job(tmp_path, Worker(relay_text=None))
     assert [(n.status, n.summary, n.files) for n in news] == [("completed", "Both forecasts say dry.", ["report.md"])]

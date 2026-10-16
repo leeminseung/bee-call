@@ -22,6 +22,7 @@ from typing import Any, Awaitable, Callable
 from beelink.clock import now_text
 from voice.language import LANGUAGES
 from worker.chart import chart_of_dark, pictures, render_svg, svg_to_png
+from worker.report_page import PAGE
 from worker.runner import USAGE, Job
 
 log = logging.getLogger("bee-call.worker")
@@ -35,7 +36,7 @@ NOT_A_NAME = ("Not saved: that is not an allowed file name. Use letters, digits,
 NO_SUCH_TOOL = "There is no tool by that name. Use one of: {tools}."
 DARK_NAME = ("Not saved: a chart's name cannot end in -dark, which names each chart's picture for dark mode. Use "
              "another name, such as prices_by_size.")
-RESERVED = {"request.md", "events.jsonl", "usage.json"}  # written by this Mac, never by a worker's model
+RESERVED = {"request.md", "events.jsonl", "usage.json", PAGE}  # written by this Mac, never by a worker's model
 MAX_FILE_BYTES = 5_000_000
 
 

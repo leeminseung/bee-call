@@ -110,6 +110,8 @@ def served_headers(target: Path) -> dict[str, str]:
     headers = dict(SERVED_HEADERS)
     if target.suffix.lower() in PLAIN_TEXT:
         headers["Content-Type"] = "text/plain; charset=utf-8"
+    elif target.suffix.lower() == ".html":  # a report's page (worker/report_page.py), sandboxed like the rest
+        headers["Content-Type"] = "text/html; charset=utf-8"
     return headers
 
 

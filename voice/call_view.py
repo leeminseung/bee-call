@@ -29,6 +29,7 @@ from voice.audio_tags import strip_tags
 from voice.call_folders import CALL_ID, EVENTS, call_ids, read_events, session_id
 from voice.offers import topic_line
 from worker.chart import chart_of_dark, pictures, svg_title
+from worker.report_page import PAGE, REPORT
 from worker.runner import USAGE
 
 LIVE_S = 120  # no new line or file refresh for this long, and no end: the call no longer reads as live
@@ -498,7 +499,9 @@ def _files(call_id: str, call: Call, job: Job) -> list[dict[str, Any]]:
         stem, suffix = (name.rsplit(".", 1)[0], "." + name.rsplit(".", 1)[1].lower()) if "." in name else (name, "")
         if suffix in IMAGES and (f"{stem}.svg" in listed or chart_of_dark(name) in listed):
             continue  # a picture of a chart the worker drew, light or dark: the chart's, not a file of its own
-        title, image, dark = None, None, None
+        if name == PAGE and REPORT in listed:
+            continue  # the report's page: the report's, not a file of its own
+        title, image, dark, page = None, None, None, None
         light_png, dark_png = pictures(f"{stem}.svg")
         if suffix == ".svg" and light_png in folder.names:
             kind, title, image = "chart", folder.chart_titles.get(name), _url(call_id, f"jobs/{job.id}/{light_png}")
@@ -506,14 +509,16 @@ def _files(call_id: str, call: Call, job: Job) -> list[dict[str, Any]]:
                 dark = _url(call_id, f"jobs/{job.id}/{dark_png}")
         elif suffix in IMAGES:
             kind, title, image = "chart", folder.chart_titles.get(name), _url(call_id, path)
-        elif name.lower() == "report.md":
+        elif name.lower() == REPORT:
             kind = "report"
+            if PAGE in folder.names:  # a report from before pages has none until the one-off command
+                page = _url(call_id, f"jobs/{job.id}/{PAGE}")
         elif suffix in TABLES:
             kind = "table"
         else:
             kind = "other"
-        out.append({"name": name, "kind": kind, "url": _url(call_id, path), "title": title, "image_url": image,
-                    "image_url_dark": dark})
+        out.append({"name": name, "kind": kind, "url": _url(call_id, path), "page_url": page, "title": title,
+                    "image_url": image, "image_url_dark": dark})
     return sorted(out, key=lambda f: (KIND_ORDER[f["kind"]], f["name"]))
 
 

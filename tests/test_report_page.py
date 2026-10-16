@@ -136,6 +136,15 @@ def test_every_page_passes_the_tag_check_and_a_page_that_would_not_is_never_made
             report_page.check(bad)
 
 
+def test_no_worker_writes_the_page_itself(tmp_path):
+    """The page is this Mac's rendering of the report: a model's save_file of report.html is refused (in any case of
+    letters), and a code execution file of that name is saved under another."""
+    from worker.tools import allowed_name, free_name
+
+    assert not allowed_name("report.html") and not allowed_name("Report.HTML")
+    assert free_name(tmp_path, "report.html", "output-1.html") == "output-1.html"
+
+
 def test_the_page_is_written_beside_the_report_and_only_then(tmp_path):
     assert report_page.write_page(tmp_path) is None and not list(tmp_path.iterdir())
     (tmp_path / "report.md").write_text("# 제목\n\n본문\n")
