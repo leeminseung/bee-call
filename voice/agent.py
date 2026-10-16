@@ -469,14 +469,18 @@ server = AgentServer(setup_fnc=prewarm, num_idle_processes=1)
 
 def caller_audio(setting: str) -> room_io.RoomOptions:
     """What the call's session hears of the caller (NOISE_CANCELLATION): LiveKit's room input, through noise
-    cancellation when it is on. The gain is left to LiveKit: on without noise cancellation, as before, and off with it,
-    since the models set the level themselves (livekit/agents#7064)."""
+    cancellation when it is on. LiveKit's gain control stays on either way, after the noise cancellation: LiveKit turns
+    it off by default when noise cancellation is set (livekit/agents#7064, "the models manage input levels"), but
+    Krisp's NC and BVC kept the levels as they came in a replay of our calls (RMS 1419 against 1340 and 1358), the
+    speech gate's floor was measured with the gain on (voice/speech_gate.py), and a comparison in a real call should
+    change one thing."""
     if setting == "off":
         return room_io.RoomOptions(audio_input=room_io.AudioInputOptions())
     from livekit.plugins import noise_cancellation  # loads the filter into LiveKit's native layer, only when used
 
     model = noise_cancellation.BVC() if setting == "bvc" else noise_cancellation.NC()
-    return room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=model))
+    return room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=model,
+                                                                      auto_gain_control=True))
 
 
 def make_session(ctx: JobContext, language: CallLanguage, tts_voice, rec: CallRecorder,

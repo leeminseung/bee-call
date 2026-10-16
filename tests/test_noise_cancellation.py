@@ -32,10 +32,11 @@ def test_bvc_and_nc_filter_the_caller_s_audio_and_off_leaves_it_as_it_was():
     assert bvc.noise_cancellation.options == noise_cancellation.BVC().options
     assert nc.noise_cancellation.options == noise_cancellation.NC().options
     assert off.noise_cancellation is None
-    # LiveKit's own default for the gain: on without noise cancellation, as before; off with it, as the models
-    # manage the level themselves (livekit/agents#7064).
+    # The gain control stays on with noise cancellation (LiveKit's default turns it off then, livekit/agents#7064):
+    # the speech gate's levels were measured with it, and a comparison in a real call changes one thing only.
     from livekit.agents.utils import is_given
-    assert not any(is_given(audio.auto_gain_control) for audio in (bvc, nc, off))
+    assert bvc.auto_gain_control is True and nc.auto_gain_control is True
+    assert not is_given(off.auto_gain_control)  # LiveKit's default without noise cancellation: on, as before
 
 
 @pytest.mark.parametrize("setting", ["bvc", "off"])
