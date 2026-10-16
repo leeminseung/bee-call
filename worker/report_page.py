@@ -22,7 +22,9 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 REPORT, PAGE = "report.md", "report.html"
-LINK = re.compile(r"(?:https?://|mailto:)[^\s\"'<>`]*", re.I)  # where a link may go
+# Where a link may go. Its value is written in double quotes and escaped, so an apostrophe is harmless (Wikipedia
+# has them); a double quote, angle brackets and white space are never in an address the renderer writes.
+LINK = re.compile(r"(?:https?://|mailto:)[^\s\"<>`]*", re.I)
 # An address written out in the text: ASCII only, so it ends where Korean words begin ("https://apple.com/kr에서").
 BARE = re.compile(r"https?://[A-Za-z0-9][A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]*", re.I)
 REL = "noopener noreferrer nofollow"  # a followed link never carries this page's address (a call's id in it)

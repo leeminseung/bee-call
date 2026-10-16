@@ -124,6 +124,15 @@ def test_links_stay_links_and_bare_addresses_become_links():
     assert "<a " not in code  # an address in code stays code
 
 
+def test_an_address_with_an_apostrophe_stays_a_link():
+    """Attribute values are written in double quotes and escaped, so an apostrophe in an address is harmless; such a
+    link (Wikipedia's Schrödinger's_cat) used to show only its words."""
+    page = page_html("[cat](https://en.wikipedia.org/wiki/Schrödinger's_cat) and "
+                     "https://en.wikipedia.org/wiki/Schr%C3%B6dinger's_cat.\n")
+    cat = "https://en.wikipedia.org/wiki/Schr%C3%B6dinger's_cat"
+    assert [attrs["href"] for t, attrs in Tags(page).found if t == "a"] == [cat, cat]
+
+
 def test_every_page_passes_the_tag_check_and_a_page_that_would_not_is_never_made():
     """The HTML that comes out is checked against the tags and attributes the renderer makes; anything else stops
     the page (the app then shows the report's text as it is)."""
