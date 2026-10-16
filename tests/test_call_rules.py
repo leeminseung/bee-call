@@ -43,9 +43,15 @@ def test_end_call_says_when_it_may_be_called():
     assert "only after the user said goodbye or that they are done" in Coordinator.end_call.info.description
 
 
-def test_after_a_job_s_result_the_conversation_goes_on_and_a_job_lasts_as_long_as_the_call():
+def test_after_a_job_s_result_the_conversation_goes_on_and_a_job_outlives_the_call():
+    """A job keeps running after its call (tests/test_jobs_after_call.py). The friend's "조사 끝나는 대로 다시 알려줘" was
+    taken for a goodbye and the job died with the call; now the AI says where the result will come, and ends the call
+    only if the user wants to."""
     assert "then keep talking about it, or about whatever the user wants" in INSTRUCTIONS
-    assert "A job runs only while the call lasts" in INSTRUCTIONS
+    assert "A job keeps running if the call ends" in INSTRUCTIONS
+    assert "say the result will come to the app with a notification" in INSTRUCTIONS
+    assert "end the call only if they want to" in INSTRUCTIONS
+    assert "A job runs only while the call lasts" not in INSTRUCTIONS
 
 
 def test_the_prep_frames_a_call_the_same_way():

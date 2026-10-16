@@ -259,6 +259,53 @@ def test_a_job_the_call_outlived_reads_as_failed_when_the_call_ended(tmp_path):
     assert (job["state"], job["failure"]) == ("failed", "call_ended")
 
 
+def job_log(folder: Path, job_id: str, touched: float, lines: list[dict] | None = None) -> None:
+    """A job's own log (jobs/<NN>/events.jsonl), last touched at `touched`: a running job touches it as it works."""
+    job = folder / "jobs" / job_id
+    job.mkdir(parents=True)
+    (job / "events.jsonl").write_text("".join(json.dumps(l) + "\n" for l in lines or [{"at": 0, "type": "started"}]))
+    os.utime(job / "events.jsonl", (touched, touched))
+
+
+CALL_START = datetime.fromisoformat(STARTED).timestamp()
+
+
+def test_a_job_that_outlives_its_call_runs_on_and_lands_after_the_call(tmp_path):
+    """A job keeps working after its call ends (2026-10-16): while its log shows life it reads as running, docked last;
+    once done it sits where it finished, after the call's last words."""
+    started = {"t": 5, "type": "job_started", "job_id": "01", "task": "A", "title": "Prices"}
+    folder = record(tmp_path, [INBOUND, say(2, "Hi."), started, hear(20, "Got to go, bye."), CLOSED, ENDED], age_s=30)
+    job_log(folder, "01", touched=WALL - 10)
+    body = view(tmp_path)
+    assert body["call"]["state"] == "ended" and body["items"][-1]["id"] == "job-01"
+    job = body["items"][-1]
+    assert (job["state"], job["duration_s"], job["failure"], job["summary"]) == ("running", None, None, None)
+    with (folder / "events.jsonl").open("a") as f:  # the job's end, after call_ended
+        f.write(json.dumps({"t": 200.5, "type": "job_done", "job_id": "01", "summary": "Cheapest in March.",
+                            "files": []}) + "\n")
+    body = view(tmp_path)
+    assert [i["type"] for i in body["items"]] == ["speech", "speech", "job"]
+    job = body["items"][-1]
+    assert (job["state"], job["summary"], job["duration_s"]) == ("done", "Cheapest in March.", 196)
+    assert job["at"] == "2026-10-15T20:03:20+09:00" and body["call"]["duration_s"] == 60
+
+
+def test_a_job_whose_log_went_quiet_without_an_end_failed(tmp_path):
+    """A job that stopped with no end on record (its process was killed: a restart) never stays running. One whose log
+    went quiet after its call ended was cut off: failed with error. One that went quiet when its call did (a call
+    from before jobs outlived calls, or a dropped one) failed with call_ended, as before."""
+    started = {"t": 5, "type": "job_started", "job_id": "01", "task": "A", "title": "Prices"}
+    folder = record(tmp_path, [INBOUND, started, hear(20, "Bye."), CLOSED, ENDED], age_s=900)
+    job_log(folder, "01", touched=WALL - 600)
+    (job,) = [i for i in view(tmp_path)["items"] if i["type"] == "job"]
+    assert (job["state"], job["failure"]) == ("failed", "error")
+    folder = record(tmp_path, [INBOUND, started, hear(20, "Bye."), CLOSED, ENDED], folder="2026-10-15/2100",
+                    room="call-matt-2", age_s=900)
+    job_log(folder, "01", touched=CALL_START + 30)
+    (job,) = [i for i in view(tmp_path, "call-matt-2")["items"] if i["type"] == "job"]
+    assert (job["state"], job["failure"], job["at"]) == ("failed", "call_ended", "2026-10-15T20:01:00+09:00")
+
+
 def test_running_jobs_come_last_and_a_job_without_a_title_is_named_by_its_task(tmp_path):
     task = "Compare Bukhansan and Gwanaksan for an easy Saturday hike and bring back a chart"
     record(tmp_path, [INBOUND, {"t": 5, "type": "job_started", "job_id": "01", "task": task},

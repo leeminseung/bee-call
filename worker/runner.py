@@ -31,6 +31,7 @@ import functools
 import html
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -44,6 +45,13 @@ from worker.report_page import PAGE, REPORT, render_apart
 
 EmitEvent = Callable[..., None]  # recorder.event(name, **fields)
 log = logging.getLogger("worker.runner")
+# A job outlives its call (2026-10-16), so whether it still works is read from its own log: a running job touches it
+# this often, and a job with no end whose log has been quiet for JOB_STALE_S is no longer running (its process was
+# killed: a restart). The call view and the voice server's start read it so.
+HEARTBEAT_S = 30.0
+JOB_STALE_S = 120.0
+JOB_ENDS = ("done", "failed", "cancelled")  # how a job's own log says it ended
+RESTARTED = "the server restarted while the job ran"
 
 
 @dataclass
@@ -161,6 +169,7 @@ class JobRunner:
         self.on_notify = on_notify
         self.jobs: dict[str, Job] = {}
         self.tasks: dict[str, asyncio.Task] = {}
+        self.stop_reason: str | None = None  # what a job stopped by cancel_all failed with ("cancelled" when unset)
 
     def _next_job(self, task: str, title: str | None, language: str | None) -> Job:
         jobs = self.session_dir / "jobs"
@@ -212,13 +221,29 @@ class JobRunner:
             if await tell(JobNotification(job.job_id, "running", task, summary=text, note=job.note)):
                 relayed = True
 
+        async def heartbeat() -> None:  # the job's log shows life while it works (HEARTBEAT_S)
+            while True:
+                await asyncio.sleep(HEARTBEAT_S)
+                try:
+                    os.utime(job.dir / "events.jsonl")
+                except OSError:
+                    pass
+
         async def run() -> None:
+            beating = asyncio.create_task(heartbeat())
+            try:
+                await work()
+            finally:
+                beating.cancel()
+
+        async def work() -> None:
             try:
                 summary = await self._run(job, progress, relay, lambda: relayed)
             except asyncio.CancelledError:
                 job.status, job.ended_at = "cancelled", time.monotonic()
-                self.emit("job_failed", job_id=job.job_id, error="cancelled")
-                self._job_log(job, "cancelled")
+                job.error = self.stop_reason or "cancelled"
+                self.emit("job_failed", job_id=job.job_id, error=job.error)
+                self._job_log(job, "cancelled", **({"reason": self.stop_reason} if self.stop_reason else {}))
                 raise
             except Exception as exc:
                 job.status, job.ended_at = "failed", time.monotonic()
@@ -294,7 +319,67 @@ class JobRunner:
             lines.append(" | ".join(parts))
         return "\n".join(lines)
 
-    async def cancel_all(self) -> None:
+    async def cancel_all(self, reason: str | None = None) -> None:
+        """Stops every job still running; each fails with `reason` ("cancelled" when none is given)."""
+        self.stop_reason = reason
         for task in self.tasks.values():
             task.cancel()
         await asyncio.gather(*self.tasks.values(), return_exceptions=True)
+
+    def running(self) -> list[asyncio.Task]:
+        return [task for task in self.tasks.values() if not task.done()]
+
+
+def _lines(path: Path) -> list[dict]:
+    """The JSON objects of a log, one a line; a line that does not parse (one still being written) is skipped."""
+    out = []
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            out.append(entry)
+    return out
+
+
+def job_alive(log_path: Path, now: float | None = None) -> bool:
+    """Whether a job whose log has no end still works: its log was touched within JOB_STALE_S."""
+    try:
+        return (time.time() if now is None else now) - log_path.stat().st_mtime <= JOB_STALE_S
+    except OSError:
+        return False
+
+
+def fail_jobs_left_running(root: Path, now: float | None = None) -> list[Path]:
+    """At the voice server's start: every job with no end whose log went quiet (its process was killed with the old
+    voice server: a deploy, a crash) fails on record, saying so, in its own log and in its call's record (after the
+    call's end, as a job's end after the call is). A job whose log still shows life is left alone. Returns the job
+    folders failed."""
+    now = time.time() if now is None else now
+    failed = []
+    for log_path in sorted(root.glob("people/*/*/*/jobs/*/events.jsonl")):
+        entries = _lines(log_path)
+        if not entries or any(e.get("type") in JOB_ENDS for e in entries) or job_alive(log_path, now):
+            continue
+        job_dir, call_dir = log_path.parent, log_path.parent.parent.parent
+        with log_path.open("a") as f:
+            f.write(json.dumps({"at": now, "type": "failed", "error": RESTARTED}) + "\n")
+        record = call_dir / "events.jsonl"
+        lines = _lines(record)
+        ended = any(e.get("type") in ("job_done", "job_failed") and str(e.get("job_id")) == job_dir.name for e in lines)
+        if lines and not ended:
+            started = next((e.get("started_at") for e in lines if e.get("type") == "call_started"), None)
+            try:
+                t = round(now - datetime.fromisoformat(started).timestamp(), 3)
+            except (TypeError, ValueError):
+                t = max((e.get("t") for e in lines if isinstance(e.get("t"), (int, float))), default=0.0)
+            with record.open("a") as f:
+                f.write(json.dumps({"t": t, "job_id": job_dir.name, "error": RESTARTED, "type": "job_failed"}) + "\n")
+        log.warning("job %s was cut off by a restart; failed on record", job_dir)
+        failed.append(job_dir)
+    return failed

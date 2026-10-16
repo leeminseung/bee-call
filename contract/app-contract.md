@@ -176,13 +176,13 @@ Every item has `type`, `id` and `at` (when it began, or for a finished job when 
 | Field | Meaning |
 |---|---|
 | `title` | A few words in the call's language: "코딩용 맥북 에어와 프로 한국 가격 비교" (open question 5). |
-| `state` | `running`, `done` or `failed`. |
+| `state` | `running`, `done` or `failed`. A job outlives its call (section 2.7): it can be `running` in a call that has ended, and finish after it. |
 | `started_at` | When it started. The app counts "1분 10초째" from it. |
 | `duration_s` | Once finished, how long it took ("1분 27초 걸림"). Null while running. |
 | `step` | While running, the latest step, in the call's language ("애플 한국 가격표 읽는 중"). Else null. |
 | `summary` | Once done, what it found, in a paragraph, in the call's language. Else null. |
 | `files` | What it made: charts first, then the report, tables, others, by name within a kind. Each is `{name, kind, url, page_url, title, image_url, image_url_dark}`. `name` is the file's real name, which the worker keeps to ASCII (`report.md`, `comparison.csv`), so the app may label a chip by its `kind` ("보고서", "표", "차트") rather than by its name. `kind` is `report` (report.md, with `page_url`, the report rendered as a readable page in HTML with light and dark styles, which the app opens instead of the raw text; null for a report from before pages existed), `table` (.csv, .tsv), `chart` (a chart the worker drew) or `other`. A chart has `image_url`, a PNG for the thumbnail and the card, `image_url_dark`, the same chart drawn for dark mode (transparent background, the dark chart palette; null for a chart drawn before dark charts existed, which the app then shows on a white plate), and its `title` in the call's language ("한국 가격(원), 에어와 프로, 세 가지 구성") when known. Other kinds have both null. The worker's own bookkeeping (request.md, events.jsonl, usage.json) is never listed. |
-| `failure` | When failed: `call_ended` (the call ended first) or `error` (anything else, with the error's words kept in the server log). Else null. A job that a call outlived without an end (a dropped call) reads as failed with `call_ended`, its `at` and `duration_s` taken from the call's end. |
+| `failure` | When failed: `call_ended` (it stopped with its call: a dropped call, or a call recorded before 2026-10-16, when a call's end stopped its jobs) or `error` (anything else, a job a server restart cut off among them, with the error's words kept in the server log). Else null. A job with no end on record whose work stopped (section 2.7) reads as failed: with `call_ended`, its `at` and `duration_s` taken from the call's end, when it stopped with the call; with `error` when it was still working after the call ended. |
 
 The step, the summary and a chart's title are in the call's language only once the worker is told that language
 (section 10). Today it writes them in English.
@@ -203,9 +203,9 @@ a write cut off by a stopped process appear only there.
 
 Items come in the order to draw. Each sits where it began: a speech run where its first words began (an AI reply
 where its voice started, so a line the person cut into comes before the words that cut it), a Bee write where it
-was written, a finished job where it finished ("통화 중에 끝난 작업은 대화 속 도착한 자리에"). A running job comes
-last, docked at the bottom of the live call. A card between two pieces of speech splits the run in two. The app does
-not sort.
+was written, a finished job where it finished ("통화 중에 끝난 작업은 대화 속 도착한 자리에"), after the call's last words
+when it finished after the call. A running job comes last, docked at the bottom of its call, live or ended. A card
+between two pieces of speech splits the run in two. The app does not sort.
 
 ### 2.6 Files: `GET /calls/{call_id}/files/{path}`
 
@@ -216,6 +216,20 @@ its inline styles). Errors: 403 for anything under `audio/` or `inputs/`,
 the model log and the Claude history (never served, BC-095) or a path that leaves the call's folder, 404 for
 anything else not there, and 401. A finished job's files never change, so the app may keep an image in memory by
 its URL.
+
+### 2.7 Jobs that outlive their call
+
+Since 2026-10-16 a job still running when its call ends runs to its end (at most 30 minutes more, then it fails
+with `error`). The call's view, and the list's `results` and `marks`, show it `running` and then `done` (or
+`failed`), with its summary, report page and charts, exactly as for a job that finishes during the call; its lines
+keep the call's record changing, so `/changes` announces the call and the list as they change (section 3). The
+server knows the job still works by its own log, which a running job touches every 30 seconds: with no end on record
+and no sign of life for 2 minutes (its process was killed, as a deploy's restart does), the job reads as `failed`,
+and the voice server writes the failure on record when it starts again. When a job ends after its call, the person
+gets one plain notification, in the call's language: "결과가 나왔어요: {title}" / "Results are in: {title}", or
+"작업을 끝내지 못했어요: {title}" / "Couldn't finish: {title}". Its payload is `{"aps": {"alert": {"title": "Bee Call",
+"body": ...}, "sound": "default", "thread-id": "jobs"}, "kind": "job", "call": <call_id>}`; tapping it opens the
+app. The app needs no change for any of this; a later build may open the call named by `call`.
 
 ## 3. Live updates during a call
 
@@ -416,6 +430,7 @@ server held (DECISIONS 2026-10-15: the friend's calls stayed in English until th
 | "Bee 할 일에 넣었어요" card and its hint | `bee_write`: `kind`, `text`, `state`, `undoable` |
 | "작업 중 · 1분 10초째" card | `job` running: `title`, `started_at`, `step` |
 | "방금 끝남 · 1분 27초 걸림" card | `job` done: `at`, `duration_s`, `title`, `summary`, `files` (chart `title` and `image_url`, chips) |
+| "결과가 나왔어요: …" notification after the call | A job that ended after its call (section 2.7) |
 | Record sheet header and "정상 종료" | `call` |
 | "통화 전에 Bee에서 본 것" | `prep` |
 | "통화 끝 · 7분 40초" | `call.state`, `call.duration_s` |

@@ -135,7 +135,17 @@ class CallRecorder:
         except (OSError, TypeError, ValueError) as exc:
             log.warning("could not keep a model request of %s: %s", self.dir, exc)
 
+    @property
+    def closed(self) -> bool:
+        """The call's end is on record (call_ended); later events go after it (after_call)."""
+        return self._events.closed
+
+    def event_or_after(self, event_type: str, /, **data: Any) -> None:
+        """An event of something that may outlive the call (a background job): in the record while the call is on,
+        after call_ended once it is over."""
+        (self.after_call if self.closed else self.event)(event_type, **data)
+
     def after_call(self, event_type: str, /, **data: Any) -> None:
-        """An event that comes after call_ended (Bee writes tried again once the call is over)."""
+        """An event that comes after call_ended (Bee writes tried again once the call is over, a job's end)."""
         with (self.dir / "events.jsonl").open("a") as f:
             f.write(json.dumps({"t": self.elapsed(), **data, "type": event_type}, default=str) + "\n")

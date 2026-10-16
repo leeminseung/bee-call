@@ -78,14 +78,14 @@ from voice.fake_claude import FakeAnthropic
 from voice.fallback_llm import FirstRequestFallback
 from voice.language import CallLanguage, call_language
 from voice.name_guard import user_names
-from voice.people import People, Person, Settings, dev_person
+from voice.people import People, Person, Settings, data_root, dev_person
 from voice.prep import INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_role
 from voice.recorder import CallRecorder
 from voice.titles import title_call
 from voice.ringback import STATE_ATTRIBUTE, ring_back
 from voice.voices import make_tts, voice_choice
 from worker.fake import FakeWorker
-from worker.runner import JobNotification, JobRunner, NoWorker, StandingBy
+from worker.runner import JobNotification, JobRunner, NoWorker, StandingBy, fail_jobs_left_running, short
 from worker.search import SearchWorker
 
 load_dotenv(".env.local")
@@ -108,9 +108,14 @@ HANG_UPS = (rtc.DisconnectReason.CLIENT_INITIATED, rtc.DisconnectReason.ROOM_DEL
 # joined (ios CallManager.pickUpSeconds), so a phone slow to join is never given up while it still rings.
 CALLER_WAIT_S = 30.0
 DECLINE_CHECK_S = 1.0  # how often a ringing AI call looks whether the user declined it (arbitrary)
-# After a call, its failed Bee writes are tried again for at most this long: LiveKit gives a job's shutdown about
-# 10 s (shutdown_process_timeout), and the call's own record is closed first (arbitrary).
+# After a call, its failed Bee writes are tried again for at most this long, after the call's own record is closed
+# (arbitrary).
 BEE_RETRY_S = 5.0
+# A background job still running when its call ends runs to its end (2026-10-16), in the call's process, at most this
+# long after the call; then it fails saying so. Its end lands in the call's record after call_ended, and the person
+# gets one plain notification. LiveKit gives a job's process shutdown_process_timeout to end once it is asked to
+# close (10 s by default, and LiveKit may ask as soon as the room is gone): the server's is set past this.
+AFTER_CALL_JOBS_S = 30 * 60
 # Changed after each reconnect of the voice server's own room connection (it is "1" from the pick-up on): captions
 # are not sent while it is away, though what it hears is still recorded, so the app stops matching caption lines to
 # the call view's counts for that call (app contract section 3, rule 6).
@@ -467,7 +472,7 @@ def prewarm(proc: JobProcess) -> None:
         proc.userdata["aws"].get_credentials()  # read the profile now rather than at the first call
 
 
-server = AgentServer(setup_fnc=prewarm, num_idle_processes=1)
+server = AgentServer(setup_fnc=prewarm, num_idle_processes=1, shutdown_process_timeout=AFTER_CALL_JOBS_S + 60)
 
 
 def caller_audio(setting: str) -> room_io.RoomOptions:
@@ -748,6 +753,7 @@ class Call:
     left: asyncio.Event | None = None
     jobs: JobRunner | None = None
     agent: Coordinator | None = None
+    over: bool = False  # the call has ended: a job's news goes to the person's phone, not to the call AI
 
     def abandoned(self) -> bool:
         """The caller hung up before the AI's first words: the call leaves no record."""
@@ -755,6 +761,10 @@ class Call:
 
 
 async def tell_about_job(call: Call, news: JobNotification) -> None:
+    if call.over:  # the call ended while the job ran: its end reaches the person's phone
+        if news.status in ("completed", "failed"):
+            await job_end_alert(call, news.job_id, done=news.status == "completed")
+        return
     if COORDINATOR_LLM == "echo":
         if news.needs_reply:
             call.session.say(f"Sorry, background job {news.job_id} failed." if news.error else news.summary)
@@ -764,10 +774,46 @@ async def tell_about_job(call: Call, news: JobNotification) -> None:
         call.session.generate_reply()
 
 
+async def job_end_alert(call: Call, job_id: str, *, done: bool) -> None:
+    """One plain notification for a job that ended after its call: "Results are in: <title>", or that it could not
+    finish, in the call's language. Tapping it opens the app, where the job's card has its result."""
+    job = call.jobs.jobs.get(job_id) if call.jobs else None
+    title = (job.title if job and job.title else None) or short(job.task if job else "", 60) or f"Job {job_id}"
+    korean = call.caller.language.code == "ko"
+    if done:
+        body = f"결과가 나왔어요: {title}" if korean else f"Results are in: {title}"
+    else:
+        body = f"작업을 끝내지 못했어요: {title}" if korean else f"Couldn't finish: {title}"
+    payload = {"aps": {"alert": {"title": "Bee Call", "body": body}, "sound": "default", "thread-id": "jobs"},
+               "kind": "job", "call": call.ctx.room.name}  # the call's id (contract section 2.7)
+    try:
+        await voip_push.alert(payload, call.caller.someone, collapse_id=f"job-{call.ctx.room.name}"[:60] + f"-{job_id}")
+    except Exception as exc:  # the result is in the app either way
+        log.warning("the notification for job %s of %s did not go out: %s", job_id, call.rec.dir, exc)
+
+
+async def finish_jobs(call: Call) -> None:
+    """The call's jobs still running at its end run to their end, at most AFTER_CALL_JOBS_S more; any still running
+    then stops, fails saying so, and its notification says it could not finish."""
+    running = call.jobs.running() if call.jobs else []
+    if not running:
+        return
+    _, late = await asyncio.wait(running, timeout=AFTER_CALL_JOBS_S)
+    if not late:
+        return
+    stopped = [job_id for job_id, task in call.jobs.tasks.items() if task in late]
+    minutes = max(1, round(AFTER_CALL_JOBS_S / 60))
+    await call.jobs.cancel_all(f"still running {minutes} minutes after the call ended")
+    for job_id in stopped:
+        await job_end_alert(call, job_id, done=False)
+
+
 async def end_call(call: Call) -> None:
     """The call's end (the job's shutdown): what it cost, its record closed, the meta agent told, then its title
-    written (voice/titles.py) while its failed Bee writes are tried again."""
+    written (voice/titles.py) while its failed Bee writes are tried again; then its jobs still running run to their
+    end (finish_jobs), which keeps the call's process until they do."""
     caller, rec, session = call.caller, call.rec, call.session
+    call.over = True
     # LiveKit runs this in a task of its own, which does not carry the Bee login chosen for the call: choose it
     # again, so the writes retried after the call go to this person's Bee and no one else's.
     bee.use_bee(call.people.bee_dir(caller.id) if caller.uses_bee else None)
@@ -778,8 +824,8 @@ async def end_call(call: Call) -> None:
         call.preparation.cancel()  # the prep records its own model use (voice/costs.py SpendLog)
     await asyncio.gather(call.prep_recorder, *([call.inputs_saver] if call.inputs_saver else []),
                          return_exceptions=True)
-    await call.jobs.cancel_all()
     if call.abandoned():  # nothing of it is kept but what it cost
+        await call.jobs.cancel_all()
         spend = SpendLog(caller.workspace)
         models = session_usage(session)
         if models:
@@ -809,6 +855,7 @@ async def end_call(call: Call) -> None:
     if caller.uses_bee:
         await after_bee_writes(rec, caller.someone, caller.language)
     await asyncio.gather(titled, return_exceptions=True)
+    await finish_jobs(call)
 
 
 async def run_call(ctx: JobContext, people: People) -> None:
@@ -877,7 +924,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
     async def notify(news: JobNotification) -> None:
         await tell_about_job(call, news)
 
-    call.jobs = JobRunner(rec.dir, rec.event, backend, notify, clock=caller.someone.now)
+    call.jobs = JobRunner(rec.dir, rec.event_or_after, backend, notify, clock=caller.someone.now)
     # Until (or without) a prep note, the plain Bee context. A note still being written replaces it when it
     # arrives, up to the first reply.
     preparation = pickup.preparation
@@ -952,5 +999,11 @@ def report_reconnects(room, rec: CallRecorder) -> None:
     room.on("reconnected", reconnected)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """The voice server: jobs a restart cut off are failed on record first (worker/runner.py), then LiveKit's CLI."""
+    fail_jobs_left_running(data_root())
     cli.run_app(server)
+
+
+if __name__ == "__main__":
+    main()

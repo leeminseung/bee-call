@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from voice.call_folders import CALL_ID, EVENTS, find_call, read_events, session_id as folder_id
+from worker.runner import job_alive
 
 SESSION_ID = re.compile(r"\d{4}-\d{2}-\d{2}/\d{4}(?:-\d+)?")  # workspace/<date>/<time>, see voice/recorder.py
 MAX_TALK_CHARS = 6000  # arbitrary: about ten minutes of talk; an older start is left out
@@ -62,7 +63,7 @@ def _talk(folder: Path) -> str:
     return text
 
 
-def _jobs(events: list[dict[str, Any]]) -> list[str]:
+def _jobs(events: list[dict[str, Any]], folder: Path) -> list[str]:
     jobs: dict[str, dict[str, Any]] = {}
     for e in events:
         if e.get("type") not in ("job_started", "job_done", "job_failed"):
@@ -88,7 +89,10 @@ def _jobs(events: list[dict[str, Any]]) -> list[str]:
         elif state == "failed":
             error = escape(str(job.get("error") or "").strip()[:300], quote=False)
             lines.append(f"- Job {job_id}, {task}\n  Failed: {error}")
-        else:  # cancelled when the call ended, or still running then
+        elif state is None and job_alive(folder / "jobs" / job_id / "events.jsonl"):  # it outlived that call
+            lines.append(f"- Job {job_id}, {task}\n  Still running; its result will reach the app, with a "
+                         "notification. Do not start it again.")
+        else:  # stopped unfinished: cancelled when its call ended (calls before 2026-10-16), or cut off since
             lines.append(f"- Job {job_id}, {task}\n  Stopped unfinished when that call ended. Start it again only "
                          "if the user wants it.")
     return lines
@@ -110,7 +114,7 @@ def earlier_call(workspace: Path, session_id: Any) -> str | None:
     parts = [f"The earlier call: {when}{length}."]
     talk = _talk(folder)
     parts.append("What was said (AI is you):\n" + talk if talk else "Nothing was said in it.")
-    jobs = _jobs(events)
+    jobs = _jobs(events, folder)
     if jobs:
         parts.append("Background jobs in that call:\n" + "\n".join(jobs))
     return "\n\n".join(parts)
