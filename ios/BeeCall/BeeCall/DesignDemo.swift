@@ -23,6 +23,7 @@ enum DesignDemo: String {
     case callsList // calls-list.html: the calls list during the call
     case callsListOlder // calls-list.html: the list scrolled to its foot, the next older page on its way
     case callsListEmpty // calls-list.html: the list before the first call
+    case callsListRecord // calls-list.html: a call's record opened in the list
 
     static func requested(in store: UserDefaults = .standard) -> DesignDemo? {
         store.string(forKey: "designD").flatMap(DesignDemo.init(rawValue:))
@@ -117,10 +118,11 @@ struct DesignDemoView: View {
                 CallSheet(callID: DesignDemo.liveCall, source: data, canContinue: true, continueCall: {},
                           startAtEnd: demo == .recordEnd)
             }
-        case .callsList, .callsListOlder, .callsListEmpty:
+        case .callsList, .callsListOlder, .callsListEmpty, .callsListRecord:
             home.sheet(isPresented: .constant(true)) {
                 CallsListSheet(source: data, canContinue: !calls.isInCall, backToCall: {}, continueCall: { _ in },
-                               startAtEnd: demo == .callsListOlder)
+                               startAtEnd: demo == .callsListOlder,
+                               startOn: demo == .callsListRecord ? DesignDemo.liveCall : nil)
             }
             .task { if demo == .callsList { await playLiveCall() } }
         case .settings, .callModels, .workerModels:

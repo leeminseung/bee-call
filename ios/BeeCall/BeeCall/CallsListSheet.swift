@@ -15,12 +15,23 @@ struct CallsListSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("language") private var language = "en"
     @State private var files = FilePreview() // a job's file, opened over this sheet
+    @State private var path: [String] // the record open in the sheet, if any
+
+    init(source: any ConversationSource, canContinue: Bool, backToCall: @escaping () -> Void,
+         continueCall: @escaping (String) -> Void, startAtEnd: Bool = false, startOn record: String? = nil) {
+        self.source = source
+        self.canContinue = canContinue
+        self.backToCall = backToCall
+        self.continueCall = continueCall
+        self.startAtEnd = startAtEnd
+        _path = State(initialValue: record.map { [$0] } ?? [])
+    }
 
     private var korean: Bool { language == "ko" }
     private var words: CallsListWords { CallsListWords(korean: korean) }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             content
                 .navigationTitle(words.title)
                 .navigationBarTitleDisplayMode(.inline)
