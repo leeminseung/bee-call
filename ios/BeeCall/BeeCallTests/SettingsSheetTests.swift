@@ -33,6 +33,15 @@ final class SettingsSheetTests: XCTestCase {
                            + "the Bee Call page of the iOS Settings app.")
     }
 
+    /// The noise cancellation switch's words: its name, and one quieter line under it.
+    @MainActor func testTheNoiseSwitchReadsInBothLanguages() {
+        let ko = SettingsWords(korean: true), en = SettingsWords(korean: false)
+        XCTAssertEqual(ko.noise, "주변 소리 줄이기")
+        XCTAssertEqual(ko.noiseDetail, "통화할 때 주변 소음과 다른 사람 목소리를 줄여요.")
+        XCTAssertEqual(en.noise, "Reduce background noise")
+        XCTAssertEqual(en.noiseDetail, "Filters out noise and other voices around you during calls.")
+    }
+
     /// "iOS 설정 열기" opens the app's own page in the Settings app, where the other switches are.
     @MainActor func testTheLastRowOpensTheAppsPageInTheSettingsApp() {
         XCTAssertEqual(SettingsWords.settingsPage, URL(string: UIApplication.openSettingsURLString))

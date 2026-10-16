@@ -524,6 +524,8 @@ nonisolated struct PersonSettings: Decodable, Hashable {
     @Present var voice: String? // null: the language's default voice
     let callModel: String // a catalog id of GET /models?role=call
     let workerModel: String // a catalog id of GET /models?role=worker
+    /// Noise cancellation on the person's audio in their calls, default on; a call keeps the value it started with.
+    let noiseCancellation: Bool
     let callTime: String
     let recordOnServer: Bool
     let recordOnPhone: Bool
@@ -535,6 +537,7 @@ nonisolated struct PersonSettings: Decodable, Hashable {
         case language, voice
         case callModel = "call_model"
         case workerModel = "worker_model"
+        case noiseCancellation = "noise_cancellation"
         case callTime = "call_time"
         case recordOnServer = "record_on_server"
         case recordOnPhone = "record_on_phone"

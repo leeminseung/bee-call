@@ -144,5 +144,10 @@ final class ContractExamplesTests: XCTestCase {
         XCTAssertNil(english.voice, "the new language's default")
         let (_, me) = try await get("/me", from: examples)
         XCTAssertEqual(try Contract.decode(Me.self, from: me).settings.language, .en)
+        let held = try Examples.decode(Me.self, "me").settings.noiseCancellation
+        let flipped = try await put(["noise_cancellation": !held])
+        XCTAssertEqual(flipped.noiseCancellation, !held)
+        let (_, after) = try await get("/me", from: examples)
+        XCTAssertEqual(try Contract.decode(Me.self, from: after).settings.noiseCancellation, !held)
     }
 }
