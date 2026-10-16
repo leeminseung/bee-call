@@ -85,8 +85,8 @@ struct ThreadEntryView: View {
 
     var body: some View {
         switch entry {
-        case .bubble(_, let speaker, let text):
-            SpeechBubble(speaker: speaker, text: text)
+        case .bubble(_, let speaker, let text, let arriving):
+            SpeechBubble(speaker: speaker, text: text, arriving: arriving)
         case .item(.speech(let speech)):
             SpeechBubble(speaker: speech.speaker, text: speech.text)
         case .item(.job(let job)):
@@ -112,13 +112,14 @@ struct ThreadEntryView: View {
 struct SpeechBubble: View {
     let speaker: Speaker
     let text: String
+    var arriving = false
 
     private var mine: Bool { speaker == .person }
 
     var body: some View {
         HStack {
             if mine { Spacer(minLength: 60) }
-            Text(text)
+            ArrivingText(text: text, arriving: arriving)
                 .font(.body)
                 .foregroundStyle(mine ? .white : BeeStyle.aiBubbleText)
                 .padding(.horizontal, 13)
@@ -127,6 +128,34 @@ struct SpeechBubble: View {
                 .frame(maxWidth: 290, alignment: mine ? .trailing : .leading)
             if !mine { Spacer(minLength: 60) }
         }
+    }
+}
+
+/// Words still arriving, in full ink with a blinking bar at their end (the dark-mode design): faded words, as design
+/// D first drew them, fall under 4.5:1. With Reduce Motion the bar stays still.
+struct ArrivingText: View {
+    let text: String
+    let arriving: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Group {
+            if arriving && !reduceMotion {
+                TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                    withBar(shown: Int(context.date.timeIntervalSinceReferenceDate * 2).isMultiple(of: 2))
+                }
+            } else {
+                withBar(shown: arriving)
+            }
+        }
+        .accessibilityLabel(text) // the bar is not read out
+    }
+
+    /// The text and, while it arrives, the bar, which keeps its place when it blinks off so the text does not move.
+    private func withBar(shown: Bool) -> Text {
+        guard arriving else { return Text(text) }
+        let bar = Text("\u{2009}\u{258F}")
+        return Text(text) + (shown ? bar : bar.foregroundStyle(.clear))
     }
 }
 

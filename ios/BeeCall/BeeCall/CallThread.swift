@@ -31,12 +31,12 @@ enum CallThread {
     /// What a call's section draws: an item of its view, or a bubble of speech with live caption text in it.
     enum Entry: Identifiable, Hashable {
         case item(CallItem)
-        case bubble(id: String, speaker: Speaker, text: String)
+        case bubble(id: String, speaker: Speaker, text: String, arriving: Bool = false)
 
         var id: String {
             switch self {
             case .item(let item): item.id
-            case .bubble(let id, _, _): id
+            case .bubble(let id, _, _, _): id
             }
         }
     }
@@ -76,11 +76,18 @@ enum CallThread {
             let held = view?.captionsIncluded ?? CaptionCounts(person: 0, ai: 0)
             for line in captions where line.number > (line.speaker == .person ? held.person : held.ai) {
                 if let last = entries.last, let (id, speaker, text) = speech(last), speaker == line.speaker {
-                    entries[entries.count - 1] = .bubble(id: id, speaker: speaker, text: text + " " + line.text)
+                    entries[entries.count - 1] = .bubble(id: id, speaker: speaker, text: text + " " + line.text,
+                                                         arriving: line.arriving)
                 } else {
                     entries.append(.bubble(id: "caption-\(line.speaker.rawValue)-\(line.number)", speaker: line.speaker,
-                                           text: line.text))
+                                           text: line.text, arriving: line.arriving))
                 }
+            }
+        }
+        // Only the newest bubble draws the bar: a line that never got its final version stops when another follows.
+        for index in entries.indices.dropLast() {
+            if case .bubble(let id, let speaker, let text, true) = entries[index] {
+                entries[index] = .bubble(id: id, speaker: speaker, text: text)
             }
         }
         return entries + running.map(Entry.item)
@@ -89,7 +96,7 @@ enum CallThread {
     private static func speech(_ entry: Entry) -> (String, Speaker, String)? {
         switch entry {
         case .item(.speech(let speech)): (speech.id, speech.speaker, speech.text)
-        case .bubble(let id, let speaker, let text): (id, speaker, text)
+        case .bubble(let id, let speaker, let text, _): (id, speaker, text)
         case .item: nil
         }
     }

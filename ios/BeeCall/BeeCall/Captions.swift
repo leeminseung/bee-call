@@ -9,6 +9,7 @@ struct Caption: Identifiable {
         let number: Int // the speaker's 1, 2, 3... in the order lines first arrived (contract section 3)
         var text: String
         var sentAt: Date
+        var arriving = true // until its stream ends (the AI's) or its final version has come (the person's)
     }
 
     let id: String // the first line's id
@@ -18,6 +19,11 @@ struct Caption: Identifiable {
     var text: String {
         lines.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
             .joined(separator: " ")
+    }
+
+    /// Its newest words are still arriving: a blinking bar ends the bubble.
+    var arriving: Bool {
+        lines.last?.arriving ?? false
     }
 }
 
@@ -35,7 +41,9 @@ struct CaptionList {
     /// lines the call view holds already.
     var lines: [CaptionLine] {
         captions.flatMap { caption in
-            caption.lines.map { CaptionLine(speaker: caption.isMine ? .person : .ai, number: $0.number, text: $0.text) }
+            caption.lines.map {
+                CaptionLine(speaker: caption.isMine ? .person : .ai, number: $0.number, text: $0.text, arriving: $0.arriving)
+            }
         }
     }
 
@@ -45,6 +53,7 @@ struct CaptionList {
             guard sentAt >= captions[bubble].lines[line].sentAt else { return } // an older version of this line
             captions[bubble].lines[line].text = text
             captions[bubble].lines[line].sentAt = sentAt
+            captions[bubble].lines[line].arriving = true
             return
         }
         let number = (counts[isMine] ?? 0) + 1
@@ -58,6 +67,14 @@ struct CaptionList {
         if captions.count > Self.limit { captions.removeFirst() }
     }
 
+    /// The stream that carried a version of the line `id` has ended. The AI's line comes as one stream in chunks, so
+    /// its stream's end is the line's; a person's line is re-sent in full, and is done with the version the voice
+    /// server marks final (lk.transcription_final), whose stream may end after a later interim one's.
+    mutating func streamEnded(line id: String, final: Bool) {
+        guard let (bubble, line) = position(of: id), final || !captions[bubble].isMine else { return }
+        captions[bubble].lines[line].arriving = false
+    }
+
     private func position(of id: String) -> (Int, Int)? {
         for (bubble, caption) in captions.enumerated() {
             if let line = caption.lines.firstIndex(where: { $0.id == id }) { return (bubble, line) }
@@ -66,11 +83,13 @@ struct CaptionList {
     }
 }
 
-/// One caption line as the thread uses it: its speaker, its number among that speaker's lines, and its text.
+/// One caption line as the thread uses it: its speaker, its number among that speaker's lines, its text, and
+/// whether its words are still arriving.
 struct CaptionLine: Hashable {
     let speaker: Speaker
     let number: Int
     let text: String
+    var arriving = false
 }
 
 /// Whether the caption numbers still line up with the server's counts (contract section 3, rule 6). They do while

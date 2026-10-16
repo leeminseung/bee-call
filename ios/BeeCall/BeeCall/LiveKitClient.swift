@@ -55,12 +55,15 @@ final class LiveKitClient: NSObject {
         // stream in chunks; a user line is re-sent in full as a new stream each time it improves.
         try await room.registerTextStreamHandler(for: "lk.transcription") { [weak self, weak room] reader, sender in
             let segment = reader.info.attributes["lk.segment_id"] ?? reader.info.id
+            let final = reader.info.attributes["lk.transcription_final"] == "true"
             var text = ""
             for try await chunk in reader {
                 text += chunk
                 guard let self, let room else { return }
                 await self.show(text, segment: segment, from: sender, sentAt: reader.info.timestamp, in: room)
             }
+            guard let self, let room else { return }
+            await self.streamEnded(segment: segment, from: sender, final: final, in: room)
         }
         try Task.checkCancellation() // the call ended while we got the room ready
         try await room.connect(url: access.url, token: access.token)
@@ -115,6 +118,12 @@ final class LiveKitClient: NSObject {
         guard room === self.room else { return } // a late line from an earlier call
         let isMine = sender == room.localParticipant.identity
         captionList.show(text, line: "\(sender.stringValue)/\(segment)", isMine: isMine, sentAt: sentAt)
+    }
+
+    /// A line's stream has ended: the AI's line is complete, a person's line once its final version has come.
+    private func streamEnded(segment: String, from sender: Participant.Identity, final: Bool, in room: Room) {
+        guard room === self.room else { return }
+        captionList.streamEnded(line: "\(sender.stringValue)/\(segment)", final: final)
     }
 
     // MARK: - Token server

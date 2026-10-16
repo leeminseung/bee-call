@@ -69,6 +69,40 @@ final class CaptionsTests: XCTestCase {
         XCTAssertEqual(list.captions.count, 2)
     }
 
+    // MARK: - A line still arriving (dark-mode design: a blinking bar at its end, never faded words)
+
+    /// The AI's line comes as one stream in chunks: it is arriving until its stream ends.
+    @MainActor func testTheAIsLineArrivesUntilItsStreamEnds() {
+        var list = CaptionList()
+        list.show("Good,", line: "agent/a1", isMine: false, sentAt: at(0))
+        XCTAssertEqual(list.captions.last?.arriving, true)
+        list.show("Good, the trail is open.", line: "agent/a1", isMine: false, sentAt: at(0))
+        list.streamEnded(line: "agent/a1", final: false) // the voice server marks only its closing header final
+        XCTAssertEqual(list.captions.last?.arriving, false)
+        XCTAssertEqual(list.lines.map(\.arriving), [false])
+    }
+
+    /// A user line is re-sent in full each time it improves: it is arriving until the version marked final.
+    @MainActor func testAUserLineArrivesUntilItsFinalVersion() {
+        var list = CaptionList()
+        list.show("Dana says", line: "matt/u1", isMine: true, sentAt: at(1))
+        list.streamEnded(line: "matt/u1", final: false)
+        XCTAssertEqual(list.captions.last?.arriving, true, "a better version is still to come")
+        list.show("Dana says her knee is better", line: "matt/u1", isMine: true, sentAt: at(2))
+        list.streamEnded(line: "matt/u1", final: true)
+        XCTAssertEqual(list.captions.last?.arriving, false)
+    }
+
+    /// A bubble of several lines is arriving while its last line is.
+    @MainActor func testAJoinedBubbleArrivesWithItsLastLine() {
+        var list = CaptionList()
+        list.show("Yes, now is fine.", line: "matt/u1", isMine: true, sentAt: at(1))
+        list.streamEnded(line: "matt/u1", final: true)
+        list.show("Dana says", line: "matt/u2", isMine: true, sentAt: at(2))
+        XCTAssertEqual(list.captions.last?.arriving, true)
+        XCTAssertEqual(list.lines.map(\.arriving), [false, true])
+    }
+
     // MARK: - Caption numbers (contract section 3)
 
     /// Each speaker's lines are numbered 1, 2, 3... in the order they first arrive in the room; a better version
@@ -80,7 +114,7 @@ final class CaptionsTests: XCTestCase {
         list.show("now is fine.", line: "matt/u2", isMine: true, sentAt: at(2))
         list.show("Yes, it is", line: "matt/u1", isMine: true, sentAt: at(3))
         list.show("Great.", line: "agent/a2", isMine: false, sentAt: at(4))
-        XCTAssertEqual(list.lines, [
+        XCTAssertEqual(list.lines.map { CaptionLine(speaker: $0.speaker, number: $0.number, text: $0.text) }, [
             CaptionLine(speaker: .ai, number: 1, text: "Hi."),
             CaptionLine(speaker: .person, number: 1, text: "Yes, it is"),
             CaptionLine(speaker: .person, number: 2, text: "now is fine."),

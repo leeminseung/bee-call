@@ -100,7 +100,7 @@ struct CallModeView: View {
     private func lineStack(_ lines: CallLines) -> some View {
         VStack(spacing: 14) {
             if let current = lines.current {
-                Text(current.text)
+                ArrivingText(text: current.text, arriving: current.arriving)
                     .font(.title2.bold())
                     .foregroundStyle(BeeStyle.ink)
                     .multilineTextAlignment(.center)
