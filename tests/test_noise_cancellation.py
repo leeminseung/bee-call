@@ -89,3 +89,19 @@ def test_a_noise_filter_that_cannot_load_never_stops_a_call(tmp_path, monkeypatc
     (coordinator,) = [e for e in events if e["type"] == "coordinator"]
     assert coordinator["noise_cancellation"] == "off"
     assert any(e["type"] == "error" and e.get("source") == "noise_cancellation" for e in events)
+
+
+@pytest.mark.parametrize("setting", ["bvc", "nc", "off"])
+def test_the_voice_server_starts_with_each_setting(setting):
+    """Second review of 2026-10-16, finding 1: the check at import ran before the function it calls was defined, so
+    NOISE_CANCELLATION=bvc or nc stopped the voice server at start (a restart loop under systemd). The setting is read
+    as the module loads, so this imports it afresh, the way the unit starts it."""
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "NOISE_CANCELLATION": setting}
+    done = subprocess.run([sys.executable, "-c", "import voice.agent as a; print(a.NOISE_CANCELLATION)"],
+                          env=env, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert done.stdout.strip().splitlines()[-1] == setting

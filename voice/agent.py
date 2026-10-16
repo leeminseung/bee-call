@@ -476,8 +476,6 @@ def prewarm(proc: JobProcess) -> None:
 
 
 server = AgentServer(setup_fnc=prewarm, num_idle_processes=1, shutdown_process_timeout=AFTER_CALL_JOBS_S + 60)
-if NOISE_CANCELLATION != "off" and (_problem := noise_problem(NOISE_CANCELLATION)):  # loaded here, not in a call
-    log.error("NOISE_CANCELLATION=%s cannot be used (%s); calls run without it", NOISE_CANCELLATION, _problem)
 
 
 def noise_filter(setting: str) -> rtc.NoiseCancellationOptions:
@@ -497,6 +495,10 @@ def noise_problem(setting: str) -> str | None:
     except Exception as exc:  # a call is answered without it rather than not at all
         return f"{type(exc).__name__}: {exc}"[:300]
     return None
+
+
+if NOISE_CANCELLATION != "off" and (_problem := noise_problem(NOISE_CANCELLATION)):  # loaded here, not in a call
+    log.error("NOISE_CANCELLATION=%s cannot be used (%s); calls run without it", NOISE_CANCELLATION, _problem)
 
 
 def caller_audio(setting: str) -> room_io.RoomOptions:
