@@ -946,7 +946,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
         rec, call.jobs, workspace, clock=caller.someone.now, prep_note=prep.note or call_brief(inputs, meta),
         pending_note=pending, language=caller.language, earlier_call=meta.get("earlier_call"),
         direction=meta.get("direction", "inbound"), audio_tags=caller.tts_voice.performs_tags,
-        user_names=user_names(inputs.first_name or prep.first_name, prep.opening))
+        user_names=user_names(inputs.first_name or prep.first_name, prep.opening, prep.spoken_name))
 
     async def shutdown() -> None:
         await end_call(call)

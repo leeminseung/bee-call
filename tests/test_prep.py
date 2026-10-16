@@ -276,3 +276,26 @@ def test_the_first_turn_waits_a_little_for_the_note(tmp_path):
 def test_a_note_after_the_first_turn_changes_nothing(tmp_path):
     turn, later, waited = late_note_turn(tmp_path, arrives_after=2.5)  # past the 2 s wait
     assert turn.endswith("The user called you from the app.\n") and later == turn and 1.9 < waited < 2.3
+
+
+def test_the_prep_writes_the_name_as_the_call_will_say_it_before_the_opening(fake_bee):
+    """voice/name_guard.py needs the name in the call's language even when the opening greets no one by name (review
+    of 2026-10-16, finding 1): the prep is told the user's first name and writes it as the call will say it, first,
+    so it is there when the AI picks up. The opening and the note are as before; a prep without a name has none."""
+    from voice.prep import PREP_INSTRUCTIONS, PREP_INSTRUCTIONS_WITHOUT_BEE
+
+    assert "<name>" in PREP_INSTRUCTIONS and "<name>" not in PREP_INSTRUCTIONS_WITHOUT_BEE
+    client = Converse(text("<name>매트</name>\n<opening>안녕하세요, Bee Call이에요.</opening>\n" + NOTE))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, glm(client), spend=SPEND, bee=True,
+                                    now=NOW))
+    assert (prep.spoken_name, prep.opening) == ("매트", "안녕하세요, Bee Call이에요.") and prep.note
+    assert Prep.from_meta(json.loads(json.dumps(prep.to_meta()))).spoken_name == "매트"
+    client = Converse(text(OPENING + NOTE))
+    prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, glm(client), spend=SPEND, bee=True,
+                                    now=NOW))
+    assert prep.spoken_name is None
+    for written in ("<name>  </name>", "<name>Mr. Very Long Name Of Someone Else</name>", "<name><b>x</b></name>"):
+        client = Converse(text(written + OPENING + NOTE))
+        prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, glm(client), spend=SPEND,
+                                        bee=True, now=NOW))
+        assert prep.spoken_name is None, written

@@ -41,6 +41,21 @@ def said(text: str, names=NAMES) -> str:
     ("Yes, I think so, and it helps.", "Yes, I think so, and it helps."),
     ("Hi Minseung, how was it?", "Hi Minseung, how was it?"),  # not the first words of a sentence: only openings say it
     ("민망하지만, 맞아요.", "민망하지만, 맞아요."),
+    # Review of 2026-10-16, finding 4: where the name is no "you", it stays: beside another person (과, 말고), in a
+    # list, glued to a word. A name said with "!" goes with its mark.
+    ("민승 님과 Dana 님 둘 다 가시는 거죠?", "민승 님과 Dana 님 둘 다 가시는 거죠?"),
+    ("민승 님 말고 Dana 님이 운전하세요?", "민승 님 말고 Dana 님이 운전하세요?"),
+    ("토요일 멤버는 Dana 님, 지수 님, 민승 님.", "토요일 멤버는 Dana 님, 지수 님, 민승 님."),
+    ("So the group is Dana, Jisoo, Minseung.", "So the group is Dana, Jisoo, Minseung."),
+    ("민승님말씀처럼 해 볼게요.", "민승님말씀처럼 해 볼게요."),
+    ("민승 님! 반가워요.", "반가워요."),
+    ("Minseung! Great to hear from you.", "Great to hear from you."),
+    ("Thanks, Minseung.", "Thanks."),
+    # Finding 2: a quoted item is said as proposed (a Bee save checks the question quotes it whole).
+    ("Bee에 '민승 님 생일 선물 사기'를 할 일로 넣을까요?", "Bee에 '민승 님 생일 선물 사기'를 할 일로 넣을까요?"),
+    ("Bee에서 '민승 님은 등산보다 수영을 더 좋아한다'로 고칠까요?", "Bee에서 '민승 님은 등산보다 수영을 더 좋아한다'로 고칠까요?"),
+    ("Shall I add 'Call Minseung's mom' to your Bee todos?", "Shall I add 'Call Minseung's mom' to your Bee todos?"),
+    ("It's fine, Minseung.", "It's fine."),
 ])
 def test_the_name_is_taken_out_of_a_reply(reply, heard):
     assert said(reply) == heard
@@ -54,6 +69,10 @@ def test_the_name_is_taken_out_of_a_reply(reply, heard):
     "민승 님, 내일 등산은 Dana 님과 다시 한번 확인해 보시는 게 좋겠어요.",
     "민망하지만, 맞아요. 민승씨는 어때요?",
     "Bee에 '민승 생일 선물 사기'를 할 일로 넣을까요?",
+    "Bee에 '민승 님 생일 선물 사기'를 할 일로 넣을까요? 민승 님은 어때요?",
+    "그건 이민승 님한테 맞는 방법 같아요.",  # finding 5: a split after "이" took the name out of "이민승"
+    "민승 님! 반가워요. It's fine, Minseung.",
+    "토요일 멤버는 Dana 님, 지수 님, 민승 님.",
 ])
 def test_streamed_in_any_pieces_a_reply_comes_out_the_same(reply):
     """A reply streams in pieces that can split a name, its 님 or the comma before it anywhere."""
@@ -86,6 +105,13 @@ def test_the_names_a_call_knows():
     assert user_names(None, "민승 씨, 안녕하세요!") == ["민승"]
     assert user_names(None, "안녕하세요, 민승 님. 무슨 일로 전화 주셨어요?") == ["민승"]
     assert user_names(None, "안녕하세요, Bee Call입니다.") == [] and user_names(" ", None) == []
+
+
+def test_the_prep_s_spoken_name_counts_even_when_the_opening_greets_no_one():
+    """Finding 1: an opening without the name left the guard without its Korean form; the prep now writes the name as
+    the call will say it (voice/prep.py <name>), and that one is taken instead of guessing from the opening."""
+    assert user_names("Minseung", "안녕하세요, Bee Call이에요. 무슨 일로 전화 주셨어요?", "민승") == ["Minseung", "민승"]
+    assert user_names("Minseung", "민승 선생님, 안녕하세요.", "민승") == ["Minseung", "민승"]  # not 선생
 
 
 def test_only_the_name_the_opening_greets_the_user_with_counts():
