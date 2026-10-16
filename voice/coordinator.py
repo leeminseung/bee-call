@@ -187,10 +187,11 @@ def keep_reply(reply: dict[str, Any], chunk: Any) -> None:
 
 
 # What ends a sentence or a clause in what the user said, for book_call's `asked` (a turn's end does too). A dot
-# ends one only before a space or the end, so "7 a.m." and "U.S." stay whole.
-CLAUSE_END = re.compile(r"(?:[!?。？！…,，、;\n]|\.(?=\s|$))+")
+# ends one only before a space or the end, and never the dot that closes "a.m.", "p.m." or "U.S.", so they stay
+# whole with what follows them: a "no" right after "9 a.m." is in what a quote of "Call me at 9 a.m." leaves out.
+CLAUSE_END = re.compile(r"(?:[!?。？！…,，、;\n]|(?<!\b[A-Za-z]\.[A-Za-z])\.(?=\s|$))+")
 # Words that turn around the words beside them: "Don't call me back", "No need to call", "전화 안 해도 돼요".
-NEGATION = re.compile(r"\b(?:no|not|never|nope|dont)\b|n['’]t\b|(?<!\S)(?:안|못)(?!\S)", re.IGNORECASE)
+NEGATION = re.compile(r"\b(?:no|not|never|nope|dont|cannot)\b|n['’]t\b|(?<!\S)(?:안|못)(?!\S)", re.IGNORECASE)
 HANGUL = re.compile(r"[\uac00-\ud7a3\u3131-\u318e]")
 
 

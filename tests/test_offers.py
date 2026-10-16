@@ -327,6 +327,11 @@ def test_a_call_back_is_booked_only_with_the_user_s_own_words_asking_for_it(tmp_
     (["다시 전화 안 해 줘도 돼요."], "해 줘도 돼요", False),
     (["Then my friend said she'd call me back."], "call me back", False),
     (["Call me back tomorrow — actually no."], "Call me back tomorrow", False),
+    (["You cannot call me back tomorrow."], "call me back tomorrow", False),
+    # The dot that closes "a.m." or "p.m." ends no piece, so a "no" right after it is in what the quote leaves out
+    # (review of the final fixes: "Call me at 9 a.m." out of the first one booked).
+    (["Call me at 9 a.m. no actually don't."], "Call me at 9 a.m.", False),
+    (["Call me at 9 p.m. no wait, never mind."], "Call me at 9 p.m.", False),
     (["I went hiking yesterday."], "yes", False),
     (["Hmm."], "m", False),
     # Whole sentences or clauses, one or several in a row (an answer split at pauses, over turns too), or most of
