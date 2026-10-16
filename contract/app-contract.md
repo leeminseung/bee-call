@@ -209,8 +209,10 @@ not sort.
 
 ### 2.6 Files: `GET /calls/{call_id}/files/{path}`
 
-What `url` and `image_url` point at. Content-Type by kind: `text/plain; charset=utf-8` for .md, .csv and .txt,
-`image/png`, and `image/svg+xml` with a sandbox CSP as today. Errors: 403 for anything under `audio/` or `inputs/`,
+What `url`, `page_url`, `image_url` and `image_url_dark` point at. Content-Type by kind: `text/plain; charset=utf-8`
+for .md, .csv and .txt, `text/html; charset=utf-8` for a report's page, `image/png`, and `image/svg+xml`, each with a
+sandbox CSP and nosniff, so nothing in a file runs (a report's page also carries its own policy, which allows only
+its inline styles). Errors: 403 for anything under `audio/` or `inputs/`,
 the model log and the Claude history (never served, BC-095) or a path that leaves the call's folder, 404 for
 anything else not there, and 401. A finished job's files never change, so the app may keep an image in memory by
 its URL.
