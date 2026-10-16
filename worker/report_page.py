@@ -57,7 +57,8 @@ p, ul, ol, blockquote, pre { margin: 0 0 1em; }
 ul, ol { padding-left: 1.3em; }
 li { margin: 0.3em 0; }
 li > p { margin: 0; }
-a { color: inherit; text-decoration: underline 2px var(--link); text-underline-offset: 3px; }
+a { color: inherit; text-decoration-line: underline; text-decoration-color: var(--link);
+  text-decoration-thickness: 2px; text-underline-offset: 3px; }
 code { font: 0.88em/1.5 ui-monospace, "SF Mono", Menlo, monospace; background: var(--card); border-radius: 5px;
   padding: 0.1em 0.35em; }
 pre { background: var(--card); border-radius: 12px; padding: 12px 14px; overflow-x: auto; }
