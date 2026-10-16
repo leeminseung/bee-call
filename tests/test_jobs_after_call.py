@@ -11,6 +11,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from tests.fake_call import FakeCall, use_fakes
 from tests.helpers import signed_in
 from tests.test_voice_server import call_folders, events_of, quick  # noqa: F401 (quick is a fixture)
@@ -505,3 +507,59 @@ def test_a_job_that_ends_after_its_call_tells_the_meta_agent(tmp_path, monkeypat
     assert _event_line(me.workspace, ended) == (
         f"[{ended['at']}] A background job of call {call} ended after the call: \"Price check\" (done); "
         f"its result is in {call}/jobs/01/")
+
+
+class TwoSpeeds:
+    """A worker: a "quick" job ends at once (a "broken" one fails at once), any other works for 30 s."""
+
+    async def run(self, job, progress, relay):
+        progress("working")
+        if "broken" in job.task:
+            raise RuntimeError("the search failed")
+        await asyncio.sleep(0.1 if "quick" in job.task else 30)
+        (job.dir / "report.md").write_text("# Result\n\nok\n")
+        await relay(f"{job.task}: the result")
+        return f"{job.task}: the summary"
+
+
+def two_jobs_call(monkeypatch, me, first: str, *, stopping: bool = False) -> list[str]:
+    """A call with a job that ends early in it (`first`) and one still running at its end, which is stopped after the
+    call (the cap, or the STOPPING mark of a deploy); returns the notifications' texts."""
+    monkeypatch.setattr(agent, "job_worker", lambda *args, **kwargs: TwoSpeeds())
+    monkeypatch.setattr(agent, "RECENT_RESULT_S", 0.2)
+    monkeypatch.setattr(agent, "AFTER_CALL_JOBS_S", 0.5)
+    pushes: list[str] = []
+
+    async def alert(payload, person, **options):
+        pushes.append(payload["aps"]["alert"]["body"])
+        return "A-1"
+
+    monkeypatch.setattr(agent.voip_push, "alert", alert)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        coordinator = call.session.started["agent"]
+        await coordinator.delegate(None, task=first, title="Early")
+        await coordinator.delegate(None, task="slow research", title="Slow")
+        await asyncio.sleep(1.0)  # the early one ended, and was told in the call, well before the call's end
+        if stopping:
+            (me.people.root / agent.STOPPING).write_text("now")
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    return pushes
+
+
+
+@pytest.mark.parametrize("first", ["quick lookup", "broken lookup"])
+@pytest.mark.parametrize("stopping", [False, True])
+def test_only_the_jobs_the_call_left_running_are_notified(tmp_path, monkeypatch, quick, first, stopping):
+    """Third review, finding 3: once a job still running after the call was stopped (the cap, or a deploy), every
+    other job of the call that had ended was notified too: a second "Results are in" for a result heard in the call,
+    or "Couldn't finish" for a job whose failure was told in it. Only the jobs still running when the call ended are."""
+    me = signed_in(tmp_path)
+    assert two_jobs_call(monkeypatch, me, first, stopping=stopping) == ["Couldn't finish: Slow"]

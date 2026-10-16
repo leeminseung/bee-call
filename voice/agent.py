@@ -803,6 +803,7 @@ class Call:
     agent: Coordinator | None = None
     over: bool = False  # the call has ended: a job's news goes to the person's phone, not to the call AI
     ended_at: float | None = None  # when it ended (time.monotonic)
+    unfinished: set[str] = field(default_factory=set)  # the jobs still running when it ended
     notified: set[str] = field(default_factory=set)  # jobs whose end went to the person's phone: one notification each
 
     def abandoned(self) -> bool:
@@ -854,9 +855,10 @@ async def job_end_alert(call: Call, job_id: str, *, done: bool) -> None:
 
 async def finish_jobs(call: Call) -> None:
     """The call's jobs still running at its end run to their end, at most AFTER_CALL_JOBS_S more, or until the voice
-    server is stopping (STOPPING); any still running then stops and fails saying why. A job that ended in the call's
-    last RECENT_RESULT_S, or since, is notified now (its news may have come as the AI said goodbye, or it is still
-    making its page); every job is notified once (job_end_alert), as done when its work was done."""
+    server is stopping (STOPPING); any still running then stops and fails saying why, and of those the person is told
+    (as done when its work was done and only its page was left). A job that ended in the call's last RECENT_RESULT_S,
+    or since, is notified now (its news may have come as the AI said goodbye, or it is still making its page). Each
+    job is notified once at most (job_end_alert)."""
     if not call.jobs:
         return
     ended_at = call.ended_at if call.ended_at is not None else time.monotonic()
@@ -874,8 +876,8 @@ async def finish_jobs(call: Call) -> None:
     minutes = max(1, round(AFTER_CALL_JOBS_S / 60))
     await call.jobs.cancel_all(RESTARTED if stopping.exists() else f"still running {minutes} minutes after the call "
                                "ended")
-    for job in list(call.jobs.jobs.values()):
-        if job.status in ("completed", "failed", "cancelled"):
+    for job in list(call.jobs.jobs.values()):  # only the jobs the call left running: the rest were told in it
+        if job.job_id in call.unfinished and job.status in ("completed", "failed", "cancelled"):
             await job_end_alert(call, job.job_id, done=job.status == "completed")
 
 
@@ -885,6 +887,7 @@ async def end_call(call: Call) -> None:
     end (finish_jobs), which keeps the call's process until they do."""
     caller, rec, session = call.caller, call.rec, call.session
     call.over, call.ended_at = True, time.monotonic()
+    call.unfinished = {job_id for job_id, task in call.jobs.tasks.items() if not task.done()} if call.jobs else set()
     # LiveKit runs this in a task of its own, which does not carry the Bee login chosen for the call: choose it
     # again, so the writes retried after the call go to this person's Bee and no one else's.
     bee.use_bee(call.people.bee_dir(caller.id) if caller.uses_bee else None)
