@@ -567,7 +567,8 @@
         "kind",
         "url",
         "title",
-        "image_url"
+        "image_url",
+        "image_url_dark"
       ],
       "properties": {
         "name": {
@@ -594,6 +595,10 @@
         "image_url": {
           "$ref": "#/$defs/path_or_null",
           "description": "A chart as a PNG image, for the thumbnail and the card. Null for other kinds."
+        },
+        "image_url_dark": {
+          "$ref": "#/$defs/path_or_null",
+          "description": "A chart drawn for dark mode as a PNG (transparent background, the dark chart palette). Null for other kinds, and for a chart drawn before dark charts existed that the one-off command has not redrawn; the app then shows image_url on a white plate."
         }
       },
       "if": {
@@ -616,6 +621,9 @@
             "type": "null"
           },
           "image_url": {
+            "type": "null"
+          },
+          "image_url_dark": {
             "type": "null"
           }
         }

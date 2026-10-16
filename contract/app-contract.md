@@ -53,7 +53,7 @@ phone runs a pre-D build.
   its start, and the app counts. Some changes come from the clock alone (a call with no sign of life turns
   `dropped`, an unanswered ring turns `missed`). The server works these out when it builds a body, never from a
   cache, and `/changes` announces them (section 3).
-- **Paths in bodies.** `url`, `image_url` and `sample_url` are paths on the token server (`/calls/.../files/...`).
+- **Paths in bodies.** `url`, `image_url`, `image_url_dark` and `sample_url` are paths on the token server (`/calls/.../files/...`).
   The app joins them to the server address and loads them with its sign-in, so images go through an authorized
   request, not a plain `AsyncImage`.
 
@@ -181,7 +181,7 @@ Every item has `type`, `id` and `at` (when it began, or for a finished job when 
 | `duration_s` | Once finished, how long it took ("1분 27초 걸림"). Null while running. |
 | `step` | While running, the latest step, in the call's language ("애플 한국 가격표 읽는 중"). Else null. |
 | `summary` | Once done, what it found, in a paragraph, in the call's language. Else null. |
-| `files` | What it made: charts first, then the report, tables, others, by name within a kind. Each is `{name, kind, url, title, image_url}`. `name` is the file's real name, which the worker keeps to ASCII (`report.md`, `comparison.csv`), so the app may label a chip by its `kind` ("보고서", "표", "차트") rather than by its name. `kind` is `report` (report.md), `table` (.csv, .tsv), `chart` (a chart the worker drew) or `other`. A chart has `image_url`, a PNG for the thumbnail and the card, and its `title` in the call's language ("한국 가격(원), 에어와 프로, 세 가지 구성") when known. Other kinds have both null. The worker's own bookkeeping (request.md, events.jsonl, usage.json) is never listed. |
+| `files` | What it made: charts first, then the report, tables, others, by name within a kind. Each is `{name, kind, url, title, image_url, image_url_dark}`. `name` is the file's real name, which the worker keeps to ASCII (`report.md`, `comparison.csv`), so the app may label a chip by its `kind` ("보고서", "표", "차트") rather than by its name. `kind` is `report` (report.md), `table` (.csv, .tsv), `chart` (a chart the worker drew) or `other`. A chart has `image_url`, a PNG for the thumbnail and the card, `image_url_dark`, the same chart drawn for dark mode (transparent background, the dark chart palette; null for a chart drawn before dark charts existed, which the app then shows on a white plate), and its `title` in the call's language ("한국 가격(원), 에어와 프로, 세 가지 구성") when known. Other kinds have both null. The worker's own bookkeeping (request.md, events.jsonl, usage.json) is never listed. |
 | `failure` | When failed: `call_ended` (the call ended first) or `error` (anything else, with the error's words kept in the server log). Else null. A job that a call outlived without an end (a dropped call) reads as failed with `call_ended`, its `at` and `duration_s` taken from the call's end. |
 
 The step, the summary and a chart's title are in the call's language only once the worker is told that language

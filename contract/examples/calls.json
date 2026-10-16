@@ -72,21 +72,24 @@
               "kind": "chart",
               "url": "/calls/call-minseung-20261015-012301/files/jobs/01/price-chart.svg",
               "title": "한국 가격(원), 에어와 프로, 세 가지 구성",
-              "image_url": "/calls/call-minseung-20261015-012301/files/jobs/01/price-chart.png"
+              "image_url": "/calls/call-minseung-20261015-012301/files/jobs/01/price-chart.png",
+              "image_url_dark": "/calls/call-minseung-20261015-012301/files/jobs/01/price-chart-dark.png"
             },
             {
               "name": "report.md",
               "kind": "report",
               "url": "/calls/call-minseung-20261015-012301/files/jobs/01/report.md",
               "title": null,
-              "image_url": null
+              "image_url": null,
+              "image_url_dark": null
             },
             {
               "name": "comparison.csv",
               "kind": "table",
               "url": "/calls/call-minseung-20261015-012301/files/jobs/01/comparison.csv",
               "title": null,
-              "image_url": null
+              "image_url": null,
+              "image_url_dark": null
             }
           ],
           "failure": null
@@ -162,7 +165,8 @@
               "kind": "chart",
               "url": "/calls/call-minseung-20261014-122604/files/jobs/01/rain-chart.svg",
               "title": "토요일 시간별 강수 확률(%)",
-              "image_url": "/calls/call-minseung-20261014-122604/files/jobs/01/rain-chart.png"
+              "image_url": "/calls/call-minseung-20261014-122604/files/jobs/01/rain-chart.png",
+              "image_url_dark": "/calls/call-minseung-20261014-122604/files/jobs/01/rain-chart-dark.png"
             }
           ],
           "failure": null
