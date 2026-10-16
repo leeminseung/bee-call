@@ -94,9 +94,9 @@ def test_a_report_that_cannot_become_a_page_still_ends_its_job_done(tmp_path, mo
     from worker import runner
 
     def refuse(folder):
-        raise ValueError("a tag the renderer never makes: x")
+        raise TimeoutError("its page took over 10 s")
 
-    monkeypatch.setattr(runner, "write_page", refuse)
+    monkeypatch.setattr(runner, "render_apart", refuse)
     _, news = run_one_job(tmp_path, Worker(relay_text=None))
     assert [(n.status, n.files) for n in news] == [("completed", ["report.md"])]
 
@@ -115,7 +115,7 @@ def test_a_call_ending_while_the_page_renders_keeps_the_job_s_whole_end_on_recor
         entered.set()
         release.wait(5)
 
-    monkeypatch.setattr(runner, "write_page", slow)
+    monkeypatch.setattr(runner, "render_apart", slow)
     events = []
 
     async def ignore(n: JobNotification) -> None:

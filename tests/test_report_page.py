@@ -189,6 +189,34 @@ def test_the_page_is_written_beside_the_report_and_only_then(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["report.html", "report.md"]  # no temporary file left
 
 
+def test_a_job_s_page_is_rendered_by_a_process_of_its_own_within_a_time_limit(tmp_path, monkeypatch):
+    """Review of the pages: rendering is Python that holds the interpreter lock (markdown-it-py takes over a second
+    on 160 KB of nested brackets), and the call's process carries live audio, so a job's page is rendered by another
+    Python process, stopped at a time limit. Here this process's renderer is broken, and the page is still made."""
+    import sys
+    import time
+
+    def broken(markdown):
+        raise AssertionError("rendered in the call's own process")
+
+    monkeypatch.setattr(report_page, "page_html", broken)
+    report_page.render_apart(tmp_path)  # no report: nothing to render, no process started
+    assert not list(tmp_path.iterdir())
+    (tmp_path / "report.md").write_text("# 제목\n")
+    report_page.render_apart(tmp_path)
+    assert "<h1>제목</h1>" in (tmp_path / "report.html").read_text()
+
+    (tmp_path / "report.html").unlink()
+    monkeypatch.setattr(report_page, "RENDER", [sys.executable, "-c", "import time; time.sleep(30)"])
+    start = time.monotonic()
+    with pytest.raises(TimeoutError):
+        report_page.render_apart(tmp_path, limit_s=0.5)
+    assert time.monotonic() - start < 10 and not (tmp_path / "report.html").exists()
+    monkeypatch.setattr(report_page, "RENDER", [sys.executable, "-c", "import sys; sys.exit('a tag: x')"])
+    with pytest.raises(RuntimeError, match="a tag: x"):
+        report_page.render_apart(tmp_path)
+
+
 def test_older_reports_get_their_page_from_the_one_off_command(tmp_path, capsys):
     """`python -m worker.report_page data/people/<id>` renders each report from before pages existed; a page already
     there is left alone."""

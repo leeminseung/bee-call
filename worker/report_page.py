@@ -6,13 +6,17 @@ as text (markdown-it-py with html off); a link goes only to an http, https or ma
 text becomes one too; a picture shows its words and loads nothing (a remote one would tell its server the page was
 opened); code keeps no class. The page's own Content-Security-Policy allows nothing but its inline styles, and the
 files route adds its sandbox and nosniff headers. What comes out is checked against the tags and attributes this
-renderer makes (check): a page that fails is not written, and the app shows the report's text as it is.
+renderer makes (check): a page that fails is not written, and the app shows the report's text as it is. A job's
+page is rendered by a Python process of its own with a time limit (render_apart): rendering holds the interpreter
+lock, and the call's process carries live audio.
 
 Reports written before pages existed: uv run python -m worker.report_page data/people/<id>   renders each missing page
 """
 
 import argparse
 import re
+import subprocess
+import sys
 from collections.abc import Iterator
 from html import escape
 from html.parser import HTMLParser
@@ -22,6 +26,9 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 REPORT, PAGE = "report.md", "report.html"
+ROOT = Path(__file__).resolve().parent.parent  # the repository, where `python -m worker.report_page` runs
+RENDER = [sys.executable, "-m", "worker.report_page", "--job"]  # one job folder's page, by a process of its own
+PAGE_LIMIT_S = 10.0  # a page takes milliseconds (0.5 s a MB); one made to be slow is stopped here
 # Where a link may go. Its value is written in double quotes and escaped, so an apostrophe is harmless (Wikipedia
 # has them); a double quote, angle brackets and white space are never in an address the renderer writes.
 LINK = re.compile(r"(?:https?://|mailto:)[^\s\"<>`]*", re.I)
@@ -250,11 +257,39 @@ def write_page(folder: Path) -> Path | None:
     return folder / PAGE
 
 
+def render_apart(folder: Path, limit_s: float = PAGE_LIMIT_S) -> None:
+    """folder's report page (write_page), rendered by a Python process of its own and stopped after limit_s; nothing
+    when the folder has no report. The report comes from a model, and rendering it is Python that holds the
+    interpreter lock (markdown-it-py takes over a second on 160 KB of nested brackets), so it never runs in the
+    call's process. TimeoutError past the limit, RuntimeError when the page could not be made."""
+    if not (folder / REPORT).exists():
+        return
+    process = subprocess.Popen([*RENDER, str(folder)], cwd=ROOT, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        _, said = process.communicate(timeout=limit_s)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
+        raise TimeoutError(f"its page took over {limit_s:g} s") from None
+    if process.returncode:
+        raise RuntimeError(said.decode(errors="replace").strip()[-300:] or f"exit status {process.returncode}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="python -m worker.report_page", description="Renders the page of each "
                                      "report a person's background jobs wrote before pages were rendered with them.")
-    parser.add_argument("workspace", type=Path, help="the person's folder, data/people/<id>")
+    parser.add_argument("workspace", type=Path, nargs="?", help="the person's folder, data/people/<id>")
+    parser.add_argument("--job", type=Path, help="one job folder: its page alone (how the job runner renders one)")
     args = parser.parse_args(argv)
+    if args.job:
+        try:
+            write_page(args.job)
+        except ValueError as exc:
+            sys.exit(f"{args.job / PAGE}: not rendered ({exc})")
+        return
+    if args.workspace is None:
+        parser.error("name the person's folder")
     for report in sorted(args.workspace.glob(f"*/*/jobs/*/{REPORT}")):
         page = report.with_name(PAGE)
         if page.exists():
