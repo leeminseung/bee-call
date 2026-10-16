@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, AsyncIterable, Callable
+from typing import Any, AsyncIterable, Callable, Iterable
 
 from livekit import rtc
 from livekit.agents import Agent, ModelSettings, RunContext, function_tool, llm
@@ -30,6 +30,7 @@ from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
 from voice.recorder import CallRecorder
 from voice.audio_tags import SPOKEN, without_tags
+from voice.name_guard import NameGuard
 from voice.speech_filter import SpeechFilter
 from voice.speech_gate import SpeechGate
 from worker.runner import JobNotification, JobRunner, short
@@ -252,7 +253,7 @@ class Coordinator(Agent):
     def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *, clock: Callable[[], datetime],
                  prep_note: str | None = None, pending_note: "asyncio.Future[str | None] | None" = None,
                  language: CallLanguage | None = None, earlier_call: str | None = None,
-                 direction: str = "inbound", audio_tags: bool = False) -> None:
+                 direction: str = "inbound", audio_tags: bool = False, user_names: Iterable[str] = ()) -> None:
         # `clock` is the person's clock (Person.now): the time the call starts goes into the instructions, and
         # book_call reads it again when the user books.
         # The date and the prep note go into the instructions before the call's first reply, and stay as they
@@ -267,6 +268,8 @@ class Coordinator(Agent):
         earlier = (f"\n{how}. That call, as it was recorded:\n{earlier_call.strip()}\n") if earlier_call else ""
         # `audio_tags`: the call's voice performs ElevenLabs audio tags such as [laughs] (voice/audio_tags.py).
         self._audio_tags = audio_tags
+        # The forms of the user's name the call knows (voice/name_guard.py): the first words may say it, no reply does.
+        self._user_names = tuple(user_names)
         self._base_instructions = instructions(audio_tags) + self.NOTE_RULES + rule + earlier + \
             f"\nIt is now {now_text(clock())}. Use this for words like today, tomorrow and this Saturday.\n"
         super().__init__(instructions=self._with_note(prep_note))
@@ -278,6 +281,11 @@ class Coordinator(Agent):
         self._note_open = pending_note is not None  # until the first reply
         self._note_task: asyncio.Task | None = None
         self._booked: str | None = None  # the call back booked in this call (book_call), if any
+
+    @property
+    def user_names(self) -> tuple[str, ...]:
+        """The forms of the user's name its replies are said without."""
+        return self._user_names
 
     def _with_note(self, note: str | None) -> str:
         if not note:
@@ -334,19 +342,20 @@ class Coordinator(Agent):
         # and the history (see voice/speech_filter.py). Tool calls themselves pass through.
         # Every request, whatever the model, goes into the call's model log as the model received it, with what
         # came back before the filter (voice/recorder.py MODEL_LOG).
+        # The user's name is left out of every reply too (voice/name_guard.py): the first words alone may say it.
         sent = model_request(self, chat_ctx, tools)
         reply: dict[str, Any] = {"text": "", "tool_calls": []}
         ended = "error"
-        speech = SpeechFilter()
+        speech, names = SpeechFilter(), NameGuard(self._user_names)
         try:
             async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
                 keep_reply(reply, chunk)
                 if isinstance(chunk, llm.ChatChunk) and chunk.delta and chunk.delta.content:
-                    kept = speech.feed(chunk.delta.content)
+                    kept = names.feed(speech.feed(chunk.delta.content))
                     if kept != chunk.delta.content:
                         chunk = chunk.model_copy(update={"delta": chunk.delta.model_copy(update={"content": kept})})
                 elif isinstance(chunk, str):
-                    chunk = speech.feed(chunk)
+                    chunk = names.feed(speech.feed(chunk))
                 yield chunk
             ended = "done"
         except (GeneratorExit, asyncio.CancelledError):
@@ -358,11 +367,13 @@ class Coordinator(Agent):
         finally:
             # The model is named once the reply is in: the first request of a call can go to GLM 5 instead.
             self._recorder.model_request({**sent, "model": model_name(self), "reply": reply, "ended": ended})
-        tail = speech.flush()
+        tail = names.feed(speech.flush()) + names.flush()
         if tail:
             yield tail
         if speech.dropped:
             self._recorder.event("speech_markup_dropped", text=speech.dropped)
+        if names.left_out:
+            self._recorder.event("name_left_out", times=names.left_out)
 
     # ---------- recording ----------
 

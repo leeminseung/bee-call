@@ -682,6 +682,28 @@ def test_the_call_ai_may_write_audio_tags_only_when_its_voice_performs_them(tmp_
     assert started._audio_tags is tags
 
 
+def test_the_call_ai_knows_the_user_s_name_from_bee_and_from_its_opening(tmp_path, monkeypatch, quick, bee_log):
+    """voice/name_guard.py: the call's replies are said without the user's name, in each form the call knows it:
+    Bee's first name, and the Korean name the opening greeted with. The opening itself keeps it."""
+    me = signed_in(tmp_path)
+    me.people.change_settings("matt", {"bee": True}, allowed=("bee",))
+    with_prep_model(monkeypatch, Converse(text("<opening>매트 님, 안녕하세요. 무슨 일로 전화 주셨어요?</opening>" + NOTE)))
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        started = call.session.started["agent"]
+        call.hang_up()
+        await call.end()
+        return started
+
+    started = asyncio.run(main())
+    assert call.session.said == ["매트 님, 안녕하세요. 무슨 일로 전화 주셨어요?"]
+    assert started.user_names == ("Matt", "매트")
+
+
 def test_a_caller_whose_phone_drops_and_comes_back_before_the_ai_speaks_keeps_the_call(tmp_path, monkeypatch, quick):
     """Second review of this round's fixes, finding 3: LiveKit keeps the session through a dropped network and the
     caller comes back to it; that call is not one hung up while it rang."""

@@ -115,6 +115,7 @@ class Prep:
     input_tokens: int = 0  # the prep's model use, for the person's daily budget (voice/costs.py)
     output_tokens: int = 0
     usage_estimated: bool = False  # a request was cut short before Bedrock counted it; its share is an estimate
+    first_name: str | None = None  # the user's first name as Bee has it, which the opening may greet with
 
     def to_meta(self) -> dict[str, Any]:
         return asdict(self)
@@ -124,7 +125,7 @@ class Prep:
         if not isinstance(data, dict):
             return None
         names = ("note", "opening", "reads", "bee", "standby_reason", "seconds", "opening_s", "model", "error",
-                 "input_tokens", "output_tokens", "usage_estimated")
+                 "input_tokens", "output_tokens", "usage_estimated", "first_name")
         return cls(**{k: data[k] for k in names if k in data})
 
 
@@ -258,7 +259,8 @@ class Preparation:
                  bee: bool, now: datetime, language: CallLanguage | None = None,
                  ours: OurCalls | None = None) -> None:
         """`role`: the prep's role as the mode runs it (prep_role); None, no model: no note and no opening."""
-        self.prep = Prep(model=role.choices[0].offering.model if role else None, bee=bee)
+        self.prep = Prep(model=role.choices[0].offering.model if role else None, bee=bee,
+                         first_name=inputs.first_name)
         if bee:  # what was read before the prep: the conversations behind the call, and the day's summary
             self.prep.reads += [conversation_read(conv_id, conv, now.tzinfo) for conv_id, conv, _ in inputs.conversations]
             if inputs.today is not None:
