@@ -188,14 +188,17 @@ struct HomeView: View {
                     }
                 }
                 .padding(.bottom, 6)
-                .background { // the conversation fades out under the top
-                    LinearGradient(stops: [.init(color: BeeStyle.background, location: 0),
-                                           .init(color: BeeStyle.background, location: 0.62),
-                                           .init(color: BeeStyle.background.opacity(0), location: 1)],
-                                   startPoint: .top, endPoint: .bottom)
-                        .padding(.horizontal, -12)
-                        .padding(.bottom, -34)
-                        .ignoresSafeArea(edges: .top)
+                .background { // the conversation is hidden under the top and fades in just below it, so the
+                    // glass of the pills and the pinned call never shows text through it
+                    VStack(spacing: 0) {
+                        BeeStyle.background
+                        LinearGradient(colors: [BeeStyle.background, BeeStyle.background.opacity(0)],
+                                       startPoint: .top, endPoint: .bottom)
+                            .frame(height: 34)
+                    }
+                    .padding(.horizontal, -12)
+                    .padding(.bottom, -34)
+                    .ignoresSafeArea(edges: .top)
                 }
                 Spacer()
                 if calls.callIsOn {
