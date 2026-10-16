@@ -6,10 +6,8 @@ words that carry each rule."""
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import pytest
-
 from beelink.context import CallInputs
-from voice.coordinator import INSTRUCTIONS, instructions, user_is_done
+from voice.coordinator import INSTRUCTIONS, instructions
 from voice.language import call_language
 from voice.prep import PREP_INSTRUCTIONS, PREP_INSTRUCTIONS_WITHOUT_BEE, seed_text
 
@@ -63,43 +61,11 @@ def test_the_prep_frames_a_call_the_same_way():
     assert "they may just want to chat" in seed
 
 
-# ---------- end_call goes through only on the user's word ----------
-
-@pytest.mark.parametrize("turns", [
-    ["이제 끊을게."], ["I'm done, bye."], ["그럼 끊을게."], ["Alright, bye."],  # the scripted calls' goodbyes
-    ["네 오케이. 어 통화 어 2분 뒤에 아니 그 걸어주고. 끊어줘도 돼."],  # real calls, as transcribed (2026-10-16)
-    ["네. 어, 고마워. 어 통화 끊어줄래? 이제 뭐 조사가 아직 진행 중이었나?"],
-    ["네 그때 네 얘기를 해보자."],  # after booking a call back (2026-10-15)
-    ["안녕히 계세요."], ["오늘은 이만할게."], ["나 이제 가봐야 돼."], ["나중에 통화하자."], ["수고하세요."],
-    ["Okay, talk to you later."], ["Gotta go, thanks!"], ["That's all for now."], ["I’m done for today."],
-    ["See you at seven then."], ["Sorry, I'm driving right now."],
-    ["내일 봐!"], ["이따 다시 통화해."], ["다음에 또 얘기하자."], ["네, 들어가세요."], ["주말 잘 보내, 안녕."],
-    ["I'll call you later."], ["Nothing else, thanks."], ["I'm all set."], ["I gotta hop off now."],
-    ["나 이제 가봐야 돼.", "응."],  # the AI asked whether to end, and heard a yes
-])
-def test_end_call_goes_through_when_the_user_said_goodbye_or_that_they_are_done(turns):
-    assert user_is_done(turns)
-
-
-@pytest.mark.parametrize("turns", [
-    ["이번 주말에 서울에서 볼 만한 전시 좀 찾아봐 줄래?"],  # a call in text: ended right after the job started
-    ["Nice."], ["응."], ["음, 괜찮네."],  # calls in text before rule 10: ended on the user's answer in a word
-    ["음, 알겠어.", "아니야, 조사 끝나는 대로 다시 알려줘."],  # the friend's real call (2026-10-16)
-    ["그래, 고마워."],  # thanks are no goodbye (a real call, 2026-10-16)
-    ["Just let me know when it's done."], ["Okay, got it."], ["Cool."], ["그렇구나."],
-    ["나중에 결과만 알려줘."], ["조사 끝내고 알려줘."], ["조사 마무리되면 말해 줘."],
-    ["그 전시는 꼭 가봐야겠다."], ["이만큼이나 많아?"], ["그만큼 비싸?"], ["담배는 작년에 끊었어."], ["소리가 좀 끊겨."],
-    ["바이러스 때문에 못 갔어."], ["Tell me more about it later."],
-    ["나중에 얘기해 줘."], ["나중에 결과 얘기해 줘."], ["내일 봐야 할 게 있어."], ["집에 들어가는 길이야."],
-    ["네, 안녕하세요."],  # a greeting (real calls open with it)
-])
-def test_end_call_is_refused_when_the_user_said_no_goodbye(turns):
-    assert not user_is_done(turns)
-
+# ---------- end_call goes through whenever the AI calls it ----------
 
 def end_call_after(tmp_path, *turns: str):
-    """end_call after the user said `turns` in a call (the AI answers each in a word): what it returned, whether
-    the call is ending, what the AI heard of the user, and the record."""
+    """end_call after the user said `turns` in a call (the AI answers each in a word): whether the call is ending, and
+    the record."""
     import asyncio
     import json
     from types import SimpleNamespace
@@ -114,38 +80,31 @@ def end_call_after(tmp_path, *turns: str):
     async def main():
         rec = CallRecorder(tmp_path / "workspace", room="r", now=seoul_now())
         coordinator = Coordinator(rec, SimpleNamespace(), tmp_path / "workspace", clock=seoul_now)
-        async with AgentSession(llm=ScriptedLLM([["Mm."]] * (len(turns) + 1))) as session:
+        async with AgentSession(llm=ScriptedLLM([["Mm."]] * len(turns))) as session:
             await session.start(coordinator)
             for turn in turns:
                 await session.run(user_input=turn)
             try:
-                result = await coordinator.end_call(None)
-            except StopResponse:
-                result = None
+                await coordinator.end_call(None)
+            except StopResponse:  # no reply to it: the goodbye was said
+                pass
             ending = coordinator.ending
-            if result is not None:  # the call goes on
-                await session.run(user_input="And one more thing.")
-            heard = [i.text_content for i in session.history.items if getattr(i, "role", None) == "user"]
         rec.close()
-        return result, ending, heard, [json.loads(line) for line in (rec.dir / "events.jsonl").read_text().splitlines()]
+        return ending, [json.loads(line) for line in (rec.dir / "events.jsonl").read_text().splitlines()]
 
     return asyncio.run(main())
 
 
-def test_a_refused_end_call_leaves_the_call_open_and_asks_nothing_more_of_the_ai(tmp_path):
-    """Claude Haiku 5.5 ended a call right after starting the job the user asked for (1 call in text of 27 after rule
-    10, 2026-10-16); in a real call it took "아니야, 조사 끝나는 대로 다시 알려줘." for a goodbye. The goodbye it said is
-    said; the line stays open, and the AI waits for the user (the refusal goes into the conversation, asking no
-    reply)."""
-    result, ending, heard, events = end_call_after(tmp_path, "이번 주말에 서울에서 볼 만한 전시 좀 찾아봐 줄래?")
-    assert not ending and not result.reply_required and result.output.startswith("Not ended:")
-    (refused,) = [e for e in events if e["type"] == "end_call_refused"]
-    assert refused["heard"] == "이번 주말에 서울에서 볼 만한 전시 좀 찾아봐 줄래?"
-    assert not [e for e in events if e["type"] == "end_call_requested"]
-    assert heard[-1] == "And one more thing."  # the AI heard the user's next words
-
-
 def test_after_a_goodbye_end_call_ends_the_call(tmp_path):
-    result, ending, _, events = end_call_after(tmp_path, "음, 알겠어.", "그럼 끊을게.")
-    assert result is None and ending
-    assert [e["type"] for e in events if e["type"].startswith("end_call")] == ["end_call_requested"]
+    ending, events = end_call_after(tmp_path, "음, 알겠어.", "그럼 끊을게.")
+    assert ending and [e["type"] for e in events if e["type"].startswith("end_call")] == ["end_call_requested"]
+
+
+def test_end_call_goes_through_whenever_the_ai_calls_it(tmp_path):
+    """Whether the user is done is the call AI's reading, as the instructions ask (rule 10). A check of the user's
+    words in code (2026-10-16, taken out the same day) refused 30 of 50 polite goodbyes a review tried ("좋은 하루
+    되세요", "응, 들어가", "That's it, thanks", "Okay, by.") and let "아직 끊지 마" through; a goodbye it refused left
+    the line silent after the AI's own. A wrong hang-up loses no work: a job keeps running after its call
+    (tests/test_jobs_after_call.py), as "조사 끝나는 대로 다시 알려줘" asks."""
+    ending, events = end_call_after(tmp_path, "아니야, 조사 끝나는 대로 다시 알려줘.")
+    assert ending and [e["type"] for e in events if e["type"].startswith("end_call")] == ["end_call_requested"]
