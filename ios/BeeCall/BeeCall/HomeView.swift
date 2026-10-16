@@ -65,7 +65,7 @@ struct ConversationThread: View {
                 .padding(.top, 8)
                 Text(CallLine.title(call, korean: words.korean))
                     .font(call.titleSource == .none ? .subheadline : .subheadline.weight(.semibold))
-                    .foregroundStyle(call.titleSource == .none ? Color.secondary : BeeStyle.ink)
+                    .foregroundStyle(call.titleSource == .none ? BeeStyle.secondaryInk : BeeStyle.ink)
                     .multilineTextAlignment(.center)
                     .padding(.top, -6)
                 if CallThread.canUnfold(call) {
@@ -113,7 +113,7 @@ struct ConversationThread: View {
                 .foregroundStyle(BeeStyle.ink)
                 .padding(.horizontal, 12)
                 .frame(minHeight: 30)
-                .background(BeeStyle.card, in: .capsule)
+                .background(BeeStyle.controlFill, in: .capsule)
         }
         .buttonStyle(.plain)
         .frame(minHeight: 44)
@@ -226,15 +226,14 @@ struct HomeView: View {
                     if let bee = source.beeLine(korean: words.korean) {
                         Text(bee)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(BeeStyle.secondaryInk)
                     }
                 }
             }
             .padding(.leading, 6)
             .padding(.trailing, 16)
             .padding(.vertical, 6)
-            .background(BeeStyle.background, in: .capsule)
-            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+            .beeGlass(in: .capsule)
             HStack {
                 Spacer()
                 Button(action: openSettings) {
@@ -242,8 +241,7 @@ struct HomeView: View {
                         .font(.title3)
                         .foregroundStyle(BeeStyle.ink)
                         .frame(width: 44, height: 44)
-                        .background(BeeStyle.background, in: .circle)
-                        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+                        .beeGlass(in: .circle)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(words.korean ? "설정" : "Settings")
@@ -260,7 +258,7 @@ struct HomeView: View {
                     .foregroundStyle(BeeStyle.onYellow)
                     .frame(width: 78, height: 78)
                     .background(BeeStyle.yellow, in: .circle)
-                    .background(Circle().fill(BeeStyle.yellow.opacity(0.22)).frame(width: 98, height: 98))
+                    .modifier(CallButtonHalo())
             }
             .buttonStyle(.plain)
             .zoomSource("call", in: zoom)
@@ -270,12 +268,12 @@ struct HomeView: View {
                 .foregroundStyle(BeeStyle.ink)
             Text(status)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BeeStyle.secondaryInk)
                 .multilineTextAlignment(.center)
             if let problem {
                 Text(problem)
                     .font(.caption)
-                    .foregroundStyle(BeeStyle.red)
+                    .foregroundStyle(BeeStyle.redText)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
             }
@@ -326,14 +324,13 @@ struct CallBar: View {
                 Label(words.callScreen, systemImage: "chevron.up")
                     .labelStyle(TrailingIconLabel())
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
             }
             .padding(.leading, 8)
             .padding(.trailing, 13)
             .frame(height: 44)
-            .background(.regularMaterial, in: .capsule)
+            .beeGlass(in: .capsule)
             .overlay(Capsule().strokeBorder(BeeStyle.yellow, lineWidth: 1.5))
-            .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 4)
@@ -356,10 +353,10 @@ struct SmallCallControl: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(tint != nil ? .white : on ? BeeStyle.background : BeeStyle.ink)
                     .frame(width: 52, height: 52)
-                    .background(tint ?? (on ? BeeStyle.ink : BeeStyle.card), in: .circle)
+                    .background(tint ?? (on ? BeeStyle.ink : BeeStyle.controlFill), in: .circle)
                 Text(label)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
             }
         }
         .buttonStyle(.plain)

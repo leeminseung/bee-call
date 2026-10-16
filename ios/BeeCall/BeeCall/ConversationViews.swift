@@ -120,7 +120,7 @@ struct SpeechBubble: View {
             if mine { Spacer(minLength: 60) }
             Text(text)
                 .font(.body)
-                .foregroundStyle(mine ? .white : BeeStyle.ink)
+                .foregroundStyle(mine ? .white : BeeStyle.aiBubbleText)
                 .padding(.horizontal, 13)
                 .padding(.vertical, 8)
                 .background(BubbleBackground(mine: mine, color: mine ? BeeStyle.personBlue : BeeStyle.aiBubble))
@@ -189,7 +189,7 @@ struct Eyebrow: View {
             Text(text)
         }
         .font(.footnote.weight(.semibold))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(BeeStyle.secondaryInk)
     }
 }
 
@@ -220,13 +220,13 @@ struct JobCardView: View {
             case .failed:
                 Text(words.failure(job.failure))
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                     .padding(.top, 5)
             default:
                 if let step = job.step {
                     Text(words.step(step))
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BeeStyle.secondaryInk)
                         .padding(.top, 5)
                 }
             }
@@ -235,12 +235,12 @@ struct JobCardView: View {
                     if let title = chart.title {
                         Text(title)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(BeeStyle.secondaryInk)
                     }
                     if let image = chart.imageURL { ServerImage(path: image) }
                 }
                 .padding(10)
-                .background(BeeStyle.background, in: .rect(cornerRadius: 14))
+                .background(BeeStyle.raised, in: .rect(cornerRadius: 14))
                 .padding(.top, 12)
             }
             let chips = job.files.filter { $0.kind != .chart && $0.kind != .unrecognized }
@@ -300,8 +300,8 @@ struct FileChip: View {
             .foregroundStyle(BeeStyle.ink)
             .padding(.horizontal, 12)
             .frame(minHeight: 36)
-            .background(BeeStyle.background, in: .capsule)
-            .overlay(Capsule().strokeBorder(.black.opacity(0.08), lineWidth: 0.5))
+            .background(BeeStyle.raised, in: .capsule)
+            .overlay(Capsule().strokeBorder(BeeStyle.separator, lineWidth: 0.5))
     }
 }
 
@@ -317,11 +317,12 @@ struct JobCompactRow: View {
                     ServerImage(path: chart)
                 } else {
                     Image(systemName: job.state == .failed ? "xmark.circle" : "doc.text")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BeeStyle.secondaryInk)
                 }
             }
             .frame(width: 58, height: 46)
-            .background(BeeStyle.background, in: .rect(cornerRadius: 11))
+            .background(BeeStyle.raised, in: .rect(cornerRadius: 11))
+            .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(BeeStyle.separator, lineWidth: 0.5))
             VStack(alignment: .leading, spacing: 2) {
                 Text(job.title)
                     .font(.subheadline.weight(.semibold))
@@ -329,7 +330,7 @@ struct JobCompactRow: View {
                     .lineLimit(1)
                 Text(job.state == .failed ? words.didNotFinish : job.files.map(words.file).joined(separator: " · "))
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -355,7 +356,7 @@ struct BeeWriteView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(live && write.state == .written ? words.added(write.kind) : words.wroteToBee)
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                 Text(live && write.state == .written ? (write.text ?? words.kind(write.kind))
                      : [words.kind(write.kind), write.text].compactMap { $0 }.joined(separator: ": "))
                     .font(.callout.weight(.semibold))
@@ -363,7 +364,7 @@ struct BeeWriteView: View {
                 if live && write.undoable {
                     Text(words.takeOutHint)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BeeStyle.secondaryInk)
                         .padding(.top, 1)
                 }
             }
@@ -371,7 +372,7 @@ struct BeeWriteView: View {
                 Spacer(minLength: 8)
                 Label(words.state(write), systemImage: write.state == .written ? "checkmark" : "exclamationmark.circle")
                     .font(.footnote.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                     .padding(.top, 8)
             }
         }
@@ -426,8 +427,8 @@ struct OfferCardView: View {
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(filled ? BeeStyle.onYellow : BeeStyle.ink)
                 .frame(maxWidth: .infinity, minHeight: 44)
-                .background(filled ? BeeStyle.yellow : BeeStyle.background, in: .capsule)
-                .overlay(Capsule().strokeBorder(.black.opacity(filled ? 0 : 0.08), lineWidth: 0.5))
+                .background(filled ? BeeStyle.yellow : BeeStyle.raised, in: .capsule)
+                .overlay(Capsule().strokeBorder(BeeStyle.separator, lineWidth: 0.5).opacity(filled ? 0 : 1))
         }
         .buttonStyle(.plain)
     }
@@ -459,7 +460,7 @@ struct WhyCallingCard: View {
                 if let summary = conversation.summary {
                     Text(summary)
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BeeStyle.secondaryInk)
                 }
                 ForEach(Array(conversation.quotes.filter { $0.speaker != .unrecognized }.enumerated()), id: \.offset) { _, quote in
                     (Text((quote.speaker == .person ? words.me : words.other) + "  ").bold() + Text(quote.text))
@@ -495,7 +496,7 @@ struct PrepCard: View {
                 Divider().padding(.vertical, 10)
                 Text(words.lookedUp)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                 ForEach(lines, id: \.text) { line in
                     Label(line.text, systemImage: line.symbol)
                         .font(.subheadline)
@@ -549,7 +550,7 @@ struct Stamp: View {
             }
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(BeeStyle.secondaryInk)
         .frame(maxWidth: .infinity)
     }
 }
@@ -573,7 +574,7 @@ struct BookedPin: View {
                 }
                 Text(offer.topic)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
@@ -581,10 +582,10 @@ struct BookedPin: View {
                 Button(action: cancel) {
                     Text(Offer.cancelButton(language: language))
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(BeeStyle.red)
+                        .foregroundStyle(BeeStyle.redText)
                         .padding(.horizontal, 13)
                         .frame(height: 36)
-                        .background(Color(.tertiarySystemFill), in: .capsule)
+                        .background(BeeStyle.subtleFill, in: .capsule)
                 }
                 .buttonStyle(.plain)
             }
@@ -592,7 +593,6 @@ struct BookedPin: View {
         .padding(.leading, 14)
         .padding(.trailing, 9)
         .padding(.vertical, 8)
-        .background(BeeStyle.background, in: .rect(cornerRadius: 24))
-        .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+        .beeGlass(in: .rect(cornerRadius: 24))
     }
 }

@@ -47,18 +47,18 @@ struct SettingsSheet: View {
                     NavigationLink {
                         voiceList
                     } label: {
-                        LabeledContent(words.voice, value: words.voiceValue(voice))
+                        SettingRow(label: words.voice, value: words.voiceValue(voice))
                     }
                     NavigationLink {
                         languageList
                     } label: {
-                        LabeledContent(words.language, value: language.name)
+                        SettingRow(label: words.language, value: language.name)
                     }
                     ForEach([ModelRole.call, .worker], id: \.self) { role in
                         NavigationLink {
                             modelList(role)
                         } label: {
-                            LabeledContent(words.model(role), value: chosen(role)?.name ?? "")
+                            SettingRow(label: words.model(role), value: chosen(role)?.name ?? "")
                         }
                     }
                 } header: {
@@ -75,7 +75,7 @@ struct SettingsSheet: View {
                                 .foregroundStyle(BeeStyle.ink)
                             Spacer()
                             Image(systemName: "arrow.up.forward.app")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(BeeStyle.secondaryInk)
                         }
                         .contentShape(.rect)
                     }
@@ -144,7 +144,7 @@ struct SettingsSheet: View {
                                         .foregroundStyle(BeeStyle.ink)
                                     Text("\(model.maker) · \(korean ? model.description.ko : model.description.en)")
                                         .font(.footnote)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(BeeStyle.secondaryInk)
                                 }
                                 Spacer()
                                 if isChosen {
@@ -160,7 +160,7 @@ struct SettingsSheet: View {
                 } else if models.failed.contains(role) {
                     HStack {
                         Text(words.modelsFailed)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(BeeStyle.secondaryInk)
                         Spacer()
                         Button(listWords.tryAgain) { Task { await models.load(role) } }
                             .buttonStyle(.borderless)
@@ -243,5 +243,20 @@ struct SettingsWords {
     /// are no voices.
     func voiceValue(_ voice: Voice?) -> String {
         voice.map { "\($0.name) · \(korean ? $0.character.ko : $0.character.en)" } ?? ""
+    }
+}
+
+/// A settings row: its name, and what is picked in the quieter ink (the system's own value grey is 4.2:1 on a dark
+/// sheet's rows, the design's #ABABB0 6.1:1).
+struct SettingRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        LabeledContent {
+            Text(value).foregroundStyle(BeeStyle.secondaryInk)
+        } label: {
+            Text(label).foregroundStyle(BeeStyle.ink)
+        }
     }
 }

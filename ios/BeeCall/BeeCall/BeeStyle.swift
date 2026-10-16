@@ -73,3 +73,35 @@ extension UIColor {
         self.init { traits in traits.userInterfaceStyle == .dark ? dark : light }
     }
 }
+
+extension View {
+    /// The design's glass under the name pill, the pinned call, the call bar and the round buttons over the
+    /// conversation: iOS's own glass from iOS 26, else the glass colour with a soft shadow.
+    @ViewBuilder
+    func beeGlass<S: Shape>(in shape: S) -> some View {
+        if #available(iOS 26, *) {
+            glassEffect(.regular, in: shape)
+        } else {
+            background(BeeStyle.glass, in: shape)
+                .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+        }
+    }
+}
+
+/// The round yellow call button's halo: a soft yellow ring in light mode, and on black a glow with a thin light rim,
+/// since the ring turns into an olive band there.
+struct CallButtonHalo: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        if scheme == .dark {
+            content
+                .overlay(Circle().strokeBorder(Color(red: 1, green: 0.925, blue: 0.55).opacity(0.5), lineWidth: 1)
+                    .padding(-1))
+                .background(Circle().fill(BeeStyle.yellow.opacity(0.34)).padding(-4).blur(radius: 14))
+        } else {
+            content
+                .background(Circle().fill(BeeStyle.yellow.opacity(0.22)).frame(width: 98, height: 98))
+        }
+    }
+}

@@ -13,7 +13,7 @@ struct SignInView: View {
                 .font(.largeTitle.bold())
             Text("An AI that calls you about your day, when you want it to.")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BeeStyle.secondaryInk)
                 .multilineTextAlignment(.center)
             Spacer()
             if case .waiting(let code) = server.state {
@@ -22,7 +22,7 @@ struct SignInView: View {
                         .font(.headline)
                     Text("Send this code to the person who invited you. Sign in again once they approve it.")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BeeStyle.secondaryInk)
                         .multilineTextAlignment(.center)
                     Text(code)
                         .font(.title.monospaced().bold())
@@ -32,7 +32,7 @@ struct SignInView: View {
             if let problem = server.problem {
                 Text(problem)
                     .font(.callout)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(BeeStyle.redText)
                     .multilineTextAlignment(.center)
             }
             SignInWithAppleButton(.signIn) { request in

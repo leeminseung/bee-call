@@ -59,18 +59,18 @@ struct CallModeView: View {
                                            answered: calls.ownRoom != nil && calls.connectedAt != nil) {
                     Text(state) // until the AI is there, and while the line comes back
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BeeStyle.secondaryInk)
                 } else {
                     TimelineView(.periodic(from: .now, by: 1)) { clock in
                         Text(CallClock.text(since: calls.connectedAt, now: clock.date))
                             .font(.footnote.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(BeeStyle.secondaryInk)
                     }
                 }
                 if let problem = calls.phoneRecordingProblem { // "Save on this iPhone" is on, but nothing is saved
                     Text(MessageWords.words(problem, korean: language == "ko"))
                         .font(.caption)
-                        .foregroundStyle(BeeStyle.red)
+                        .foregroundStyle(BeeStyle.redText)
                         .multilineTextAlignment(.center)
                         .padding(.top, 2)
                 }
@@ -82,8 +82,7 @@ struct CallModeView: View {
                         .foregroundStyle(BeeStyle.ink)
                         .padding(.horizontal, 16)
                         .frame(minHeight: 44)
-                        .background(BeeStyle.background, in: .capsule)
-                        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+                        .beeGlass(in: .capsule)
                         .overlay(alignment: .topTrailing) {
                             if job?.arrived == true { // a result waits in the conversation
                                 Circle().fill(BeeStyle.yellow).frame(width: 9, height: 9).offset(x: 2, y: 2)
@@ -115,7 +114,7 @@ struct CallModeView: View {
                  + Text(other.isMine ? words.me : "Bee Call").bold()
                  + Text(" " + other.text))
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
             }
@@ -188,10 +187,10 @@ struct CallControl: View {
                     .font(.title2.weight(.semibold))
                     .foregroundStyle(tint != nil ? .white : on ? BeeStyle.background : BeeStyle.ink)
                     .frame(width: 66, height: 66)
-                    .background(tint ?? (on ? BeeStyle.ink : BeeStyle.card), in: .circle)
+                    .background(tint ?? (on ? BeeStyle.ink : BeeStyle.controlFill), in: .circle)
                 Text(label)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BeeStyle.secondaryInk)
             }
         }
         .buttonStyle(.plain)
@@ -229,13 +228,13 @@ struct JobPillView: View {
                 }
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(job.arrived ? BeeStyle.onYellow : .secondary)
+                    .foregroundStyle(job.arrived ? BeeStyle.onYellow : BeeStyle.secondaryInk)
             }
             .font(.subheadline.weight(.medium))
             .foregroundStyle(job.arrived ? BeeStyle.onYellow : BeeStyle.ink)
             .padding(.horizontal, 18)
             .frame(minHeight: 44)
-            .background(job.arrived ? BeeStyle.yellow : BeeStyle.card, in: .capsule)
+            .background(job.arrived ? BeeStyle.yellow : BeeStyle.controlFill, in: .capsule)
         }
         .buttonStyle(.plain)
         .sensoryFeedback(.success, trigger: job.arrived) { _, arrived in arrived } // one short tap on arrival

@@ -31,7 +31,7 @@ struct CallSheet: View {
                         } else {
                             Text(source.isMissing(callID) ? words.noRecord : words.loading)
                                 .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(BeeStyle.secondaryInk)
                                 .frame(maxWidth: .infinity)
                                 .padding(.top, 40)
                         }
@@ -95,7 +95,7 @@ struct CallSheet: View {
                 .foregroundStyle(BeeStyle.ink)
             infoLine(call)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BeeStyle.secondaryInk)
                 .accessibilityLabel(call.state == .ended ? CallLine.sheetLine(call, korean: korean, now: .now)
                                     : CallLine.line(call, korean: korean, now: .now))
         }
@@ -117,7 +117,7 @@ struct CallSheet: View {
                     .foregroundStyle(BeeStyle.onYellow)
                     .frame(width: 78, height: 78)
                     .background(BeeStyle.yellow, in: .circle)
-                    .background(Circle().fill(BeeStyle.yellow.opacity(0.22)).frame(width: 98, height: 98))
+                    .modifier(CallButtonHalo())
             }
             .buttonStyle(.plain)
             .disabled(!canContinue)
