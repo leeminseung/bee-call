@@ -165,24 +165,52 @@ final class OfferCenter: NSObject, UNUserNotificationCenterDelegate {
     }
 
     // MARK: - UNUserNotificationCenterDelegate
+    //
+    // The completion-handler forms, each calling its handler on the main thread. UIKit asserts that a response's
+    // handler runs there; the async forms' compiler-made handlers ran on a background thread and every tapped
+    // notification closed the app (build 4's crash, 2026-10-16).
 
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        await refresh() // the new offer shows on the first screen too
-        return [.banner, .list, .sound]
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        let show = MainThreadHandler { completionHandler([.banner, .list, .sound]) }
+        Task { @MainActor in
+            show() // at once: iOS drops a banner whose handler comes late
+            await self.refresh() // the new offer shows on the first screen too
+        }
     }
 
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            didReceive response: UNNotificationResponse) async {
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
         let action = response.actionIdentifier
         let offerID = response.notification.request.content.userInfo["offer"] as? String
-        guard let offerID else { return }
+        let done = MainThreadHandler(completionHandler)
+        Task { @MainActor in
+            await self.received(action, offer: offerID)
+            done() // iOS keeps the app running until this, so after the answer has gone
+        }
+    }
+
+    /// A notification's button, or the notification itself, was tapped.
+    private func received(_ action: String, offer offerID: String?) async {
+        guard let offerID else { return } // not an offer's notification: the app just opens
         if let choice = Choice(rawValue: action) {
-            // iOS keeps the app running until this returns.
             if let result = await answer(offerID, choice), result != .accepted { await tellAnswerFailed() }
         } else {
             await refresh() // the notification itself was tapped: the app opens on the offer list
         }
+    }
+}
+
+/// A completion handler the system passes in, carried to the main actor and called only there.
+nonisolated struct MainThreadHandler: @unchecked Sendable {
+    private let handler: () -> Void
+
+    init(_ handler: @escaping () -> Void) {
+        self.handler = handler
+    }
+
+    @MainActor func callAsFunction() {
+        handler()
     }
 }
 
