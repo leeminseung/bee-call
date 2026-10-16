@@ -307,17 +307,21 @@ nonisolated enum FileKind: String, ContractValue {
     case report, table, chart, other, unrecognized
 }
 
-/// A file a job made. `url` and `imageURL` are paths on the token server, loaded with the sign-in.
+/// A file a job made. `url`, `imageURL` and `imageURLDark` are paths on the token server, loaded with the sign-in.
+/// A chart has both images: `imageURLDark` is the same chart drawn for dark mode, null for a chart drawn before
+/// dark charts existed.
 nonisolated struct JobFile: Decodable, Hashable {
     let name: String
     let kind: FileKind
     let url: String
     @Present var title: String?
     @Present var imageURL: String?
+    @Present var imageURLDark: String?
 
     enum CodingKeys: String, CodingKey {
         case name, kind, url, title
         case imageURL = "image_url"
+        case imageURLDark = "image_url_dark"
     }
 }
 
