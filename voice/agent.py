@@ -476,21 +476,39 @@ def prewarm(proc: JobProcess) -> None:
 
 
 server = AgentServer(setup_fnc=prewarm, num_idle_processes=1, shutdown_process_timeout=AFTER_CALL_JOBS_S + 60)
+if NOISE_CANCELLATION != "off" and (_problem := noise_problem(NOISE_CANCELLATION)):  # loaded here, not in a call
+    log.error("NOISE_CANCELLATION=%s cannot be used (%s); calls run without it", NOISE_CANCELLATION, _problem)
+
+
+def noise_filter(setting: str) -> rtc.NoiseCancellationOptions:
+    """The noise cancellation model of a setting, bvc or nc. Importing the plugin loads its filter into LiveKit's
+    native layer (about 0.1 s), once in a process."""
+    from livekit.plugins import noise_cancellation
+
+    return noise_cancellation.BVC() if setting == "bvc" else noise_cancellation.NC()
+
+
+def noise_problem(setting: str) -> str | None:
+    """Why the setting's filter cannot be used here, or None (off always can)."""
+    if setting == "off":
+        return None
+    try:
+        noise_filter(setting)
+    except Exception as exc:  # a call is answered without it rather than not at all
+        return f"{type(exc).__name__}: {exc}"[:300]
+    return None
 
 
 def caller_audio(setting: str) -> room_io.RoomOptions:
     """What the call's session hears of the caller (NOISE_CANCELLATION): LiveKit's room input, through noise
-    cancellation when it is on. LiveKit's gain control stays on either way, after the noise cancellation: LiveKit turns
-    it off by default when noise cancellation is set (livekit/agents#7064, "the models manage input levels"), but
-    Krisp's NC and BVC kept the levels as they came in a replay of our calls (RMS 1419 against 1340 and 1358), the
-    speech gate's floor was measured with the gain on (voice/speech_gate.py), and a comparison in a real call should
-    change one thing."""
-    if setting == "off":
+    cancellation when it is on and its filter loads (else without it). LiveKit's gain control stays on either way,
+    after the noise cancellation: LiveKit turns it off by default when noise cancellation is set (livekit/agents#7064,
+    "the models manage input levels"), but Krisp's NC and BVC kept the levels as they came in a replay of our calls
+    (RMS 1419 against 1340 and 1358), the speech gate's floor was measured with the gain on (voice/speech_gate.py),
+    and a comparison in a real call should change one thing."""
+    if setting == "off" or noise_problem(setting):
         return room_io.RoomOptions(audio_input=room_io.AudioInputOptions())
-    from livekit.plugins import noise_cancellation  # loads the filter into LiveKit's native layer, only when used
-
-    model = noise_cancellation.BVC() if setting == "bvc" else noise_cancellation.NC()
-    return room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=model,
+    return room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=noise_filter(setting),
                                                                       auto_gain_control=True))
 
 
@@ -697,10 +715,15 @@ def open_record(ctx: JobContext, people: People, caller: Caller, meta: dict) -> 
     if unused:
         log.warning("%s set but not used: a call's voice comes from the voice catalog, and with "
                     "COORDINATOR_LLM=anthropic its model's settings from voice/call_models.py", ", ".join(unused))
+    noise = noise_problem(NOISE_CANCELLATION)
     rec.event("coordinator", llm=COORDINATOR_LLM, model=coordinator_model(caller.call_model),
               call_model=caller.call_model.name, language=caller.language.code, voice=caller.tts_voice.describe(),
               person=caller.id, audio_on_server=settings.record_on_server, audio_on_phone=settings.record_on_phone,
-              noise_cancellation=NOISE_CANCELLATION, **({"settings_not_used": unused} if unused else {}))
+              noise_cancellation="off" if noise else NOISE_CANCELLATION,
+              **({"settings_not_used": unused} if unused else {}))
+    if noise:
+        log.error("NOISE_CANCELLATION=%s cannot be used (%s); the call runs without it", NOISE_CANCELLATION, noise)
+        rec.event("error", source="noise_cancellation", error=noise)
     rec.event("call", direction=meta.get("direction", "inbound"), topic=meta.get("topic"), reason=meta.get("reason"),
               kind=meta.get("kind"), continue_from=meta.get("continue_from") if meta.get("earlier_call") else None)
     return rec, settings

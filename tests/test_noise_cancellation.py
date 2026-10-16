@@ -60,3 +60,32 @@ def test_a_call_hears_the_caller_through_the_setting_and_its_record_says_which(t
     (coordinator,) = [e for e in events_of(folder) if e["type"] == "coordinator"]
     assert coordinator["noise_cancellation"] == setting
     assert json.dumps(coordinator)  # the record stays plain JSON
+
+
+def test_a_noise_filter_that_cannot_load_never_stops_a_call(tmp_path, monkeypatch, quick):
+    """Review of 2026-10-16, finding 7: a failure to load the filter went out of session.start and failed every call.
+    The call is answered without it, and its record says so."""
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(agent, "NOISE_CANCELLATION", "bvc")
+
+    def broken(setting):
+        raise OSError("liblivekit_nc_plugin.so: cannot open shared object file")
+
+    monkeypatch.setattr(agent, "noise_filter", broken)
+    assert agent.caller_audio("bvc").audio_input.noise_cancellation is None
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    assert call.session.started["room_options"].audio_input.noise_cancellation is None
+    (folder,) = call_folders(me.workspace)
+    events = events_of(folder)
+    (coordinator,) = [e for e in events if e["type"] == "coordinator"]
+    assert coordinator["noise_cancellation"] == "off"
+    assert any(e["type"] == "error" and e.get("source") == "noise_cancellation" for e in events)
