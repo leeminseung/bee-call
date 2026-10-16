@@ -28,7 +28,12 @@ YOU = r"(?:께서는|께서도|께서|한테는|한테도|한테|에게는|에�
 # Words after the name that set it beside someone else: the name stays.
 BESIDE = r"(?:말고|빼고|대신|아니고|아니라|보다|하고|과|와|랑|이랑|및|또는|이나|나)(?![가-힣])"
 ENDS = ".!?。！？…"
+CLAUSE_MARKS = r"[,.!?。！？…\n]"
 HOLD_AFTER = 8  # a name this close to where the text has got to is held back: what follows it decides
+# After the name said at a sentence's start and its comma, the next item of a list or a pair: "Minseung, Dana and
+# Jisoo are coming", "민승 님, Dana 님, 지수 님 다 오세요?". The name then stays.
+LISTED_NEXT = re.compile(r"(?:[A-Z][a-z]+|[^\s,.!?]{1,12} ?(?:님|씨))(?:,|\s+and\b|\s*&|과|와|하고|이랑|랑)")
+LOOK_AHEAD = 20  # how far past such a comma the text is held back at most, to see whether a list follows
 QUOTES = "'\"‘’“”「」『』«»"
 APOSTROPHES = "'’"
 # The name an opening greets the user with: 민승 in "민승 님, 안녕하세요." or "안녕하세요, 민승 님.", said to them (a comma or
@@ -54,8 +59,17 @@ def _word(char: str) -> bool:
 
 
 def _apostrophe(before: str, after: str) -> bool:
-    """A ' between two letters or digits of a Latin word ("it's", "Minseung's") is no quotation mark."""
+    """A ' between two letters or digits of a Latin word ("it's", "Minseung's"), or before digits ("the '90s"), is no
+    quotation mark."""
+    if after and after.isascii() and after.isdigit() and not (before and before.isalnum()):
+        return True
     return bool(before and after) and before.isascii() and before.isalnum() and after.isascii() and after.isalnum()
+
+
+def _decided(following: str) -> bool:
+    """Whether enough of the text after a sentence-start name and its comma has come to tell whether a list follows
+    (LISTED_NEXT): the next word and the start of another, a mark, or LOOK_AHEAD characters."""
+    return len(following) >= LOOK_AHEAD or bool(re.search(CLAUSE_MARKS + r"|\s\S+\s", following.lstrip()))
 
 
 def _listed(before: str) -> bool:
@@ -89,7 +103,9 @@ class NameGuard:
         self._set_off = re.compile(alone + HONORIFIC + r"?\s*[,!！]\s*")  # "민승 님, ", "Minseung! "
         self._last_words = re.compile(r",\s*" + alone + HONORIFIC + r"?(?![\w가-힣])(?=\s*(?:[" + re.escape(ENDS)
                                       + r"]|$))")  # "알겠어요, 민승 님."
-        self._as_you = re.compile(alone + HONORIFIC + "(?:" + YOU + r"(?![\w가-힣])\s*|\s+(?!" + BESIDE + r")(?=[가-힣]))")
+        self._as_you = re.compile(alone + HONORIFIC + "(?:(?P<particle>" + YOU + r")(?![\w가-힣])\s*|\s+(?!" + BESIDE
+                                  + r")(?=[가-힣]))")
+        self._name_at_end = re.compile(alone + HONORIFIC + r"?\s*$")
         self._prefixes = {form[:k] for form in self._forms for k in range(1, len(form) + 1)}
 
     def feed(self, text: str) -> str:
@@ -121,9 +137,27 @@ class NameGuard:
         comma = re.search(r",\s*$", text[:cut])  # a name set off by this comma may follow
         if comma:
             cut = comma.start()
+            named = self._name_at_end.search(text[:cut])  # or one before it, set off by it: "민승님, 민승님은 ..."
+            if named:
+                cut = named.start()
+        for found in self._as_you.finditer(text[:cut]):  # "민승 님도": a pair if another 도 comes before the clause ends
+            if (found.group("particle") or "").endswith("도") and not re.search(CLAUSE_MARKS, text[found.end():cut]):
+                cut = found.start()
+                break
+        for found in self._set_off.finditer(text[:cut]):  # a sentence-start "Minseung, " before what may be a list
+            if self._sentence_start(text, found.start()) and not _decided(text[found.end():cut]):
+                cut = found.start()
+                break
         if cut and text[cut - 1] in APOSTROPHES:
             cut -= 1
         return cut
+
+    def _sentence_start(self, text: str, at: int) -> bool:
+        """Whether `at` in `text` (what comes after what was passed on) starts a sentence, as _clean's set_off
+        tells it."""
+        before = self._last + text[:at]
+        told = before.rstrip()
+        return (not told and self._start) or bool(told and (told[-1] in ENDS or before.endswith("\n")))
 
     def _pass(self, text: str, final: bool) -> str:
         """The text with the name taken out where it is outside quotation marks, keeping what comes before it."""
@@ -137,6 +171,10 @@ class NameGuard:
                 self._put(out, char, quoted=True)
                 self._quoted = not self._quoted
                 piece = []
+            elif self._quoted and char.isspace() and before in ENDS:  # a quote never runs past its sentence: a
+                self._put(out, "".join(piece), final=False)  # mark left open was no quotation mark
+                self._quoted = False
+                piece = [char]
             else:
                 piece.append(char)
         self._put(out, "".join(piece), final=final)
@@ -188,6 +226,8 @@ class NameGuard:
         def set_off(found: re.Match, string: str) -> str | None:
             told = string[:found.start()].rstrip()
             if (not told and self._start) or (told and (told[-1] in ENDS or string[:found.start()].endswith("\n"))):
+                if LISTED_NEXT.match(string[found.end():]):  # "Minseung, Dana and Jisoo": a list, not said to them
+                    return None
                 return "\0"  # a sentence's start: its next letter is a capital, below
             if told.endswith(",") and string[found.start():found.end()].rstrip().endswith(","):
                 return None if _listed(clause(string, found.start()).rstrip()[:-1]) else ""  # "좋은데, 민승 님, 뭐"
@@ -195,6 +235,13 @@ class NameGuard:
 
         whole = drop(self._set_off, whole, set_off)
         whole = re.sub("\0([a-z]?)", lambda m: m.group(1).upper(), whole)
-        whole = drop(self._as_you, whole, lambda found, string: "")
+        def as_you(found: re.Match, string: str) -> str | None:
+            if (found.group("particle") or "").endswith("도"):  # "민승 님도 Dana 님도": a pair, not "you too"
+                rest = re.split(CLAUSE_MARKS, string[found.end():], maxsplit=1)[0]
+                if re.search(r"[\w가-힣]도(?![가-힣])", rest):
+                    return None
+            return ""
+
+        whole = drop(self._as_you, whole, as_you)
         self.left_out += count
         return whole[len(lead):]

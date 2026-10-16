@@ -56,6 +56,16 @@ def said(text: str, names=NAMES) -> str:
     ("Bee에서 '민승 님은 등산보다 수영을 더 좋아한다'로 고칠까요?", "Bee에서 '민승 님은 등산보다 수영을 더 좋아한다'로 고칠까요?"),
     ("Shall I add 'Call Minseung's mom' to your Bee todos?", "Shall I add 'Call Minseung's mom' to your Bee todos?"),
     ("It's fine, Minseung.", "It's fine."),
+    # Second review of 2026-10-16, finding 6: a pair or a list that starts with the name keeps it; a stray quote mark
+    # (an elision such as '90s) no longer leaves the rest of the reply unguarded.
+    ("민승 님도 Dana 님도 오세요?", "민승 님도 Dana 님도 오세요?"),
+    ("민승 씨도 편하게 쉬시는 주말 보내시면 좋겠어요.", "편하게 쉬시는 주말 보내시면 좋겠어요."),  # "you too": a measured reply
+    ("Minseung, Dana and Jisoo are all coming.", "Minseung, Dana and Jisoo are all coming."),
+    ("민승 님, Dana 님, 지수 님 다 오세요?", "민승 님, Dana 님, 지수 님 다 오세요?"),
+    ("Minseung, Dana said she's in.", "Dana said she's in."),
+    ("The '90s were fun, Minseung. Right?", "The '90s were fun. Right?"),
+    ("That was a ‘wow moment. Minseung, what do you think?", "That was a ‘wow moment. What do you think?"),
+    ("Rock 'n' roll, Minseung! Nice.", "Rock 'n' roll! Nice."),
 ])
 def test_the_name_is_taken_out_of_a_reply(reply, heard):
     assert said(reply) == heard
@@ -73,6 +83,12 @@ def test_the_name_is_taken_out_of_a_reply(reply, heard):
     "그건 이민승 님한테 맞는 방법 같아요.",  # finding 5: a split after "이" took the name out of "이민승"
     "민승 님! 반가워요. It's fine, Minseung.",
     "토요일 멤버는 Dana 님, 지수 님, 민승 님.",
+    "민승님, 민승님은 어때요?",  # second review, finding 6: split after "민승님, 민승님은 어" it kept "민승님, "
+    "민승 님도 Dana 님도 오세요? 민승 님도 그렇게 생각하세요?",
+    "Minseung, Dana and Jisoo are all coming. Minseung, bring water.",
+    "민승 님, Dana 님, 지수 님 다 오세요?",
+    "The '90s were fun, Minseung. Right?",
+    "That was a ‘wow moment. Minseung, what do you think?",
 ])
 def test_streamed_in_any_pieces_a_reply_comes_out_the_same(reply):
     """A reply streams in pieces that can split a name, its 님 or the comma before it anywhere."""
