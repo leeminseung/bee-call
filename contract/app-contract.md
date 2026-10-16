@@ -224,9 +224,10 @@ with `error`). The call's view, and the list's `results` and `marks`, show it `r
 `failed`), with its summary, report page and charts, exactly as for a job that finishes during the call; its lines
 keep the call's record changing, so `/changes` announces the call and the list as they change (section 3). The
 server knows the job still works by its own log, which a running job touches every 30 seconds: with no end on record
-and no sign of life for 2 minutes (its process was killed, as a deploy's restart does), the job reads as `failed`,
-and the voice server writes the failure on record when it starts again. When a job ends after its call, the person
-gets one plain notification, in the call's language: "결과가 나왔어요: {title}" / "Results are in: {title}", or
+and no sign of life for 2 minutes (its process was killed: a crash), the job reads as `failed`, and the voice
+server writes the failure on record within minutes. A deploy stops a job still running after its call at once: it
+fails with `error`, and the person is told it could not finish. When a job ends after its call, the person gets one
+plain notification, in the call's language: "결과가 나왔어요: {title}" / "Results are in: {title}", or
 "작업을 끝내지 못했어요: {title}" / "Couldn't finish: {title}". Its payload is `{"aps": {"alert": {"title": "Bee Call",
 "body": ...}, "sound": "default", "thread-id": "jobs"}, "kind": "job", "call": <call_id>}`; tapping it opens the
 app. The app needs no change for any of this; a later build may open the call named by `call`.

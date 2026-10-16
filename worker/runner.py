@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -47,11 +48,12 @@ EmitEvent = Callable[..., None]  # recorder.event(name, **fields)
 log = logging.getLogger("worker.runner")
 # A job outlives its call (2026-10-16), so whether it still works is read from its own log: a running job touches it
 # this often, and a job with no end whose log has been quiet for JOB_STALE_S is no longer running (its process was
-# killed: a restart). The call view and the voice server's start read it so.
+# killed: a restart). The call view and the voice server's sweeps read it so.
 HEARTBEAT_S = 30.0
 JOB_STALE_S = 120.0
 JOB_ENDS = ("done", "failed", "cancelled")  # how a job's own log says it ended
 RESTARTED = "the server restarted while the job ran"
+SWEEP_EVERY_S = 300.0  # how often the voice server looks for jobs whose process was killed (fail_jobs_left_running)
 
 
 @dataclass
@@ -356,30 +358,56 @@ def job_alive(log_path: Path, now: float | None = None) -> bool:
 
 
 def fail_jobs_left_running(root: Path, now: float | None = None) -> list[Path]:
-    """At the voice server's start: every job with no end whose log went quiet (its process was killed with the old
-    voice server: a deploy, a crash) fails on record, saying so, in its own log and in its call's record (after the
-    call's end, as a job's end after the call is). A job whose log still shows life is left alone. Returns the job
-    folders failed."""
+    """Every job with no end whose log went quiet (its process was killed: a restart, a crash, LiveKit) fails on
+    record, saying so, at the time its log went quiet: in its own log, which keeps that time, and in its call's
+    record, after the call's end, as a job's end after the call is. A record with no call_ended (the call itself was
+    cut off) gets no line: one would make the call read as live again, and the call view shows the job failed from its
+    quiet log anyway. A job whose log still shows life is left alone. Returns the job folders failed. Run as the voice
+    server starts and every SWEEP_EVERY_S after (keep_sweeping)."""
     now = time.time() if now is None else now
     failed = []
     for log_path in sorted(root.glob("people/*/*/*/jobs/*/events.jsonl")):
+        try:
+            quiet = log_path.stat().st_mtime
+        except OSError:
+            continue
+        if now - quiet <= JOB_STALE_S:
+            continue
         entries = _lines(log_path)
-        if not entries or any(e.get("type") in JOB_ENDS for e in entries) or job_alive(log_path, now):
+        if not entries or any(e.get("type") in JOB_ENDS for e in entries):
             continue
         job_dir, call_dir = log_path.parent, log_path.parent.parent.parent
         with log_path.open("a") as f:
-            f.write(json.dumps({"at": now, "type": "failed", "error": RESTARTED}) + "\n")
+            f.write(json.dumps({"at": quiet, "type": "failed", "error": RESTARTED}) + "\n")
+        os.utime(log_path, (quiet, quiet))
         record = call_dir / "events.jsonl"
         lines = _lines(record)
         ended = any(e.get("type") in ("job_done", "job_failed") and str(e.get("job_id")) == job_dir.name for e in lines)
-        if lines and not ended:
+        if any(e.get("type") == "call_ended" for e in lines) and not ended:
             started = next((e.get("started_at") for e in lines if e.get("type") == "call_started"), None)
             try:
-                t = round(now - datetime.fromisoformat(started).timestamp(), 3)
+                t = round(quiet - datetime.fromisoformat(started).timestamp(), 3)
             except (TypeError, ValueError):
                 t = max((e.get("t") for e in lines if isinstance(e.get("t"), (int, float))), default=0.0)
             with record.open("a") as f:
                 f.write(json.dumps({"t": t, "job_id": job_dir.name, "error": RESTARTED, "type": "job_failed"}) + "\n")
-        log.warning("job %s was cut off by a restart; failed on record", job_dir)
+        log.warning("job %s stopped with no end; failed on record", job_dir)
         failed.append(job_dir)
     return failed
+
+
+def keep_sweeping(root: Path, every: float | None = None) -> threading.Event:
+    """fail_jobs_left_running every `every` seconds (SWEEP_EVERY_S), in a thread of its own, for as long as the process
+    runs; set the event returned to stop it."""
+    stop = threading.Event()
+    period = SWEEP_EVERY_S if every is None else every
+
+    def sweep() -> None:
+        while not stop.wait(period):
+            try:
+                fail_jobs_left_running(root)
+            except Exception:
+                log.exception("the sweep of jobs left running failed")
+
+    threading.Thread(target=sweep, name="job-sweep", daemon=True).start()
+    return stop

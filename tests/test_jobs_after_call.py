@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 
 from tests.fake_call import FakeCall, use_fakes
@@ -132,6 +133,7 @@ def test_a_job_cut_off_by_a_restart_is_failed_when_the_voice_server_starts(tmp_p
         os.utime(job / "events.jsonl", (touched, touched))
     started = []
     monkeypatch.setattr(agent.cli, "run_app", lambda server: started.append(server))
+    monkeypatch.setattr(agent, "keep_sweeping", lambda root: None)
     monkeypatch.setenv("BEE_CALL_DATA", str(tmp_path / "data"))
     agent.main()
     assert started == [agent.server]
@@ -293,3 +295,213 @@ def test_a_reply_queued_before_the_goodbye_is_not_said_after_it(tmp_path):
     said, log = asyncio.run(main())
     assert said == ["Bye, take care!"]
     assert [entry["ended"] for entry in log] == ["done", "after end_call"]  # the model log keeps what was not said
+
+
+# ---------- second review of 2026-10-16: one notification a job, a stop that does not wait, the sweep ----------
+
+def test_a_job_that_ends_while_the_call_is_closing_is_notified_once(tmp_path, monkeypatch, quick):
+    """Finding 3: a job's end that came after the call ended but before finish_jobs (here while the title was
+    written) was notified by both, two "Results are in" for one job."""
+    me = signed_in(tmp_path)
+    real_title = agent.title_call
+
+    async def slow_title(*args, **kwargs):  # the real one may take up to 5 s (voice/titles.py)
+        await asyncio.sleep(1.0)
+        return await real_title(*args, **kwargs)
+
+    monkeypatch.setattr(agent, "title_call", slow_title)
+    pushes, _, _ = in_a_call(monkeypatch, me, step_s=0.3, hang_up_after=0.4)
+    assert [p["aps"]["alert"]["body"] for p, _ in pushes] == ["Results are in: Price check"]
+
+
+def test_a_job_still_making_its_page_when_the_call_ends_is_notified_once(tmp_path, monkeypatch, quick):
+    """Finding 3 too: the runner marks a job completed before it renders the page and tells the call, so finish_jobs
+    and the later news both notified it."""
+    import worker.runner as runner
+
+    me = signed_in(tmp_path)
+    real_render = runner.render_apart
+
+    def slow_render(folder):
+        time.sleep(1.0)
+        return real_render(folder)
+
+    monkeypatch.setattr(runner, "render_apart", slow_render)
+    pushes, _, _ = in_a_call(monkeypatch, me, step_s=0.15, hang_up_after=0.4)
+    assert [p["aps"]["alert"]["body"] for p, _ in pushes] == ["Results are in: Price check"]
+
+
+def test_a_job_done_but_still_making_its_page_at_the_cap_is_told_as_done(tmp_path, monkeypatch, quick):
+    """Finding 3, the cap: a job whose work was done while its page was still being made counted as late and was
+    notified as "Couldn't finish", while its card said done."""
+    import worker.runner as runner
+
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(agent, "AFTER_CALL_JOBS_S", 0.8)
+    real_render = runner.render_apart
+
+    def slow_render(folder):
+        time.sleep(2.0)
+        return real_render(folder)
+
+    monkeypatch.setattr(runner, "render_apart", slow_render)
+    pushes, _, _ = in_a_call(monkeypatch, me, step_s=0.15)
+    assert [p["aps"]["alert"]["body"] for p, _ in pushes] == ["Results are in: Price check"]
+    (folder,) = call_folders(me.workspace)
+    assert [e["type"] for e in events_of(folder) if e["type"] in ("job_started", "job_done", "job_failed")] == \
+        ["job_started", "job_done"]
+
+
+def test_when_the_voice_server_is_stopping_its_jobs_after_calls_stop_at_once(tmp_path, monkeypatch, quick):
+    """Finding 4: a deploy (systemd stops the voice server) waited for every job still running after its call, up to
+    the unit's 10 minutes, and took no calls meanwhile. The server marks its data root as it starts to stop; a job
+    left running after its call then fails at once, saying so, and the person is told it could not finish."""
+    from worker.runner import RESTARTED
+
+    me = signed_in(tmp_path)
+    (me.people.root / agent.STOPPING).write_text("now")
+    started = time.monotonic()
+    pushes, _, _ = in_a_call(monkeypatch, me, step_s=5.0)
+    assert time.monotonic() - started < 4.0  # not the job's 10 s
+    (folder,) = call_folders(me.workspace)
+    (failed,) = [e for e in events_of(folder) if e["type"] == "job_failed"]
+    assert failed["error"] == RESTARTED
+    assert [p["aps"]["alert"]["body"] for p, _ in pushes] == ["Couldn't finish: Price check"]
+
+
+def test_the_voice_server_marks_its_data_root_as_it_starts_to_stop(tmp_path, monkeypatch):
+    drained = []
+
+    async def drain(self, timeout=None):
+        drained.append(self)
+
+    monkeypatch.setattr(agent.AgentServer, "drain", drain)
+    monkeypatch.setenv("BEE_CALL_DATA", str(tmp_path / "data"))
+    asyncio.run(agent.server.drain())
+    assert drained == [agent.server] and (tmp_path / "data" / agent.STOPPING).exists()
+
+
+def started_voice_server(tmp_path, monkeypatch) -> list:
+    """agent.main with LiveKit's CLI and the sweep's thread stood in for: the sweeps it started."""
+    sweeps = []
+    monkeypatch.setattr(agent.cli, "run_app", lambda server: None)
+    monkeypatch.setattr(agent, "keep_sweeping", lambda root: sweeps.append(root))
+    monkeypatch.setenv("BEE_CALL_DATA", str(tmp_path / "data"))
+    agent.main()
+    return sweeps
+
+
+def test_a_new_voice_server_clears_the_stop_mark_and_keeps_sweeping(tmp_path, monkeypatch):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / agent.STOPPING).write_text("then")
+    assert started_voice_server(tmp_path, monkeypatch) == [tmp_path / "data"]
+    assert not (tmp_path / "data" / agent.STOPPING).exists()
+
+
+def killed_job(folder: Path, *, quiet_s: float, call_ended: bool = True) -> Path:
+    """A call record with one job that has no end, whose log went quiet `quiet_s` ago; returns the job's log."""
+    folder.mkdir(parents=True)
+    lines = [{"t": 0.0, "type": "call_started", "room": "call-matt-1", "started_at": "2026-10-16T13:24:00+09:00"},
+             {"t": 5.0, "type": "job_started", "job_id": "01", "task": "Moderna", "title": "모더나 조사"}]
+    if call_ended:
+        lines += [{"t": 60.0, "type": "session_closed", "reason": "CloseReason.USER_INITIATED"},
+                  {"t": 61.0, "type": "call_ended"}]
+    (folder / "events.jsonl").write_text("".join(json.dumps(l, ensure_ascii=False) + "\n" for l in lines))
+    log = folder / "jobs" / "01" / "events.jsonl"
+    log.parent.mkdir(parents=True)
+    log.write_text('{"at": 1, "type": "started"}\n')
+    quiet = time.time() - quiet_s
+    os.utime(log, (quiet, quiet))
+    return log
+
+
+def test_a_job_killed_just_before_a_restart_is_failed_by_a_later_sweep_at_the_time_it_stopped(tmp_path):
+    """Finding 2: a job killed seconds before the voice server started again still had a fresh log, so the sweep at
+    the start left it, and the next start, days later, failed it timed then. Sweeps keep coming (keep_sweeping),
+    and a job is failed at the time its log went quiet; its log keeps that time."""
+    from worker.runner import JOB_STALE_S, fail_jobs_left_running
+
+    me = signed_in(tmp_path)
+    folder = me.workspace / "2026-10-16" / "1324"
+    log = killed_job(folder, quiet_s=5)
+    assert fail_jobs_left_running(tmp_path / "data") == []  # at the start: it may still be working
+    quiet = log.stat().st_mtime
+    later = time.time() + JOB_STALE_S + 60
+    assert fail_jobs_left_running(tmp_path / "data", now=later) == [folder / "jobs" / "01"]
+    (failed,) = [e for e in events_of(folder) if e["type"] == "job_failed"]
+    started = datetime.fromisoformat("2026-10-16T13:24:00+09:00").timestamp()
+    assert abs(failed["t"] - (quiet - started)) < 1.0
+    assert log.stat().st_mtime == quiet and json.loads(log.read_text().splitlines()[-1])["at"] == quiet
+    assert fail_jobs_left_running(tmp_path / "data", now=later + 600) == []  # once
+
+
+def test_a_call_cut_off_mid_way_gets_no_line_from_the_sweep(tmp_path):
+    """Finding 2 too: a line appended to a record with no call_ended made the call read as live again for two
+    minutes, and announced it in /changes. Its job is failed in its own log only (the call view shows it failed
+    from its quiet log)."""
+    from worker.runner import fail_jobs_left_running
+
+    me = signed_in(tmp_path)
+    folder = me.workspace / "2026-10-16" / "1324"
+    log = killed_job(folder, quiet_s=4 * 86400, call_ended=False)
+    record = (folder / "events.jsonl").read_text()
+    touched = (folder / "events.jsonl").stat().st_mtime
+    assert fail_jobs_left_running(tmp_path / "data") == [folder / "jobs" / "01"]
+    assert (folder / "events.jsonl").read_text() == record and (folder / "events.jsonl").stat().st_mtime == touched
+    assert json.loads(log.read_text().splitlines()[-1])["type"] == "failed"
+
+
+def test_the_sweep_runs_again_and_again_in_a_thread_of_its_own(tmp_path, monkeypatch):
+    from worker import runner
+
+    swept = []
+    monkeypatch.setattr(runner, "fail_jobs_left_running", lambda root: swept.append(root) or [])
+    stop = runner.keep_sweeping(tmp_path, every=0.05)
+    time.sleep(0.3)
+    stop.set()
+    assert len(swept) >= 3 and set(swept) == {tmp_path}
+
+
+def test_no_job_starts_once_the_day_s_budget_is_used_up(tmp_path, monkeypatch, quick):
+    """Finding 7: the daily budget was checked only as a call started; a job now runs on after its call, so delegate
+    checks it too."""
+    from voice.costs import SpendLog
+
+    me = signed_in(tmp_path)
+    monkeypatch.setattr(agent, "WORKER", "fake")
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+    said = []
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        coordinator = call.session.started["agent"]
+        SpendLog(me.workspace).add("a test", model="claude-sonnet-5-5", input_tokens=10**9)
+        said.append(await coordinator.delegate(None, task="Compare MacBook prices in Korea", title="Prices"))
+        call.hang_up()
+        await call.end()
+
+    asyncio.run(main())
+    assert said[0].startswith("Not started: today's budget") and "Tell the user" in said[0]
+    (folder,) = call_folders(me.workspace)
+    assert not [e for e in events_of(folder) if e["type"] == "job_started"]
+
+
+def test_a_job_that_ends_after_its_call_tells_the_meta_agent(tmp_path, monkeypatch, quick):
+    """Finding 8: the meta agent looks at a call as it ends, before its jobs did; it puts a job's result on the next
+    call's agenda (meta/agent.py), so it hears when a job ends after the call."""
+    from meta.agent import _event_line
+    from meta.session import MetaSession
+
+    me = signed_in(tmp_path)
+    in_a_call(monkeypatch, me, step_s=0.3)
+    (folder,) = call_folders(me.workspace)
+    events = MetaSession(me.workspace).take_events()
+    assert [e["kind"] for e in events] == ["call_ended", "job_ended"]
+    ended = events[-1]
+    call = f"{folder.parent.name}/{folder.name}"
+    assert (ended["call"], ended["job"], ended["title"], ended["outcome"]) == (call, "01", "Price check", "done")
+    assert _event_line(me.workspace, ended) == (
+        f"[{ended['at']}] A background job of call {call} ended after the call: \"Price check\" (done); "
+        f"its result is in {call}/jobs/01/")

@@ -47,7 +47,8 @@ import logging
 import os
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -57,6 +58,7 @@ from livekit import rtc
 from livekit.agents import (AgentServer, AgentSession, JobContext, JobProcess, RecordingOptions, cli, inference, llm,
                             room_io)
 from livekit.plugins import aws, silero
+from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.aws.stt import Credentials
 
 from beelink import cli as bee
@@ -85,7 +87,8 @@ from voice.titles import title_call
 from voice.ringback import STATE_ATTRIBUTE, ring_back
 from voice.voices import make_tts, voice_choice
 from worker.fake import FakeWorker
-from worker.runner import JobNotification, JobRunner, NoWorker, StandingBy, fail_jobs_left_running, short
+from worker.runner import (RESTARTED, JobNotification, JobRunner, NoWorker, StandingBy, fail_jobs_left_running,
+                           keep_sweeping, short)
 from worker.search import SearchWorker
 
 load_dotenv(".env.local")
@@ -119,6 +122,11 @@ AFTER_CALL_JOBS_S = 30 * 60
 # A result that came in the call's last seconds may not have been heard (it ended while the AI said goodbye, once):
 # a job that ended this long before the call did is notified as well (arbitrary).
 RECENT_RESULT_S = 20.0
+# In the data root while the voice server is stopping (VoiceServer.drain: a deploy, a restart): a job still running
+# after its call then stops at once, failing on record and notified, so the stop waits only for calls in progress
+# (systemd gives it 10 minutes, and it takes no new call meanwhile). The next start clears it.
+STOPPING = "voice-server-stopping"
+STOP_CHECK_S = 1.0  # how often a call's process waiting on its jobs looks for it (arbitrary)
 # Changed after each reconnect of the voice server's own room connection (it is "1" from the pick-up on): captions
 # are not sent while it is away, though what it hears is still recorded, so the app stops matching caption lines to
 # the call view's counts for that call (app contract section 3, rule 6).
@@ -475,7 +483,19 @@ def prewarm(proc: JobProcess) -> None:
         proc.userdata["aws"].get_credentials()  # read the profile now rather than at the first call
 
 
-server = AgentServer(setup_fnc=prewarm, num_idle_processes=1, shutdown_process_timeout=AFTER_CALL_JOBS_S + 60)
+class VoiceServer(AgentServer):
+    """LiveKit's worker, marking the data root as it starts to stop (STOPPING)."""
+
+    async def drain(self, timeout: Any = NOT_GIVEN) -> None:
+        try:
+            data_root().mkdir(parents=True, exist_ok=True)
+            (data_root() / STOPPING).write_text(datetime.now().astimezone().isoformat(timespec="seconds") + "\n")
+        except OSError as exc:  # the jobs after calls then run on until systemd's limit, as before
+            log.warning("could not mark the voice server as stopping: %s", exc)
+        await super().drain(timeout)
+
+
+server = VoiceServer(setup_fnc=prewarm, num_idle_processes=1, shutdown_process_timeout=AFTER_CALL_JOBS_S + 60)
 
 
 def noise_filter(setting: str) -> rtc.NoiseCancellationOptions:
@@ -782,6 +802,8 @@ class Call:
     jobs: JobRunner | None = None
     agent: Coordinator | None = None
     over: bool = False  # the call has ended: a job's news goes to the person's phone, not to the call AI
+    ended_at: float | None = None  # when it ended (time.monotonic)
+    notified: set[str] = field(default_factory=set)  # jobs whose end went to the person's phone: one notification each
 
     def abandoned(self) -> bool:
         """The caller hung up before the AI's first words: the call leaves no record."""
@@ -805,9 +827,18 @@ async def tell_about_job(call: Call, news: JobNotification) -> None:
 
 async def job_end_alert(call: Call, job_id: str, *, done: bool) -> None:
     """One plain notification for a job that ended after its call: "Results are in: <title>", or that it could not
-    finish, in the call's language. Tapping it opens the app, where the job's card has its result."""
+    finish, in the call's language. Tapping it opens the app, where the job's card has its result. Once a job,
+    whichever of its news and the call's end sees it first; the meta agent hears of a job that ended after the call
+    (it looked at the call as it ended)."""
+    if job_id in call.notified:
+        return
+    call.notified.add(job_id)
     job = call.jobs.jobs.get(job_id) if call.jobs else None
     title = (job.title if job and job.title else None) or short(job.task if job else "", 60) or f"Job {job_id}"
+    if job is not None and job.ended_at is not None and call.ended_at is not None and job.ended_at >= call.ended_at:
+        add_event(call.caller.workspace, "job_ended", now=call.caller.someone.now(),
+                  call=f"{call.rec.dir.parent.name}/{call.rec.dir.name}", job=job_id, title=title,
+                  outcome="done" if done else "failed")
     korean = call.caller.language.code == "ko"
     if done:
         body = f"결과가 나왔어요: {title}" if korean else f"Results are in: {title}"
@@ -822,26 +853,30 @@ async def job_end_alert(call: Call, job_id: str, *, done: bool) -> None:
 
 
 async def finish_jobs(call: Call) -> None:
-    """The call's jobs still running at its end run to their end, at most AFTER_CALL_JOBS_S more; any still running
-    then stops, fails saying so, and its notification says it could not finish. A job that ended in the call's last
-    RECENT_RESULT_S is notified now (its news may have come as the AI said goodbye)."""
-    if call.jobs:
-        now = time.monotonic()
-        for job in call.jobs.jobs.values():
-            if job.status in ("completed", "failed") and job.ended_at is not None \
-                    and now - job.ended_at <= RECENT_RESULT_S:
-                await job_end_alert(call, job.job_id, done=job.status == "completed")
-    running = call.jobs.running() if call.jobs else []
-    if not running:
+    """The call's jobs still running at its end run to their end, at most AFTER_CALL_JOBS_S more, or until the voice
+    server is stopping (STOPPING); any still running then stops and fails saying why. A job that ended in the call's
+    last RECENT_RESULT_S, or since, is notified now (its news may have come as the AI said goodbye, or it is still
+    making its page); every job is notified once (job_end_alert), as done when its work was done."""
+    if not call.jobs:
         return
-    _, late = await asyncio.wait(running, timeout=AFTER_CALL_JOBS_S)
-    if not late:
+    ended_at = call.ended_at if call.ended_at is not None else time.monotonic()
+    for job in list(call.jobs.jobs.values()):
+        if job.status in ("completed", "failed") and job.ended_at is not None \
+                and ended_at - job.ended_at <= RECENT_RESULT_S:
+            await job_end_alert(call, job.job_id, done=job.status == "completed")
+    stopping = call.people.root / STOPPING
+    deadline = time.monotonic() + AFTER_CALL_JOBS_S
+    pending = set(call.jobs.running())
+    while pending and not stopping.exists() and (left := deadline - time.monotonic()) > 0:
+        _, pending = await asyncio.wait(pending, timeout=min(STOP_CHECK_S, left))
+    if not pending:
         return
-    stopped = [job_id for job_id, task in call.jobs.tasks.items() if task in late]
     minutes = max(1, round(AFTER_CALL_JOBS_S / 60))
-    await call.jobs.cancel_all(f"still running {minutes} minutes after the call ended")
-    for job_id in stopped:
-        await job_end_alert(call, job_id, done=False)
+    await call.jobs.cancel_all(RESTARTED if stopping.exists() else f"still running {minutes} minutes after the call "
+                               "ended")
+    for job in list(call.jobs.jobs.values()):
+        if job.status in ("completed", "failed", "cancelled"):
+            await job_end_alert(call, job.job_id, done=job.status == "completed")
 
 
 async def end_call(call: Call) -> None:
@@ -849,7 +884,7 @@ async def end_call(call: Call) -> None:
     written (voice/titles.py) while its failed Bee writes are tried again; then its jobs still running run to their
     end (finish_jobs), which keeps the call's process until they do."""
     caller, rec, session = call.caller, call.rec, call.session
-    call.over = True
+    call.over, call.ended_at = True, time.monotonic()
     # LiveKit runs this in a task of its own, which does not carry the Bee login chosen for the call: choose it
     # again, so the writes retried after the call go to this person's Bee and no one else's.
     bee.use_bee(call.people.bee_dir(caller.id) if caller.uses_bee else None)
@@ -971,7 +1006,8 @@ async def run_call(ctx: JobContext, people: People) -> None:
         rec, call.jobs, workspace, clock=caller.someone.now, prep_note=prep.note or call_brief(inputs, meta),
         pending_note=pending, language=caller.language, earlier_call=meta.get("earlier_call"),
         direction=meta.get("direction", "inbound"), audio_tags=caller.tts_voice.performs_tags,
-        user_names=user_names(inputs.first_name or prep.first_name, prep.opening, prep.spoken_name))
+        user_names=user_names(inputs.first_name or prep.first_name, prep.opening, prep.spoken_name),
+        budget=lambda: day_budget(caller.someone, caller.someone.now()))
 
     async def shutdown() -> None:
         await end_call(call)
@@ -1036,8 +1072,12 @@ def report_reconnects(room, rec: CallRecorder) -> None:
 
 
 def main() -> None:
-    """The voice server: jobs a restart cut off are failed on record first (worker/runner.py), then LiveKit's CLI."""
-    fail_jobs_left_running(data_root())
+    """The voice server: the stop that came before is over (STOPPING); jobs a restart or a crash cut off are failed on
+    record, now and every few minutes after (worker/runner.py), then LiveKit's CLI."""
+    root = data_root()
+    (root / STOPPING).unlink(missing_ok=True)
+    fail_jobs_left_running(root)
+    keep_sweeping(root)
     cli.run_app(server)
 
 

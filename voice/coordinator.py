@@ -30,6 +30,7 @@ from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
 from voice.recorder import CallRecorder
 from voice.audio_tags import SPOKEN, without_tags
+from voice.costs import DayBudget
 from voice.name_guard import NameGuard
 from voice.speech_filter import SpeechFilter
 from voice.speech_gate import SpeechGate
@@ -290,7 +291,8 @@ class Coordinator(Agent):
     def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *, clock: Callable[[], datetime],
                  prep_note: str | None = None, pending_note: "asyncio.Future[str | None] | None" = None,
                  language: CallLanguage | None = None, earlier_call: str | None = None,
-                 direction: str = "inbound", audio_tags: bool = False, user_names: Iterable[str] = ()) -> None:
+                 direction: str = "inbound", audio_tags: bool = False, user_names: Iterable[str] = (),
+                 budget: Callable[[], DayBudget] | None = None) -> None:
         # `clock` is the person's clock (Person.now): the time the call starts goes into the instructions, and
         # book_call reads it again when the user books.
         # The date and the prep note go into the instructions before the call's first reply, and stay as they
@@ -320,6 +322,9 @@ class Coordinator(Agent):
         self._booked: str | None = None  # the call back booked in this call (book_call), if any
         # end_call ran: the goodbye is said, and nothing more is (a reply queued by job news before it would follow)
         self.ending = False
+        # The person's budget for today (voice/costs.py day_budget): checked as a call starts, and before a job, which
+        # runs on after its call.
+        self._budget = budget
 
     @property
     def user_names(self) -> tuple[str, ...]:
@@ -481,6 +486,9 @@ class Coordinator(Agent):
             title: A few words naming the job for the user's screen, in the language you speak with the user, such
                 as "Saturday rain in Seoul by the hour".
         """
+        budget = self._budget() if self._budget is not None else None
+        if budget is not None and budget.used_up:
+            return f"Not started: {budget.why()}. Tell the user in a few words that the job could not start."
         job = self._jobs.start(task, title=" ".join(title.split()) or None, language=self._language.code)
         return (f"Job {job.job_id} is running in the background. A job notification will come when it has news. "
                 "If you already told the user you are on it, do not say it again; carry on the conversation.")
