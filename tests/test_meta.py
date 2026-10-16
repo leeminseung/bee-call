@@ -421,6 +421,22 @@ def test_one_list_says_which_parts_of_a_call_are_private(tmp_path):
     assert "zebra" not in files.grep(ws, "zebra")
 
 
+def test_a_report_s_page_is_never_searched_beside_its_report(tmp_path):
+    """A job's report.html is its report.md rendered for the app (worker/report_page.py): searching both found every
+    report line twice, two of grep's 50 places for one (review of the pages, 2026-10-16). The report is the one
+    read."""
+    from worker.report_page import write_page
+
+    ws = workspace_with_a_call(tmp_path)
+    job = ws / "2026-10-14" / "1200" / "jobs" / "01"
+    job.mkdir(parents=True)
+    (job / "report.md").write_text("# Offers\n\nThe zebra bonus is ten percent.\n")
+    write_page(job)
+    found = files.grep(ws, "zebra")
+    assert found.count("zebra") == 1 and "report.md" in found and "report.html" not in found
+    assert "report.html" not in files.list_files(ws, "2026-10-14/1200/jobs/01")
+
+
 def test_file_tools_leave_out_the_model_log_and_claude_s_history(tmp_path):
     """A call's model log repeats the whole conversation in every request (and the Bee context with it), so a search
     would match it on every line and push the transcripts out of the 50 matches; like Claude's history, it is a

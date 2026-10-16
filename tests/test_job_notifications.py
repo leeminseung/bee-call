@@ -57,6 +57,85 @@ def test_the_answer_comes_while_the_job_runs_and_the_end_brings_only_the_files(t
     assert runner.status_text().startswith(f"Job 01 | completed after 0 s | task: {TASK} | files: report.md")
 
 
+def test_a_chart_s_dark_picture_is_not_one_of_the_files_a_job_made(tmp_path):
+    """A chart is its SVG and its PNG, as before; its dark PNG is for the app, which the call view finds beside the
+    chart, so the call AI and the session screen never hear of it. A file whose name only ends the same is listed."""
+    class Charting(Worker):
+        async def run(self, job, progress, relay) -> str:
+            for name in ("rain.svg", "rain.png", "rain-dark.png", "logo-dark.png"):
+                (job.dir / name).write_bytes(b"x")
+            return "Charted."
+
+    runner, news = run_one_job(tmp_path, Charting())
+    assert news[-1].files == ["logo-dark.png", "rain.png", "rain.svg"]
+    assert runner.status_text().endswith("files: logo-dark.png, rain.png, rain.svg")
+
+
+def test_a_finished_job_s_report_gets_its_page_which_is_not_one_of_its_files(tmp_path):
+    """The report as a readable page for the app (contract 2.4, page_url), rendered when the job ends, whoever wrote
+    report.md (a worker's save_file, its fallback report, the search worker); there by the time the call AI hears the
+    job is done, which hears only of the report, as does the session screen."""
+    seen = []
+
+    async def on_notify(n: JobNotification) -> None:
+        seen.append((n.status, n.files, (tmp_path / "jobs" / "01" / "report.html").exists()))
+
+    async def main() -> None:
+        runner = JobRunner(tmp_path, lambda name, **f: None, Worker(relay_text=None), on_notify, clock=seoul_now)
+        runner.start(TASK)
+        await asyncio.gather(*runner.tasks.values())
+
+    asyncio.run(main())
+    assert seen == [("completed", ["report.md"], True)]
+    assert "<h1>Report</h1>" in (tmp_path / "jobs" / "01" / "report.html").read_text()
+
+
+def test_a_report_that_cannot_become_a_page_still_ends_its_job_done(tmp_path, monkeypatch):
+    from worker import runner
+
+    def refuse(folder):
+        raise TimeoutError("its page took over 10 s")
+
+    monkeypatch.setattr(runner, "render_apart", refuse)
+    _, news = run_one_job(tmp_path, Worker(relay_text=None))
+    assert [(n.status, n.files) for n in news] == [("completed", ["report.md"])]
+
+
+def test_a_call_ending_while_the_page_renders_keeps_the_job_s_whole_end_on_record(tmp_path, monkeypatch):
+    """The page is the only wait between the job's end and the call AI hearing it, and it comes after everything the
+    record says about that end: a call ending meanwhile still leaves job_done and the summary the user would have
+    heard (relay) on record, as before pages existed."""
+    import threading
+
+    from worker import runner
+
+    entered, release = threading.Event(), threading.Event()
+
+    def slow(folder):
+        entered.set()
+        release.wait(5)
+
+    monkeypatch.setattr(runner, "render_apart", slow)
+    events = []
+
+    async def ignore(n: JobNotification) -> None:
+        pass
+
+    async def main() -> None:
+        jobs = JobRunner(tmp_path, lambda name, **f: events.append(name), Worker(relay_text=None), ignore,
+                         clock=seoul_now)
+        jobs.start(TASK)
+        while not entered.is_set():
+            await asyncio.sleep(0.01)
+        ending = asyncio.create_task(jobs.cancel_all())
+        await asyncio.sleep(0.05)
+        release.set()
+        await ending
+
+    asyncio.run(main())
+    assert events[-2:] == ["job_done", "relay"]
+
+
 def test_a_job_that_never_relayed_ends_with_its_summary(tmp_path):
     _, news = run_one_job(tmp_path, Worker(relay_text=None))
     assert [(n.status, n.summary, n.files) for n in news] == [("completed", "Both forecasts say dry.", ["report.md"])]

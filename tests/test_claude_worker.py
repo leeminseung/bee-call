@@ -197,7 +197,7 @@ def test_a_job_runs_on_claude_with_anthropic_s_server_tools_and_the_job_s_own_to
     assert (tmp_path / "prices.csv").read_bytes() == b"model,price\nAir,1590000\n"  # from code execution
     # Deleted from Anthropic's Files API once the job is over: its conversation names the file until then.
     assert client.files.deleted == ["file_1"]
-    assert (tmp_path / "prices.svg").exists() and (tmp_path / "prices.png").exists()
+    assert all((tmp_path / name).exists() for name in ("prices.svg", "prices.png", "prices-dark.png"))
 
     opening, second, third, last = client.messages.sent
     assert (opening["model"], opening["max_tokens"], opening["thinking"], opening["output_config"]) == (
