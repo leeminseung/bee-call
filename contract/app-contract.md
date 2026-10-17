@@ -423,7 +423,7 @@ server held (DECISIONS 2026-10-15: the friend's calls stayed in English until th
 | `POST /calls/decline` `{room}` | 204 | 400 for a room that is not this person's. |
 | `POST /push`, `POST /voip` `{token, environment}` | 204 | 400. |
 | `POST /bee/connect` | `{link}`, `bee-connect.json` | 502 when Bee cannot start a login. |
-| `POST /bee/disconnect` | 204 | 502 when the login could not be removed. |
+| `POST /bee/disconnect` | 204 | 502 when the login could not be removed. When Bee was on, the server also has the meta agent rewrite its notes without what came from Bee; nothing changes for the app. |
 
 ## 8. Where each part of D comes from
 

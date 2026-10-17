@@ -295,6 +295,16 @@ def test_a_to_do_bee_suggests_in_the_same_words_is_not_added_again(tmp_path, fak
     "Shall I put them in Bee? And how was the trip?",
     "Bee에 기록된 내용 중에 어제 회의 얘기 해 볼까요?",
     "Bee에 넣어 둔 것들 확인해 볼까요?",
+    # the second review of 2026-10-18 (finding 1): questions about one thing Bee has, or about something else
+    "그거 Bee 기록에서 지울까요?", "그거 Bee 기록에서 뺄까요?", "이거 Bee 기억에서 지울까요?", "그거 Bee에서 기억 고칠까요?",
+    "그거 Bee에서 기록 지울까요?", "그거 Bee 할 일에서 끝난 걸로 기록할까요?", "그거 Bee에 저장된 거 지울까요?",
+    "그거 Bee에 기억된 대로 할까요?", "Bee가 들은 거 맞는지 기억나실까요?", "Bee에 있는 내용 정리해서 말씀드릴까요?",
+    "그거 Bee에 그대로 남겨 둘까요?",
+    "Bee says you have a long day tomorrow, so want me to keep it short?",
+    "Bee says you've got a busy afternoon, should I keep it quick?",
+    "Bee has the dentist at 3 on Friday, shall I move it to the agenda for our next call?",
+    "Bee mentioned your trip, should I keep that in mind when we plan?", "Shall I keep it as it is in Bee?",
+    "Shall I move it to done in Bee?", "Do you want me to keep that one in Bee or delete it?",
 ])
 def test_a_yes_to_a_question_that_does_not_offer_to_organize_adds_nothing(tmp_path, fake_bee, question):
     """Finding 1: the offer check took any question with Bee and a word like 기억, 저장, keep or add."""
@@ -311,6 +321,18 @@ def test_a_yes_to_a_question_that_does_not_offer_to_organize_adds_nothing(tmp_pa
     "오늘 나온 것들 Bee에 넣어 둘까?", "Want me to save these to Bee?",
     "Bee에 쌓인 것 정리는, 지난 며칠 대화에서 오래 갈 내용만 골라서 Bee에 넣어 둘까요?",
     "최근 3일치를 정리해서 Bee에 넣어 둘까요?", "지난 사흘 동안 쌓인 기록은 Bee에 정리해 둘까요?", "Bee에 정리해 둘까요?",
+    # collect, then offer once (2026-10-18): the instructions' examples, and one thing put in Bee the same way
+    "오늘 나온 것 몇 개 Bee에 넣어 둘까요?", "오늘 나온 내용 Bee에 넣어 둘까요?", "Shall I put what came up today in Bee?",
+    "A few things from today are worth keeping. Shall I put them in Bee?", "Shall I put that in Bee?",
+    "그거 Bee에 넣어 둘까요?", "오늘 나온 거 Bee에 기억해 둘까요?",
+    # measured on the final instructions (2026-10-18, second round)
+    "Twice a week sounds like it could fit around the piano. A few things from today are worth keeping. Shall I put "
+    "them in Bee?",
+    "A few things from today are worth keeping, like the Spanish class and visiting your sister in Busan monthly. "
+    "Shall I put them in Bee?",
+    "그리고 오늘 나온 것 몇 개, 예를 들면 피아노 저녁 연습이랑 고양이 알레르기 같은 것도 Bee에 넣어 둘까요?",
+    "그럼 오늘 나온 것들 몇 개 Bee에 넣어 둘까요?", "죄송해요, 방금 넣어 달라는 말이 Bee에 저장되지 않았어요. 오늘 나온 내용 Bee에 넣어 둘까요?",
+    "오늘 나온 것 몇 개 Bee에 넣어 둘까요? 고양이 알레르기 하나랑, 이번 주에 스페인어 학원 알아보기요.",
 ])
 def test_the_organize_questions_the_ai_asked_in_measured_calls_still_count(tmp_path, fake_bee, question):
     said, _, _ = organized(tmp_path, [("assistant", question), ("user", "네, 그렇게 해 주세요.")], facts=["Drinks coffee"])

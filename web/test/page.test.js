@@ -470,6 +470,19 @@ test("between calls, an organize run the user said yes to shows what went into B
   assert.doesNotMatch(shown, /notification sent/);
 });
 
+test("between calls, turning Bee off shows as what woke the meta agent", async () => {
+  const rewrote = { entries: [{
+    at: "2026-10-18T20:01:00+09:00", events: [{ kind: "bee_disconnected" }],
+    decision: "You turned Bee off, so I took what came from Bee out of my notes.",
+    actions: [{ tool: "write_state", result: "notes updated" }],
+  }] };
+  const page = loadPage({ hash: "#/meta", fetch: answering(rewrote) });
+  await page.settle();
+  const shown = page.visibleText(page.byId("view"));
+  assert.match(shown, /You turned Bee off: notes from Bee are taken out/);
+  assert.doesNotMatch(shown, /bee_disconnected/);
+});
+
 /** One time the meta agent looked, with only what a normal page shows. */
 const looked = (at, decision) => ({ at, events: [{ kind: "bee_change", inbox: "inbox/x" }], decision });
 

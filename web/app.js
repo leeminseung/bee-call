@@ -339,6 +339,7 @@
     call_missed: (e) => `You did not answer an AI call about “${e.topic || ""}”`,
     call_declined: (e) => `You declined an AI call about “${e.topic || ""}”`,
     organize_bee: (e) => `You asked Bee Call to organize Bee: the past ${e.days || 3} days`,
+    bee_disconnected: () => "You turned Bee off: notes from Bee are taken out",
   };
 
   // The meta agent's times it looked, newest first. The server lists the newest page; with "more", it has older

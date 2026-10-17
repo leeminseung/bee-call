@@ -107,11 +107,11 @@ def test_the_seed_says_who_calls_why_the_meta_agent_s_notes_and_what_changed_in_
     assert "They offered 15 percent bonus." in seed  # the conversation behind the call
     assert "[conversation 4]" in seed and "[fact 7, unconfirmed] Bonus is 15%" in seed  # what changed since
     assert "first name" not in seed and "Calendar:" not in seed  # no bundle of today's Bee
-    assert seed.endswith("they called, so let them bring their own topic. The call is in English: write the opening in English, whatever language the notes, the earlier calls or Bee are in.")
+    assert seed.endswith("they called, so let them bring their own topic. Keep the note to about 70 words, never more than 100. The call is in English: write the opening in English, whatever language the notes, the earlier calls or Bee are in.")
     out = seed_text(CallInputs(), {"direction": "outbound", "reason": "A Bee conversation just ended.",
                                    "topic": "Planned a hike"}, NOW, bee=True)
     assert "You are about to call the user. Why: A Bee conversation just ended. (topic: Planned a hike)." in out
-    assert out.endswith("and ask if they have a minute. The call is in English: write the opening in English, whatever language the notes, the earlier calls or Bee are in.")
+    assert out.endswith("and ask if they have a minute. Keep the note to about 70 words, never more than 100. The call is in English: write the opening in English, whatever language the notes, the earlier calls or Bee are in.")
 
 
 def test_opening_then_note_in_one_answer(fake_bee):
@@ -165,7 +165,7 @@ def test_opening_then_one_round_of_reads_then_the_note(fake_bee):
     assert "Planned a Saturday hike with Dana" in results[0]["content"][0]["text"]
     assert "Hiked with Dana in the morning" in results[1]["content"][0]["text"]
     assert results[3]["status"] == "error" and "at most 3 reads" in results[3]["content"][0]["text"]
-    assert second[-1]["content"][-1] == {"text": "Now write the note."}
+    assert second[-1]["content"][-1] == {"text": "Now write the note, about 70 words."}
 
 
 def test_a_person_without_bee_has_a_prep_that_read_nothing_of_bee(fake_bee):
@@ -209,7 +209,8 @@ def test_reads_before_the_opening_still_give_an_opening(fake_bee):
     client = Converse([tool(0, "bee_conversation", {"id": 5})], text(OPENING + NOTE))
     prep = asyncio.run(prepare_call(inputs(fake_bee), {}, glm(client), spend=SPEND, bee=True, now=NOW))
     assert prep.opening and prep.note
-    assert client.requests[1]["messages"][-1]["content"][-1] == {"text": "Now write the opening and the note."}
+    assert client.requests[1]["messages"][-1]["content"][-1] == {
+        "text": "Now write the opening and the note, about 70 words."}
 
 
 @pytest.mark.parametrize("reply,opening", [(text("Sure, I'm ready."), None), (text(OPENING), "Hi Matt")])
@@ -371,7 +372,10 @@ def test_the_seed_carries_the_last_calls_for_a_person_with_bee_or_without(tmp_pa
 
 
 def test_the_prep_is_told_to_compact_what_came_before_into_what_this_call_must_know():
-    """The user's texts (2026-10-18) for "What you are doing" and "Your note"; the opening and "What to read" stay."""
+    """The user's texts (2026-10-18) for "What you are doing" and "Your note"; the opening and "What to read" stay.
+    Measured that day, 1 of 8 notes kept under 100 words: "Your note" now asks for one short line each, shows a note of
+    the right length for another user and asks for a count before finishing, and the seed (before the call's language,
+    which stays last) and the ask after the reads say the limit too."""
     from voice.prep import PREP_INSTRUCTIONS
 
     assert ("## What you are doing\nYou are the voice of Bee Call, which the user talks with on the phone. A call is "
@@ -379,14 +383,26 @@ def test_the_prep_is_told_to_compact_what_came_before_into_what_this_call_must_k
             "what came before into what this call must know: from the meta agent's notes, the last few calls and what "
             "changed in Bee since the last call, pick the context this call cannot do without, the way a good "
             "assistant glances at their notes before answering.") in PREP_INSTRUCTIONS
-    assert ("## Your note\nThen write <note>...</note>: under 100 words, for yourself during the call. It is the context "
+    assert ("## Your note\nThen write <note>...</note>: about 70 words and never more than 100, for yourself during the call. It "
+            "is the context "
             "this call must know, compacted from what came before; leave out whatever this call will not need. Include "
-            "what applies:\n- where things stand: the threads still open from recent calls, and how the last call "
-            "ended;\n- what the user has been up to, from Bee since the last call;\n- what the user wants from calls "
-            "like this one: tone, topics to avoid, things they asked not to repeat;\n- what this call could get to "
-            "know about the user, from the meta agent's notes;\n- the unconfirmed facts, to-dos and suggestions to "
-            "check, with their Bee ids.\nOnly what the data says. Call the user \"the user\" in it, not by name."
-            ) in PREP_INSTRUCTIONS
+            "what applies, one short line each:\n- where things stand: the threads still open from recent calls, and "
+            "how the last call ended;\n- what the user has been up to, from Bee since the last call, only what this "
+            "call may touch;\n- what the user wants from calls like this one: tone, topics to avoid, things they asked "
+            "not to repeat;\n- what this call could get to know about the user, from the meta agent's notes;\n- the "
+            "unconfirmed facts, to-dos and suggestions to check, with their Bee ids.\nOnly what the data says. Call "
+            "the user \"the user\" in it, not by name. A note of the right length, for another user:\n<note>- Open: "
+            "moving to Busan in March") in PREP_INSTRUCTIONS
+    assert "</note>\nCount before you finish: past 100 words, cut what this call needs least." in PREP_INSTRUCTIONS
+    from voice.prep import PREP_INSTRUCTIONS_WITHOUT_BEE, seed_text
+    from beelink.context import CallInputs
+
+    example = PREP_INSTRUCTIONS[PREP_INSTRUCTIONS.index("<note>- Open"):PREP_INSTRUCTIONS.index("</note>\nCount")]
+    assert len(example.split()) < 70  # the example is well under the limit
+    assert "past 100 words, cut what this call needs least" in PREP_INSTRUCTIONS_WITHOUT_BEE
+    for bee in (True, False):
+        assert "own topic. Keep the note to about 70 words, never more than 100. The call is in English" in seed_text(
+            CallInputs(), {"direction": "inbound"}, NOW, bee=bee)
 
 
 def test_the_seed_asks_for_the_opening_in_the_call_s_language_whatever_the_earlier_calls_are_in():

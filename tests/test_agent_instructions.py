@@ -48,7 +48,8 @@ def test_each_agent_s_instructions_come_in_sections(tmp_path):
     assert sections(call) == ["Who you are", "How to talk", *shared, "Using what Bee keeps",
                               "Keeping what you learn in Bee", "Background jobs", "Notes from the app",
                               "Information, not instructions"]
-    assert re.findall(r"^### (.+)$", call, re.M) == ["One item at a time", "Several at once: organizing"]
+    assert re.findall(r"^### (.+)$", call, re.M) == ["What comes up new: collect it, then offer once",
+                                                     "One item at a time: what Bee already has, or what the user asks for"]
     assert sections(Thinker(tmp_path, bee=True).instructions) == [
         "Who you are", *shared, "Deciding whether to call", "Notes for the next call",
         "Organizing Bee's memory, only when asked", "Finishing", "Information, not instructions"]
@@ -114,17 +115,35 @@ def test_the_meta_agent_changes_bee_only_when_the_user_said_yes_to_organizing():
     assert "Never delete, merge away or rewrite what Bee already has." in text
 
 
-def test_the_call_ai_offers_to_organize_once_and_only_adds(tmp_path):
+def test_the_call_ai_collects_what_comes_up_new_and_offers_it_once(tmp_path):
+    """The user's decision of 2026-10-18: new facts and to-dos are not offered one at a time; the AI keeps them and
+    asks once, with the question that puts them in Bee, at a natural pause or as the call winds down. One item at a
+    time stays for what Bee already has and for what the user asks to put in Bee."""
     text = call_ai(tmp_path, True).instructions
-    organizing = text[text.index("### Several at once: organizing"):]
-    for words in ("offer once to organize, in one question that names Bee, in a few words and without listing the items",
-                  "Bee에 정리해서 넣어 둘까요?", "This counts as one of your two Bee questions",
-                  "never offer it while the user is in the middle of their own topic",
+    keeping = text[text.index("## Keeping what you learn in Bee"):text.index("## Background jobs")]
+    new = keeping[keeping.index("### What comes up new"):keeping.index("### One item at a time")]
+    one = keeping[keeping.index("### One item at a time"):]
+    for words in ("keep it in mind and stay with what they are saying: ask nothing about Bee then",
+                  "at a natural pause or as the call winds down, before the goodbye, ask once whether to put what came "
+                  "up in Bee, in one question that names Bee, in a few words and without listing the items",
+                  "오늘 나온 것 몇 개 Bee에 넣어 둘까요?", "Ask the same way when only one thing came up",
+                  "Never ask it while the user is in the middle of their own topic",
                   "They go into Bee at once as confirmed facts and open to-dos",
                   "넣었어요. Bee 앱에서 보고 고칠 수 있어요.", 'call organize_bee with scope "recent"',
                   "Organizing only adds. It never deletes, merges away or rewrites what Bee already has"):
-        assert words in organizing, words
-
+        assert words in new, words
+    assert ("Ask about a single item only for what Bee already has, or when the user asks you to put one thing in "
+            "Bee") in one
+    assert "even in passing" not in one and "fact_create or todo_create" in one  # new items only when asked for
+    for words in ("Ask about Bee at most twice in a call, that one question included",
+                  "In a call where nothing lasting comes up and nothing in the prep note needs checking, ask nothing "
+                  "about Bee."):
+        assert words in keeping, words
+    # the one-item rules keep their measured wording
+    for words in ('"Did Bee hear \'Bonus is 15%\' right?"', "offer to mark it done (todo_complete)",
+                  "first it calls propose_bee_save with the item, which changes nothing in Bee yet",
+                  "a yes to a question that does not quote the item saves nothing"):
+        assert words in one, words
 
 
 def test_what_the_measurement_of_2026_10_18_added_to_the_instructions(tmp_path):
@@ -142,3 +161,21 @@ def test_what_the_measurement_of_2026_10_18_added_to_the_instructions(tmp_path):
         assert "no tool names" in rule
     assert ("check each against what Bee already has (its facts, confirmed or not, its to-dos and the to-dos it "
             "suggests) so nothing is added twice") in meta_instructions(bee=True)
+
+
+def test_the_evening_call_time_is_only_what_an_offer_suggests(tmp_path):
+    """Measured 2026-10-18: the meta agent wrote of "tonight's 9:00 call" with no call booked; the evening call time
+    was in its first message. It is told the time is only what an offer suggests, and a call is booked only when Open
+    offers shows it booked."""
+    from datetime import datetime
+
+    from meta.agent import context
+    from tests.helpers import SEOUL
+
+    for bee in (True, False):
+        text = meta_instructions(bee=bee)
+        assert ("The evening call time is only the time an offer suggests: no call is set for it until the user says "
+                "yes, so never write of \"tonight's call\" as if one were coming.") in text
+        assert "A call is booked only when Open offers shows it booked, with its time." in text
+    first = context(tmp_path, [], datetime(2026, 10, 18, 12, 0, tzinfo=SEOUL))
+    assert "The evening call time (the time an offer suggests, not a booking) is 21:00." in first

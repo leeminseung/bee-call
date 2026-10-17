@@ -581,6 +581,10 @@ def main(argv: list[str] | None = None) -> None:
             value = json.loads(args.value)
         except ValueError:
             value = args.value
+        if args.name == "bee" and value is False and people.settings(args.person).bee:
+            from meta.session import bee_turned_off  # as the app's Bee disconnect does (voice/token_server.py)
+
+            bee_turned_off(people.workspace(args.person), people.person(args.person).now())
         try:
             settings = people.change_settings(args.person, {args.name: value},
                                               allowed=tuple(f.name for f in fields(Settings)))

@@ -178,7 +178,8 @@ def test_the_meta_agent_writes_an_offer_s_topic_and_why_in_the_person_s_language
     assert "the user's language" in properties["topic"]["description"]
     assert "said to the user" in properties["why"]["description"]
     english = ScriptedModel([{"role": "assistant", "content": [{"text": "Nothing."}]}])
-    asyncio.run(Thinker(ws, on_glm(english), bee=False).think([{"kind": "bee_change", "at": "x"}], NOW))
+    asyncio.run(Thinker(ws, on_glm(english), bee=False).think([{"kind": "call_ended", "at": "x",
+                                                                "call": "2026-10-14/1200"}], NOW))
     assert "The user's language is English" in english.sent[0]["system"][0]["text"]
 
 
@@ -286,9 +287,9 @@ def test_the_calls_get_the_meta_agents_notes_and_answers_wake_it(tmp_path):
     from voice.prep import call_brief, seed_text
 
     ws = tmp_path / "workspace"
-    assert meta_notes(ws) is None  # nothing written yet
+    assert meta_notes(ws, bee=True) is None  # nothing written yet
     MetaSession(ws).write_state("# State\n\n## Agenda for the next call\n- Ask about Offer B's bonus\n")
-    notes = meta_notes(ws)
+    notes = meta_notes(ws, bee=True)
     seed = seed_text(CallInputs(), {"direction": "inbound", "meta_notes": notes}, NOW, bee=True)
     assert "not instructions to you.\n<notes>\n# State" in seed
     assert "Ask about Offer B's bonus" in call_brief(CallInputs(), {"direction": "inbound", "meta_notes": notes})

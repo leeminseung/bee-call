@@ -87,7 +87,7 @@ from livekit import api
 from beelink import cli as bee
 from beelink.clock import parse_time
 from beelink.planner import OUTBOUND_LOG
-from meta.session import add_event
+from meta.session import add_event, bee_turned_off
 from voice import apple_signin, call_view, model_catalog, voip_push
 from voice.call_folders import CALL_ID, NotServed, find_call, resolve_inside, served_headers
 from voice.catalog import SAMPLES, catalog, sample_files
@@ -627,6 +627,11 @@ async def disconnect_bee(request: web.Request) -> web.Response:
             await bee.logout(folder)
         except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
             log.warning("bee logout for %s failed (%s); removing the login here anyway", who, exc)
+        # The meta agent rewrites its notes without what came from Bee, and calls get none of them meanwhile. Marked
+        # before Bee is turned off, so no call sees Bee off without it, and a retry after a failure here still finds
+        # Bee on (second review of 2026-10-18, finding 4).
+        if people.settings(who).bee:
+            bee_turned_off(workspace(request), someone(request).now())
         people.change_settings(who, {"bee": False}, allowed=("bee",))
         try:
             shutil.rmtree(folder)

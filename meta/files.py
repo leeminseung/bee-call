@@ -51,9 +51,9 @@ def _inside(workspace: Path, relative: str) -> Path:
     return path
 
 
-def _readable(path: Path, root: Path) -> bool:
+def _readable(path: Path, root: Path, hidden: tuple[str, ...] = ()) -> bool:
     """Inside the workspace once links are resolved, and no part of the path, as named or as resolved, is hidden
-    or secret ("..", dot-folders, token files, audio)."""
+    or secret ("..", dot-folders, token files, audio), or one of `hidden` (names more to hide for this reader)."""
     try:
         resolved, named = path.resolve(), path.absolute()
     except OSError:
@@ -67,20 +67,20 @@ def _readable(path: Path, root: Path) -> bool:
         except ValueError:
             pass
     # In lower case: a Mac's disk finds "VOIP_TOKEN.json" under "voip_token.json" (BC-049).
-    return not any(fnmatch.fnmatchcase(name.lower(), pattern) for name in names for pattern in HIDDEN)
+    return not any(fnmatch.fnmatchcase(name.lower(), pattern) for name in names for pattern in (*HIDDEN, *hidden))
 
 
 def redact(text: str) -> str:
     return LOCATION.sub(lambda m: f'"{m.group(1)}": "[hidden]"', text)
 
 
-def list_files(workspace: Path, path: str = ".", pattern: str = "*") -> str:
+def list_files(workspace: Path, path: str = ".", pattern: str = "*", hidden: tuple[str, ...] = ()) -> str:
     """Files and folders under `path` (one level), newest first, with sizes."""
     root = _root(workspace)
     folder = _inside(workspace, path)
-    if not folder.is_dir() or not _readable(root / (path or "."), root):
+    if not folder.is_dir() or not _readable(root / (path or "."), root, hidden):
         raise FileError(f"{path!r} is not a folder that can be listed")
-    entries = [p for p in folder.iterdir() if _readable(p, root) and fnmatch.fnmatch(p.name, pattern)]
+    entries = [p for p in folder.iterdir() if _readable(p, root, hidden) and fnmatch.fnmatch(p.name, pattern)]
     entries.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     lines = [f"{p.relative_to(root)}/" if p.is_dir() else f"{p.relative_to(root)}  ({p.stat().st_size} bytes)"
              for p in entries[:MAX_LIST]]
@@ -88,11 +88,12 @@ def list_files(workspace: Path, path: str = ".", pattern: str = "*") -> str:
     return "\n".join(lines) + more if lines else "(empty)"
 
 
-def read_file(workspace: Path, path: str, start_line: int = 1, max_lines: int = 200) -> str:
+def read_file(workspace: Path, path: str, start_line: int = 1, max_lines: int = 200,
+              hidden: tuple[str, ...] = ()) -> str:
     """Lines start_line.. of a text file, numbered."""
     root = _root(workspace)
     file = _inside(workspace, path)
-    if not file.is_file() or not _readable(root / path, root):
+    if not file.is_file() or not _readable(root / path, root, hidden):
         raise FileError(f"{path!r} is not a file that can be read")
     if file.stat().st_size > MAX_FILE_BYTES:
         raise FileError(f"{path!r} is too large; use grep on it")
@@ -106,7 +107,7 @@ def read_file(workspace: Path, path: str, start_line: int = 1, max_lines: int = 
     return (text or "(no lines there)") + (f"\n({rest} more lines)" if rest > 0 else "")
 
 
-def grep(workspace: Path, pattern: str, path: str = ".", glob: str = "*") -> str:
+def grep(workspace: Path, pattern: str, path: str = ".", glob: str = "*", hidden: tuple[str, ...] = ()) -> str:
     """Lines matching a regular expression (case-insensitive) in files under `path` whose names match `glob`."""
     try:
         compiled = regex.compile(pattern, regex.IGNORECASE)
@@ -118,7 +119,7 @@ def grep(workspace: Path, pattern: str, path: str = ".", glob: str = "*") -> str
     deadline = time.monotonic() + GREP_SECONDS
     matches: list[str] = []
     for file in files:
-        if file.is_symlink() or not file.is_file() or not _readable(file, root) \
+        if file.is_symlink() or not file.is_file() or not _readable(file, root, hidden) \
                 or not fnmatch.fnmatch(file.name, glob) or file.stat().st_size > MAX_FILE_BYTES:
             continue
         for number, line in enumerate(file.read_text(errors="replace").splitlines(), 1):
