@@ -328,7 +328,7 @@ and sends one plain notification, "오늘 밤 9시에 전화할게요: {topic}. 
 today: {topic}. You can call it off in the app." (`{"aps": {"alert": {"title": "Bee Call", "body": ...}, "sound":
 "default", "thread-id": "offers"}, "offer": <id>}`, no buttons). After tomorrow the time names the date and weekday
 ("10월 20일 화요일 밤 9시에 전화할게요: …" / "I'll call you at 9:00 PM on Tuesday, October 20: …"). It is pinned and
-called off like any booked call; the app needs no change for it. A memo that asks for a time within 30 minutes of a
+called off like any booked call; the app needs no change for it. A memo that asks for a time within 10 minutes of a
 call already booked joins that call: no second offer and no second notification. A memo that asks for a call now or
 soon becomes a question (`asked`) instead.
 
