@@ -647,7 +647,7 @@ def test_the_meta_agent_is_told_a_memo_that_asks_for_a_call_is_the_user_s_yes():
 
     text = INSTRUCTIONS.format(**WITH_BEE, language="Korean")
     assert "A voice memo is the user speaking to you on purpose" in text
-    for words in ("book_call", "copying the memo's own words", "now or soon", "offer_call", "decide as for any other"):
+    for words in ("book_call", "copying their own words", "now or soon", "offer_call", "decide as for any other"):
         assert words in text, words
 
 
@@ -753,3 +753,235 @@ def test_the_watcher_s_copy_of_a_memo_says_when_it_was_recorded_if_bee_s_answer_
     (tmp_path / "memo.json").write_text(json.dumps(memo, ensure_ascii=False))  # journals get answers without it
     _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(1, "book_call", **BOOK)]}, done())
     assert entry["tools"][0]["result"].startswith("Booked") and len(told) == 1
+
+
+# ---------- 2026-10-17: a call asked for in any Bee input, a conversation as well as a voice memo ----------
+# The user's setup: the Apple Watch Bee app, which has no voice memos; a note he records with Start and Stop comes
+# as a Bee conversation. Whatever the input, if the user asks Bee Call to call them, the meta agent books the call.
+
+def ms(moment: datetime) -> int:
+    return int(moment.timestamp() * 1000)
+
+
+def conversation_change(tmp_path: Path, monkeypatch, lines: list[tuple[str, str]], conv_id: int = 88,
+                        ended: datetime | None = NOW - timedelta(minutes=1), inbox_name: str = "2026-10-14-182900",
+                        earlier: list[tuple[str, str, datetime]] = (), realtime: bool = False,
+                        started: datetime | None = None) -> Path:
+    """A workspace whose Bee just reported a conversation with these lines (speaker, text), spoken in the minute
+    before it ended (or before now, while it is still recording: `ended` None); `earlier` lines (speaker, text,
+    time) came before them. `realtime`: Bee also has a live transcription with the same lines."""
+    ws = workspace_with_a_call(tmp_path)
+    last = ended or NOW
+    said = [{"id": n, "speaker": who, "text": text, "spoken_at": ms(when)} for n, (who, text, when) in enumerate(earlier)]
+    said += [{"id": 100 + n, "speaker": who, "text": text,
+              "spoken_at": ms(last - timedelta(seconds=50) + timedelta(seconds=10 * n))} for n, (who, text) in
+             enumerate(lines)]
+    known = {str(conv_id): said, **({f"{conv_id}:realtime": said} if realtime else {})}
+    (tmp_path / "transcripts.json").write_text(json.dumps(known, ensure_ascii=False))
+    monkeypatch.setenv("FAKE_BEE_TRANSCRIPTS", str(tmp_path / "transcripts.json"))
+    inbox = ws / "inbox" / inbox_name
+    inbox.mkdir(parents=True)
+    started = started or (last - timedelta(minutes=1) if not earlier else min(when for _, _, when in earlier))
+    (inbox / "changed.json").write_text(json.dumps({"conversations": [
+        {"id": conv_id, "state": "COMPLETED" if ended else "CAPTURING", "utterances_count": len(said),
+         "short_summary": "A short note", "start_time": ms(started), "end_time": ms(ended) if ended else None}],
+        "journals": []}, ensure_ascii=False))
+    add_event(ws, "bee_change", now=NOW, inbox=f"inbox/{inbox_name}", conversation_ids=[conv_id],
+              counts={"conversations": 1})
+    return ws
+
+
+WATCH_NOTE = [("Minseung", "오늘 이사 준비할 게 너무 많네."), ("Minseung", "오늘 밤 9시에 전화해서 같이 정리하자.")]
+BOOK_FROM_CONVERSATION = dict(conversation_id=88, asked="오늘 밤 9시에 전화해서 같이 정리하자", at="2026-10-14T21:00",
+                              topic="이사 준비 정리", why="오늘 밤 9시에 같이 정리하자고 하셨어요.")
+
+
+def test_a_conversation_in_which_the_wearer_asks_for_a_call_books_it(tmp_path, monkeypatch):
+    """A note recorded on the watch comes as a Bee conversation in which only the wearer speaks. The agent is shown
+    its lines with Bee's speaker names and their times, and the booking is checked as a memo's is: the words asking
+    for the call must be the wearer's own, in those lines."""
+    ws = conversation_change(tmp_path, monkeypatch, WATCH_NOTE)
+    model, entry, told, asked = think_with(ws, {"role": "assistant", "content": [tool_use(
+        1, "book_call", **BOOK_FROM_CONVERSATION)]}, done())
+    first = model.sent[0]["messages"][0]["content"][0]["text"]
+    assert "[18:28] Minseung: 오늘 밤 9시에 전화해서 같이 정리하자." in first
+    (offer,) = OfferStore(ws).all()
+    assert (offer.state, offer.kind, offer.conversation_ids, offer.memo_ids) == ("booked", "conversation", [88], [])
+    assert offer.call_at == "2026-10-14T21:00:00+09:00" and told == [offer] and asked == []
+    from voice.offers import agreed
+
+    assert "in what Bee recorded" in agreed(offer) and "오늘 밤 9시에 전화해서 같이 정리하자" in agreed(offer)
+
+
+@pytest.mark.parametrize("lines, args, why", [
+    (WATCH_NOTE, {"asked": "오늘 밤 9시에 꼭 전화해 줘"}, "own words"),  # words the conversation does not have
+    (WATCH_NOTE, {"conversation_id": 99}, "no Bee conversation 99"),  # not among the changes shown
+    (WATCH_NOTE, {"memo_id": "j-41"}, "one of"),  # a memo and a conversation at once
+])
+def test_a_booking_from_a_conversation_must_quote_its_own_words(tmp_path, monkeypatch, lines, args, why):
+    ws = conversation_change(tmp_path, monkeypatch, lines)
+    _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(
+        1, "book_call", **{**BOOK_FROM_CONVERSATION, **args})]}, done())
+    result = entry["tools"][0]["result"]
+    assert result.startswith("Not booked") and why in result and OfferStore(ws).all() == [] and told == []
+
+
+def test_a_conversation_recorded_long_ago_or_during_our_call_books_nothing(tmp_path, monkeypatch):
+    """The stale-input rule holds for conversations too; and Bee's recording of a Bee Call call never books another
+    call, also if one reached the agent."""
+    ws = conversation_change(tmp_path, monkeypatch, WATCH_NOTE, ended=NOW - timedelta(days=2))
+    _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(
+        1, "book_call", **BOOK_FROM_CONVERSATION)]}, done())
+    assert entry["tools"][0]["result"].startswith("Not booked") and "2 days ago" in entry["tools"][0]["result"]
+    ours = conversation_change(tmp_path / "ours", monkeypatch, WATCH_NOTE)
+    call = ours / "2026-10-14" / "1828"
+    call.mkdir(parents=True)
+    (call / "events.jsonl").write_text(
+        json.dumps({"t": 0.0, "type": "call_started", "started_at": (NOW - timedelta(minutes=3)).isoformat()}) + "\n"
+        + json.dumps({"t": 240.0, "type": "call_ended"}) + "\n")
+    _, entry, told, _ = think_with(ours, {"role": "assistant", "content": [tool_use(
+        1, "book_call", **BOOK_FROM_CONVERSATION)]}, done())
+    assert entry["tools"][0]["result"].startswith("Not booked") and "during one of the user's calls" in \
+        entry["tools"][0]["result"] and OfferStore(ours).all() == [] and told == []
+
+
+def test_only_the_lines_new_since_the_conversation_was_last_shown_are_shown(tmp_path, monkeypatch):
+    """A conversation Bee keeps updating comes back in later changes: the agent is shown the lines spoken since the
+    change before, with their times, not the whole conversation again."""
+    before = NOW - timedelta(minutes=20)
+    ws = conversation_change(tmp_path, monkeypatch, [("Minseung", "오늘 밤 9시에 전화해서 같이 정리하자.")],
+                             earlier=[("Minseung", "아까 한 얘기 기억나?", before), ("Unknown", "응.", before)])
+    earlier = ws / "inbox" / "2026-10-14-181000"
+    earlier.mkdir(parents=True)
+    (earlier / "changed.json").write_text(json.dumps({"conversations": [
+        {"id": 88, "state": "CAPTURING", "utterances_count": 2, "short_summary": None, "start_time": ms(before),
+         "end_time": ms(before + timedelta(seconds=5))}], "journals": []}))
+    model, _, _, _ = think_with(ws, done())
+    first = model.sent[0]["messages"][0]["content"][0]["text"]
+    assert "Minseung: 오늘 밤 9시에 전화해서 같이 정리하자." in first and "아까 한 얘기 기억나?" not in first
+    assert "2 earlier lines" in first
+
+
+def test_the_meta_agent_books_a_call_the_user_asks_for_in_any_bee_input():
+    """The decision is the model's, from a principle with examples: a request counts when the wearer asks the
+    assistant to call them; words said to another person, or a time mentioned without asking, do not."""
+    from meta.agent import INSTRUCTIONS, WITH_BEE
+
+    text = INSTRUCTIONS.format(**WITH_BEE, language="Korean")
+    for words in ("in a voice memo or in a conversation Bee recorded", "asks you, the assistant, to call them",
+                  "\"오늘 밤 9시에 전화해서 같이 정리하자\"", "\"call me at nine tonight\"", "(\"나중에 전화해\" to a friend)",
+                  "a time mentioned without asking for a call", "\"Unknown\"", "copying their own words",
+                  "sometimes marks the wearer \"Unknown\" too", "judge by what is said and to whom"):
+        assert words in text, words
+
+
+# ---------- review of 2026-10-17 (booking from any Bee input) ----------
+
+def booked(ws: Path, **args) -> tuple[str, list]:
+    _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(
+        1, "book_call", **{**BOOK_FROM_CONVERSATION, **args})]}, done())
+    return entry["tools"][0]["result"], told
+
+
+def first_message(ws: Path) -> str:
+    model, _, _, _ = think_with(ws, done())
+    return model.sent[0]["messages"][0]["content"][0]["text"]
+
+
+def test_a_request_in_a_line_bee_marks_unknown_is_the_model_s_to_judge(tmp_path, monkeypatch):
+    """Finding 4: Bee marked 3 of the user's 17 lines said alone as "Unknown" (FINDINGS 2026-10-09), so a line's
+    speaker name is shown to the model but no rule in code turns a request away for it."""
+    ws = conversation_change(tmp_path, monkeypatch, [("Minseung", "오늘 이사 준비할 게 너무 많네."),
+                                                     ("Unknown", "오늘 밤 9시에 전화해서 같이 정리하자.")])
+    result, told = booked(ws)
+    assert result.startswith("Booked") and len(told) == 1
+
+
+def test_lines_spoken_during_our_call_are_never_shown_or_booked_from(tmp_path, monkeypatch):
+    """Finding 1: the watch records through our calls, into a conversation still recording (no end time) that began
+    before the call, so the batch's copy passed the own-call check and the user's words to our AI booked a call."""
+    ws = conversation_change(tmp_path, monkeypatch, [("Minseung", "배고프다."), ("Minseung", "오늘 밤 9시에 다시 전화해 줘."),
+                                                     ("Minseung", "뭐 먹지.")],
+                             ended=None, started=NOW - timedelta(hours=3))
+    call = ws / "2026-10-14" / "1829"
+    call.mkdir(parents=True)  # our call, while the second line was said (18:29:20)
+    (call / "events.jsonl").write_text(
+        json.dumps({"t": 0.0, "type": "call_started", "started_at": (NOW - timedelta(seconds=45)).isoformat()}) + "\n"
+        + json.dumps({"t": 15.0, "type": "call_ended"}) + "\n")
+    shown = first_message(ws)
+    assert "다시 전화해 줘" not in shown and "lines said during your calls with the user are left out" in shown
+    result, told = booked(ws, asked="오늘 밤 9시에 다시 전화해 줘")
+    assert result.startswith("Not booked") and told == []
+
+
+def test_an_old_request_in_a_long_recording_books_nothing(tmp_path, monkeypatch):
+    """Finding 2: the age was the conversation's, so yesterday's request in a recording that ended a minute ago
+    booked tonight. The lines the words are in must be recent."""
+    ws = conversation_change(tmp_path, monkeypatch, [("Minseung", "뭐 먹지.")],
+                             earlier=[("Minseung", "오늘 밤 9시에 전화해서 같이 정리하자.", NOW - timedelta(hours=22))])
+    result, told = booked(ws)
+    assert result.startswith("Not booked") and "22 hours ago" in result and told == []
+
+
+def test_lines_shown_before_are_not_new_also_when_bee_gave_no_end_then(tmp_path, monkeypatch):
+    """Finding 2: an earlier copy with no end time made every line new again; the earlier change's own time is used."""
+    before = NOW - timedelta(minutes=30)
+    ws = conversation_change(tmp_path, monkeypatch, [("Minseung", "이제 정리 시작해야지.")], ended=None,
+                             earlier=[("Minseung", "아까 한 얘기 기억나?", before)])
+    earlier = ws / "inbox" / (NOW - timedelta(minutes=20)).astimezone().strftime("%Y-%m-%d-%H%M%S")
+    earlier.mkdir(parents=True)
+    (earlier / "changed.json").write_text(json.dumps({"conversations": [
+        {"id": 88, "state": "CAPTURING", "utterances_count": 1, "start_time": ms(before), "end_time": None}]}))
+    shown = first_message(ws)
+    assert "이제 정리 시작해야지." in shown and "아까 한 얘기 기억나?" not in shown and "1 earlier lines" in shown
+
+
+def test_a_live_transcription_s_lines_are_shown_once(tmp_path, monkeypatch):
+    """Finding 3: bee conversations transcript joins every transcription, the live one too, so each line came twice
+    and the request fell out of the lines shown. Bee's conversation is read, and one transcription of it, as the
+    Bee CLI shows it (the first that is not live)."""
+    ws = conversation_change(tmp_path, monkeypatch, WATCH_NOTE, realtime=True)
+    shown = first_message(ws)
+    assert shown.count("오늘 밤 9시에 전화해서 같이 정리하자.") == 1 and "earlier lines" not in shown
+    add_event(ws, "bee_change", now=NOW, inbox="inbox/2026-10-14-182900", conversation_ids=[88])  # think again
+    result, told = booked(ws)
+    assert result.startswith("Booked") and len(told) == 1
+
+
+@pytest.mark.parametrize("lines", [
+    [("Minseung", "오늘 밤 9시에 전화해 줘."), ("Minseung", "아니다, 하지 마.")],
+    [("Minseung", "오늘 밤 9시에 전화해 줘."), ("Unknown", "응."), ("Minseung", "아니다, 됐어. 하지 마.")],
+    [("Minseung", "Call me at nine tonight."), ("Minseung", "Actually no, don't.")],
+])
+def test_a_request_taken_back_on_a_later_line_books_nothing(tmp_path, monkeypatch, lines):
+    """Finding 6: said_in sees only the rest of the line the words are in, so a take-back on the next line booked.
+    In a memo the same words were refused."""
+    ws = conversation_change(tmp_path, monkeypatch, lines)
+    result, told = booked(ws, asked=lines[0][1].rstrip("."))
+    assert result.startswith("Not booked") and "takes it back" in result and told == []
+
+
+def test_the_newest_conversations_are_the_ones_read(tmp_path, monkeypatch):
+    """Finding 7: the first three of the change were read, oldest first, so a note that came fourth could not book.
+    The newest are read: those still recording, then by their end."""
+    ws = conversation_change(tmp_path, monkeypatch, WATCH_NOTE)
+    changed = ws / "inbox" / "2026-10-14-182900" / "changed.json"
+    batch = json.loads(changed.read_text())
+    older = [{"id": 60 + n, "state": "COMPLETED", "utterances_count": 1, "short_summary": f"Older {n}",
+              "start_time": ms(NOW - timedelta(hours=5 - n)), "end_time": ms(NOW - timedelta(hours=4 - n))}
+             for n in range(3)]
+    batch["conversations"] = older + batch["conversations"]
+    changed.write_text(json.dumps(batch, ensure_ascii=False))
+    events = MetaSession(ws).take_events()
+    add_event(ws, "bee_change", now=NOW, inbox="inbox/2026-10-14-182900", conversation_ids=[60, 61, 62, 88])
+    result, told = booked(ws)
+    assert result.startswith("Booked") and len(told) == 1 and events
+
+
+def test_a_line_s_start_that_is_no_time_reads_as_no_time():
+    """Finding 8: a line's start of 3.5 (seconds into the recording) was read as 1970. As the Bee CLI does, values
+    at or below 1e9 are no time."""
+    from meta.agent import recorded
+
+    assert recorded({"created_at": 3.5}, NOW) is None and recorded({"created_at": 1e9}, NOW) is None
+    assert recorded({"created_at": ms(NOW)}, NOW) == NOW

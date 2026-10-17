@@ -72,6 +72,19 @@ def recent_text(conversations: list[dict[str, Any]], zone: tzinfo) -> str:
                + "\n".join(conversation_line(c, zone) for c in conversations))
 
 
+def one_transcription(conversation: Any) -> list[dict[str, Any]] | None:
+    """A Bee conversation's lines from one of its transcriptions, as the Bee CLI shows them (the first that is not
+    live, else the first): bee conversations transcript joins them all, so a live transcription's lines came twice
+    (review of 2026-10-17, finding 3). None when the answer holds no transcriptions."""
+    found = conversation.get("transcriptions") if isinstance(conversation, dict) else None
+    if not isinstance(found, list):
+        return None
+    usable = [t for t in found if isinstance(t, dict)]
+    picked = next((t for t in usable if not t.get("realtime")), usable[0] if usable else None)
+    lines = picked.get("utterances") if picked else []
+    return [u for u in lines or [] if isinstance(u, dict)]
+
+
 def conversation_text(conversation: dict[str, Any], utterances: list[dict[str, Any]], zone: tzinfo) -> str:
     lines = [conversation_line(conversation, zone)]
     if conversation.get("summary"):
@@ -121,10 +134,12 @@ async def conversation_read(conversation_id: int, zone: tzinfo,
     except Exception as exc:
         return f"Bee read failed: {exc}", None
     found = got.get("conversation") or {"id": conversation_id}
+    lines = one_transcription(found)  # one transcription's lines; the transcript read joins them all
+    found = {k: v for k, v in found.items() if k != "transcriptions"}
     if ours is not None and ours.conversation(found):
         return (f"Bee conversation {conversation_id} is left out: Bee recorded it during one of the user's calls with "
                 "this assistant, and that call's own record is the source."), None
-    return conversation_text(found, said.get("transcript") or [], zone), found
+    return conversation_text(found, lines if lines is not None else said.get("transcript") or [], zone), found
 
 
 async def day(date: str) -> str:

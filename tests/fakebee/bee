@@ -89,8 +89,23 @@ if cmd[:2] == ["todos", "suggestions"]:
     out({"todoSuggestions": [{"id": 34, "text": "Ask about bonus terms", "emoji": "", "details": "", "alarm_at": None}]})
 if cmd[:2] in (["conversations", "get"], ["conversations", "transcript"]) and cmd[2] == "999":
     out({"conversation": None, "transcript": None})  # a conversation Bee returns as null
+if cmd[:2] == ["conversations", "get"] and os.environ.get("FAKE_BEE_TRANSCRIPTS"):
+    # As the API answers (bee conversations get prints it as it came): the conversation with its transcriptions,
+    # the final one and, when the file has "<id>:realtime", a live one with the same lines before it.
+    known = json.load(open(os.environ["FAKE_BEE_TRANSCRIPTS"]))
+    transcriptions = [{"id": 1, "realtime": True, "utterances": known[cmd[2] + ":realtime"]}] \
+        if cmd[2] + ":realtime" in known else []
+    transcriptions.append({"id": 2, "realtime": False, "utterances": known.get(cmd[2], [])})
+    out({"conversation": {"id": int(cmd[2]), "short_summary": "A short note", "start_time": now_ms,
+                          "transcriptions": transcriptions}})
 if cmd[:2] == ["conversations", "get"]:
     out({"conversation": {"id": int(cmd[2]), "short_summary": "Talked through a job offer", "start_time": now_ms}})
+if cmd[:2] == ["conversations", "transcript"] and os.environ.get("FAKE_BEE_TRANSCRIPTS"):
+    # Every transcription's lines in one list, as bee conversations transcript gives them: a live transcription's
+    # lines come twice.
+    known = json.load(open(os.environ["FAKE_BEE_TRANSCRIPTS"]))
+    said = known.get(cmd[2] + ":realtime", []) + known.get(cmd[2], [])
+    out({"conversationId": int(cmd[2]), "transcript": said})
 if cmd[:2] == ["conversations", "transcript"]:
     out({"conversationId": int(cmd[2]), "transcript": [
         {"spoken_at": now_ms - 60000, "speaker": "me", "text": "They offered 15 percent bonus."},

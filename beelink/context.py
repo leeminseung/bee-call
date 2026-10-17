@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from beelink import cli
+from beelink.reads import one_transcription
 from beelink.calls import OurCalls
 
 MAX_CONVERSATIONS = 3
@@ -105,8 +106,10 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
     for conv_id, pair in zip(ids, convs):
         if pair is not None:
             conv_raw, transcript_raw = pair
-            inputs.conversations.append((conv_id, (conv_raw or {}).get("conversation") or {},
-                                         (transcript_raw or {}).get("transcript") or []))
+            conv = (conv_raw or {}).get("conversation") or {}
+            lines = one_transcription(conv)  # one transcription's lines; the transcript read joins them all
+            inputs.conversations.append((conv_id, {k: v for k, v in conv.items() if k != "transcriptions"},
+                                         lines if lines is not None else (transcript_raw or {}).get("transcript") or []))
     if ours is not None:
         inputs.facts, inputs.suggestions = ours.others(inputs.facts), ours.others(inputs.suggestions)
         inputs.recent = ours.conversations(inputs.recent)

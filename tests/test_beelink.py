@@ -486,6 +486,23 @@ def test_our_to_dos_are_looked_for_past_bee_s_first_page(tmp_path, fake_bee, mon
     assert [c[:2] for c in calls(fake_bee)].count(["todos", "list"]) == 2  # found on page 2: page 3 is not read
 
 
+def test_a_call_s_prep_reads_one_transcription_of_a_conversation(tmp_path, fake_bee, monkeypatch):
+    """Review of 2026-10-17 (booking from any Bee input), finding 3: bee conversations transcript joins every
+    transcription, the live one too, so each line came twice. The conversation Bee answers with holds them; one is
+    read, as the Bee CLI shows it (the first that is not live), and the conversation is kept without them."""
+    said = [{"id": 1, "speaker": "Minseung", "text": "Remind me about the movers.", "spoken_at": 1792229360000}]
+    (tmp_path / "t.json").write_text(json.dumps({"88": said, "88:realtime": said}))
+    monkeypatch.setenv("FAKE_BEE_TRANSCRIPTS", str(tmp_path / "t.json"))
+    inputs = asyncio.run(context.fetch_call_inputs(conversation_ids=[88]))
+    ((conv_id, conv, lines),) = inputs.conversations
+    assert conv_id == 88 and [line["text"] for line in lines] == ["Remind me about the movers."]
+    assert "transcriptions" not in conv
+    from beelink import reads
+
+    text = asyncio.run(reads.conversation(88, SEOUL))
+    assert text.count("Remind me about the movers.") == 1
+
+
 def test_the_prep_and_the_plain_context_list_our_open_to_dos(tmp_path):
     from voice.prep import call_brief, seed_text
 
