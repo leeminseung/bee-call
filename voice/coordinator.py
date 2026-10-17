@@ -38,12 +38,12 @@ from worker.runner import JobNotification, JobRunner, short
 
 # How the call AI may write sounds (voice/audio_tags.py): no tags at all, or, when its voice performs them, a few
 # ElevenLabs audio tags used sparingly. One of the "instructions for speech that sounds real" to tune by ear.
-SPEECH_RULE = ('- Write only words to say: no notes to yourself about what to do next, and no stage directions, '
-               'sound effects or descriptions of the situation, in parentheses, brackets or asterisks, such as '
-               '"(pauses)", "[laughs]" or "*sighs*".')
+SPEECH_RULE = ('- Write only words to say: no notes to yourself about what to do next, no tool names, and no stage '
+               'directions, sound effects or descriptions of the situation, in parentheses, brackets or asterisks, '
+               'such as "(pauses)", "[laughs]" or "*sighs*".')
 SPEECH_RULE_WITH_TAGS = (
-    '- Write only words to say: no notes to yourself about what to do next, and no stage directions or descriptions '
-    'of the situation, in parentheses, brackets or asterisks, such as "(pauses)" or "*smiles*". Your voice can make a few sounds, written exactly as these tags: '
+    '- Write only words to say: no notes to yourself about what to do next, no tool names, and no stage directions or '
+    'descriptions of the situation, in parentheses, brackets or asterisks, such as "(pauses)" or "*smiles*". Your voice can make a few sounds, written exactly as these tags: '
     + ", ".join(f"[{tag}]" for tag in SPOKEN) + '. Use them sparingly, only where a person on the phone would make '
     'that sound: at most one in a reply, and most replies have none. Put a tag where the sound happens, as in '
     '"[laughs] That\'s a good one."')
@@ -131,7 +131,9 @@ USING_WHAT_BEE_KEEPS = """\
 The call prep note at the end of these instructions is what you noted just before the call, from Bee and from the \
 notes kept between calls. Bring up things from it only when they connect to what the user is talking about, or once \
 the user's own topic is done; never interrupt the user's topic with them. What Bee keeps about the user is what they \
-told it: mention a kept fact when it connects, as someone who remembers would, never as a list."""
+told it: mention a kept fact when it connects, as someone who remembers would, never as a list. What Bee keeps is the \
+user's life, never yours: bring it up as theirs ("Bee says you're building a home server"), and when they ask about \
+you, answer in a few words and turn back to them."""
 # One item at a time keeps the wording measured on 2026-10-17 (its examples, and never asking in other words first).
 KEEPING_WHAT_YOU_LEARN = """\
 ## Keeping what you learn in Bee
@@ -169,7 +171,8 @@ Sometimes there is more to keep than one item: several lasting things came up in
 tidied. Then, at a natural pause, offer once to organize, in one question that names Bee, in a few words and without \
 listing the items, for example "A few things from today are worth keeping. Shall I put them in Bee?", or, in a \
 Korean call, "오늘 이야기 중에 오래 갈 내용이 몇 개 있었는데, Bee에 정리해서 넣어 둘까요?". This counts as one of your \
-two Bee questions, and you never offer it while the user is in the middle of their own topic.
+two Bee questions, and you never offer it while the user is in the middle of their own topic. Once you have offered one \
+item in a call, keep the lasting things that come up after it for this one offer instead of asking about each.
 After a clear yes:
 - For what came up in this call, call organize_bee with the new facts and to-dos, each one short statement in \
 English. They go into Bee at once as confirmed facts and open to-dos. Then say in a few words that it is done and \

@@ -189,7 +189,8 @@ The step, the summary and a chart's title are in the call's language only once t
 
 **`bee_write`**: a fact or to-do written to Bee after the person's spoken yes, one item per write. Built from the call's
 `bee-writes.jsonl`, the writer's own record of every step, not from the `bee_write` events: an undo that failed and
-a write cut off by a stopped process appear only there.
+a write cut off by a stopped process appear only there. Organizing Bee after one yes (the call AI's `organize_bee`)
+adds several items at once, each its own `fact_create` or `todo_create` write, so the app draws each as a card.
 
 | Field | Meaning |
 |---|---|
@@ -444,6 +445,7 @@ server held (DECISIONS 2026-10-15: the friend's calls stayed in English until th
 | "방금 끝남 · 1분 27초 걸림" card | `job` done: `at`, `duration_s`, `title`, `summary`, `files` (chart `title` and `image_url`, chips) |
 | "결과가 나왔어요: …" notification after the call | A job that ended after its call (section 2.7) |
 | "오늘 밤 9시에 전화할게요: …" notification | A call a voice memo asked for (section 4), pinned as `booked` |
+| "Bee에 기억 3개를 넣었어요. Bee 앱에서 보고 고칠 수 있어요." notification | The end of organizing what Bee recorded over the past days, which the person said yes to in a call; a plain alert (`thread-id` `bee`, no `kind`), as the Bee summary after a call is, so tapping it opens the app |
 | Record sheet header and "정상 종료" | `call` |
 | "통화 전에 Bee에서 본 것" | `prep` |
 | "통화 끝 · 7분 40초" | `call.state`, `call.duration_s` |

@@ -115,8 +115,9 @@ ORGANIZING = """\
 ## Organizing Bee's memory, only when asked
 When the user said yes in a call to organizing what Bee recorded over the past days, the app wakes you with that \
 request and the days to cover. Then read those days in Bee, pick what is worth keeping (lasting facts about the \
-user, to-dos they mean to do), check each against what Bee already has so nothing is added twice, and add them with \
-bee_add_fact and bee_add_todo, each one short statement in English. Never delete, merge away or rewrite what Bee \
+user, to-dos they mean to do), check each against what Bee already has (its facts, confirmed or not, its to-dos and \
+the to-dos it suggests) so nothing is added twice, and add them with bee_add_fact and bee_add_todo, each one short \
+statement in English. Never delete, merge away or rewrite what Bee \
 already has. Finish with one sentence for the user's notification: how many you added, and that they can see and \
 edit them in the Bee app. At any other time you have no tools that change Bee."""
 FINISHING = """\
@@ -824,8 +825,9 @@ class Thinker:
         return f"Bee did not confirm {what} ({write.error}): it may be in Bee. Do not add it again."
 
     async def _bee_has(self, adding: "Adding") -> dict[str, set[str]]:
-        """What Bee has, in plain words, read once per organize run: its facts (confirmed and unconfirmed) and its
-        to-dos (open and done), ORGANIZE_PAGES pages of each list. Raises when the first page of a list fails."""
+        """What Bee has, in plain words, read once per organize run: its facts (confirmed and unconfirmed), its to-dos
+        (open and done), ORGANIZE_PAGES pages of each list, and the to-dos it suggests. Raises when the first page of
+        a list fails."""
         if adding.have is None:
             facts: set[str] = set()
             for unconfirmed in (False, True):
@@ -833,6 +835,11 @@ class Thinker:
                     limit=50, cursor=c, unconfirmed=unconfirmed, timeout=META_READ_S), "facts") if isinstance(f, dict)}
             todos = {_plain(t.get("text")) for t in await _pages(lambda c: cli.todos(
                 limit=50, cursor=c, timeout=META_READ_S), "todos") if isinstance(t, dict)}
+            try:  # what Bee suggests counts too: a to-do in the same words would be added twice
+                todos |= {_plain(t.get("text")) for t in await cli.todo_suggestions(limit=50, timeout=META_READ_S)
+                          if isinstance(t, dict)}
+            except Exception:
+                pass
             adding.have = {"fact_create": facts, "todo_create": todos}
         return adding.have
 

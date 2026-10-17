@@ -119,7 +119,7 @@ def test_the_opening_picks_up_the_earlier_call(tmp_path):
     seed = seed_text(CallInputs(), meta, NOW, bee=True)
     assert "The user is calling you from the app to continue an earlier call with you." in seed
     assert "The earlier call this one continues:\nThe earlier call: Tue Oct 13" in seed
-    assert seed.endswith("Then let the user lead.")
+    assert seed.endswith("Then let the user lead. The call is in English: write the opening in English, whatever language the notes, the earlier calls or Bee are in.")
     assert "calling you from the app." in seed_text(CallInputs(), {"direction": "inbound"}, NOW, bee=True)
 
 

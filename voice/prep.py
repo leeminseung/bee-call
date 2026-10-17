@@ -143,10 +143,12 @@ def prep_role(mode: str) -> Role | None:
     return model_catalog.mode_role("prep", mode)
 
 
-def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: bool) -> str:
-    """What started the call and what it starts from (`bee`: the person uses Bee): the meta agent's notes, the
-    conversation or voice memo behind the call, and what changed in Bee since the last call, ending with what the
-    opening should do. `now` is the person's time (Person.now())."""
+def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: bool,
+              language: CallLanguage | None = None) -> str:
+    """What started the call and what it starts from (`bee`: the person uses Bee): the meta agent's notes, the last
+    calls, the conversation or voice memo behind the call, and what changed in Bee since the last call, ending with
+    what the opening should do, in the call's language (`language`, the person's). `now` is the person's time
+    (Person.now())."""
     zone = now.tzinfo
     if meta.get("direction") == "outbound":
         why = f"You are about to call the user. Why: {meta.get('reason') or 'to talk through their day'}"
@@ -190,7 +192,11 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: b
         parts.append(changes_text(inputs.changes, zone))
     if inputs.errors:
         parts.append("Bee reads that failed: " + "; ".join(inputs.errors))
-    parts.append(ask)
+    # Measured 2026-10-18: with the earlier calls' Korean lines in this message, the opening of 14 of 17 English calls
+    # came out in Korean. The call's language is named last.
+    name = (language or call_language()).name
+    sources = "the notes, the earlier calls or Bee are" if bee else "the notes or the earlier calls are"
+    parts.append(f"{ask} The call is in {name}: write the opening in {name}, whatever language {sources} in.")
     return "\n\n".join(parts)
 
 
@@ -344,7 +350,8 @@ class Preparation:
         self._spend = spend  # the person's spend log: the prep's model use goes there when it ends
         self._bee = bee  # the person uses Bee: Bee data, Bee tools and Bee's words; otherwise none of them
         instructions = PREP_INSTRUCTIONS if bee else PREP_INSTRUCTIONS_WITHOUT_BEE
-        self._system = instructions.replace("{opening}", (language or call_language()).opening)
+        self._language = language or call_language()  # the call's: the opening is in it
+        self._system = instructions.replace("{opening}", self._language.opening)
         self._inputs, self._meta, self._role = inputs, meta, role
         self._usage = Usage()  # what the prep's requests used, as their providers count it
         self._now = now  # the person's time (Person.now()), for the seed's "It is now" and Bee's times
@@ -407,7 +414,8 @@ class Preparation:
                     log.exception("could not record the prep's model use")
 
     async def _run(self) -> None:
-        turns = [Turn("user", text=seed_text(self._inputs, self._meta, self._now, bee=self._bee))]
+        turns = [Turn("user", text=seed_text(self._inputs, self._meta, self._now, bee=self._bee,
+                                             language=self._language))]
         tools = TOOLS if self._bee else []
         first = await providers.answer_with(self._role, self._system, turns, tools, on_text=self._on_text,
                                             usage=self._usage)

@@ -150,7 +150,7 @@ def last_calls(workspace: Path, zone, count: int = LAST_CALLS, skip: str | None 
 
     found = [folder for folder in call_folders(workspace) if folder_id(folder) != skip][-count:]
     parts = []
-    for folder in found:
+    for n, folder in enumerate(found, 1):
         events = _events(folder)
         started = next((e.get("started_at") for e in events if e.get("type") == "call_started"), None)
         try:
@@ -162,7 +162,8 @@ def last_calls(workspace: Path, zone, count: int = LAST_CALLS, skip: str | None 
         talk = [line.replace("AI: ", "AI (you): ", 1) for line in _talk(folder).splitlines() if line.strip()]
         lines = "\n".join(f"   {line[:LINE_CHARS]}{'…' if len(line) > LINE_CHARS else ''}"
                           for line in talk[-LAST_LINES:]) or "   (nothing was said)"
-        parts.append(f"- {when}, {title}: {how_it_ended(events)}. Its last lines:\n{lines}")
+        last = "The last call, " if n == len(found) else ""
+        parts.append(f"- {last}{when}, {title}: {how_it_ended(events)}. Its last lines:\n{lines}")
     if not parts:
         return None
     return ("Your last calls with the user, oldest first (the last one is the call just before this one):\n"

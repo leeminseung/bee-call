@@ -107,11 +107,11 @@ def test_the_seed_says_who_calls_why_the_meta_agent_s_notes_and_what_changed_in_
     assert "They offered 15 percent bonus." in seed  # the conversation behind the call
     assert "[conversation 4]" in seed and "[fact 7, unconfirmed] Bonus is 15%" in seed  # what changed since
     assert "first name" not in seed and "Calendar:" not in seed  # no bundle of today's Bee
-    assert seed.endswith("they called, so let them bring their own topic.")
+    assert seed.endswith("they called, so let them bring their own topic. The call is in English: write the opening in English, whatever language the notes, the earlier calls or Bee are in.")
     out = seed_text(CallInputs(), {"direction": "outbound", "reason": "A Bee conversation just ended.",
                                    "topic": "Planned a hike"}, NOW, bee=True)
     assert "You are about to call the user. Why: A Bee conversation just ended. (topic: Planned a hike)." in out
-    assert out.endswith("and ask if they have a minute.")
+    assert out.endswith("and ask if they have a minute. The call is in English: write the opening in English, whatever language the notes, the earlier calls or Bee are in.")
 
 
 def test_opening_then_note_in_one_answer(fake_bee):
@@ -356,6 +356,7 @@ def test_the_prep_reads_the_last_three_calls_built_from_their_records(tmp_path):
     assert '"Planning the hike"' in text and "Sun Oct 18, 8:00 PM" in text and "it dropped" in text
     assert "the user hung up" in text and "no title" in text
     assert "it ended with a goodbye, and you ended the call" in text
+    assert "- The last call, Mon Oct 19, 9:30 PM, \"The two job offers\"" in text  # named as the last one
     assert "User: Let's pick the offer up tomorrow. Bye!" in text and "AI (you): Talk tomorrow. Bye!" in text
     assert "Line 1" not in text  # only its last few lines
     assert last_calls(tmp_path / "nobody", NOW.tzinfo) is None
@@ -386,3 +387,15 @@ def test_the_prep_is_told_to_compact_what_came_before_into_what_this_call_must_k
             "know about the user, from the meta agent's notes;\n- the unconfirmed facts, to-dos and suggestions to "
             "check, with their Bee ids.\nOnly what the data says. Call the user \"the user\" in it, not by name."
             ) in PREP_INSTRUCTIONS
+
+
+def test_the_seed_asks_for_the_opening_in_the_call_s_language_whatever_the_earlier_calls_are_in():
+    """Measured 2026-10-18 (Haiku 5.5, thinking off): with the last calls' Korean lines in its input, the prep wrote a
+    Korean opening for 14 of 17 English calls. The seed's last words name the call's language."""
+    from voice.language import call_language
+
+    for code, name in (("en", "English"), ("ko", "Korean")):
+        seed = seed_text(CallInputs(), {"direction": "inbound", "last_calls": "User: 내일 다시 얘기하자."}, NOW, bee=True,
+                         language=call_language(code))
+        assert seed.endswith(f"The call is in {name}: write the opening in {name}, whatever language the notes, the "
+                             "earlier calls or Bee are in."), code

@@ -124,3 +124,23 @@ def test_the_call_ai_offers_to_organize_once_and_only_adds(tmp_path):
                   "넣었어요. Bee 앱에서 보고 고칠 수 있어요.", 'call organize_bee with scope "recent"',
                   "Organizing only adds. It never deletes, merges away or rewrites what Bee already has"):
         assert words in organizing, words
+
+
+
+def test_what_the_measurement_of_2026_10_18_added_to_the_instructions(tmp_path):
+    """Measured with the real models (server-progress.md): asked what was new with it, the call AI told the user's own
+    home server plans as its own (1 of 4 casual calls); it said a tool's name aloud in 2 replies of one call;
+    single-item offers always came first, so the organize offer never came (0 of 4); the organize run added items close
+    to Bee's unconfirmed facts and suggested to-dos, having read only the confirmed facts."""
+    from meta.agent import instructions as meta_instructions
+    from voice.coordinator import SPEECH_RULE, SPEECH_RULE_WITH_TAGS
+
+    call = call_ai(tmp_path, True).instructions
+    assert "What Bee keeps is the user's life, never yours: bring it up as theirs" in call
+    assert "when they ask about you, answer in a few words and turn back to them" in call
+    for rule in (SPEECH_RULE, SPEECH_RULE_WITH_TAGS):
+        assert "no tool names" in rule
+    assert ("Once you have offered one item in a call, keep the lasting things that come up after it for this one "
+            "offer instead of asking about each.") in call
+    assert ("check each against what Bee already has (its facts, confirmed or not, its to-dos and the to-dos it "
+            "suggests) so nothing is added twice") in meta_instructions(bee=True)

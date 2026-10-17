@@ -273,3 +273,11 @@ def test_what_an_organize_run_added_is_the_user_s_own_for_every_later_read(tmp_p
     fact = {**made, "created_at": just_after}
     assert OurCalls.of(ws).derived(fact) and OurCalls.of(ws).kept_facts([fact]) == [fact]
     assert json.dumps(fact)
+
+
+
+def test_a_to_do_bee_suggests_in_the_same_words_is_not_added_again(tmp_path, fake_bee):
+    _, entry = organize(tmp_path, [{"role": "assistant", "content": [
+        tool_use(1, "bee_add_todo", text="Ask about bonus terms")]}, done("Nothing new.")])  # the fake's suggestion 34
+    assert entry["tools"][0]["result"] == "Not added: Bee already has to-do 'Ask about bonus terms'."
+    assert bee_commands(fake_bee) == []
