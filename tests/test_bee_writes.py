@@ -775,9 +775,11 @@ def test_every_tool_the_call_ai_waits_on_says_one_line_after_2_s(tmp_path, fake_
     async def main():
         agent, _ = await in_a_call(tmp_path, language="ko")
         fillers = {}
-        for name, use in (("search_bee", lambda c: agent.search_bee(c, query="등산")),
-                          ("bee_today", lambda c: agent.bee_today(c)),
-                          ("bee_conversation", lambda c: agent.bee_conversation(c, conversation_id=1))):
+        reads = {tool.info.name: tool for tool in agent.tools if tool.info.name.startswith("bee_")}
+        for name, use in (("bee_search", lambda c: reads["bee_search"](raw_arguments={"query": "등산"}, context=c)),
+                          ("bee_today", lambda c: reads["bee_today"](raw_arguments={}, context=c)),
+                          ("bee_conversation", lambda c: reads["bee_conversation"](raw_arguments={"id": 1},
+                                                                                     context=c))):
             context = Context()
             await use(context)
             fillers[name] = context.fillers
@@ -796,7 +798,7 @@ def test_every_tool_the_call_ai_waits_on_says_one_line_after_2_s(tmp_path, fake_
     fillers = asyncio.run(main())
     line = call_language("ko").waiting
     assert line == "잠깐만요, 확인하고 있어요." and call_language("en").waiting == "One moment, I'm checking."
-    for name in ("search_bee", "bee_today", "bee_conversation", "save_to_bee", "undo_bee_write"):
+    for name in ("bee_search", "bee_today", "bee_conversation", "save_to_bee", "undo_bee_write"):
         assert fillers[name] == [(line, 2.0, None)], name
     assert fillers["propose_bee_save"] == []
 

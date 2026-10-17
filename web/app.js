@@ -338,6 +338,7 @@
     booked_soon: (e) => `A booked call is coming up at ${atLabel(e.call_at)}: “${e.topic || ""}”`,
     call_missed: (e) => `You did not answer an AI call about “${e.topic || ""}”`,
     call_declined: (e) => `You declined an AI call about “${e.topic || ""}”`,
+    organize_bee: (e) => `You asked Bee Call to organize Bee: the past ${e.days || 3} days`,
   };
 
   // The meta agent's times it looked, newest first. The server lists the newest page; with "more", it has older
@@ -469,6 +470,9 @@
         let text = null;
         if (a.tool === "offer_call") text = `Asked you about a call: “${a.topic}”.${debug && a.result ? ` ${a.result}` : ""}`;
         else if (a.tool === "write_state") text = "Updated what it keeps track of";
+        else if ((a.tool === "bee_add_fact" || a.tool === "bee_add_todo") && a.result === "added") {
+          text = `Added to Bee: ${a.tool === "bee_add_fact" ? "fact" : "to-do"} “${a.text || ""}”`;
+        }
         else if (debug) text = `${a.tool}: ${a.result || ""}`;
         if (text) card.append(el("p", "card-note", text));
       }

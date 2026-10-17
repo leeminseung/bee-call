@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from livekit.agents import AgentSession
 
+from beelink import toolkit
 from beelink.context import CallInputs, fetch_call_inputs
 from voice.coordinator import BeeCoordinator, Coordinator
 from voice.echo_llm import EchoLLM
@@ -87,26 +88,38 @@ def inputs(fake_bee) -> CallInputs:
     return asyncio.run(fetch_call_inputs(conversation_ids=[5]))
 
 
-def test_the_seed_says_who_calls_why_and_what_bee_has(fake_bee):
-    seed = seed_text(inputs(fake_bee), {"direction": "inbound"}, NOW, bee=True)
+CHANGES = {"since": datetime(2026, 10, 13, 9, 0, tzinfo=ZoneInfo("Asia/Seoul")).timestamp(), "batches": 1,
+           "conversations": [{"id": 4, "short_summary": "Planned a Saturday hike with Dana", "utterances_count": 12}],
+           "journals": [], "facts": [{"id": 7, "text": "Bonus is 15%", "confirmed": False}], "todos": [],
+           "dailies": []}
+NOTES = "## Agenda for the next call\n- Offer B's bonus\n## Worth getting to know next\n- How they decide on jobs"
+
+
+def test_the_seed_says_who_calls_why_the_meta_agent_s_notes_and_what_changed_in_bee(fake_bee):
+    """2026-10-17: no fixed bundle of Bee reads: the seed holds who calls whom and why, the meta agent's notes, the
+    conversation behind the call, and what changed in Bee since the last call."""
+    found = inputs(fake_bee)
+    found.changes = CHANGES
+    seed = seed_text(found, {"direction": "inbound", "meta_notes": NOTES}, NOW, bee=True)
     assert seed.startswith("It is now Tuesday, October 13, 2026, 4:40 PM (Asia/Seoul). The user is calling you")
-    assert "The user's first name is Matt." in seed and "They offered 15 percent bonus." in seed
-    assert "[todo 51] Reply to the recruiter" in seed and "Calendar: Team offsite planning" in seed
-    assert "[conversation 4]" in seed and "[unconfirmed fact 7] Bonus is 15%" in seed
-    assert seed.endswith("they called, so let them bring their own topic.")
+    assert f"In Bee's epoch milliseconds, now is {int(NOW.timestamp() * 1000)}." in seed.splitlines()[0]
+    assert "The meta agent's notes, written between calls" in seed and "How they decide on jobs" in seed
+    assert "They offered 15 percent bonus." in seed  # the conversation behind the call
+    assert "[conversation 4]" in seed and "[fact 7, unconfirmed] Bonus is 15%" in seed  # what changed since
+    assert "first name" not in seed and "Calendar:" not in seed  # no bundle of today's Bee
+    assert seed.endswith("they called, so let them bring their own topic. The call is in English: write the opening in English, whatever language the notes, the earlier calls or Bee are in.")
     out = seed_text(CallInputs(), {"direction": "outbound", "reason": "A Bee conversation just ended.",
                                    "topic": "Planned a hike"}, NOW, bee=True)
     assert "You are about to call the user. Why: A Bee conversation just ended. (topic: Planned a hike)." in out
-    assert out.endswith("and ask if they have a minute.")
+    assert out.endswith("and ask if they have a minute. The call is in English: write the opening in English, whatever language the notes, the earlier calls or Bee are in.")
 
 
 def test_opening_then_note_in_one_answer(fake_bee):
     client = Converse(text(OPENING + "\n" + NOTE))
     prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, glm(client), spend=SPEND, bee=True, now=NOW))
-    # What it read, as data (contract 2.3): the conversation behind the call and the day, then no more.
-    (behind, day) = prep.reads
-    assert (behind["type"], behind["id"], behind["summary"], day) == (
-        "conversation", 5, "Talked through a job offer", {"type": "day", "date": "2026-10-13"})
+    # What it read, as data (contract 2.3): the conversation behind the call, then no more.
+    (behind,) = prep.reads
+    assert (behind["type"], behind["id"], behind["summary"]) == ("conversation", 5, "Talked through a job offer")
     assert datetime.fromisoformat(behind["at"]).utcoffset().total_seconds() == 9 * 3600
     assert prep.error is None and prep.bee is True and prep.model == "zai.glm-5"
     assert prep.opening == "Hi Matt, it's Bee Call. What's on your mind?"
@@ -131,16 +144,20 @@ def test_the_opening_is_ready_before_the_note_is_written():
 
 
 def test_opening_then_one_round_of_reads_then_the_note(fake_bee):
+    """One round of reads with the Bee read toolkit (beelink/toolkit.py), the same tools the call AI and the meta agent
+    have; each recorded as data, and a read past MAX_READS refused."""
     client = Converse(
-        [{"text": OPENING}, tool(0, "search_bee", {"query": "hike with Dana"}), tool(1, "bee_day", {"date": "2026-10-12"}),
-         tool(2, "bee_conversation", {"conversation_id": 4}), tool(3, "bee_conversation", {"conversation_id": 5})],
+        [{"text": OPENING}, tool(0, "bee_search", {"query": "hike with Dana", "mode": "neural"}),
+         tool(1, "bee_daily", {"date": "2026-10-12"}), tool(2, "bee_conversation", {"id": 4}),
+         tool(3, "bee_conversation", {"id": 5})],
         text(NOTE))
     prep = asyncio.run(prepare_call(inputs(fake_bee), {"direction": "inbound"}, glm(client), spend=SPEND, bee=True, now=NOW))
     assert prep.note and prep.opening.startswith("Hi Matt")
-    extra = prep.reads[2:]  # after the conversation behind the call and the day, each read the prep chose, as data
+    extra = prep.reads[1:]  # after the conversation behind the call, each read the prep chose, as data
     assert len(extra) == MAX_READS and extra[:2] == [{"type": "search", "query": "hike with Dana"},
                                                      {"type": "day", "date": "2026-10-12"}]
     assert (extra[2]["type"], extra[2]["id"], extra[2]["summary"]) == ("conversation", 4, "Talked through a job offer")
+    assert [t["toolSpec"]["name"] for t in client.requests[0]["toolConfig"]["tools"]] == list(toolkit.NAMES)
     second = client.requests[1]["messages"]
     assert second[1]["content"][0] == {"text": OPENING}  # the first answer goes back as it was
     results = [b["toolResult"] for b in second[-1]["content"] if "toolResult" in b]
@@ -189,7 +206,7 @@ def test_with_the_server_s_mode_the_prep_runs_on_claude_haiku_and_glm_5_stands_b
 
 
 def test_reads_before_the_opening_still_give_an_opening(fake_bee):
-    client = Converse([tool(0, "bee_conversation", {"conversation_id": 5})], text(OPENING + NOTE))
+    client = Converse([tool(0, "bee_conversation", {"id": 5})], text(OPENING + NOTE))
     prep = asyncio.run(prepare_call(inputs(fake_bee), {}, glm(client), spend=SPEND, bee=True, now=NOW))
     assert prep.opening and prep.note
     assert client.requests[1]["messages"][-1]["content"][-1] == {"text": "Now write the opening and the note."}
@@ -292,5 +309,93 @@ def test_the_prep_of_a_call_a_memo_asked_for_reads_the_memo_and_bee_s_reply(fake
                            "agreed": "the user asked for this call in a voice memo"}, NOW, bee=True)
     assert "The voice memo behind this call (recorded" in seed and memo["text"] in seed
     assert "Bee's reply to it: 이사 준비 목록을 정리해 드릴게요." in seed and "Bee's to-dos from it: 이사 업체 알아보기" in seed
-    assert seed.index("The voice memo behind this call") < seed.index("Recent")  # before the rest of Bee
+    assert seed.index("The voice memo behind this call") < seed.index("What changed in Bee")  # before the rest
     assert "They agreed to this call: the user asked for this call in a voice memo" in seed
+
+
+# ---------- the user's amendment of 2026-10-18: the last calls, and a note that compacts what came before ----------
+
+def a_record(workspace, folder: str, started: str, lines: list[tuple[str, str]], *, title: str | None = None,
+             ended: str = "goodbye") -> None:
+    """One earlier call's record: its events (started, its end) and its transcript."""
+    path = workspace / folder
+    path.mkdir(parents=True)
+    events = [{"t": 0, "type": "call_started", "room": f"call-{folder}", "started_at": started}]
+    if ended == "goodbye":
+        events += [{"t": 50, "type": "end_call_requested"},
+                   {"t": 51, "type": "session_closed", "reason": "CloseReason.USER_INITIATED"}]
+    elif ended == "hung up":
+        events.append({"t": 51, "type": "session_closed", "reason": "CloseReason.PARTICIPANT_DISCONNECTED"})
+    elif ended == "dropped":
+        events.append({"t": 51, "type": "session_closed", "reason": "CloseReason.JOB_SHUTDOWN"})
+    events.append({"t": 52, "type": "call_ended"})
+    if title:
+        events.append({"t": 55, "type": "call_titled", "title": title})
+    (path / "events.jsonl").write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events))
+    talk = "".join(f"- 00:{n:02d}.0 **{who}:** {text}\n" for n, (who, text) in enumerate(lines))
+    (path / "transcript.md").write_text("# Call\n\n" + talk)
+
+
+def test_the_prep_reads_the_last_three_calls_built_from_their_records(tmp_path):
+    """Each with its title, when it was, how it ended and its last few lines, from the call records (no model call);
+    at most three, the newest last."""
+    from voice.continuation import last_calls
+
+    ws = tmp_path / "workspace"
+    a_record(ws, "2026-10-16/0900", "2026-10-16T09:00:00+09:00", [("User", "Old news.")], title="Oldest call")
+    a_record(ws, "2026-10-18/2000", "2026-10-18T20:00:00+09:00", [("User", "Saturday hike?"), ("AI", "Sounds fun.")],
+             title="Planning the hike", ended="dropped")
+    a_record(ws, "2026-10-19/1200", "2026-10-19T12:00:00+09:00", [("AI", "Lunch?"), ("User", "Gimbap again.")],
+             title=None, ended="hung up")
+    a_record(ws, "2026-10-19/2130", "2026-10-19T21:30:00+09:00",
+             [("User", f"Line {n}") for n in range(8)] + [("User", "Let's pick the offer up tomorrow. Bye!"),
+                                                          ("AI", "Talk tomorrow. Bye!")], title="The two job offers")
+    text = last_calls(ws, NOW.tzinfo)
+    assert "Oldest call" not in text  # three at most
+    assert text.index("Planning the hike") < text.index("Gimbap again.") < text.index("The two job offers")
+    assert '"Planning the hike"' in text and "Sun Oct 18, 8:00 PM" in text and "it dropped" in text
+    assert "the user hung up" in text and "no title" in text
+    assert "it ended with a goodbye, and you ended the call" in text
+    assert "- The last call, Mon Oct 19, 9:30 PM, \"The two job offers\"" in text  # named as the last one
+    assert "User: Let's pick the offer up tomorrow. Bye!" in text and "AI (you): Talk tomorrow. Bye!" in text
+    assert "Line 1" not in text  # only its last few lines
+    assert last_calls(tmp_path / "nobody", NOW.tzinfo) is None
+    assert "The two job offers" not in last_calls(ws, NOW.tzinfo, skip="2026-10-19/2130")  # the call continued
+
+
+def test_the_seed_carries_the_last_calls_for_a_person_with_bee_or_without(tmp_path):
+    for bee in (True, False):
+        seed = seed_text(CallInputs(), {"direction": "inbound", "last_calls": "Your last calls with the user ..."},
+                         NOW, bee=bee)
+        assert "Your last calls with the user ..." in seed
+
+
+def test_the_prep_is_told_to_compact_what_came_before_into_what_this_call_must_know():
+    """The user's texts (2026-10-18) for "What you are doing" and "Your note"; the opening and "What to read" stay."""
+    from voice.prep import PREP_INSTRUCTIONS
+
+    assert ("## What you are doing\nYou are the voice of Bee Call, which the user talks with on the phone. A call is "
+            "about to start, and the phone is ringing on their side while you get ready. In these seconds you compact "
+            "what came before into what this call must know: from the meta agent's notes, the last few calls and what "
+            "changed in Bee since the last call, pick the context this call cannot do without, the way a good "
+            "assistant glances at their notes before answering.") in PREP_INSTRUCTIONS
+    assert ("## Your note\nThen write <note>...</note>: under 100 words, for yourself during the call. It is the context "
+            "this call must know, compacted from what came before; leave out whatever this call will not need. Include "
+            "what applies:\n- where things stand: the threads still open from recent calls, and how the last call "
+            "ended;\n- what the user has been up to, from Bee since the last call;\n- what the user wants from calls "
+            "like this one: tone, topics to avoid, things they asked not to repeat;\n- what this call could get to "
+            "know about the user, from the meta agent's notes;\n- the unconfirmed facts, to-dos and suggestions to "
+            "check, with their Bee ids.\nOnly what the data says. Call the user \"the user\" in it, not by name."
+            ) in PREP_INSTRUCTIONS
+
+
+def test_the_seed_asks_for_the_opening_in_the_call_s_language_whatever_the_earlier_calls_are_in():
+    """Measured 2026-10-18 (Haiku 5.5, thinking off): with the last calls' Korean lines in its input, the prep wrote a
+    Korean opening for 14 of 17 English calls. The seed's last words name the call's language."""
+    from voice.language import call_language
+
+    for code, name in (("en", "English"), ("ko", "Korean")):
+        seed = seed_text(CallInputs(), {"direction": "inbound", "last_calls": "User: 내일 다시 얘기하자."}, NOW, bee=True,
+                         language=call_language(code))
+        assert seed.endswith(f"The call is in {name}: write the opening in {name}, whatever language the notes, the "
+                             "earlier calls or Bee are in."), code

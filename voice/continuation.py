@@ -118,3 +118,53 @@ def earlier_call(workspace: Path, session_id: Any) -> str | None:
     if jobs:
         parts.append("Background jobs in that call:\n" + "\n".join(jobs))
     return "\n\n".join(parts)
+
+
+LAST_CALLS = 3  # the earlier calls a call's prep reads (arbitrary, the user's amendment of 2026-10-18)
+LAST_LINES = 4  # of each, its last lines (arbitrary)
+LINE_CHARS = 200  # of each line (arbitrary)
+ENDED_BY_HANGING_UP = ("participant_disconnected",)  # LiveKit's close reason when the phone left the room
+ENDED = ("user_initiated", "participant_disconnected", "task_completed")  # a normal end (voice/call_view.py)
+
+
+def how_it_ended(events: list[dict[str, Any]]) -> str:
+    """How a recorded call ended, in a few words for a model."""
+    reason = next((str(e.get("reason") or "").rsplit(".", 1)[-1].strip().lower() for e in events
+                   if e.get("type") == "session_closed"), None)
+    if any(e.get("type") == "end_call_requested" for e in events):
+        return "it ended with a goodbye, and you ended the call"
+    if reason in ENDED_BY_HANGING_UP:
+        return "the user hung up"
+    if reason in ENDED or (reason == "" and any(e.get("type") == "call_ended" for e in events)):
+        return "it ended"
+    if reason:
+        return "it dropped"
+    return "it ended" if any(e.get("type") == "call_ended" for e in events) else "no end is on record"
+
+
+def last_calls(workspace: Path, zone, count: int = LAST_CALLS, skip: str | None = None) -> str | None:
+    """The person's last `count` calls for a call's prep, oldest first, built from their records (no model call): each
+    with its title, when it was, how it ended and its last few lines; None before their first call. `skip`: a call's
+    folder (<date>/<time>) left out, as the earlier call a continued call has whole."""
+    from voice.call_folders import call_folders
+
+    found = [folder for folder in call_folders(workspace) if folder_id(folder) != skip][-count:]
+    parts = []
+    for n, folder in enumerate(found, 1):
+        events = _events(folder)
+        started = next((e.get("started_at") for e in events if e.get("type") == "call_started"), None)
+        try:
+            when = datetime.fromisoformat(started).astimezone(zone).strftime("%a %b %-d, %-I:%M %p")
+        except (TypeError, ValueError):
+            when = folder_id(folder)
+        titles = [e.get("title") for e in events if e.get("type") == "call_titled" and e.get("title")]
+        title = f'"{titles[-1]}"' if titles else "no title"
+        talk = [line.replace("AI: ", "AI (you): ", 1) for line in _talk(folder).splitlines() if line.strip()]
+        lines = "\n".join(f"   {line[:LINE_CHARS]}{'…' if len(line) > LINE_CHARS else ''}"
+                          for line in talk[-LAST_LINES:]) or "   (nothing was said)"
+        last = "The last call, " if n == len(found) else ""
+        parts.append(f"- {last}{when}, {title}: {how_it_ended(events)}. Its last lines:\n{lines}")
+    if not parts:
+        return None
+    return ("Your last calls with the user, oldest first (the last one is the call just before this one):\n"
+            + "\n".join(parts))

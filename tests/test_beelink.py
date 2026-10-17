@@ -1,6 +1,7 @@
 """Tests for beelink against a fake `bee` executable; the real Bee account is never touched."""
 
 import asyncio
+import os
 import json
 import time
 from datetime import datetime
@@ -34,7 +35,7 @@ def test_no_test_can_run_the_real_bee_cli():
     from beelink import cli
 
     assert Path(cli.bee_bin()).resolve() == FAKE_BEE.resolve()
-    asyncio.run(context.fetch_call_inputs())
+    asyncio.run(context.fetch_call_inputs(conversation_ids=[5]))
     assert calls(Path(os.environ["FAKE_BEE_LOG"]))  # every read went to the fake
 
 
@@ -121,21 +122,61 @@ def test_what_bee_made_of_our_own_call_is_never_new_context(tmp_path, fake_bee, 
     assert "Said to the AI" not in json.dumps(saved, ensure_ascii=False)  # the meta agent can read this file
 
 
-def test_a_call_s_bee_inputs_leave_out_what_bee_made_of_our_calls(tmp_path, fake_bee):
-    """BC-060, the prep's reads: the fake's recent conversation 5 and fact 7 fall in an earlier call of ours."""
+def test_a_call_reads_no_fixed_bundle_of_bee_only_what_it_is_about(tmp_path, fake_bee):
+    """2026-10-17 (the user's decision): a call starts from the meta agent's notes and what changed in Bee since the
+    last call, with no fixed bundle of Bee reads; only the conversation or voice memo behind it is read from Bee."""
     from beelink.calls import OurCalls
 
     workspace = tmp_path / "workspace"
-    make_session(workspace, datetime.fromtimestamp(time.time() - 3600 - 120), 3600)  # covers the fake's "an hour ago"
-    plain = asyncio.run(context.fetch_call_inputs())
-    assert [c["id"] for c in plain.recent] == [5, 4] and [f["id"] for f in plain.facts] == [7]
+    asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
+    assert calls(fake_bee) == []  # a call the user starts reads nothing from Bee before the prep
+    asyncio.run(context.fetch_call_inputs(conversation_ids=[5], memo_ids=["j-1"], ours=OurCalls.of(workspace)))
+    assert sorted(c[:2] for c in calls(fake_bee)) == [["conversations", "get"], ["conversations", "transcript"],
+                                                     ["journals", "get"]]
+
+
+def a_batch(workspace: Path, name: str, saved: float, **changed) -> None:
+    """One of the watcher's saved Bee changes, inbox/<name>/changed.json, saved at `saved` (epoch seconds)."""
+    folder = workspace / "inbox" / name
+    folder.mkdir(parents=True)
+    path = folder / "changed.json"
+    path.write_text(json.dumps({"meta": {"next_cursor": "c"}, **changed}, ensure_ascii=False))
+    os.utime(path, (saved, saved))
+
+
+def test_what_changed_in_bee_since_the_last_call_comes_from_the_watcher_s_batches(tmp_path, fake_bee):
+    """What changed since the last call began, from the watcher's saved batches (which leave out what Bee made of our
+    calls): the newest version of each item, without transcripts or locations, and no Bee read for it."""
+    from beelink.calls import OurCalls
+
+    workspace = tmp_path / "workspace"
+    last_call = time.time() - 3 * 3600
+    make_session(workspace, datetime.fromtimestamp(last_call), 300)
+    a_batch(workspace, "2026-10-17-090000", last_call - 600, facts=[{"id": 1, "text": "Before the call"}])
+    a_batch(workspace, "2026-10-17-130000", last_call + 3600,
+            conversations=[{"id": 12, "short_summary": "A walk", "utterances_count": 10,
+                            "transcriptions": [{"utterances": [{"text": "x"}]}],
+                            "primary_location": {"address": "12 Some Street"}}],
+            facts=[{"id": 2, "text": "Drinks coffee", "confirmed": False}])
+    a_batch(workspace, "2026-10-17-140000", last_call + 7200,
+            conversations=[{"id": 12, "short_summary": "A long walk", "utterances_count": 40}],
+            journals=[{"id": "j-2", "text": "Buy milk"}], todos=[{"id": 5, "text": "Book the dentist"}],
+            dailies=[{"id": 9, "date": "2026-10-16", "short_summary": "Errands"}])
     inputs = asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
-    assert [c["id"] for c in inputs.recent] == [4]
-    assert inputs.today["recentConversations"] == [] and inputs.facts == []
+    changes = inputs.changes
+    assert abs(changes["since"] - last_call) < 2 and changes["batches"] == 2
+    assert [(c["id"], c["short_summary"]) for c in changes["conversations"]] == [(12, "A long walk")]  # the newest
+    assert "transcriptions" not in json.dumps(changes) and "Some Street" not in json.dumps(changes)
+    assert [f["id"] for f in changes["facts"]] == [2] and [m["id"] for m in changes["journals"]] == ["j-2"]
+    assert [t["id"] for t in changes["todos"]] == [5] and [d["id"] for d in changes["dailies"]] == [9]
+    assert calls(fake_bee) == []
+    first = context.changes_since(workspace, None)  # before a first call: the last FIRST_CALL_DAYS
+    assert first["batches"] == 3
 
 
 def test_the_call_ai_the_prep_and_the_meta_agent_read_nothing_bee_made_of_our_calls(tmp_path, fake_bee):
-    """BC-060 for the reads made while working: the fake's conversation 5 and fact 7 fall in an earlier call."""
+    """BC-060 for the reads made while working, now one toolkit for all three (beelink/toolkit.py): the fake's
+    conversation 5 and fact 7 fall in an earlier call."""
     from types import SimpleNamespace
     from meta.agent import Thinker
     from tests.helpers import seoul_now
@@ -149,21 +190,22 @@ def test_the_call_ai_the_prep_and_the_meta_agent_read_nothing_bee_made_of_our_ca
     make_session(workspace, datetime.fromtimestamp(time.time() - 3600 - 120), 3600)
     rec = CallRecorder(workspace, room="r", now=seoul_now())
     coordinator = BeeCoordinator(rec, SimpleNamespace(), workspace, clock=seoul_now)
+    reads = {tool.info.name: tool for tool in coordinator.tools if tool.info.name.startswith("bee_")}
     thinker = Thinker(workspace, bee=True)
 
     async def main():
-        today = await coordinator.bee_today(None)
-        conversation = await coordinator.bee_conversation(None, 5)
+        today = await reads["bee_today"](raw_arguments={}, context=None)
+        conversation = await reads["bee_conversation"](raw_arguments={"id": 5}, context=None)
         meta_today = await thinker._tool("bee_today", {}, seoul_now(), [])
-        pending = await thinker._tool("bee_pending", {}, seoul_now(), [])
-        read = await _read(ToolCall("t", "bee_conversation", {"conversation_id": 5}), Prep(), seoul_now().tzinfo,
+        pending = await thinker._tool("bee_facts", {"status": "unconfirmed"}, seoul_now(), [])
+        read = await _read(ToolCall("t", "bee_conversation", {"id": 5}), Prep(), seoul_now().tzinfo,
                            ours=OurCalls.of(workspace))
         return today, conversation, meta_today, pending, read.text
 
     today, conversation, meta_today, pending, read = asyncio.run(main())
     rec.close()
-    assert "[conversation 5]" not in today and "[conversation 5]" not in meta_today
-    assert "[unconfirmed fact 7]" not in pending
+    assert '"id":5,' not in today and '"id":5,' not in meta_today
+    assert "Bonus is 15%" not in pending and "1 fact Bee made of your calls with the user is left out" in pending
     for text in (conversation, read):
         assert "left out" in text and "Talked through a job offer" not in text
 
@@ -245,15 +287,15 @@ def test_parse_stream_line():
 def test_context_saves_inputs_and_card(tmp_path, fake_bee):
     session = tmp_path / "workspace" / "2026-10-12" / "1530"
     session.mkdir(parents=True)
-    inputs = asyncio.run(context.fetch_call_inputs(conversation_ids=[5]))
-    assert inputs.errors == [] and inputs.first_name == "Matt" and inputs.today["activeTodos"][0]["id"] == 51
-    assert inputs.facts[0]["id"] == 7 and inputs.suggestions[0]["id"] == 34 and [c["id"] for c in inputs.recent] == [5, 4]
+    from beelink.calls import OurCalls
+
+    inputs = asyncio.run(context.fetch_call_inputs(conversation_ids=[5], ours=OurCalls.of(tmp_path / "workspace")))
+    assert inputs.errors == [] and inputs.changes["batches"] == 0
     card = context.save_call_inputs(session, inputs, SEOUL)
     names = sorted(p.name for p in (session / "inputs").iterdir())
-    assert names == ["conversation-5.json", "recent_conversations.json", "today.json", "todo_suggestions.json",
-                     "transcript-5.json", "unconfirmed_facts.json"]
+    assert names == ["changes_since_last_call.json", "conversation-5.json", "transcript-5.json"]
     assert card["conversation_id"] == 5 and card["summary"] == "Talked through a job offer"
-    assert card["pending_fact_ids"] == [7]
+    assert card["pending_fact_ids"] == []
     assert card["utterances"][0]["text"] == "They offered 15 percent bonus."
     # Full times with the person's offset (contract 2.2): a quote and the conversation's start, not "HH:MM".
     from datetime import datetime
@@ -427,65 +469,6 @@ def test_the_bee_login_link_is_read_as_the_readme_documents(tmp_path, monkeypatc
                 asyncio.run(cli.start_login(folder))
 
 
-def our_todo_call(workspace: Path, *writes: dict) -> Path:
-    """An earlier call of ours, ended two days ago, with these Bee writes (bee-writes.jsonl lines)."""
-    started = datetime.fromtimestamp(time.time() - 2 * 86400)
-    make_session(workspace, started, 120)
-    folder = workspace / started.strftime("%Y-%m-%d") / started.strftime("%H%M")
-    (folder / "bee-writes.jsonl").write_text("".join(json.dumps(w, ensure_ascii=False) + "\n" for w in writes))
-    return folder
-
-
-def todo_write(key: str, todo_id: int, text: str, *after: str) -> list[dict]:
-    lines = [{"key": key, "status": "applying", "item": {"kind": "todo_create", "text": text}, "question": "q",
-              "answer": "a", "at": "2026-10-15T20:00:00+09:00"},
-             {"key": key, "status": "ok", "response": {"todo": {"id": todo_id, "text": text, "created_at": 1,
-                                                                "completed": False}}, "at": "2026-10-15T20:00:01+09:00"}]
-    return lines + [{"key": key, "status": status, "at": "2026-10-15T20:00:05+09:00"} for status in after]
-
-
-def test_a_call_reads_the_to_dos_our_earlier_calls_added_that_are_still_open(tmp_path, fake_bee, monkeypatch):
-    """2026-10-17: the prep reads open to-dos Bee Call made earlier, so a later call can ask whether one is done. A
-    to-do taken back in its call, or marked done since, is left out. One page of Bee's to-dos is read for all of
-    them (review of 2026-10-17, finding 7: one `todos get` each made up to 21 Bee processes start at once before a
-    call); one not on that page is left out, as one Bee could not be asked about is."""
-    from beelink.calls import OurCalls
-
-    workspace = tmp_path / "workspace"
-    our_todo_call(workspace, *todo_write("w1", 99, "삼각대 주문하기"), *todo_write("w2", 100, "Call Dana", "undone"),
-                  *todo_write("w3", 101, "Email Jun"))
-    todos = tmp_path / "todos.json"
-    todos.write_text(json.dumps([{"id": 99, "text": "Order the camera tripod", "created_at": 1, "completed": False},
-                                 {"id": 100, "text": "Call Dana", "created_at": 1, "completed": False}]))
-    monkeypatch.setenv("FAKE_BEE_TODOS", str(todos))
-    inputs = asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
-    assert [(t["id"], t["text"]) for t in inputs.our_todos] == [(99, "Order the camera tripod")]  # as Bee has it now
-    assert [c[:2] for c in calls(fake_bee)].count(["todos", "list"]) == 1
-    assert not [c for c in calls(fake_bee) if c[:2] == ["todos", "get"]]
-    todos.write_text(json.dumps([{"id": 99, "text": "Order the camera tripod", "created_at": 1, "completed": True}]))
-    assert asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace))).our_todos == []
-    assert asyncio.run(context.fetch_call_inputs()).our_todos == []  # without our calls, nothing of them is read
-
-
-def test_our_to_dos_are_looked_for_past_bee_s_first_page(tmp_path, fake_bee, monkeypatch):
-    """Second review of 2026-10-17, finding 5: one page of 50 to-dos was read, so ours past it (Bee promises no order)
-    were left out without a word. The pages are read one after another until all of ours are found, at most
-    OUR_TODO_PAGES of them, within one read's time."""
-    from beelink.calls import OurCalls
-
-    workspace = tmp_path / "workspace"
-    our_todo_call(workspace, *todo_write("w1", 161, "Order the camera tripod"))
-    todos = tmp_path / "todos.json"
-    todos.write_text(json.dumps([{"id": 100 + n, "text": f"Todo {n}", "created_at": 1, "completed": n % 2 == 0}
-                                 for n in range(61)] + [{"id": 161, "text": "Order the camera tripod", "created_at": 2,
-                                                          "completed": False}] +
-                                [{"id": 300 + n, "text": "later", "created_at": 3, "completed": False} for n in range(60)]))
-    monkeypatch.setenv("FAKE_BEE_TODOS", str(todos))
-    inputs = asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
-    assert [t["id"] for t in inputs.our_todos] == [161] and inputs.errors == []
-    assert [c[:2] for c in calls(fake_bee)].count(["todos", "list"]) == 2  # found on page 2: page 3 is not read
-
-
 def test_a_call_s_prep_reads_one_transcription_of_a_conversation(tmp_path, fake_bee, monkeypatch):
     """Review of 2026-10-17 (booking from any Bee input), finding 3: bee conversations transcript joins every
     transcription, the live one too, so each line came twice. The conversation Bee answers with holds them; one is
@@ -497,51 +480,33 @@ def test_a_call_s_prep_reads_one_transcription_of_a_conversation(tmp_path, fake_
     ((conv_id, conv, lines),) = inputs.conversations
     assert conv_id == 88 and [line["text"] for line in lines] == ["Remind me about the movers."]
     assert "transcriptions" not in conv
-    from beelink import reads
+    from beelink import toolkit
 
-    text = asyncio.run(reads.conversation(88, SEOUL))
-    assert text.count("Remind me about the movers.") == 1
+    read = asyncio.run(toolkit.read("bee_transcript", {"id": 88}, ours=None, zone=SEOUL, timeout=5, max_chars=3000))
+    assert read.text.count("Remind me about the movers.") == 1
 
 
-def test_the_prep_and_the_plain_context_list_our_open_to_dos(tmp_path):
+def test_the_prep_and_the_plain_context_carry_what_changed_since_the_last_call(tmp_path):
     from voice.prep import call_brief, seed_text
 
-    inputs = context.CallInputs(our_todos=[{"id": 99, "text": "삼각대 주문하기", "added_at": "2026-10-15T20:00:01+09:00"}])
-    seed = seed_text(inputs, {"direction": "inbound"}, datetime.now().astimezone(), bee=True)
-    assert "To-dos you added to Bee in earlier calls, still open:\n[todo 99] 삼각대 주문하기" in seed
-    assert "To-do you added to Bee in an earlier call, still open (id 99): 삼각대 주문하기" in call_brief(inputs, {})
-
-
-def test_a_call_reads_what_bee_keeps_about_the_user_newest_first(tmp_path, fake_bee, monkeypatch):
-    """2026-10-17: the prep reads the person's confirmed facts (bee facts list), newest first and at most
-    MAX_KNOWN_FACTS, so a later call can bring up something kept in an earlier one. What Bee made of our calls stays
-    out as before (BC-060), except a fact one of our calls wrote on the user's yes: that one is theirs."""
-    from beelink.calls import OurCalls
-
-    workspace = tmp_path / "workspace"
-    started = datetime.fromtimestamp(time.time() - 2 * 86400)
-    our_todo_call(workspace, {"key": "w1", "status": "applying", "item": {"kind": "fact_create", "text": "땅콩 알레르기가 있다"},
-                              "question": "q", "answer": "a", "at": "2026-10-15T20:00:00+09:00"},
-                  {"key": "w1", "status": "ok", "response": {"fact": {"id": 301, "text": "땅콩 알레르기가 있다"}},
-                   "at": "2026-10-15T20:00:01+09:00"})
-    during = int((started.timestamp() + 60) * 1000)  # inside that call
-    facts = [{"id": 300 + n, "text": f"Fact {n}", "created_at": int(time.time() * 1000) - n * 86400000,
-              "confirmed": True, "tags": []} for n in range(12)]
-    facts[1] = {"id": 301, "text": "땅콩 알레르기가 있다", "created_at": during, "confirmed": True, "tags": []}
-    facts[2] = {"id": 302, "text": "Bee heard this in our call", "created_at": during, "confirmed": True, "tags": []}
-    (tmp_path / "facts.json").write_text(json.dumps(facts[::-1], ensure_ascii=False))  # Bee promises no order
-    monkeypatch.setenv("FAKE_BEE_FACTS", str(tmp_path / "facts.json"))
-    inputs = asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
-    assert context.MAX_KNOWN_FACTS == 8
-    assert [f["id"] for f in inputs.known_facts] == [300, 301, 303, 304, 305, 306, 307, 308]  # 302: Bee's, of our call
-    assert ["facts", "list", "--limit", str(context.KNOWN_FACTS_READ), "--json"] in calls(fake_bee)
-    assert asyncio.run(context.fetch_call_inputs()).known_facts[0]["id"] == 300
-
-
-def test_the_prep_and_the_plain_context_carry_what_bee_keeps(tmp_path):
-    from voice.prep import call_brief, seed_text
-
-    inputs = context.CallInputs(known_facts=[{"id": 301, "text": "땅콩 알레르기가 있다"}])
-    seed = seed_text(inputs, {"direction": "inbound"}, datetime.now().astimezone(), bee=True)
-    assert "What Bee keeps about the user (confirmed facts, newest first):\n[fact 301] 땅콩 알레르기가 있다" in seed
-    assert "What Bee keeps about the user (fact 301): 땅콩 알레르기가 있다" in call_brief(inputs, {})
+    changes = {"since": datetime(2026, 10, 17, 21, 5, tzinfo=SEOUL).timestamp(), "batches": 2,
+               "conversations": [{"id": 12, "short_summary": "A long walk", "summary": "Talked about servers.",
+                                  "utterances_count": 40}],
+               "journals": [{"id": "j-2", "text": "Buy milk", "aiResponse": {"message": "A reminder to buy milk."}}],
+               "facts": [{"id": 2, "text": "Drinks coffee", "confirmed": False}],
+               "todos": [{"id": 5, "text": "Book the dentist", "completed": False}],
+               "dailies": [{"id": 9, "date": "2026-10-16", "short_summary": "Errands"}]}
+    inputs = context.CallInputs(changes=changes)
+    seed = seed_text(inputs, {"direction": "inbound"}, datetime(2026, 10, 18, 9, 0, tzinfo=SEOUL), bee=True)
+    assert "What changed in Bee since the last call (since Oct 17, 21:05), newest first:" in seed
+    for line in ("[conversation 12] time unknown, 40 lines: A long walk. Talked about servers.",
+                 '[voice memo j-2]: "Buy milk" Bee\'s reply: A reminder to buy milk.', "[fact 2, unconfirmed] Drinks coffee",
+                 "[todo 5] Book the dentist", "[daily summary 2026-10-16] Errands"):
+        assert line in seed, line
+    assert "What changed in Bee since the last call" in call_brief(inputs, {}, SEOUL)
+    nothing = seed_text(context.CallInputs(changes={**changes, **{k: [] for k in context.CHANGE_KINDS}}),
+                        {"direction": "inbound"}, datetime(2026, 10, 18, 9, 0, tzinfo=SEOUL), bee=True)
+    assert "What changed in Bee since the last call (since Oct 17, 21:05): nothing the watcher saw." in nothing
+    many = {**changes, "facts": [{"id": n, "text": f"Fact number {n} " + "x" * 300} for n in range(20)]}
+    long = seed_text(context.CallInputs(changes=many), {"direction": "inbound"}, datetime.now(SEOUL), bee=True)
+    assert "more changes are not shown; the Bee tools read them." in long

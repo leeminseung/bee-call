@@ -41,7 +41,7 @@ from beelink.clock import parse_time
 from beelink.planner import COOLDOWN, MAX_AGE, OUTBOUND_LOG, RulePlanner, call_in_progress, last_outbound
 from beelink.watcher import BeeWatcher, Trigger
 from voice import voip_push
-from voice.continuation import earlier_call
+from voice.continuation import earlier_call, last_calls
 from voice.dispatch import DECLINES, RING_SECONDS, place_call
 from voice.costs import SpendLog, day_budget
 from voice.language import CallLanguage, call_language
@@ -179,6 +179,20 @@ async def tell_booked(offer: Offer, person: Person, now: datetime, language: Cal
     return f"notification sent: {payload['aps']['alert']['body']}"
 
 
+async def tell_organized(payload: dict, person: Person) -> str:
+    """The one plain notification at the end of an organize run the user said yes to in a call (meta/agent.py): how
+    many items went into Bee. It answers the user's own request, so quiet hours hold it not, and it does not count
+    among the day's offers. Returns what happened, in words."""
+    try:
+        sent = await voip_push.alert(payload, person, collapse_id=f"organized-{int(time.time())}")
+    except Exception as exc:  # what went in is in Bee either way
+        log.warning("could not tell %s that Bee was organized: %s", person.id, exc)
+        return f"the notification failed ({exc})"
+    if not sent:
+        return "no notification (no APNs key, or the app has not sent its token yet)"
+    return f"notification sent: {payload['aps']['alert']['body']}"
+
+
 async def send_held(person: Person, now: datetime, language: CallLanguage | None = None) -> None:
     """Sends the notifications that had to wait (a call, the 30 minutes after one or after a notification, quiet
     hours), once they may go out."""
@@ -208,7 +222,8 @@ async def prepare_offer(offer: Offer, person: Person, *, prepare=prepare_outboun
     It reads the Bee login chosen for the work it runs in: the person's loops choose theirs (serve_person)."""
     workspace = person.workspace
     deadline_s = prep_deadline(offer) if deadline_s is None else deadline_s
-    extra = {"agreed": agreed(offer), "meta_notes": meta_notes(workspace)}
+    extra = {"agreed": agreed(offer), "meta_notes": meta_notes(workspace),
+             "last_calls": last_calls(workspace, person.now().tzinfo, skip=offer.continue_from)}
     if offer.continue_from:
         extra["earlier_call"] = earlier_call(workspace, offer.continue_from)
     return await prepare(plan_of(offer), extra=extra, spend=SpendLog(workspace), bee=person.settings().bee,
@@ -373,8 +388,11 @@ async def serve_person(people: People, person_id: str, settings: Settings) -> No
     async def on_trigger(trigger: Trigger) -> None:
         add_event(workspace, "bee_change", now=person.now(), **bee_event(trigger, workspace))
 
+    async def notify(payload: dict) -> str:
+        return await tell_organized(payload, person)
+
     thinker = thinker_for(workspace, send=send, call_time=settings.call_time, bee=settings.bee,
-                          language=settings.language, tell=tell)
+                          language=settings.language, tell=tell, notify=notify)
     # A TaskGroup: if one loop fails, the others stop too, so serve_people() never starts a second set beside
     # survivors of the first.
     async with asyncio.TaskGroup() as group:
@@ -451,8 +469,11 @@ async def main() -> None:
     async def tell(offer: Offer, ws: Path, now: datetime) -> str:
         return await tell_booked(offer, person, now, language)
 
+    async def notify(payload: dict) -> str:
+        return await tell_organized(payload, person)
+
     thinker = thinker_for(workspace, send=send, call_time=settings.call_time, bee=settings.bee,
-                          language=settings.language, tell=tell)
+                          language=settings.language, tell=tell, notify=notify)
     if args.once:
         if args.rules:
             made = await handle(saved_trigger(args.once), planner, args.dry_run, person)

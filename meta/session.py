@@ -6,7 +6,7 @@ workspace/meta/ (design: the meta agent proposes the user's next step and acts o
   session.jsonl  the meta session: one entry per time the agent thought, with the events, every tool it used
                  and the agent's own words, shown as they are in the app's timeline.
   state.md       the agent's working notes, rewritten by the agent itself: open threads, the next call's agenda,
-                 what the user turned down, what it learned the user prefers.
+                 what the user turned down, what it learned the user prefers, what is worth getting to know next.
 
 Appending one short line is atomic on POSIX, so writers need no lock; the cursor is the inbox's byte offset.
 """
@@ -30,6 +30,8 @@ STATE_TEMPLATE = """# State
 ## Turned down
 
 ## What the user prefers
+
+## Worth getting to know next
 """
 
 
@@ -48,7 +50,8 @@ def meta_notes(workspace: Path) -> str | None:
         text = (workspace / META_DIR / "state.md").read_text().strip()
     except OSError:
         return None
-    return text if text and text != STATE_TEMPLATE.strip() else None
+    # Headings alone are no notes (the template, an older template, or notes the agent emptied).
+    return text if any(line.strip() and not line.lstrip().startswith("#") for line in text.splitlines()) else None
 
 
 def quiet(moment: datetime) -> bool:

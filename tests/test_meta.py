@@ -480,9 +480,13 @@ def test_file_tools_skip_links_out_hidden_folders_and_locations(tmp_path):
 def test_the_meta_agent_only_reads_offers_and_keeps_notes():
     """BC-048 and BC-050, pinned by name rather than against the tool list itself: read-only file and Bee tools,
     and three ways a run ends (offer a call, rewrite its notes, nothing). No tool places a call or writes to Bee."""
+    from beelink import toolkit
+    from meta.agent import ADD_TOOLS
+
     names = {tool.name for tool in TOOLS}
-    assert names == {"list_files", "read_file", "grep", "bee_today", "bee_conversation", "search_bee", "bee_day",
-                     "bee_pending", "bee_facts", "write_state", "offer_call", "book_call"}
+    assert names == {"list_files", "read_file", "grep", *toolkit.NAMES, "write_state", "offer_call", "book_call"}
+    assert {tool.name for tool in ADD_TOOLS} == {"bee_add_fact", "bee_add_todo"} and not names & {"bee_add_fact",
+                                                                                                "bee_add_todo"}
     # 2026-10-17: book_call books only the call a voice memo asks for, quoting the memo (the memo is the user's yes);
     # nothing else of it places a call or writes to Bee.
 
@@ -643,9 +647,9 @@ def test_a_memo_that_asks_for_a_call_now_is_offered_now(tmp_path, monkeypatch):
 
 
 def test_the_meta_agent_is_told_a_memo_that_asks_for_a_call_is_the_user_s_yes():
-    from meta.agent import INSTRUCTIONS, WITH_BEE
+    from meta.agent import instructions
 
-    text = INSTRUCTIONS.format(**WITH_BEE, language="Korean")
+    text = instructions(bee=True, language="Korean")
     assert "A voice memo is the user speaking to you on purpose" in text
     for words in ("book_call", "copying their own words", "now or soon", "offer_call", "decide as for any other"):
         assert words in text, words
@@ -865,9 +869,9 @@ def test_only_the_lines_new_since_the_conversation_was_last_shown_are_shown(tmp_
 def test_the_meta_agent_books_a_call_the_user_asks_for_in_any_bee_input():
     """The decision is the model's, from a principle with examples: a request counts when the wearer asks the
     assistant to call them; words said to another person, or a time mentioned without asking, do not."""
-    from meta.agent import INSTRUCTIONS, WITH_BEE
+    from meta.agent import instructions
 
-    text = INSTRUCTIONS.format(**WITH_BEE, language="Korean")
+    text = instructions(bee=True, language="Korean")
     for words in ("in a voice memo or in a conversation Bee recorded", "asks you, the assistant, to call them",
                   "\"오늘 밤 9시에 전화해서 같이 정리하자\"", "\"call me at nine tonight\"", "(\"나중에 전화해\" to a friend)",
                   "a time mentioned without asking for a call", "\"Unknown\"", "copying their own words",
@@ -985,3 +989,29 @@ def test_a_line_s_start_that_is_no_time_reads_as_no_time():
 
     assert recorded({"created_at": 3.5}, NOW) is None and recorded({"created_at": 1e9}, NOW) is None
     assert recorded({"created_at": ms(NOW)}, NOW) == NOW
+
+
+
+def test_a_think_cut_off_by_a_stop_is_logged_with_what_it_used(tmp_path):
+    """The day's budget reads each think's usage from the meta session (voice/costs.py), also for a think the process's
+    stop cut off midway."""
+    import time as clock
+
+    class Slow(ScriptedModel):
+        def converse(self, **request):
+            if self.sent:
+                clock.sleep(1.0)  # the second request is still out when the stop comes
+            return super().converse(**request)
+
+    ws = workspace_with_a_call(tmp_path)
+    model = Slow([{"role": "assistant", "content": [tool_use(1, "grep", pattern="bonus")]},
+                  {"role": "assistant", "content": [{"text": "Done."}]}])
+
+    async def main():
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(Thinker(ws, on_glm(model), bee=True).think([{"kind": "call_ended", "at": "x"}], NOW),
+                                   0.5)
+
+    asyncio.run(main())
+    (logged,) = MetaSession(ws).entries()
+    assert logged["error"].startswith("stopped before it finished") and logged["usage"]["input_tokens"] == 1000

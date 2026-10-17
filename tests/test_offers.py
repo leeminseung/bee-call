@@ -210,6 +210,7 @@ def test_a_yes_is_called_with_how_the_user_agreed(tmp_path):
     (room,) = asyncio.run(call_due(me.person, prepare=fake_prepare, place=place))
     (topic, extra, deadline), = prepared
     assert topic == "Planned a Saturday hike with Dana" and "Call me now" in extra["agreed"] and deadline < 20
+    assert extra["last_calls"] is None  # no earlier call to carry (voice/continuation.py last_calls)
     meta = json.loads(requests[0].agents[0].metadata)
     assert meta["prep"]["opening"] == "Hi, calling as you asked." and meta["agreed"] == extra["agreed"]
     assert meta["conversation_ids"] == [5121] and store.get(offer.id).state == "called" and room == requests[0].name
@@ -1058,3 +1059,25 @@ def test_a_call_after_midnight_reads_as_early_morning_in_korean(tmp_path):
     assert when_label(soon + timedelta(days=1), now, call_language("ko")) == "10월 19일 월요일 새벽 12시 30분"
     assert when_label(soon, now, call_language("en")) == "12:30 AM tomorrow"
     assert clock_label(datetime(2026, 10, 17, 21, 0, tzinfo=SEOUL), call_language("ko")) == "밤 9시"
+
+
+def test_the_prep_of_an_ai_call_reads_the_last_calls(tmp_path):
+    """The user's amendment of 2026-10-18: the prep of a call the AI places carries the last calls too."""
+    from tests.test_prep import a_record
+
+    me = signed_in(tmp_path)
+    a_record(me.workspace, "2026-10-14/2100", "2026-10-14T21:00:00+09:00", [("User", "Talk tomorrow about the offer.")],
+             title="The two offers", ended="hung up")
+    store = OfferStore(me.workspace)
+    offer, _ = asked(tmp_path, now=datetime.now(SEOUL), workspace=me.workspace)
+    store.answer(offer.id, "now", datetime.now(SEOUL))
+    prepared = []
+
+    async def fake_prepare(plan, extra=None, deadline_s=None, **kw):
+        prepared.append(extra)
+        return Prep(note="note", opening="Hi.")
+
+    asyncio.run(call_due(me.person, prepare=fake_prepare, place=placing([])))
+    (extra,) = prepared
+    assert '"The two offers": the user hung up' in extra["last_calls"]
+    assert "User: Talk tomorrow about the offer." in extra["last_calls"]

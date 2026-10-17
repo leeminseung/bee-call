@@ -447,6 +447,29 @@ test("between calls, the debug view still shows the raw tool calls, the model an
   }
 });
 
+test("between calls, an organize run the user said yes to shows what went into Bee", async () => {
+  const organized = { entries: [{
+    at: "2026-10-18T15:01:00+09:00", kind: "organize",
+    events: [{ kind: "organize_bee", call: "2026-10-18/1450", days: 3 }],
+    decision: "I added two things from the last three days to Bee.",
+    actions: [
+      { tool: "bee_add_fact", text: "Drinks coffee every morning", result: "added" },
+      { tool: "bee_add_fact", text: "Lives in Seoul", result: "already in Bee" },
+      { tool: "bee_add_todo", text: "Book the dentist", result: "added" },
+      { tool: "notification", added: 2, body: "Added 2 memories to Bee.", result: "notification sent: Added 2" },
+    ],
+  }] };
+  const page = loadPage({ hash: "#/meta", fetch: answering(organized) });
+  await page.settle();
+  const shown = page.visibleText(page.byId("view"));
+  assert.match(shown, /You asked Bee Call to organize Bee: the past 3 days/);
+  assert.match(shown, /I added two things from the last three days to Bee\./);
+  assert.match(shown, /Added to Bee: fact “Drinks coffee every morning”/);
+  assert.match(shown, /Added to Bee: to-do “Book the dentist”/);
+  assert.doesNotMatch(shown, /Lives in Seoul/);  // Bee had it: nothing went in
+  assert.doesNotMatch(shown, /notification sent/);
+});
+
 /** One time the meta agent looked, with only what a normal page shows. */
 const looked = (at, decision) => ({ at, events: [{ kind: "bee_change", inbox: "inbox/x" }], decision });
 

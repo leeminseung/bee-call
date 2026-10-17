@@ -69,7 +69,7 @@ from voice.aws_session import aws_profile, aws_session
 from voice import model_catalog, providers
 from voice.call_models import CallModel, call_model_for, coordinator_llm
 from voice.claude_llm import ClaudeBedrockLLM, default_model
-from voice.continuation import earlier_call, record_id
+from voice.continuation import earlier_call, last_calls, record_id
 from voice.costs import SpendLog, day_budget
 from meta.session import add_event, meta_notes
 from voice import voip_push
@@ -474,10 +474,10 @@ def read_already(task: asyncio.Task) -> CallInputs | None:
     return None
 
 
-async def brief_once_read(task: asyncio.Task, meta: dict) -> str | None:
+async def brief_once_read(task: asyncio.Task, meta: dict, zone=None) -> str | None:
     """The plain Bee context, once the task has read Bee (None if the read failed)."""
     try:
-        return call_brief(await asyncio.shield(task), meta)
+        return call_brief(await asyncio.shield(task), meta, zone)
     except Exception:
         return None
 
@@ -933,6 +933,12 @@ async def end_call(call: Call) -> None:
     # The meta agent looks at every call once it is over (meta/agent.py).
     add_event(caller.workspace, "call_ended", now=caller.someone.now(), call=f"{rec.dir.parent.name}/{rec.dir.name}",
               direction=call.meta.get("direction", "inbound"))
+    # The user said yes in the call to organizing what Bee recorded over the past days: the meta agent does it now,
+    # in the background, and its one notification comes after the call (organize_bee, meta/agent.py).
+    request = getattr(call.agent, "organize_request", None)
+    if request and caller.uses_bee:
+        add_event(caller.workspace, "organize_bee", now=caller.someone.now(),
+                  call=f"{rec.dir.parent.name}/{rec.dir.name}", language=caller.language.code, **request)
     # The title (at most 5 s) runs beside the Bee retry, after the record is closed, so neither keeps it open.
     titled = asyncio.create_task(title_call(rec.dir, caller.language, workspace=caller.workspace))
     if caller.uses_bee:
@@ -971,6 +977,9 @@ async def run_call(ctx: JobContext, people: People) -> None:
         meta["earlier_call"] = earlier_call(workspace, meta["continue_from"])
         meta["continue_from"] = record_id(workspace, meta["continue_from"])  # recorded by its folder, either way
     meta["meta_notes"] = meta_notes(workspace)  # the meta agent's agenda and open threads, for the opening
+    # The last calls, from their records (the user's amendment of 2026-10-18); the one a continued call has whole is
+    # left out.
+    meta["last_calls"] = last_calls(workspace, caller.someone.now().tzinfo, skip=meta.get("continue_from"))
     inbox = Path(meta["inbox"]) if meta.get("inbox") else None
     if inbox is not None and not inbox.resolve().is_relative_to(workspace.resolve()):
         inbox = None  # only the person's own Bee batches
@@ -1013,9 +1022,10 @@ async def run_call(ctx: JobContext, people: People) -> None:
     preparation = pickup.preparation
     pending = preparation.done if preparation is not None and not preparation.done.done() else None
     if pending is None and not prep.note and inputs_saver is not None:  # an AI call answered before Bee was read
-        pending = asyncio.ensure_future(brief_once_read(pickup.inputs_task, meta))
+        pending = asyncio.ensure_future(brief_once_read(pickup.inputs_task, meta, caller.someone.now().tzinfo))
     call.agent = (BeeCoordinator if caller.uses_bee else Coordinator)(
-        rec, call.jobs, workspace, clock=caller.someone.now, prep_note=prep.note or call_brief(inputs, meta),
+        rec, call.jobs, workspace, clock=caller.someone.now,
+        prep_note=prep.note or call_brief(inputs, meta, caller.someone.now().tzinfo),
         pending_note=pending, language=caller.language, earlier_call=meta.get("earlier_call"),
         direction=meta.get("direction", "inbound"), audio_tags=caller.tts_voice.performs_tags,
         budget=lambda: day_budget(caller.someone, caller.someone.now()))
