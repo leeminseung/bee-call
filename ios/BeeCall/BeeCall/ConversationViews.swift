@@ -20,21 +20,44 @@ struct ConversationWords {
     var noRecord: String { korean ? "이 통화는 기록이 없어요" : "This call has no record" }
     var loading: String { korean ? "불러오는 중" : "Loading" }
 
-    func kind(_ kind: BeeWriteKind) -> String {
+    /// What a write is about: a to-do or a fact; nothing for a kind this build does not know.
+    func kind(_ kind: BeeWriteKind) -> String? {
+        if kind.isTodo { return korean ? "할 일" : "To-do" }
+        if kind.isFact { return korean ? "사실" : "Fact" }
+        return nil
+    }
+
+    /// A Bee write's line after the call: "할 일: 장보기", or what it did when there is nothing else to say.
+    func title(_ write: BeeWrite) -> String {
+        let line = [kind(write.kind), write.text].compactMap { $0 }.joined(separator: ": ")
+        return line.isEmpty ? done(write.kind) : line
+    }
+
+    /// The line over a Bee write during the call, what it did: "Bee 할 일에 넣었어요", "Bee에서 지웠어요".
+    func done(_ kind: BeeWriteKind) -> String {
         switch kind {
-        case .todoCreate, .todoAccept: korean ? "할 일" : "To-do"
-        case .factConfirm, .factUpdate, .unrecognized: korean ? "사실" : "Fact"
+        case .todoCreate, .todoAccept: korean ? "Bee 할 일에 넣었어요" : "Added to Bee: To-do"
+        case .factConfirm, .factUpdate: korean ? "Bee 사실에 넣었어요" : "Added to Bee: Fact"
+        case .factCreate: korean ? "Bee에 기억해 뒀어요" : "Saved to Bee"
+        case .todoComplete: korean ? "Bee 할 일을 끝냈어요" : "Marked done in Bee"
+        case .todoDismiss: korean ? "Bee 제안을 뺐어요" : "Removed Bee's suggestion"
+        case .factDelete: korean ? "Bee에서 지웠어요" : "Deleted from Bee"
+        case .unrecognized: korean ? "Bee에 저장했어요" : "Saved to Bee"
         }
     }
 
-    /// The line over a Bee write during the call: "Bee 할 일에 넣었어요".
-    func added(_ kind: BeeWriteKind) -> String { korean ? "Bee \(self.kind(kind))에 넣었어요" : "Added to Bee: \(self.kind(kind))" }
-
-    /// A Bee write's state, after the call or when it did not go in.
+    /// A Bee write's state, after the call or when it did not go in: for one that went in, what its kind did.
     func state(_ write: BeeWrite) -> String {
         switch write.state {
-        case .written: korean ? "넣음" : "Added"
-        case .undone: korean ? "뺌" : "Taken out"
+        case .written:
+            switch write.kind {
+            case .todoCreate, .todoAccept, .factCreate, .factConfirm, .factUpdate: korean ? "넣음" : "Added"
+            case .todoComplete: korean ? "끝냄" : "Done"
+            case .todoDismiss: korean ? "뺌" : "Removed"
+            case .factDelete: korean ? "지움" : "Deleted"
+            case .unrecognized: korean ? "저장함" : "Saved"
+            }
+        case .undone: write.kind == .todoComplete ? (korean ? "되돌림" : "Undone") : (korean ? "뺌" : "Taken out")
         case .unknown: korean ? "Bee에서 확인해 주세요" : "Check it in Bee"
         case .failed: write.willRetry ? (korean ? "통화 뒤에 다시 넣어 볼게요" : "Trying again after the call")
             : (korean ? "넣지 못함" : "Not added")
@@ -417,6 +440,12 @@ struct BeeWriteView: View {
     let live: Bool
     let words: ConversationWords
 
+    /// "빼려면 '빼 줘'라고 말하세요": while the call is on, on a write that can be undone (a turned-down suggestion
+    /// and a deleted fact never can).
+    static func hint(_ write: BeeWrite, live: Bool, words: ConversationWords) -> String? {
+        live && write.undoable ? words.takeOutHint : nil
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "checklist")
@@ -425,15 +454,15 @@ struct BeeWriteView: View {
                 .frame(width: 30, height: 30)
                 .background(BeeStyle.yellow, in: .circle)
             VStack(alignment: .leading, spacing: 1) {
-                Text(live && write.state == .written ? words.added(write.kind) : words.wroteToBee)
+                Text(live && write.state == .written ? words.done(write.kind) : words.wroteToBee)
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(BeeStyle.secondaryInk)
-                Text(live && write.state == .written ? (write.text ?? words.kind(write.kind))
-                     : [words.kind(write.kind), write.text].compactMap { $0 }.joined(separator: ": "))
+                Text(live && write.state == .written ? (write.text ?? words.kind(write.kind) ?? words.done(write.kind))
+                     : words.title(write))
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(BeeStyle.ink)
-                if live && write.undoable {
-                    Text(words.takeOutHint)
+                if let hint = Self.hint(write, live: live, words: words) {
+                    Text(hint)
                         .font(.footnote)
                         .foregroundStyle(BeeStyle.secondaryInk)
                         .padding(.top, 1)

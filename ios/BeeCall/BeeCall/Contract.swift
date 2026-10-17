@@ -245,7 +245,7 @@ nonisolated enum CallItem: Decodable, Hashable, Identifiable {
         switch self {
         case .speech(let speech): speech.speaker != .unrecognized
         case .job(let job): job.state != .unrecognized
-        case .beeWrite(let write): write.state != .unrecognized && write.kind != .unrecognized
+        case .beeWrite(let write): write.state != .unrecognized // an unknown kind gets a plain line
         case .unrecognized: false
         }
     }
@@ -328,9 +328,16 @@ nonisolated struct JobFile: Decodable, Hashable {
     }
 }
 
+/// What a write did in Bee (contract 2.4): a to-do made, taken from Bee's suggestions, completed or turned down; a
+/// fact made, confirmed, corrected or deleted. A kind a later server adds reads as `unrecognized` and is still drawn,
+/// with a plain line.
 nonisolated enum BeeWriteKind: String, ContractValue {
-    case todoCreate = "todo_create", todoAccept = "todo_accept", factConfirm = "fact_confirm",
-         factUpdate = "fact_update", unrecognized
+    case todoCreate = "todo_create", todoAccept = "todo_accept", todoComplete = "todo_complete",
+         todoDismiss = "todo_dismiss", factCreate = "fact_create", factConfirm = "fact_confirm",
+         factUpdate = "fact_update", factDelete = "fact_delete", unrecognized
+
+    var isTodo: Bool { [.todoCreate, .todoAccept, .todoComplete, .todoDismiss].contains(self) }
+    var isFact: Bool { [.factCreate, .factConfirm, .factUpdate, .factDelete].contains(self) }
 }
 
 nonisolated enum BeeWriteState: String, ContractValue {

@@ -146,8 +146,10 @@ enum CallsList {
             let inBee = entry.results.compactMap { item -> BeeWriteKind? in
                 if case .beeWrite(let write) = item, write.state == .written { write.kind } else { nil }
             }
-            let todos = inBee.filter { $0 == .todoCreate || $0 == .todoAccept }.count
-            let facts = inBee.filter { $0 == .factConfirm || $0 == .factUpdate }.count
+            // What is in Bee after the call: a turned-down suggestion, a deleted fact and a kind this build does not
+            // know take nothing in.
+            let todos = inBee.filter { [.todoCreate, .todoAccept, .todoComplete].contains($0) }.count
+            let facts = inBee.filter { [.factCreate, .factConfirm, .factUpdate].contains($0) }.count
             if todos > 0 { pills.append(Pill(kind: .beeTodo, text: korean ? "Bee 할 일 \(todos)" : "Bee to-do \(todos)")) }
             if facts > 0 { pills.append(Pill(kind: .beeFact, text: korean ? "Bee 사실 \(facts)" : "Bee fact \(facts)")) }
             return pills
