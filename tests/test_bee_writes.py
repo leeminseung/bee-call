@@ -933,6 +933,61 @@ def test_a_yes_taken_back_in_the_same_answer_saves_nothing(tmp_path, fake_bee, a
     assert said.startswith("Not saved") and "propose it again" in said and writes_to_bee(fake_bee) == []
 
 
+@pytest.mark.parametrize("answer", ["네, 잠시만요, 지우지 마세요.", "응 아니 그거 말고", "네, 아니요.", "네 아뇨 그냥 두세요",
+                                    "Yes, hold on, keep it.", "Yes, no, keep it.", "Yeah, actually keep it.",
+                                    "Yes. Sorry, I mean no.", "응, 지우지 마."])
+def test_what_cannot_be_undone_needs_a_plain_yes(tmp_path, fake_bee, answer):
+    """Second review of 2026-10-17, finding 1: each of these deleted the fact, since a list of take-back words never
+    holds them all. For what cannot be undone, the answer may hold only a yes, fillers and the asked-for verb; anything
+    more and the AI asks again."""
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        return await saved(agent, "Shall I delete 'Bonus is 15%' from Bee?", answer, kind="fact_delete",
+                           text="Bonus is 15%", fact_id=7)
+
+    said = asyncio.run(main())
+    assert said.startswith("Not saved") and "ask about it alone" in said and writes_to_bee(fake_bee) == []
+
+
+@pytest.mark.parametrize("answer", ["응.", "응, 지워 줘.", "네, 지워 주세요.", "응 그거 지워줘", "그래, 삭제해 줘.", "네네",
+                                    "Yes, delete it.", "Yes please.", "Sure, go ahead.", "Yeah, remove that one.",
+                                    "Okay, delete it now."])
+def test_a_plain_yes_still_deletes(tmp_path, fake_bee, answer):
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        return await saved(agent, "Shall I delete 'Bonus is 15%' from Bee?", answer, kind="fact_delete",
+                           text="Bonus is 15%", fact_id=7)
+
+    assert asyncio.run(main()).startswith("Saved to Bee") and writes_to_bee(fake_bee) == [["facts", "delete"]]
+
+
+def test_a_delete_needs_a_question_that_says_it_deletes(tmp_path, fake_bee):
+    """Second review of 2026-10-17, finding 4: fact_delete proposed, then "Did Bee hear 'Bonus is 15%' right?" and
+    "Yes, that's right." deleted the fact. What cannot be undone counts only as the answer to a question that says
+    it deletes or removes."""
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        number = await proposed(agent, kind="fact_delete", text="Bonus is 15%", fact_id=7)
+        await say(agent, ("assistant", "Did Bee hear 'Bonus is 15%' right?"), ("user", "Yes."))
+        wrong = await agent.save_to_bee(None, proposal=number)
+        again = await proposed(agent, kind="fact_delete", text="Bonus is 15%", fact_id=7)
+        await say(agent, ("assistant", "Bee에서 'Bonus is 15%' 지울까요?"), ("user", "응."))
+        return wrong, await agent.save_to_bee(None, proposal=again)
+
+    wrong, right = asyncio.run(main())
+    assert wrong.startswith("Not saved") and "delete" in wrong and right.startswith("Saved to Bee")
+    assert writes_to_bee(fake_bee) == [["facts", "delete"]]
+
+
+@pytest.mark.parametrize("answer", ["응, 잠시만요.", "Yes. Sorry, I mean no.", "Yes, hold on.", "네, 아니요."])
+def test_a_yes_held_or_taken_back_saves_nothing_for_any_change(tmp_path, fake_bee, answer):
+    async def main():
+        agent, _ = await in_a_call(tmp_path, language="ko")
+        return await saved(agent, "Bee 할 일로 'Call mom' 넣을까요?", answer, kind="todo_create", text="Call mom")
+
+    assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []
+
+
 @pytest.mark.parametrize("answer", ["응, 넣어 줘. 급한 건 아니야.", "네, 그렇게 해 주세요. 잠깐이면 되죠?",
                                     "Yes, and no rush on it."])
 def test_a_yes_that_only_says_something_is_not_so_is_still_a_yes(tmp_path, fake_bee, answer):

@@ -174,9 +174,24 @@ AFFIRMATIVE = re.compile(r"^\W*(?:(?:음|어|아|그|저|um|uh|hmm|well|oh)\W+)?
 # takes it back only as a word of its own, at a clause's start or right after the yes ("응, 아니다", "응 아니야"),
 # not after a noun, where it says what something is not ("급한 건 아니야").
 TAKES_IT_BACK = re.compile(r"\b(?:wait,? no|no,? wait|actually,? no|actually,? don'?t|never ?mind|scratch that|"
-                           r"forget (?:it|that)|on second thought)\b|잠깐(?:만|[\s,.!?…]|$)|"
-                           r"(?:^|[,.!?…]\s*|(?:응|네|예|어|그래|좋아)\s+)(?:아\s+)?(?:아니다|아니야|아냐)(?=[\s,.!?…]|$)",
-                           re.IGNORECASE)
+                           r"forget (?:it|that)|on second thought|hold on|i mean,? no)\b|잠깐(?:만|[\s,.!?…]|$)|잠시만|"
+                           r"(?:^|[,.!?…]\s*|(?:응|네|예|어|그래|좋아)\s+)(?:아\s+)?(?:아니다|아니야|아냐|아니요|아뇨|아니)"
+                           r"(?=[\s,.!?…]|$)", re.IGNORECASE)
+# What cannot be undone needs a plain yes: the answer, in letters only, is made of nothing but yes words, fillers, the
+# asked-for verb and the words around a request (second review of 2026-10-17, finding 1: no list of take-backs holds
+# them all; "네, 잠시만요, 지우지 마세요." and "Yes. Sorry, I mean no." deleted the fact). Anything more, and the AI
+# asks again.
+PLAIN_YES = re.compile(
+    r"^(?:음|어|아|오|um|uh|hmm|well|oh|"
+    r"응|네|예|넵|넹|그래|그래요|좋아|좋아요|오케이|맞아|맞아요|그럼|그럼요|물론|yes|yeah|yep|yup|sure|ok|okay|right|"
+    r"absolutely|ofcourse|please|goahead|doit|"
+    r"그거|그것|그걸|이거|그냥|지금|it|that|this|one|now|"
+    r"지워|지우자|삭제|삭제해|없애|빼|delete|remove|dismiss|takeitout|getridof|drop|"
+    r"해|줘|줘요|주세요|주라|요|부탁해|부탁해요|부탁드려요|thanks|thankyou|고마워|고마워요)+$")
+# The question about what cannot be undone has to say it deletes or removes (second review of 2026-10-17, finding
+# 4: a fact_delete proposed, then "Did Bee hear 'Bonus is 15%' right?" "Yes, that's right." deleted the fact).
+SAYS_IT_REMOVES = re.compile(r"\b(?:delete|remove|dismiss|take (?:it )?out|get rid of|drop|turn (?:it )?down)|"
+                             r"지우|지울|지워|삭제|빼|뺄|없애", re.IGNORECASE)
 SENTENCES = re.compile(r"(?<=[.!?。])\s+|\n")
 QUOTES = "'\"‘’“”「」『』«»"
 EXPIRED = "expired"  # a proposal whose question was answered and passed (BeeCoordinator._answer_to)
@@ -721,6 +736,15 @@ class BeeCoordinator(Coordinator):
             found.expired = True
             return (f"Not saved: the answer takes the yes back (\"{answer}\"). If the user does want it, propose it "
                     "again with propose_bee_save and ask about it alone.")
+        if found.item["kind"] in NOT_UNDOABLE:
+            if not any(SAYS_IT_REMOVES.search(s) for s in asking_sentences(question, found.item["text"])):
+                found.expired = True
+                return ("Not saved: this cannot be undone, and your question did not say it deletes or removes it. "
+                        f"Propose it again and ask, {self._ask_like(found.item)}")
+            if not PLAIN_YES.match(_letters_only(answer)):
+                found.expired = True
+                return (f"Not saved: this cannot be undone, and the answer is more than a plain yes (\"{answer}\"). "
+                        "If the user does want it, propose it again with propose_bee_save and ask about it alone.")
         same = self._claimed.get(same_item(found.item))
         if same is not None:  # proposed twice, both answered by one yes (measured 2026-10-17)
             found.expired = True
@@ -836,13 +860,23 @@ def asks_about(text: str | None, item: str) -> bool:
     """Whether an AI turn asks about the item: it names Bee (the word), and one of its sentences is a question
     ("?") that quotes the item's text whole, in quotation marks. So "I'll add 'Buy milk' to Bee. Anything else?"
     asks about something else, and 'Buy milk and eggs' does not quote 'Buy milk'."""
+    return bool(asking_sentences(text, item))
+
+
+def asking_sentences(text: str | None, item: str) -> list[str]:
+    """The sentences of an AI turn that ask about the item (asks_about); none when the turn does not name Bee."""
     text = re.sub(r"\s+", " ", text or "")
     if not NAMES_BEE.search(text):
-        return False
+        return []
     quote = f"[{re.escape(QUOTES)}]"
     quoted = re.compile(f"{quote}{re.escape(_plain(item))}[.!?。]?{quote}")
-    return any(quoted.search(sentence.casefold()) for sentence in SENTENCES.split(text)
-               if QUESTION.search(sentence.rstrip(QUOTES + " ")[-1:]))
+    return [sentence for sentence in SENTENCES.split(text)
+            if QUESTION.search(sentence.rstrip(QUOTES + " ")[-1:]) and quoted.search(sentence.casefold())]
+
+
+def _letters_only(text: str) -> str:
+    """Letters and digits only, in lower case: how an answer is matched against PLAIN_YES."""
+    return "".join(ch for ch in text.casefold() if ch.isalnum())
 
 
 def same_item(item: dict) -> tuple:
