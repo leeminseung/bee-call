@@ -989,3 +989,29 @@ def test_a_line_s_start_that_is_no_time_reads_as_no_time():
 
     assert recorded({"created_at": 3.5}, NOW) is None and recorded({"created_at": 1e9}, NOW) is None
     assert recorded({"created_at": ms(NOW)}, NOW) == NOW
+
+
+
+def test_a_think_cut_off_by_a_stop_is_logged_with_what_it_used(tmp_path):
+    """The day's budget reads each think's usage from the meta session (voice/costs.py), also for a think the process's
+    stop cut off midway."""
+    import time as clock
+
+    class Slow(ScriptedModel):
+        def converse(self, **request):
+            if self.sent:
+                clock.sleep(1.0)  # the second request is still out when the stop comes
+            return super().converse(**request)
+
+    ws = workspace_with_a_call(tmp_path)
+    model = Slow([{"role": "assistant", "content": [tool_use(1, "grep", pattern="bonus")]},
+                  {"role": "assistant", "content": [{"text": "Done."}]}])
+
+    async def main():
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(Thinker(ws, on_glm(model), bee=True).think([{"kind": "call_ended", "at": "x"}], NOW),
+                                   0.5)
+
+    asyncio.run(main())
+    (logged,) = MetaSession(ws).entries()
+    assert logged["error"].startswith("stopped before it finished") and logged["usage"]["input_tokens"] == 1000

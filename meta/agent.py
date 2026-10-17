@@ -712,6 +712,7 @@ class Thinker:
                                  "decision": "", "usage": {"input_tokens": 0, "output_tokens": 0}}  # voice/costs.py
         turns = [Turn("user", text=first)]
         answering = None  # the choice that answered: the rest of the think goes to it
+        stopped = False
         try:
             for _ in range(rounds):
                 if answering is None:
@@ -741,13 +742,14 @@ class Thinker:
             entry["error"] = f"{type(exc).__name__}: {exc}"[:500]
         except asyncio.CancelledError:  # the process is stopping: the events stay in the inbox for next time
             entry["error"] = "stopped before it finished (the process was stopping)"
-            entry["seconds"] = round(time.monotonic() - started, 2)
-            MetaSession(self.workspace).log(entry)
+            stopped = True
             raise
         finally:
             entry["usage"] = {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,
                               "cache_read": usage.cache_read, "cache_write": usage.cache_write}
             entry["seconds"] = round(time.monotonic() - started, 2)
+            if stopped:  # logged here, with what it used (the day's budget counts it): the caller never gets it
+                MetaSession(self.workspace).log(entry)
         return entry
 
     # ---------- organizing Bee's memory, on the user's yes in a call ----------
