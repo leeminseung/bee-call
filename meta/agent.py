@@ -14,6 +14,7 @@ on Bedrock standing by), through its provider's adapter (voice/providers/), with
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
@@ -70,15 +71,21 @@ card and the call's AI reads it)."""
 # The parts about Bee, for a person who connected it; a person without Bee gets none of them.
 WITH_BEE = {"wears_bee": " The user wears Bee, a wearable that records and summarizes their conversations and keeps "
                          "their voice memos.",
-            "memo_yes": ", and a voice memo in which they ask for a call is that yes",
-            "book_call": "- book_call: book the call a voice memo asks for, at the time it asks; the user gets one "
-                         "notification that says so, and can call it off in the app.\n",
-            "memos": "A voice memo is the user speaking to you on purpose, in their own words, so it counts more than "
-                     "a conversation Bee happened to hear. When a memo asks you to call at a time (\"오늘 밤 9시에 "
-                     "전화해서 같이 정리하자\", \"call me tonight at 9 about this\"), book that call with book_call, "
-                     "copying the memo's own words that ask for it. When it asks for a call now or soon, offer one "
-                     "for now with offer_call, with its memo_id. When it asks for no call, decide as for any other "
-                     "change. Bee's reply to a memo shows what Bee made of it.\n",
+            "memo_yes": ", and the user asking you for a call, in a voice memo or in a conversation Bee recorded, is "
+                        "that yes",
+            "book_call": "- book_call: book the call the user asks you for, in a voice memo or in a conversation Bee "
+                         "recorded, at the time they ask; the user gets one notification that says so, and can call "
+                         "it off in the app.\n",
+            "memos": "When the user asks you to call them, in a voice memo or in a conversation Bee recorded (a note "
+                     "they record on their watch comes as a conversation), that is their yes: book the call with "
+                     "book_call at the time they ask, copying their own words that ask for it. A request counts when "
+                     "the wearer asks you, the assistant, to call them: \"오늘 밤 9시에 전화해서 같이 정리하자\", "
+                     "\"call me at nine tonight\". Words they say to another person (\"나중에 전화해\" to a friend), "
+                     "or a time mentioned without asking for a call, do not. In a conversation's lines Bee names the "
+                     "wearer, the user, and marks other speakers \"Unknown\". When they ask for a call now or soon, "
+                     "offer one for now with offer_call, naming the memo or the conversation. When nothing asks for "
+                     "a call, decide as for any other change. A voice memo is the user speaking to you on purpose; "
+                     "Bee's reply to it shows what Bee made of it.\n",
             "bee_changes": " Changes to Bee (keeping, confirming, fixing or deleting a fact; adding a todo, marking "
                            "one done or turning down one Bee suggested) go on the agenda: the AI makes them in a call, "
                            "after the user agrees.",
@@ -122,16 +129,21 @@ TOOLS = [
            "inbox": {"type": "string", "description": "The inbox/<time> folder of the Bee change, if any."},
            "memo_id": {"type": "string", "description": "The voice memo behind it, if any (one memo, one call)."}},
           ["topic", "why"]),
-    _tool("book_call", "Book the call a voice memo asks for, at the time it asks. The AI calls then; the user gets "
-                       "one notification that says so and can call it off in the app.",
-          {"memo_id": {"type": "string", "description": "The voice memo's id."},
-           "asked": {"type": "string", "description": "The memo's own words asking for the call, copied word for word "
-                                                      "from it: their sentence, or most of it."},
+    _tool("book_call", "Book the call the user asks you for, in a voice memo or in a conversation Bee recorded, at "
+                       "the time they ask. The AI calls then; the user gets one notification that says so and can "
+                       "call it off in the app.",
+          {"memo_id": {"type": "string", "description": "The voice memo's id, when a memo asks for the call."},
+           "conversation_id": {"type": "integer", "description": "The Bee conversation's id, when the user asks for "
+                                                                 "the call in a conversation."},
+           "asked": {"type": "string", "description": "The user's own words asking for the call, copied word for word "
+                                                      "from the memo or from the wearer's lines: their sentence, or "
+                                                      "most of it."},
            "at": {"type": "string", "description": "When to call: the user's local date and time in ISO 8601, like "
                                                    "2026-10-17T21:00."},
            "topic": {"type": "string", "description": "What the call is about, in a few words, in the user's language."},
            "why": {"type": "string", "description": "Why you call then, in one sentence in the user's language, said "
-                                                    "to the user."}}),
+                                                    "to the user."}},
+          ["asked", "at", "topic", "why"]),
 ]
 # offer_call for a person without Bee: no Bee conversations or Bee changes to name.
 OFFER_CALL_WITHOUT_BEE = _tool(
@@ -159,6 +171,14 @@ MEMOS_SHOWN = 3  # voice memos of one Bee change shown to the agent, and read fr
 # A memo recorded longer ago than this books no call: "tonight" in it meant another night (review of 2026-10-17,
 # finding 2: a memo four days old, back in a later batch, booked a call for tonight). Arbitrary.
 MEMO_BOOK_HOURS = 12
+# A conversation's lines shown to the agent: those spoken since the change before that had the conversation, the
+# newest, with Bee's speaker names and their times (2026-10-17: a note recorded on the watch comes as a conversation,
+# and a call asked for in it is booked as one a memo asks for). Arbitrary.
+CONVERSATIONS_READ = 3  # conversations of one think whose lines are read
+LINES_SHOWN, LINES_CHARS = 20, 1500  # of one conversation's lines
+EARLIER_BATCHES = 50  # earlier changes looked through for when a conversation was last shown
+# Speaker names Bee gives anyone but the wearer: "Unknown" (and the fake's "speaker_1"); the wearer is named.
+NOT_THE_WEARER = re.compile(r"^\s*(?:unknown.*|speaker[ _-]?\d*|someone|other|)\s*$", re.IGNORECASE)
 
 
 def memo_ids(workspace: Path, events: list[dict[str, Any]]) -> list[str]:
@@ -228,6 +248,52 @@ def ago(then: datetime, now: datetime) -> str:
     return f"{minutes // 1440} days ago"
 
 
+def spoken_at(utterance: dict[str, Any], now: datetime) -> datetime | None:
+    """When a line of a Bee conversation was said (spoken_at, else start), on the person's clock."""
+    return recorded({"created_at": utterance.get("spoken_at") or utterance.get("start")}, now)
+
+
+def by_wearer(utterance: dict[str, Any]) -> bool:
+    """A line Bee gives to the wearer, the user: it names them, and marks everyone else "Unknown"."""
+    return not NOT_THE_WEARER.match(str(utterance.get("speaker") or ""))
+
+
+def last_shown(workspace: Path, conv_id: Any, inbox: str) -> datetime | None:
+    """When a conversation ended as the latest change before `inbox` had it (end_time), or None: lines spoken
+    after that are new."""
+    root = workspace / "inbox"
+    current = Path(str(inbox)).name
+    try:
+        earlier = sorted((p for p in root.iterdir() if p.is_dir() and p.name < current), reverse=True)
+    except OSError:
+        return None
+    for folder in earlier[:EARLIER_BATCHES]:
+        try:
+            changed = json.loads((folder / "changed.json").read_text())
+        except (OSError, ValueError):
+            continue
+        for c in changed.get("conversations") or []:
+            if isinstance(c, dict) and c.get("id") == conv_id:
+                return recorded({"created_at": c.get("end_time")}, datetime.now().astimezone())
+    return None
+
+
+def _conversation_lines(seen: dict[str, Any], now: datetime) -> str:
+    """A conversation's new lines, as the agent reads them: "[18:28] Minseung: ..."."""
+    lines = seen.get("lines") or []
+    text = ""
+    if seen.get("earlier"):
+        text += f"\n    ({seen['earlier']} earlier lines were in an earlier change)"
+    if not lines:
+        return text + "\n    no new lines"
+    shown = []
+    for u in lines:
+        when = spoken_at(u, now)
+        stamp = "" if when is None else f"[{when:%H:%M}] " if when.date() == now.date() else f"[{when:%m-%d %H:%M}] "
+        shown.append(f"\n    {stamp}{u.get('speaker') or 'Unknown'}: {' '.join(str(u.get('text') or '').split())}")
+    return text + "".join(shown)
+
+
 def _memo_lines(memo: dict[str, Any], now: datetime | None = None) -> str:
     text = str(memo.get("text") or memo.get("transcript") or "").strip()
     made = recorded(memo, now) if now is not None else None
@@ -243,7 +309,7 @@ def _memo_lines(memo: dict[str, Any], now: datetime | None = None) -> str:
 
 
 def _event_line(workspace: Path, event: dict[str, Any], memos: dict[str, dict[str, Any]] | None = None,
-                now: datetime | None = None) -> str:
+                now: datetime | None = None, conversations: dict[Any, dict[str, Any]] | None = None) -> str:
     """One event as the agent reads it, with the Bee change's essentials so it need not open the file for them: a
     voice memo whole, as Bee has it now (`memos`, read with bee journals get), with Bee's reply to it."""
     kind, at = event.get("kind"), event.get("at")
@@ -257,6 +323,9 @@ def _event_line(workspace: Path, event: dict[str, Any], memos: dict[str, dict[st
         for c in [c for c in changed.get("conversations", []) if not kept or c.get("id") in kept][:6]:
             line += (f"\n  conversation {c.get('id')} ({c.get('utterances_count') or '?'} utterances, "
                      f"{c.get('state', '')}): {c.get('short_summary') or 'no summary yet'}")
+            seen = (conversations or {}).get(c.get("id"))
+            if seen is not None and now is not None:
+                line += _conversation_lines(seen, now)
         for j in changed.get("journals", [])[:MEMOS_SHOWN]:
             line += _memo_lines((memos or {}).get(str(j.get("id"))) or j, now)
         others = {k: len(v) for k, v in changed.items() if isinstance(v, list) and k not in ("conversations", "journals") and v}
@@ -278,7 +347,8 @@ def _event_line(workspace: Path, event: dict[str, Any], memos: dict[str, dict[st
 
 
 def context(workspace: Path, events: list[dict[str, Any]], now: datetime, call_time: str | None = None,
-            memos: dict[str, dict[str, Any]] | None = None) -> str:
+            memos: dict[str, dict[str, Any]] | None = None,
+            conversations: dict[Any, dict[str, Any]] | None = None) -> str:
     """The first message: the time and limits, open offers, the agent's notes and past entries, and the events."""
     session, store = MetaSession(workspace), OfferStore(workspace)
     left = max(0, DAILY_NOTIFICATIONS - store.notified_on(now))
@@ -292,7 +362,7 @@ def context(workspace: Path, events: list[dict[str, Any]], now: datetime, call_t
         "Open offers:\n" + ("\n".join(offers) if offers else "none"),
         "Your notes (state.md):\n" + session.state(),
         "Your recent entries (meta session):\n" + session.recent_text(),
-        "What just happened:\n" + "\n".join(_event_line(workspace, e, memos, now) for e in events),
+        "What just happened:\n" + "\n".join(_event_line(workspace, e, memos, now, conversations) for e in events),
     ])
 
 
@@ -312,8 +382,11 @@ class Thinker:
         # The meta role as the COORDINATOR_LLM mode runs it (model_catalog.mode_role).
         self.role = role or model_catalog.mode_role("meta", coordinator_llm())
         self.send = send
-        self.tell = tell  # the one plain notification for a call booked from a voice memo
+        self.tell = tell  # the one plain notification for a call booked from a Bee input (a memo or a conversation)
         self._memos: dict[str, dict[str, Any]] = {}  # the memos of this think's events, as Bee has them now
+        # The conversations of this think's events whose lines were read: {"conversation": as the change had it,
+        # "lines": the lines shown, "earlier": how many earlier ones were left out}.
+        self._conversations: dict[Any, dict[str, Any]] = {}
         self._events: list[dict[str, Any]] = []
         self.call_time = call_time  # the evening time an offer suggests (the person's setting; the default when None)
         self.language = language if language in LANGUAGES else "en"
@@ -398,9 +471,54 @@ class Thinker:
         return f"Asked: offer {offer.id}, suggesting {offer.suggested_at}. {sent}"
 
     async def _book_call(self, args: dict[str, Any], now: datetime, actions: list[dict[str, Any]]) -> str:
-        """The call a voice memo asks for, at the time it asks. Checked in code like book_call in a call: the memo's
-        own words must ask for it (voice/said.py), at a time in the coming week; one memo books at most one call."""
+        """The call the user asks for, in a voice memo or in a conversation Bee recorded, at the time they ask.
+        Checked in code like book_call in a call: the input's own words, the user's, must ask for it
+        (voice/said.py), the input is recent and not Bee's recording of one of our calls, and the time is in the
+        coming week; one memo or conversation books at most one call."""
         memo_id = str(args.get("memo_id") or "").strip()
+        conv_id = args.get("conversation_id")
+        if bool(memo_id) == (conv_id is not None and str(conv_id).strip() != ""):
+            return ("Not booked: give one of memo_id and conversation_id: the voice memo or the Bee conversation in "
+                    "which the user asks for the call.")
+        asked = args.get("asked")
+        refused = self._memo_asks(memo_id, asked, now) if memo_id else self._conversation_asks(conv_id, asked, now)
+        if refused:
+            return refused
+        try:
+            when = datetime.fromisoformat(str(args.get("at") or "").strip())
+        except ValueError:
+            return "Not booked: give at in ISO 8601, like 2026-10-17T21:00."
+        when = when.replace(tzinfo=now.tzinfo) if when.tzinfo is None else when.astimezone(now.tzinfo)
+        if when < now + timedelta(minutes=1):
+            return "Not booked: that time has passed. For a call now or soon, offer one with offer_call."
+        if when > now + timedelta(days=7):
+            return "Not booked: calls can be booked at most a week ahead."
+        topic, why = clean(args.get("topic"), MAX_TOPIC), clean(args.get("why"), MAX_WHY)
+        if not topic or not why:
+            return "Not booked: book_call needs a topic and a why."
+        inbox = next((e.get("inbox") for e in self._events if e.get("kind") == "bee_change"), None)
+        source = f"voice memo {memo_id}" if memo_id else f"Bee conversation {conv_id}"
+        try:
+            offer, joined = OfferStore(self.workspace).book_from_input(
+                topic, when, now, reason=why, asked=clean(asked, MAX_WHY), memo_id=memo_id or None,
+                conversation_id=None if memo_id else int(conv_id),
+                inbox=str(files._inside(self.workspace, str(inbox))) if inbox else None)
+        except AlreadyOffered as exc:
+            return f"Not booked: {exc}."
+        if joined:  # a call is booked for about that time: the input goes into it, and the user was told of it
+            at = offer.at("call_at") or when
+            actions.append({"tool": "book_call", "offer": offer.id, "call_at": offer.call_at, "topic": offer.topic,
+                            "result": f"joined the call booked before, with {source}"})
+            return (f"Not booked again: {source} joined the call already booked at {at:%H:%M} on {at:%A, %B} "
+                    f"{at.day} (offer {offer.id}, \"{offer.topic}\"), which will read it too. No second "
+                    "notification goes out.")
+        told = await self.tell(offer, self.workspace, now) if self.tell else "not told (no sender)"
+        actions.append({"tool": "book_call", "offer": offer.id, "call_at": offer.call_at, "topic": topic,
+                        "result": told})
+        return f"Booked: offer {offer.id}, the call at {when:%H:%M} on {when:%A, %B %-d}. {told}"
+
+    def _memo_asks(self, memo_id: str, asked: Any, now: datetime) -> str | None:
+        """Why a voice memo books no call (None: its own words ask for it, and it is recent)."""
         memo = self._memos.get(memo_id)
         if memo is None:
             return f"Not booked: there is no voice memo {memo_id} among the changes you were told about."
@@ -417,48 +535,100 @@ class Thinker:
         cleaned = reply.get("cleanedUpText") if isinstance(reply.get("cleanedUpText"), str) else ""
         # Bee's cleaned-up text of the same words has sentences where the raw text may have none (review of
         # 2026-10-17); the words still have to be the memo's, in one or the other, never across the two.
-        if not (said_in([text], args.get("asked")) or (cleaned.strip() and said_in([cleaned], args.get("asked")))):
+        if not (said_in([text], asked) or (cleaned.strip() and said_in([cleaned], asked))):
             return ("Not booked: asked must be the memo's own words asking for the call, copied word for word from it: "
                     "its sentence, or most of it with nothing left out that changes it. Book only a call the memo "
                     "asks for.")
-        try:
-            when = datetime.fromisoformat(str(args.get("at") or "").strip())
-        except ValueError:
-            return "Not booked: give at in ISO 8601, like 2026-10-17T21:00."
-        when = when.replace(tzinfo=now.tzinfo) if when.tzinfo is None else when.astimezone(now.tzinfo)
-        if when < now + timedelta(minutes=1):
-            return "Not booked: that time has passed. For a call now or soon, offer one with offer_call."
-        if when > now + timedelta(days=7):
-            return "Not booked: calls can be booked at most a week ahead."
-        topic, why = clean(args.get("topic"), MAX_TOPIC), clean(args.get("why"), MAX_WHY)
-        if not topic or not why:
-            return "Not booked: book_call needs a topic and a why."
-        inbox = next((e.get("inbox") for e in self._events if e.get("kind") == "bee_change"), None)
-        try:
-            offer, joined = OfferStore(self.workspace).book_from_memo(
-                topic, when, now, reason=why, memo_id=memo_id, asked=clean(args.get("asked"), MAX_WHY),
-                inbox=str(files._inside(self.workspace, str(inbox))) if inbox else None)
-        except AlreadyOffered as exc:
-            return f"Not booked: {exc}."
-        if joined:  # a call is booked for about that time: the memo goes into it, and the user was told of it
-            at = offer.at("call_at") or when
-            actions.append({"tool": "book_call", "offer": offer.id, "call_at": offer.call_at, "topic": offer.topic,
-                            "result": f"joined the call booked before, with voice memo {memo_id}"})
-            return (f"Not booked again: voice memo {memo_id} joined the call already booked at {at:%H:%M} on "
-                    f"{at:%A, %B} {at.day} (offer {offer.id}, \"{offer.topic}\"), which will read it too. No "
-                    "second notification goes out.")
-        told = await self.tell(offer, self.workspace, now) if self.tell else "not told (no sender)"
-        actions.append({"tool": "book_call", "offer": offer.id, "call_at": offer.call_at, "topic": topic,
-                        "result": told})
-        return f"Booked: offer {offer.id}, the call at {when:%H:%M} on {when:%A, %B %-d}. {told}"
+        return None
 
-    async def _read_memos(self, events: list[dict[str, Any]]) -> None:
-        """The voice memos these events name, as Bee has them now (bee journals get): the finished text and Bee's
-        reply. A memo that cannot be read is shown as the watcher saved it."""
+    def _conversation_asks(self, conv_id: Any, asked: Any, now: datetime) -> str | None:
+        """Why a Bee conversation books no call (None: the wearer's own words in the lines the agent was shown ask
+        for it, and it is recent and not Bee's recording of one of our calls)."""
+        try:
+            conv_id = int(conv_id)
+        except (TypeError, ValueError):
+            return "Not booked: conversation_id is a Bee conversation's number."
+        seen = self._conversations.get(conv_id)
+        if seen is None:
+            return (f"Not booked: there is no Bee conversation {conv_id} among the changes you were told about with "
+                    "their lines.")
+        conv, lines = seen["conversation"], seen["lines"]
+        if OurCalls.of(self.workspace).conversation(conv):  # the watcher leaves these out; never book from one
+            return (f"Not booked: Bee recorded conversation {conv_id} during one of the user's calls with you; that "
+                    "call's own record is the source, and it books no call.")
+        times = [t for t in (spoken_at(u, now) for u in lines) if t is not None]
+        made = recorded({"created_at": conv.get("end_time")}, now) or (max(times) if times else None)
+        if made is None:
+            return (f"Not booked: Bee did not say when conversation {conv_id} was recorded, so its times cannot be "
+                    "read. If it still matters, offer a call with offer_call or put it on the agenda.")
+        if now - made > timedelta(hours=MEMO_BOOK_HOURS):
+            return (f"Not booked: conversation {conv_id} was recorded {ago(made, now)}, and a conversation that old "
+                    "books no call: its times meant another day. If it still matters, offer a call with offer_call "
+                    "or put it on the agenda.")
+        runs, run = [], []  # the wearer's lines, in runs of lines said one after another
+        for u in lines:
+            if by_wearer(u):
+                run.append(str(u.get("text") or ""))
+            elif run:
+                runs.append(run)
+                run = []
+        if run:
+            runs.append(run)
+        if any(said_in(texts, asked) for texts in runs):
+            return None
+        other = next((u for u in lines if not by_wearer(u) and said_in([str(u.get("text") or "")], asked)), None)
+        if other is not None:
+            return (f"Not booked: those words are said by a speaker Bee marks \"{other.get('speaker') or 'Unknown'}\", "
+                    "not by the wearer, and a call is booked only when the user asks for it. If you think the user "
+                    "wants a call, offer one with offer_call.")
+        return ("Not booked: asked must be the wearer's own words asking for the call, copied word for word from the "
+                "conversation's lines you were shown: their sentence, or most of it with nothing left out that "
+                "changes it. Book only a call the user asks for.")
+
+    async def _read_memos(self, events: list[dict[str, Any]], now: datetime) -> None:
+        """What these events' Bee changes hold, as Bee has it now: each voice memo (bee journals get: the finished
+        text and Bee's reply) and each conversation's new lines (bee conversations transcript). A memo that cannot
+        be read is shown as the watcher saved it; a conversation, with its summary only."""
         self._events = events
         ids = memo_ids(self.workspace, events)[:MEMOS_SHOWN] if self.bee else []
-        found = await asyncio.gather(*(cli.journal(i, timeout=MEMO_READ_S) for i in ids), return_exceptions=True)
+        convs = self._changed_conversations(events)[:CONVERSATIONS_READ] if self.bee else []
+        found, said = await asyncio.gather(
+            asyncio.gather(*(cli.journal(i, timeout=MEMO_READ_S) for i in ids), return_exceptions=True),
+            asyncio.gather(*(cli.transcript(c["id"], timeout=MEMO_READ_S) for c, _ in convs), return_exceptions=True))
         self._memos = {i: memo for i, memo in zip(ids, found) if isinstance(memo, dict) and memo.get("id") is not None}
+        self._conversations = {}
+        for (conv, inbox), got in zip(convs, said):
+            if isinstance(got, BaseException) or not isinstance(got, dict):
+                continue
+            lines = [u for u in got.get("transcript") or [] if isinstance(u, dict) and str(u.get("text") or "").strip()]
+            lines.sort(key=lambda u: (spoken_at(u, now) or now).timestamp())
+            before = last_shown(self.workspace, conv["id"], inbox)
+            new = [u for u in lines if before is None or (spoken_at(u, now) or now) > before]
+            shown, size = [], 0
+            for u in reversed(new):  # the newest, within LINES_SHOWN and LINES_CHARS
+                size += len(str(u.get("text")))
+                if len(shown) >= LINES_SHOWN or (shown and size > LINES_CHARS):
+                    break
+                shown.insert(0, u)
+            self._conversations[conv["id"]] = {"conversation": conv, "lines": shown,
+                                               "earlier": len(lines) - len(shown)}
+
+    def _changed_conversations(self, events: list[dict[str, Any]]) -> list[tuple[dict[str, Any], str]]:
+        """The conversations these events' Bee changes hold, as the agent is shown them, with their change's inbox."""
+        found: list[tuple[dict[str, Any], str]] = []
+        for event in events:
+            if event.get("kind") != "bee_change":
+                continue
+            try:
+                changed = json.loads((self.workspace / str(event.get("inbox")) / "changed.json").read_text())
+            except (OSError, ValueError):
+                continue
+            kept = set(event.get("conversation_ids") or [])
+            for c in [c for c in changed.get("conversations", []) if not kept or c.get("id") in kept][:6]:
+                if isinstance(c, dict) and isinstance(c.get("id"), int) and \
+                        all(c["id"] != seen["id"] for seen, _ in found):
+                    found.append((c, str(event.get("inbox"))))
+        return found
 
     async def think(self, events: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
         """Thinks once about these events and logs the entry in the meta session. Never raises. `now` is the
@@ -468,8 +638,9 @@ class Thinker:
         entry: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "events": events,
                                  "model": self.role.choices[0].offering.model, "tools": [], "actions": [],
                                  "decision": "", "usage": {"input_tokens": 0, "output_tokens": 0}}  # voice/costs.py
-        await self._read_memos(events)
-        turns = [Turn("user", text=context(self.workspace, events, now, self.call_time, self._memos))]
+        await self._read_memos(events, now)
+        turns = [Turn("user", text=context(self.workspace, events, now, self.call_time, self._memos,
+                                           self._conversations))]
         answering = None  # the choice that answered: the rest of the think goes to it
         try:
             for _ in range(MAX_ROUNDS):

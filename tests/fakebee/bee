@@ -91,6 +91,10 @@ if cmd[:2] in (["conversations", "get"], ["conversations", "transcript"]) and cm
     out({"conversation": None, "transcript": None})  # a conversation Bee returns as null
 if cmd[:2] == ["conversations", "get"]:
     out({"conversation": {"id": int(cmd[2]), "short_summary": "Talked through a job offer", "start_time": now_ms}})
+if cmd[:2] == ["conversations", "transcript"] and os.environ.get("FAKE_BEE_TRANSCRIPTS"):
+    # The utterances of each conversation, from the file FAKE_BEE_TRANSCRIPTS names: {"<id>": [utterance, ...]}
+    said = json.load(open(os.environ["FAKE_BEE_TRANSCRIPTS"])).get(cmd[2], [])
+    out({"conversationId": int(cmd[2]), "transcript": said})
 if cmd[:2] == ["conversations", "transcript"]:
     out({"conversationId": int(cmd[2]), "transcript": [
         {"spoken_at": now_ms - 60000, "speaker": "me", "text": "They offered 15 percent bonus."},

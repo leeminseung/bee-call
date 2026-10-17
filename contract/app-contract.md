@@ -322,14 +322,14 @@ Answering: `POST /offers/{offer_id}` with `{"choice": "later" | "now" | "decline
 booked call ("전화 취소") until its room is being made. Errors: 404 unknown offer (checked first), 400 another
 choice, 409 closed or already answered, 401.
 
-A voice memo can book a call too (since 2026-10-17): when the person's memo asks for a call at a time ("오늘 밤 9시에
-전화해서 같이 정리하자"), the server books it, as `booked` with that `call_at` and a topic in the person's language,
+A voice memo or a Bee conversation can book a call too (since 2026-10-17): when the person asks Bee Call, in a memo or
+in a conversation Bee recorded, to call at a time ("오늘 밤 9시에 전화해서 같이 정리하자"), the server books it, as `booked` with that `call_at` and a topic in the person's language,
 and sends one plain notification, "오늘 밤 9시에 전화할게요: {topic}. 앱에서 취소할 수 있어요." / "I'll call you at 9:00 PM
 today: {topic}. You can call it off in the app." (`{"aps": {"alert": {"title": "Bee Call", "body": ...}, "sound":
 "default", "thread-id": "offers"}, "offer": <id>}`, no buttons). After tomorrow the time names the date and weekday
 ("10월 20일 화요일 밤 9시에 전화할게요: …" / "I'll call you at 9:00 PM on Tuesday, October 20: …"). It is pinned and
-called off like any booked call; the app needs no change for it. A memo that asks for a time within 10 minutes of a
-call already booked joins that call: no second offer and no second notification. A memo that asks for a call now or
+called off like any booked call; the app needs no change for it. One that asks for a time within 10 minutes of a
+call already booked joins that call: no second offer and no second notification. One that asks for a call now or
 soon becomes a question (`asked`) instead.
 
 ## 5. Voices: `GET /voices?language=ko`

@@ -331,25 +331,36 @@ class OfferStore:
             raise AlreadyOffered(f"voice memo {', '.join(memos)} already had a call booked or offered "
                                  f"({earlier.id}, {earlier.state})")
 
-    def book_from_memo(self, topic: str, call_at: datetime, now: datetime, *, reason: str, memo_id: str,
-                       asked: str, inbox: str | None = None) -> tuple[Offer, bool]:
-        """The call a voice memo asks for, at the time it asks ("오늘 밤 9시에 전화해서 같이 정리하자"): the memo is the
-        user's yes, so it is booked, and the person can call it off in the app (meta/agent.py book_call). A memo
-        asking for a time within BOOKED_NEAR of a call already booked joins that call instead, which then reads it
-        too; the call keeps its time and topic (review of 2026-10-17, finding 3: two memos booked two calls at
-        21:00). Returns the offer, and whether the memo joined a call booked before."""
-        offer = Offer(id=self._new_id(now), state="booked", reason=reason, topic=topic, kind="voice note",
-                      call_at=_iso(call_at), inbox=inbox, memo_ids=[memo_id], asked=asked,
+    def book_from_input(self, topic: str, call_at: datetime, now: datetime, *, reason: str, asked: str,
+                        memo_id: str | None = None, conversation_id: int | None = None,
+                        inbox: str | None = None) -> tuple[Offer, bool]:
+        """The call the user asks for in a Bee input, a voice memo or a conversation, at the time they ask ("오늘 밤
+        9시에 전화해서 같이 정리하자"): their asking is their yes, so it is booked, and the person can call it off in
+        the app (meta/agent.py book_call). An input asking for a time within BOOKED_NEAR of a call already booked
+        joins that call instead, which then reads it too; the call keeps its time and topic (review of 2026-10-17,
+        finding 3: two memos booked two calls at 21:00). Returns the offer, and whether the input joined a call
+        booked before."""
+        memos = [memo_id] if memo_id else []
+        conversations = [conversation_id] if conversation_id is not None else []
+        offer = Offer(id=self._new_id(now), state="booked", reason=reason, topic=topic,
+                      kind="voice note" if memo_id else "conversation", call_at=_iso(call_at), inbox=inbox,
+                      memo_ids=memos, conversation_ids=conversations, asked=asked,
                       history=[{"at": _iso(now), "state": "booked"}])
         with self._lock():
             for earlier in self.all():
-                self._once([], [memo_id], earlier)
+                self._once(conversations, memos, earlier)
             near = next((o for o in self.all() if o.state == "booked" and o.at("call_at") is not None
                          and abs(o.at("call_at") - call_at) <= BOOKED_NEAR), None)
             if near is not None:
-                near.memo_ids = [*near.memo_ids, memo_id]
+                near.memo_ids = [*near.memo_ids, *memos]
+                near.conversation_ids = [*near.conversation_ids, *conversations]
                 return self._save(near), True
             return self._save(offer), False
+
+    def book_from_memo(self, topic: str, call_at: datetime, now: datetime, *, reason: str, memo_id: str,
+                       asked: str, inbox: str | None = None) -> tuple[Offer, bool]:
+        """The call a voice memo asks for (book_from_input)."""
+        return self.book_from_input(topic, call_at, now, reason=reason, asked=asked, memo_id=memo_id, inbox=inbox)
 
     def book(self, topic: str, call_at: datetime, now: datetime, continue_from: str | None = None,
              language: CallLanguage | None = None) -> Offer:
@@ -460,8 +471,9 @@ def agreed(offer: Offer) -> str:
     when = parse_time(said).strftime("%H:%M") if said else "earlier"
     if offer.source == "call":
         return f"the user asked for this call back during an earlier call, at {when}"
-    if offer.asked:  # booked from a voice memo
-        return f"the user asked for this call in a voice memo (\"{offer.asked}\"), and you booked it at {when}"
+    if offer.asked:  # booked from a Bee input that asks for it
+        source = "a voice memo" if offer.kind == "voice note" else "what Bee recorded of them"
+        return f"the user asked for this call in {source} (\"{offer.asked}\"), and you booked it at {when}"
     if any(h["state"] == "now" for h in offer.history):
         return f"the user tapped \"Call me now\" on your notification at {when}"
     return f"at {when} the user accepted the time your notification suggested"
@@ -529,8 +541,8 @@ def topic_line(topic: str | None, kind: str | None, language: str) -> str:
 
 
 def memo_booked_notification(offer: Offer, now: datetime, language: CallLanguage) -> dict[str, Any]:
-    """The one plain notification for a call a voice memo asked for: when the AI will call, about what, and that the
-    app can call it off. No buttons."""
+    """The one plain notification for a call the user asked for in a Bee input, a voice memo or a conversation: when
+    the AI will call, about what, and that the app can call it off. No buttons."""
     when = when_label(offer.at("call_at") or now, now, language)
     topic = topic_line(offer.topic, offer.kind, language.code)
     body = (f"{when}에 전화할게요: {topic}. 앱에서 취소할 수 있어요." if language.code == "ko"
