@@ -85,12 +85,63 @@ def _seconds(value: Any) -> float | None:
 
 @dataclass
 class OurCalls:
-    """What Bee recorded during our own calls, which is never read as new context (BC-060)."""
+    """What Bee recorded during our own calls, which is never read as new context (BC-060), and what our calls
+    wrote to Bee."""
     windows: list[tuple[float, float]]
+    workspace: Path | None = None
 
     @classmethod
     def of(cls, workspace: Path) -> "OurCalls":
-        return cls(our_call_windows(workspace))
+        return cls(our_call_windows(workspace), workspace)
+
+    def written_facts(self) -> set[int]:
+        """The facts our calls wrote on the user's yes (made, confirmed or corrected, and not taken back): the
+        user's own, not something Bee made of a call."""
+        if self.workspace is None:
+            return set()
+        from beelink.writer import BeeWrites, the_fact
+
+        written: set[int] = set()
+        for folder in call_folders(self.workspace):
+            if not (folder / "bee-writes.jsonl").exists():
+                continue
+            for write in BeeWrites(folder).all():
+                if write.status != "ok":
+                    continue
+                fact_id = the_fact(write.response).get("id") if write.kind == "fact_create" else write.item.get("fact_id")
+                if isinstance(fact_id, int) and write.kind in ("fact_create", "fact_confirm", "fact_update"):
+                    written.add(fact_id)
+        return written
+
+    def kept_facts(self, items: Any) -> list[Any]:
+        """Confirmed facts without those Bee made of our calls (as others()), but with the ones our calls wrote."""
+        written = self.written_facts()
+        return [item for item in items or [] if (isinstance(item, dict) and item.get("id") in written)
+                or not self.derived(item)]
+
+    def added_todos(self) -> list[dict[str, Any]]:
+        """The to-dos our calls added to Bee (todo_create, todo_accept) and did not take back or mark done, newest
+        first: {"id", "text", "added_at"}. Whether each is still open is Bee's to say (beelink/context.py)."""
+        if self.workspace is None:
+            return []
+        from beelink.writer import BeeWrites, made_todo  # the writer reads call folders as this module does
+
+        added: dict[int, dict[str, Any]] = {}
+        done: set[Any] = set()
+        for folder in call_folders(self.workspace):
+            if not (folder / "bee-writes.jsonl").exists():
+                continue
+            for write in BeeWrites(folder).all():
+                if write.status != "ok":
+                    continue
+                if write.kind in ("todo_create", "todo_accept"):
+                    todo = made_todo(write.response)
+                    if isinstance(todo.get("id"), int):
+                        added[todo["id"]] = {"id": todo["id"], "text": write.text or str(todo.get("text") or ""),
+                                             "added_at": write.began}
+                elif write.kind == "todo_complete":
+                    done.add(write.item.get("todo_id"))
+        return [todo for todo in reversed(list(added.values())) if todo["id"] not in done]
 
     def conversation(self, item: Any) -> bool:
         """A Bee conversation that overlaps one of our calls."""

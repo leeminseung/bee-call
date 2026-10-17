@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from beelink.planner import OFFERS_DIR, OUTBOUND_LOG
+from beelink.writer import KINDS, NOT_UNDOABLE
 from voice.audio_tags import strip_tags
 from voice.call_folders import CALL_ID, EVENTS, call_ids, read_events, session_id
 from voice.offers import topic_line
@@ -42,7 +43,6 @@ DEFAULT_LIMIT, MAX_LIMIT = 20, 50
 TITLE_CHARS = 60  # the person's first sentence as a title
 JOB_TITLE_CHARS = 40  # a job's title cut from its task, for jobs started before delegate took a title
 WRITES = "bee-writes.jsonl"  # beelink/writer.py
-KINDS = ("todo_create", "todo_accept", "fact_confirm", "fact_update")
 ENDED = ("user_initiated", "participant_disconnected", "task_completed")  # LiveKit's close reasons for a normal end
 BOOKKEEPING = ("request.md", "events.jsonl", "usage.json")  # a job folder's own files, never listed
 FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
@@ -578,7 +578,8 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
             shown = "failed" if retrying else "unknown"
         item = {"type": "bee_write", "id": write.id, "at": _iso(write.at or call.when(write.t), zone),
                 "kind": write.kind, "text": write.text, "state": shown,
-                "will_retry": live and write.state == "failed", "undoable": write is last_ok}
+                "will_retry": live and write.state == "failed",
+                "undoable": write is last_ok and write.kind not in NOT_UNDOABLE}
         placed.append(((write.t, write.line), item))
     placed.sort(key=lambda entry: entry[0])
     items: list[dict[str, Any]] = []

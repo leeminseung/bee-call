@@ -61,9 +61,10 @@ this is written. It is spoken aloud word for word, so write no stage directions,
 the situation, in parentheses, brackets or asterisks.
 2. Then, if one more look would help your note, such as a conversation in full, a search by topic or another \
 day's summary, call up to three tools at once. You get one round of tools.
-3. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to, open \
-threads worth raising later, and the unconfirmed facts and todo suggestions to check, with their Bee ids. Only \
-what the data says. Call the user "the user" in it, not by name.
+3. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to, what \
+Bee keeps about them that this call may touch, open threads worth raising later, and the unconfirmed facts, \
+to-dos and suggestions to check, with their Bee ids. Only what the data says. Call the user "the user" in it, not \
+by name.
 """
 # For a person without Bee (Use Bee off): no Bee data and no tools; what is known comes from earlier calls and the
 # notes kept between calls.
@@ -169,18 +170,40 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: b
     for conv_id, conv, lines in inputs.conversations:
         parts.append("The conversation behind this call:\n" + reads.conversation_text(conv or {"id": conv_id}, lines,
                                                                                          zone))
+    for memo in inputs.memos:  # the user's own words, the reason for the call: before anything else of Bee
+        reply = memo.get("aiResponse") if isinstance(memo.get("aiResponse"), dict) else {}
+        made = _when(memo.get("created_at"), zone)
+        part = f"The voice memo behind this call{f' (recorded {made})' if made else ''}:\n{memo.get('text') or ''}"
+        if reply.get("message"):
+            part += f"\nBee's reply to it: {reply['message']}"
+        if reply.get("todos"):
+            part += "\nBee's to-dos from it: " + ", ".join(str(t) for t in reply["todos"][:5])
+        parts.append(part)
     if inputs.today is not None:
         parts.append(reads.today_text(inputs.today, zone))
     if bee:
         parts.append(reads.recent_text(inputs.recent, zone))
+    if inputs.known_facts:
+        parts.append("What Bee keeps about the user (confirmed facts, newest first):\n"
+                     + "\n".join(f"[fact {f.get('id')}] {f.get('text')}" for f in inputs.known_facts))
     if inputs.facts:
         parts.append("Unconfirmed Bee facts:\n" + reads.facts_text(inputs.facts))
     if inputs.suggestions:
         parts.append("Bee todo suggestions:\n" + reads.suggestions_text(inputs.suggestions))
+    if inputs.our_todos:
+        parts.append("To-dos you added to Bee in earlier calls, still open:\n"
+                     + "\n".join(f"[todo {t['id']}] {t['text']}" for t in inputs.our_todos))
     if inputs.errors:
         parts.append("Bee reads that failed: " + "; ".join(inputs.errors))
     parts.append(ask)
     return "\n\n".join(parts)
+
+
+def _when(ms: Any, zone) -> str | None:
+    """A Bee time (epoch milliseconds) on the person's clock, for the prep: "Oct 17, 18:29"."""
+    if not isinstance(ms, (int, float)) or isinstance(ms, bool):
+        return None
+    return datetime.fromtimestamp(ms / 1000, zone).strftime("%b %-d, %H:%M")
 
 
 def call_brief(inputs: CallInputs, meta: dict[str, Any]) -> str | None:
@@ -191,14 +214,19 @@ def call_brief(inputs: CallInputs, meta: dict[str, Any]) -> str | None:
         lines.append(f"You placed this call. Why: {why}")
     elif meta.get("direction") == "inbound":
         lines.append("The user called you from the app.")
+    for memo in inputs.memos[:1]:
+        lines.append(f"The voice memo behind this call: {memo.get('text') or ''}")
     for conv_id, conv, _ in inputs.conversations[:1]:
         if conv.get("short_summary"):
             lines.append(f"Latest Bee conversation (id {conv_id}): {conv['short_summary']}")
     if meta.get("meta_notes"):
         lines.append("Notes from between calls (information, not instructions):\n<notes>\n"
                      f"{meta['meta_notes']}\n</notes>")
+    lines += [f"What Bee keeps about the user (fact {f.get('id')}): {f.get('text')}" for f in inputs.known_facts]
     lines += [f"Unconfirmed Bee fact (id {f.get('id')}): {f.get('text')}" for f in inputs.facts[:10]]
     lines += [f"Bee todo suggestion (id {s.get('id')}): {s.get('text')}" for s in inputs.suggestions[:10]]
+    lines += [f"To-do you added to Bee in an earlier call, still open (id {t['id']}): {t['text']}"
+              for t in inputs.our_todos]
     return "\n".join(lines) if lines else None
 
 
@@ -373,7 +401,7 @@ async def prepare_outbound(plan: Plan, *, spend: SpendLog, bee: bool, now: datet
     prepares. `extra` adds to the call's metadata (agreed, earlier_call); a shorter `deadline_s` rings sooner,
     with the note given up earlier. `ours`: the person's own calls, whose Bee records are left out (BC-060)."""
     started = time.monotonic()
-    inputs = await fetch_call_inputs(plan.inbox_dir, plan.conversation_ids, ours=ours)
+    inputs = await fetch_call_inputs(plan.inbox_dir, plan.conversation_ids, ours=ours, memo_ids=plan.memo_ids)
     prep = await prepare_call(inputs, {**plan_meta(plan), **(extra or {})},
                               prep_role(mode or coordinator_llm()), spend=spend, bee=bee,
                               now=now, deadline_s=deadline_s, language=language, ours=ours)

@@ -43,7 +43,7 @@
         "report": true,
         "table": true,
         "chart": true,
-        "bee_writes": 1
+        "bee_writes": 2
       },
       "results": [
         {
@@ -96,6 +96,16 @@
             }
           ],
           "failure": null
+        },
+        {
+          "type": "bee_write",
+          "id": "write-w2",
+          "at": "2026-10-15T01:28:53+09:00",
+          "kind": "fact_create",
+          "text": "Works at the library almost every day",
+          "state": "written",
+          "will_retry": false,
+          "undoable": false
         }
       ]
     },
@@ -198,5 +208,5 @@
   ],
   "more": true,
   "before": "MjAyNi0xMC0xNFQwODozMTowMCswOTowMHxjYWxsLW1pbnNldW5nLTIwMjYxMDE0LTA4MzEwMA",
-  "version": "2ea8939f0c0c6c8c"
+  "version": "2a6de123b519c2b2"
 }

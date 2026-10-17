@@ -310,8 +310,8 @@ were made) and `version`.
 | `id` | string | Such as `20261015-144102-a91f`. |
 | `state` | enum | `asked`: waiting for an answer, with the buttons "8:30에" (later), "지금" (now) and "괜찮아요" (decline). `booked`: agreed for `call_at`, can be called off. `calling`: being placed now, can no longer be called off (the server's own `now` and `placing` states read as `calling`). |
 | `topic` | string | What it is about, in the person's language. Never null: when the offer has no topic of its own, the server writes the line its notification uses ("새 음성 메모 이야기", "오늘 하루 이야기"), so the app keeps no fallback of its own. |
-| `created_at` | time | When it was asked, or booked out loud in a call. |
-| `suggested_at` | time or null | The time a question suggests. Null for a call booked out loud in a call. |
+| `created_at` | time | When it was asked, or booked out loud in a call or in a voice memo. |
+| `suggested_at` | time or null | The time a question suggests. Null for a call booked out loud in a call or in a voice memo. |
 | `call_at` | time or null | When it rings, once agreed: the booked time the pinned row shows. Null while asked. |
 
 Deprecated, for pre-D builds only: `suggested_epoch`, `call_epoch`, and `kind` and `source`, which those builds
@@ -321,6 +321,16 @@ Answering: `POST /offers/{offer_id}` with `{"choice": "later" | "now" | "decline
 `{"offer": ...}` (`schemas/offer-answer.json`, state `booked`, `calling` or `declined`). "decline" also calls off a
 booked call ("전화 취소") until its room is being made. Errors: 404 unknown offer (checked first), 400 another
 choice, 409 closed or already answered, 401.
+
+A voice memo can book a call too (since 2026-10-17): when the person's memo asks for a call at a time ("오늘 밤 9시에
+전화해서 같이 정리하자"), the server books it, as `booked` with that `call_at` and a topic in the person's language,
+and sends one plain notification, "오늘 밤 9시에 전화할게요: {topic}. 앱에서 취소할 수 있어요." / "I'll call you at 9:00 PM
+today: {topic}. You can call it off in the app." (`{"aps": {"alert": {"title": "Bee Call", "body": ...}, "sound":
+"default", "thread-id": "offers"}, "offer": <id>}`, no buttons). After tomorrow the time names the date and weekday
+("10월 20일 화요일 밤 9시에 전화할게요: …" / "I'll call you at 9:00 PM on Tuesday, October 20: …"). It is pinned and
+called off like any booked call; the app needs no change for it. A memo that asks for a time within 10 minutes of a
+call already booked joins that call: no second offer and no second notification. A memo that asks for a call now or
+soon becomes a question (`asked`) instead.
 
 ## 5. Voices: `GET /voices?language=ko`
 
@@ -433,6 +443,7 @@ server held (DECISIONS 2026-10-15: the friend's calls stayed in English until th
 | "작업 중 · 1분 10초째" card | `job` running: `title`, `started_at`, `step` |
 | "방금 끝남 · 1분 27초 걸림" card | `job` done: `at`, `duration_s`, `title`, `summary`, `files` (chart `title` and `image_url`, chips) |
 | "결과가 나왔어요: …" notification after the call | A job that ended after its call (section 2.7) |
+| "오늘 밤 9시에 전화할게요: …" notification | A call a voice memo asked for (section 4), pinned as `booked` |
 | Record sheet header and "정상 종료" | `call` |
 | "통화 전에 Bee에서 본 것" | `prep` |
 | "통화 끝 · 7분 40초" | `call.state`, `call.duration_s` |

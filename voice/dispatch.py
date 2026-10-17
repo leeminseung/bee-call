@@ -108,7 +108,7 @@ def call_metadata(direction: str, plan: Plan | None = None, prep: dict[str, Any]
         data.update({"inbox": str(plan.inbox_dir) if plan.inbox_dir else None,
                      "plan": str(plan.path) if plan.path else None,
                      "conversation_ids": plan.conversation_ids, "reason": plan.reason, "topic": plan.topic,
-                     "kind": plan.kind})
+                     "kind": plan.kind, "memo_ids": plan.memo_ids})
     if prep is not None:
         data["prep"] = prep
     return json.dumps(data, ensure_ascii=False)

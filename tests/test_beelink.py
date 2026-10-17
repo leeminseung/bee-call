@@ -13,7 +13,9 @@ from tests.helpers import SEOUL
 from beelink.watcher import BeeWatcher, parse_stream_line
 
 FAKE_BEE = Path(__file__).parent / "fakebee" / "bee"
-WRITE_COMMANDS = {("facts", "confirm"), ("facts", "update"), ("todos", "create"), ("todos", "accept-suggestion")}
+WRITE_COMMANDS = {("facts", "confirm"), ("facts", "update"), ("facts", "create"), ("facts", "delete"),
+                  ("todos", "create"), ("todos", "accept-suggestion"), ("todos", "complete"),
+                  ("todos", "update"), ("todos", "dismiss-suggestion")}
 
 
 @pytest.fixture
@@ -311,11 +313,93 @@ def test_a_new_event_never_cancels_a_call_being_placed(tmp_path, fake_bee, monke
         watcher.on_event("update-conversation-summary")  # as bee stream reports them (server review 16)
         await asyncio.sleep(0.15)  # past the quiet period: the first catch-up is placing its call
         watcher.on_event("journal-created")
-        watcher.on_event("journal-text")  # not a settled change: it starts nothing
+        watcher.on_event("journal-text")  # a piece of the memo's text: the quiet period starts over, for the memo
         await asyncio.sleep(1.0)
 
     asyncio.run(main())
     assert finished == ["update-conversation-summary", "journal-created"]
+
+
+def test_a_voice_memo_is_looked_at_once_its_text_stopped_coming(tmp_path, fake_bee, monkeypatch):
+    """2026-10-17: a memo's text arrives in pieces (journal-text) after journal-created, and Bee's reply to it later
+    (journal-updated): each piece starts the quiet period over, so the catch-up sees the finished memo."""
+    from beelink.watcher import STREAM_TYPES
+
+    assert "journal-updated" in STREAM_TYPES.split(",") and "journal-text" in STREAM_TYPES.split(",")
+    workspace = tmp_path / "workspace"
+    one_conversation(tmp_path, monkeypatch)
+    seen = []
+
+    async def on_trigger(trigger):
+        seen.append((trigger.reason, time.monotonic()))
+
+    async def main():
+        watcher = BeeWatcher(workspace, on_trigger, debounce=0.15)
+        watcher.on_event("journal-created")
+        for _ in range(5):
+            await asyncio.sleep(0.08)  # shorter than the quiet period
+            watcher.on_event("journal-text")
+        last = time.monotonic()
+        watcher.on_event("journal-updated")  # Bee's reply came
+        await asyncio.sleep(0.6)
+        return last
+
+    last = asyncio.run(main())
+    assert [reason for reason, _ in seen] == ["journal-created"] and seen[0][1] >= last + 0.14
+
+
+def test_a_burst_of_events_that_never_stops_is_looked_at_within_the_longest_wait(tmp_path, fake_bee, monkeypatch):
+    """Review of 2026-10-17, finding 6: with an event every 0.2 s and a 0.3 s quiet period, nothing was looked at
+    until the events stopped. A conversation Bee keeps updating is looked at once the longest wait is up; a voice
+    memo's pieces still start the quiet period over (above), since a memo ends."""
+    workspace = tmp_path / "workspace"
+    one_conversation(tmp_path, monkeypatch)
+    seen = []
+
+    async def on_trigger(trigger):
+        seen.append(time.monotonic())
+
+    async def main():
+        watcher = BeeWatcher(workspace, on_trigger, debounce=0.3, longest_wait=1.0)
+        started = time.monotonic()
+        while time.monotonic() - started < 2.5:
+            watcher.on_event("update-conversation")
+            await asyncio.sleep(0.2)
+        return started
+
+    started = asyncio.run(main())
+    assert seen and seen[0] - started < 1.4
+
+
+def test_the_longest_wait_never_cuts_a_voice_memo_still_coming_in(tmp_path, fake_bee, monkeypatch):
+    """Second review of 2026-10-17, finding 2: once the longest wait was up, a conversation event started a catch-up at
+    once, while the memo's text was still coming in, and the meta agent read the memo unfinished. A catch-up the
+    longest wait brings forward still waits the quiet period after the memo's last piece."""
+    workspace = tmp_path / "workspace"
+    one_conversation(tmp_path, monkeypatch)
+    seen = []
+
+    async def on_trigger(trigger):
+        seen.append(time.monotonic())
+
+    async def main():
+        watcher = BeeWatcher(workspace, on_trigger, debounce=0.3, longest_wait=1.0)
+        started = time.monotonic()
+        watcher.on_event("journal-created")
+        last, sent = started, []
+        while time.monotonic() - started < 1.3:
+            await asyncio.sleep(0.1)
+            if time.monotonic() - started > 1.15 and not sent:
+                sent.append(True)
+                watcher.on_event("update-conversation-summary")  # past the longest wait, mid-memo
+                await asyncio.sleep(0.05)  # time for a catch-up to start, before the memo's next piece
+            watcher.on_event("journal-text")
+            last = time.monotonic()
+        await asyncio.sleep(0.8)
+        return last
+
+    last = asyncio.run(main())
+    assert len(seen) == 1 and seen[0] >= last + 0.25
 
 
 def test_the_bee_login_link_is_read_as_the_readme_documents(tmp_path, monkeypatch):
@@ -341,3 +425,106 @@ def test_the_bee_login_link_is_read_as_the_readme_documents(tmp_path, monkeypatc
         else:
             with pytest.raises(cli.BeeError):
                 asyncio.run(cli.start_login(folder))
+
+
+def our_todo_call(workspace: Path, *writes: dict) -> Path:
+    """An earlier call of ours, ended two days ago, with these Bee writes (bee-writes.jsonl lines)."""
+    started = datetime.fromtimestamp(time.time() - 2 * 86400)
+    make_session(workspace, started, 120)
+    folder = workspace / started.strftime("%Y-%m-%d") / started.strftime("%H%M")
+    (folder / "bee-writes.jsonl").write_text("".join(json.dumps(w, ensure_ascii=False) + "\n" for w in writes))
+    return folder
+
+
+def todo_write(key: str, todo_id: int, text: str, *after: str) -> list[dict]:
+    lines = [{"key": key, "status": "applying", "item": {"kind": "todo_create", "text": text}, "question": "q",
+              "answer": "a", "at": "2026-10-15T20:00:00+09:00"},
+             {"key": key, "status": "ok", "response": {"todo": {"id": todo_id, "text": text, "created_at": 1,
+                                                                "completed": False}}, "at": "2026-10-15T20:00:01+09:00"}]
+    return lines + [{"key": key, "status": status, "at": "2026-10-15T20:00:05+09:00"} for status in after]
+
+
+def test_a_call_reads_the_to_dos_our_earlier_calls_added_that_are_still_open(tmp_path, fake_bee, monkeypatch):
+    """2026-10-17: the prep reads open to-dos Bee Call made earlier, so a later call can ask whether one is done. A
+    to-do taken back in its call, or marked done since, is left out. One page of Bee's to-dos is read for all of
+    them (review of 2026-10-17, finding 7: one `todos get` each made up to 21 Bee processes start at once before a
+    call); one not on that page is left out, as one Bee could not be asked about is."""
+    from beelink.calls import OurCalls
+
+    workspace = tmp_path / "workspace"
+    our_todo_call(workspace, *todo_write("w1", 99, "삼각대 주문하기"), *todo_write("w2", 100, "Call Dana", "undone"),
+                  *todo_write("w3", 101, "Email Jun"))
+    todos = tmp_path / "todos.json"
+    todos.write_text(json.dumps([{"id": 99, "text": "Order the camera tripod", "created_at": 1, "completed": False},
+                                 {"id": 100, "text": "Call Dana", "created_at": 1, "completed": False}]))
+    monkeypatch.setenv("FAKE_BEE_TODOS", str(todos))
+    inputs = asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
+    assert [(t["id"], t["text"]) for t in inputs.our_todos] == [(99, "Order the camera tripod")]  # as Bee has it now
+    assert [c[:2] for c in calls(fake_bee)].count(["todos", "list"]) == 1
+    assert not [c for c in calls(fake_bee) if c[:2] == ["todos", "get"]]
+    todos.write_text(json.dumps([{"id": 99, "text": "Order the camera tripod", "created_at": 1, "completed": True}]))
+    assert asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace))).our_todos == []
+    assert asyncio.run(context.fetch_call_inputs()).our_todos == []  # without our calls, nothing of them is read
+
+
+def test_our_to_dos_are_looked_for_past_bee_s_first_page(tmp_path, fake_bee, monkeypatch):
+    """Second review of 2026-10-17, finding 5: one page of 50 to-dos was read, so ours past it (Bee promises no order)
+    were left out without a word. The pages are read one after another until all of ours are found, at most
+    OUR_TODO_PAGES of them, within one read's time."""
+    from beelink.calls import OurCalls
+
+    workspace = tmp_path / "workspace"
+    our_todo_call(workspace, *todo_write("w1", 161, "Order the camera tripod"))
+    todos = tmp_path / "todos.json"
+    todos.write_text(json.dumps([{"id": 100 + n, "text": f"Todo {n}", "created_at": 1, "completed": n % 2 == 0}
+                                 for n in range(61)] + [{"id": 161, "text": "Order the camera tripod", "created_at": 2,
+                                                          "completed": False}] +
+                                [{"id": 300 + n, "text": "later", "created_at": 3, "completed": False} for n in range(60)]))
+    monkeypatch.setenv("FAKE_BEE_TODOS", str(todos))
+    inputs = asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
+    assert [t["id"] for t in inputs.our_todos] == [161] and inputs.errors == []
+    assert [c[:2] for c in calls(fake_bee)].count(["todos", "list"]) == 2  # found on page 2: page 3 is not read
+
+
+def test_the_prep_and_the_plain_context_list_our_open_to_dos(tmp_path):
+    from voice.prep import call_brief, seed_text
+
+    inputs = context.CallInputs(our_todos=[{"id": 99, "text": "삼각대 주문하기", "added_at": "2026-10-15T20:00:01+09:00"}])
+    seed = seed_text(inputs, {"direction": "inbound"}, datetime.now().astimezone(), bee=True)
+    assert "To-dos you added to Bee in earlier calls, still open:\n[todo 99] 삼각대 주문하기" in seed
+    assert "To-do you added to Bee in an earlier call, still open (id 99): 삼각대 주문하기" in call_brief(inputs, {})
+
+
+def test_a_call_reads_what_bee_keeps_about_the_user_newest_first(tmp_path, fake_bee, monkeypatch):
+    """2026-10-17: the prep reads the person's confirmed facts (bee facts list), newest first and at most
+    MAX_KNOWN_FACTS, so a later call can bring up something kept in an earlier one. What Bee made of our calls stays
+    out as before (BC-060), except a fact one of our calls wrote on the user's yes: that one is theirs."""
+    from beelink.calls import OurCalls
+
+    workspace = tmp_path / "workspace"
+    started = datetime.fromtimestamp(time.time() - 2 * 86400)
+    our_todo_call(workspace, {"key": "w1", "status": "applying", "item": {"kind": "fact_create", "text": "땅콩 알레르기가 있다"},
+                              "question": "q", "answer": "a", "at": "2026-10-15T20:00:00+09:00"},
+                  {"key": "w1", "status": "ok", "response": {"fact": {"id": 301, "text": "땅콩 알레르기가 있다"}},
+                   "at": "2026-10-15T20:00:01+09:00"})
+    during = int((started.timestamp() + 60) * 1000)  # inside that call
+    facts = [{"id": 300 + n, "text": f"Fact {n}", "created_at": int(time.time() * 1000) - n * 86400000,
+              "confirmed": True, "tags": []} for n in range(12)]
+    facts[1] = {"id": 301, "text": "땅콩 알레르기가 있다", "created_at": during, "confirmed": True, "tags": []}
+    facts[2] = {"id": 302, "text": "Bee heard this in our call", "created_at": during, "confirmed": True, "tags": []}
+    (tmp_path / "facts.json").write_text(json.dumps(facts[::-1], ensure_ascii=False))  # Bee promises no order
+    monkeypatch.setenv("FAKE_BEE_FACTS", str(tmp_path / "facts.json"))
+    inputs = asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
+    assert context.MAX_KNOWN_FACTS == 8
+    assert [f["id"] for f in inputs.known_facts] == [300, 301, 303, 304, 305, 306, 307, 308]  # 302: Bee's, of our call
+    assert ["facts", "list", "--limit", str(context.KNOWN_FACTS_READ), "--json"] in calls(fake_bee)
+    assert asyncio.run(context.fetch_call_inputs()).known_facts[0]["id"] == 300
+
+
+def test_the_prep_and_the_plain_context_carry_what_bee_keeps(tmp_path):
+    from voice.prep import call_brief, seed_text
+
+    inputs = context.CallInputs(known_facts=[{"id": 301, "text": "땅콩 알레르기가 있다"}])
+    seed = seed_text(inputs, {"direction": "inbound"}, datetime.now().astimezone(), bee=True)
+    assert "What Bee keeps about the user (confirmed facts, newest first):\n[fact 301] 땅콩 알레르기가 있다" in seed
+    assert "What Bee keeps about the user (fact 301): 땅콩 알레르기가 있다" in call_brief(inputs, {})

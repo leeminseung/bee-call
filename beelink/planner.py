@@ -48,6 +48,7 @@ class Plan:
     topic: str | None = None  # what the call is about, in Bee's words (its short summary)
     kind: str | None = None  # "conversation" or "voice note"
     path: Path | None = None  # plan.md
+    memo_ids: list[str] = field(default_factory=list)  # the voice memos (Bee journals) behind it
 
 
 def call_in_progress(workspace: Path, now: datetime) -> bool:

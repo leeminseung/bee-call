@@ -25,10 +25,11 @@ from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_inst
 from beelink import reads
 from beelink.calls import OurCalls
 from beelink.clock import now_text
-from beelink.writer import KINDS, BeeWrites, event_fields, item_label, label
+from beelink.writer import AS_BEE_HAS_IT, KINDS, NOT_UNDOABLE, BeeWrites, as_bee_has_it, event_fields, item_label, label
 from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
 from voice.recorder import CallRecorder
+from voice.said import said_in
 from voice.audio_tags import SPOKEN, without_tags
 from voice.costs import DayBudget
 from voice.speech_filter import SpeechFilter
@@ -37,11 +38,12 @@ from worker.runner import JobNotification, JobRunner, short
 
 # How the call AI may write sounds (voice/audio_tags.py): no tags at all, or, when its voice performs them, a few
 # ElevenLabs audio tags used sparingly. One of the "instructions for speech that sounds real" to tune by ear.
-SPEECH_RULE = ('- Write only words to say: no stage directions, sound effects or descriptions of the situation, in '
-               'parentheses, brackets or asterisks, such as "(pauses)", "[laughs]" or "*sighs*".')
+SPEECH_RULE = ('- Write only words to say: no notes to yourself about what to do next, and no stage directions, '
+               'sound effects or descriptions of the situation, in parentheses, brackets or asterisks, such as '
+               '"(pauses)", "[laughs]" or "*sighs*".')
 SPEECH_RULE_WITH_TAGS = (
-    '- Write only words to say: no stage directions or descriptions of the situation, in parentheses, brackets or '
-    'asterisks, such as "(pauses)" or "*smiles*". Your voice can make a few sounds, written exactly as these tags: '
+    '- Write only words to say: no notes to yourself about what to do next, and no stage directions or descriptions '
+    'of the situation, in parentheses, brackets or asterisks, such as "(pauses)" or "*smiles*". Your voice can make a few sounds, written exactly as these tags: '
     + ", ".join(f"[{tag}]" for tag in SPOKEN) + '. Use them sparingly, only where a person on the phone would make '
     'that sound: at most one in a reply, and most replies have none. Put a tag where the sound happens, as in '
     '"[laughs] That\'s a good one."')
@@ -112,22 +114,41 @@ the user's day yourself; what they tell you is all you know of it.
 """
 # For a person who connected Bee: the note is from Bee, and the call can read and save Bee.
 BEE_NOTE_RULES = """\
-The user wears Bee, a wearable that records and summarizes their conversations. The call prep note at the end of \
-these instructions is what was looked up in Bee just before the call. Bring up things from it only when they \
-connect to what the user is talking about, or once the user's own topic is done. Never interrupt the user's topic \
-with them. For more from Bee during the call, use bee_today, bee_conversation and search_bee.
-Saving to Bee happens right away, in the call, in three steps. First call propose_bee_save with the item, \
-written in the user's language. Then ask one question that names Bee and, in the question itself, quotes the \
-item exactly as you proposed it, such as "Shall I add 'Note the bug' to your Bee todos?" (write Bee as "Bee" in \
-every language, as in "Bee에 할 일로 '버그 기록'을 넣을까요?"). Only after a clear yes to that question, call \
-save_to_bee with the number propose_bee_save gave, then tell the user in a few words what you saved. A yes to any \
-other question, or one given before you proposed the item, is no yes to saving; only the answer to your first \
-question about an item counts, so to ask again, propose it again first. If the user asks you to take it out, call \
-undo_bee_write. If saving does not go through, say what save_to_bee tells you to say.
-When the prep note lists unconfirmed Bee facts, check them at a natural moment: propose a fact_confirm with the \
-fact as Bee has it, then ask, quoting it in the question itself, for example "Did Bee hear 'Bonus is 15%' \
-right?" If the user agrees, save it. If they correct it, propose a fact_update with the corrected text, ask \
-whether to fix it in Bee, quoting the new text, and after a yes save it.
+The user wears Bee, a wearable that records and summarizes their conversations and keeps their voice memos. The \
+call prep note at the end of these instructions is what was looked up in Bee just before the call. Bring up things \
+from it only when they connect to what the user is talking about, or once the user's own topic is done. Never \
+interrupt the user's topic with them. For more from Bee during the call, use bee_today, bee_conversation and \
+search_bee.
+Bee is the user's memory. What Bee keeps about the user (in the prep note) is what they told it: mention a kept fact \
+when it connects to what they are talking about, as someone who remembers would, never as a list. Help keep that \
+memory accurate and tidy, without turning the call into a review of Bee. For example:
+- When the user says something lasting about themselves, even in passing ("참고로 나 매운 거 못 먹어": a \
+preference, a routine, an allergy, where they work), offer once, in your reply to it, to keep it in Bee \
+(fact_create), rather than saying you will remember it: "Shall I keep 'Can't eat spicy food' in Bee?", or, in a \
+Korean call, "Bee에 'Can't eat spicy food'로 기억해 둘까요?"
+- When the prep note lists an unconfirmed Bee fact, check it at a natural moment (fact_confirm), quoting it as Bee \
+has it: "Did Bee hear 'Bonus is 15%' right?" If the user corrects it, offer to fix it (fact_update, quoting the new \
+text); if it should not be there at all, offer to delete it (fact_delete).
+- When the user says they did what an open Bee to-do is about ("그거 주문했어"), offer to mark it done \
+(todo_complete). To-dos you added to Bee in earlier calls are in the prep note: ask whether one is done only when \
+it fits.
+- When the user wants something done later, offer a to-do (todo_create); take one Bee suggested (todo_accept) or \
+turn it down (todo_dismiss) when they say so.
+Ask about Bee at most twice in a call, unless the user brings Bee up, and never twice about the same item.
+Write every Bee item in English, Bee's language, whatever the call's language: Bee keeps the user's memory in \
+English. To confirm, mark done, take or delete what Bee has, keep its text as Bee has it, and write a correction in \
+English.
+Changing Bee happens right away, in the call. The user can agree only to words they heard, so an offer to change Bee \
+is one reply that does two things: first it calls propose_bee_save with the item, which changes nothing in Bee yet, \
+before saying anything about Bee; then it asks one question, in the call's language, that names Bee and, in the \
+question itself, quotes the item exactly as you proposed it, such as "Shall I add 'Note the bug' to your Bee todos?" or "Bee에 'My home server has to be \
+quiet'로 기억해 둘까요?" (write Bee as "Bee" in every language). Never ask in other words first ("Want me to save \
+that to Bee?"): a yes to a question that does not quote the item saves nothing, and the user has to say yes twice. \
+Only after a clear yes to your question, call save_to_bee with the number propose_bee_save gave, then tell the user \
+in a few words what you did. A yes to any other question is no yes; only the answer to your first question about an \
+item counts, so to ask again, propose it again first. If the user asks you to take it back, call undo_bee_write (a \
+deleted fact or a dismissed suggestion cannot be brought back). If it does not go through, say what save_to_bee \
+tells you to say.
 """
 
 NOTE_WAIT_S = 2.0  # the first reply waits at most this long for a prep note still being written (arbitrary)
@@ -135,7 +156,6 @@ NOTE_WAIT_S = 2.0  # the first reply waits at most this long for a prep note sti
 # call has been silent this long, so the caller does not think it dropped (Matt, 2026-10-15). One rule for
 # every such tool; how long they may wait at most is beelink/cli.py CALL_WAIT_S.
 WAITING_LINE_AFTER_S = 2.0
-HANGUL = re.compile(r"[\uac00-\ud7a3]")
 QUESTION = re.compile(r"[?？]")
 NAMES_BEE = re.compile(r"(?<![A-Za-z])Bee(?![a-z]| Call)")  # "Bee", "Bee에"; not "been", "beer" or "Bee Call"
 # A sentence of the answer that starts by saying no. Such an answer never counts as a yes to saving, whatever the
@@ -149,6 +169,29 @@ AFFIRMATIVE = re.compile(r"^\W*(?:(?:음|어|아|그|저|um|uh|hmm|well|oh)\W+)?
                          r"absolutely\b|of course\b|sounds good\b|that'?s right\b|right\b|correct\b|"
                          r"네|넵|넹|예|응|그래|그럼|좋아|좋습니다|좋네요|넣어|해 ?줘|해 ?주세요|맞아|맞습니다|그렇게|부탁|"
                          r"물론|당연|오케이)", re.IGNORECASE)
+# Words anywhere in the answer that take its yes back: "Yes. Actually no, don't delete it.", "Yeah wait no, keep
+# it.", "네, 아 잠깐만요 지우지 마세요." (review of 2026-10-17, finding 1: each of these deleted the fact). "아니야"
+# takes it back only as a word of its own, at a clause's start or right after the yes ("응, 아니다", "응 아니야"),
+# not after a noun, where it says what something is not ("급한 건 아니야").
+TAKES_IT_BACK = re.compile(r"\b(?:wait,? no|no,? wait|actually,? no|actually,? don'?t|never ?mind|scratch that|"
+                           r"forget (?:it|that)|on second thought|hold on|i mean,? no)\b|잠깐(?:만|[\s,.!?…]|$)|잠시만|"
+                           r"(?:^|[,.!?…]\s*|(?:응|네|예|어|그래|좋아)\s+)(?:아\s+)?(?:아니다|아니야|아냐|아니요|아뇨|아니)"
+                           r"(?=[\s,.!?…]|$)", re.IGNORECASE)
+# What cannot be undone needs a plain yes: the answer, in letters only, is made of nothing but yes words, fillers, the
+# asked-for verb and the words around a request (second review of 2026-10-17, finding 1: no list of take-backs holds
+# them all; "네, 잠시만요, 지우지 마세요." and "Yes. Sorry, I mean no." deleted the fact). Anything more, and the AI
+# asks again.
+PLAIN_YES = re.compile(
+    r"^(?:음|어|아|오|um|uh|hmm|well|oh|"
+    r"응|네|예|넵|넹|그래|그래요|좋아|좋아요|오케이|맞아|맞아요|그럼|그럼요|물론|yes|yeah|yep|yup|sure|ok|okay|right|"
+    r"absolutely|ofcourse|please|goahead|doit|"
+    r"그거|그것|그걸|이거|그냥|지금|it|that|this|one|now|"
+    r"지워|지우자|삭제|삭제해|없애|빼|delete|remove|dismiss|takeitout|getridof|drop|"
+    r"해|줘|줘요|주세요|주라|요|부탁해|부탁해요|부탁드려요|thanks|thankyou|고마워|고마워요)+$")
+# The question about what cannot be undone has to say it deletes or removes (second review of 2026-10-17, finding
+# 4: a fact_delete proposed, then "Did Bee hear 'Bonus is 15%' right?" "Yes, that's right." deleted the fact).
+SAYS_IT_REMOVES = re.compile(r"\b(?:delete|remove|dismiss|take (?:it )?out|get rid of|drop|turn (?:it )?down)|"
+                             r"지우|지울|지워|삭제|빼|뺄|없애", re.IGNORECASE)
 SENTENCES = re.compile(r"(?<=[.!?。])\s+|\n")
 QUOTES = "'\"‘’“”「」『』«»"
 EXPIRED = "expired"  # a proposal whose question was answered and passed (BeeCoordinator._answer_to)
@@ -156,8 +199,22 @@ EXPIRED = "expired"  # a proposal whose question was answered and passed (BeeCoo
 # language.
 ASK_LIKE = {"todo_create": "Shall I add '{text}' to your Bee todos?",
             "todo_accept": "Shall I add Bee's suggested todo '{text}'?",
+            "todo_complete": "Shall I mark '{text}' done in Bee?",
+            "todo_dismiss": "Shall I remove Bee's suggestion '{text}'?",
+            "fact_create": "Shall I keep '{text}' in Bee?",
             "fact_confirm": "Did Bee hear '{text}' right?",
-            "fact_update": "Shall I fix it in Bee to '{text}'?"}
+            "fact_update": "Shall I fix it in Bee to '{text}'?",
+            "fact_delete": "Shall I delete '{text}' from Bee?"}
+# The same questions for a Korean call: the English item inside the Korean question, which ends with it (the save
+# check needs the quote in the question; a measured call asked "Bee에 기억해 둘까요?" and quoted the item after it).
+ASK_LIKE_KO = {"todo_create": "Bee 할 일로 '{text}' 넣을까요?",
+               "todo_accept": "Bee가 제안한 할 일 '{text}', 넣을까요?",
+               "todo_complete": "Bee에서 '{text}' 끝난 걸로 할까요?",
+               "todo_dismiss": "Bee가 제안한 '{text}', 뺄까요?",
+               "fact_create": "Bee에 '{text}' 기억해 둘까요?",
+               "fact_confirm": "Bee가 '{text}'라고 들었는데, 맞아요?",
+               "fact_update": "Bee에서 '{text}'로 고칠까요?",
+               "fact_delete": "Bee에서 '{text}' 지울까요?"}
 ENGLISH = call_language("en")  # what the tools tell the model is in English, like the rest of its instructions
 
 
@@ -200,42 +257,6 @@ def keep_reply(reply: dict[str, Any], chunk: Any) -> None:
             reply["tool_calls"].append({"name": call.name, "arguments": call.arguments, "call_id": call.call_id})
         if chunk.usage:
             reply["usage"] = chunk.usage.model_dump(mode="json")
-
-
-# What ends a sentence or a clause in what the user said, for book_call's `asked` (a turn's end does too). A dot
-# ends one only before a space or the end, so "7 a.m." and "U.S." stay whole.
-CLAUSE_END = re.compile(r"(?:[!?。？！…,，、;\n]|\.(?=\s|$))+")
-# What takes back the request it follows in the same turn: "Call me at nine. Wait, no.", "Call me at 9 a.m. no
-# actually don't.", "내일 아침 9시에 전화해 줘. 아니다, 하지 마." Words that only add to it take nothing back ("No rush
-# though.", "Don't be late.", "Not earlier, please.", "아니면 10시도 괜찮아.").
-TAKEN_BACK = re.compile(
-    r"^\W*(?:no(?=\s*(?:[,.!?]|$)|\s+(?:wait|actually|don'?t|do not|never|cancel|forget|scratch|not)\b)|nope\b|nah\b|"
-    r"(?:don'?t|do not)(?=\s*(?:[,.!?]|$)|\s+(?:call|bother|do it|worry about it)\b)|never ?mind\b|wait,? no\b|"
-    r"actually,? no\b|cancel\b|forget it\b|scratch that\b|not now\b|"
-    r"아니(?:다|야|요)?(?=[\s,.!?]|$)|아냐|아뇨|하지 ?마|하지 ?말|취소)", re.IGNORECASE)
-# Words that turn around the words beside them: "Don't call me back", "No need to call", "전화 안 해도 돼요".
-NEGATION = re.compile(r"\b(?:no|not|never|nope|dont|cannot)\b|n['’]t\b|(?<!\S)(?:안|못)(?!\S)", re.IGNORECASE)
-HANGUL = re.compile(r"[\uac00-\ud7a3\u3131-\u318e]")
-
-
-def _letters(text: str) -> str:
-    """Text as it is compared for book_call: letters and digits only, in lower case."""
-    return "".join(c for c in text.casefold() if c.isalnum())
-
-
-def _lead(text: str, letters: int) -> str:
-    """The start of `text` that holds its first `letters` letters and digits, as _letters counts them."""
-    count = 0
-    for i, c in enumerate(text):
-        if count >= letters:
-            return text[:i]
-        count += len(_letters(c))
-    return text
-
-
-def _tail(text: str, letters: int) -> str:
-    """The end of `text` that holds its last `letters` letters and digits."""
-    return _lead(text[::-1], letters)[::-1]
 
 
 def job_notification(news: JobNotification) -> str:
@@ -536,49 +557,8 @@ class Coordinator(Agent):
                 if getattr(item, "type", None) == "message" and item.role == "user"]
 
     def _user_said(self, words: Any) -> bool:
-        """Whether `words` are what the user said in this call (punctuation, spacing and case aside): most of a
-        sentence or a clause between commas, or of several in a row (an answer split at pauses, over turns too).
-        What they leave out of the first may be a lead-in such as "so" or "그럼", and of the last an English tail
-        such as "about the dentist", but never a "not", a "don't" or a "안", and never the end of Korean words, where
-        Korean says no: "call me back" out of "Don't call me back." is refused, and so are "내일은 전화하지" out of
-        "내일은 전화하지 마세요." and "전화" out of "아니요, 전화는 안 해도 돼요.". Words the rest of the same turn
-        takes back are refused too ("Call me at nine. Wait, no.", TAKEN_BACK). Whether the words ask for a call stays
-        the call AI's reading."""
-        wanted = _letters(words) if isinstance(words, str) else ""
-        if not wanted:
-            return False
-        turns = self._user_turns()
-        # Each piece: its text, its letters, and the rest of the same turn after it (all of it: "Wait, no." is split
-        # at its comma), which may take back words that end in this piece.
-        pieces: list[tuple[str, str, str | None]] = []
-        for turn in turns:
-            spans, at = [], 0
-            for mark in CLAUSE_END.finditer(turn):
-                spans.append((at, mark.start()))
-                at = mark.end()
-            spans.append((at, len(turn)))
-            for start, end in spans:
-                part = turn[start:end]
-                if not _letters(part):
-                    continue
-                rest = turn[end:]
-                pieces.append((part, _letters(part), rest if _letters(rest) else None))
-        for start, (first_text, first, _) in enumerate(pieces):
-            run = ""
-            for last_text, last, next_text in pieces[start:]:
-                run += last
-                if len(run) > 2 * len(wanted):  # the words would be less than half of what the user said
-                    break
-                at = run.find(wanted)
-                while at != -1:
-                    after = len(run) - at - len(wanted)
-                    if at < len(first) and after < len(last):  # within the first piece and the last one
-                        lead, tail = _lead(first_text, at), _tail(last_text, after)  # what the words leave out
-                        if not NEGATION.search(f"{lead} {tail}") and not HANGUL.search(tail) \
-                                and not (next_text and TAKEN_BACK.search(next_text)):
-                            return True
-                    at = run.find(wanted, at + 1)
-        return False
+        """Whether `words` are what the user said in this call (voice/said.py)."""
+        return said_in(self._user_turns(), words)
 
     @function_tool
     async def cancel_call(self, context: RunContext) -> str:
@@ -611,6 +591,7 @@ class Proposal:
     after: str | None
     saved: bool = False
     expired: bool = False
+    before: dict | None = None  # what it changes, as Bee had it when it was proposed (AS_BEE_HAS_IT)
 
 
 class BeeCoordinator(Coordinator):
@@ -624,6 +605,7 @@ class BeeCoordinator(Coordinator):
         super().__init__(recorder, jobs, workspace, **kwargs)
         self._bee_writes = BeeWrites(recorder.dir)  # this call's Bee writes, kept in its folder
         self._proposals: dict[int, Proposal] = {}  # items the AI means to ask about, by number (propose_bee_save)
+        self._claimed: dict[tuple, int] = {}  # each item saved or tried in this call (same_item), by its proposal
 
     @function_tool
     async def search_bee(self, context: RunContext, query: str) -> str:
@@ -655,42 +637,68 @@ class BeeCoordinator(Coordinator):
 
     @function_tool
     async def propose_bee_save(self, context: RunContext, kind: str, text: str, fact_id: int | None = None,
-                               suggestion_id: int | None = None, alarm_at: str | None = None) -> str:
-        """Before you ask the user whether to save something to their Bee: fixes the item and gives it a number.
-        Then ask one question that names Bee and quotes the item, and call save_to_bee with the number only after
-        the user says yes to it.
+                               suggestion_id: int | None = None, todo_id: int | None = None,
+                               alarm_at: str | None = None) -> str:
+        """Call it in the reply that asks the user whether to change something in their Bee, before the question: it
+        fixes the item and gives it a number, and changes nothing in Bee, so it needs no yes. Then ask one question
+        that names Bee and quotes the item, and call save_to_bee with the number only after the user says yes to it.
 
         Args:
-            kind: One of fact_confirm, fact_update, todo_create, todo_accept.
-            text: The item as your question will quote it: the todo, or the fact as it should read, in the user's
-                language; for fact_confirm and todo_accept, the fact or the suggested todo as Bee has it.
-            fact_id: The Bee fact id (fact_confirm, fact_update).
-            suggestion_id: The Bee todo suggestion id (todo_accept).
+            kind: fact_create (keep something lasting the user said about themselves), fact_confirm (Bee heard a
+                fact right), fact_update (fix a fact Bee has wrong), fact_delete (take a wrong fact out; cannot be
+                undone), todo_create (a new todo), todo_accept (take Bee's suggested todo), todo_complete (mark a
+                todo done) or todo_dismiss (turn down Bee's suggested todo; cannot be undone).
+            text: The item as your question will quote it: in English, Bee's language, for what you write
+                (fact_create, fact_update, todo_create), whatever the call's language; for the others, the fact or
+                the todo as Bee has it.
+            fact_id: The Bee fact id (fact_confirm, fact_update, fact_delete).
+            suggestion_id: The Bee todo suggestion id (todo_accept, todo_dismiss).
+            todo_id: The Bee todo id (todo_complete).
             alarm_at: Optional ISO 8601 time for a todo alarm (todo_create).
         """
         if kind not in KINDS:
             return f"Unknown kind {kind!r}; use one of {', '.join(KINDS)}."
         if not text or not text.strip():
             return "text is required: the item as your question will quote it."
-        if kind in ("fact_update", "todo_create") and self._language.code == "ko" and not HANGUL.search(text):
-            return "Write the text in Korean, the user's language, then propose it again."
         item: dict = {"kind": kind, "text": text.strip()}
-        if kind in ("fact_confirm", "fact_update"):
+        if kind in ("fact_confirm", "fact_update", "fact_delete"):
             if fact_id is None:
                 return "fact_id is required."
             item["fact_id"] = fact_id
         if kind == "todo_create" and alarm_at:
             item["alarm_at"] = alarm_at
-        if kind == "todo_accept":
+        if kind in ("todo_accept", "todo_dismiss"):
             if suggestion_id is None:
                 return "suggestion_id is required."
             item["suggestion_id"] = suggestion_id
+        if kind == "todo_complete":
+            if todo_id is None:
+                return "todo_id is required."
+            item["todo_id"] = todo_id
+        before, as_bee_has_it_note = None, ""
+        if kind in AS_BEE_HAS_IT:  # asked about as Bee has it, so the user hears what the id points to
+            what = {"fact_delete": f"fact {fact_id}", "todo_complete": f"todo {todo_id}",
+                    "todo_dismiss": f"todo suggestion {suggestion_id}"}[kind]
+            try:
+                async with self.waiting(context):
+                    before = await as_bee_has_it(item)
+            except Exception as exc:
+                return (f"Could not read {what} from Bee ({short(str(exc) or type(exc).__name__, 120)}), so it cannot "
+                        "be changed now. Tell the user in a few words.")
+            if not before or not isinstance(before.get("text"), str) or not before["text"].strip():
+                return f"Bee has no {what}. Take the id from the prep note, bee_today or search_bee."
+            if _plain(before["text"]) != _plain(item["text"]):
+                as_bee_has_it_note = f" Bee has it as '{before['text']}': quote that, not other words."
+            item["text"] = before["text"]
         number = len(self._proposals) + 1
-        self._proposals[number] = Proposal(item, after=self._last_user_turn())
-        return (f"Proposal {number}: {item_label(item, ENGLISH)}. Ask the user now (unless you already asked it in "
-                f"this reply), in one question that names Bee and quotes the item exactly, such as: "
-                f"{ASK_LIKE[kind].format(text=item['text'])} Call save_to_bee with proposal {number} only after they "
-                "say yes to that question.")
+        proposal = self._proposals[number] = Proposal(item, after=self._last_user_turn(), before=before)
+        if kind not in NOT_UNDOABLE and self._asked_just_before(proposal, self._turns(), item["text"]):
+            return (f"Proposal {number}: {item_label(item, ENGLISH)}. Your words just before the user's last answer "
+                    f"asked about it, quoting it: if that answer was a clear yes, call save_to_bee with proposal "
+                    f"{number} now, without asking again; if it was not, do not save it.")
+        return (f"Proposal {number}: {item_label(item, ENGLISH)}.{as_bee_has_it_note} Ask the user now (unless you "
+                f"already asked it in this reply), in one question that names Bee and quotes the item exactly, {self._ask_like(item)} Call "
+                f"save_to_bee with proposal {number} only after they say yes to that question.")
 
     @function_tool
     async def save_to_bee(self, context: RunContext, proposal: int) -> str:
@@ -701,15 +709,15 @@ class BeeCoordinator(Coordinator):
         """
         found = self._proposals.get(proposal)
         if found is None:
-            return f"There is no proposal {proposal}; call propose_bee_save first."
+            return (f"There is no proposal {proposal}; call propose_bee_save first, and it says whether you still "
+                    "need to ask.")
         if found.saved:
             return f"Proposal {proposal} was already saved; it is not saved twice."
         heard = EXPIRED if found.expired else self._answer_to(found)
         if heard is None:
             return (f"Not saved: the user has not yet said yes to a question about proposal {proposal}. Ask now, in "
-                    "one question that names Bee and quotes the item exactly, such as: "
-                    f"{ASK_LIKE[found.item['kind']].format(text=found.item['text'])} Call save_to_bee again only "
-                    "after they say yes to it.")
+                    f"one question that names Bee and quotes the item exactly, {self._ask_like(found.item)} Call "
+                    "save_to_bee again only after they say yes to it.")
         if heard == EXPIRED:
             found.expired = True
             return (f"Not saved: proposal {proposal} was asked about, and the conversation went on past the answer. If "
@@ -724,9 +732,28 @@ class BeeCoordinator(Coordinator):
             found.expired = True
             return (f"Not saved: the answer is not a yes (\"{answer}\"). If the user wants it, propose it again with "
                     "propose_bee_save and ask about it alone.")
+        if TAKES_IT_BACK.search(answer):
+            found.expired = True
+            return (f"Not saved: the answer takes the yes back (\"{answer}\"). If the user does want it, propose it "
+                    "again with propose_bee_save and ask about it alone.")
+        if found.item["kind"] in NOT_UNDOABLE:
+            if not any(SAYS_IT_REMOVES.search(s) for s in asking_sentences(question, found.item["text"])):
+                found.expired = True
+                return ("Not saved: this cannot be undone, and your question did not say it deletes or removes it. "
+                        f"Propose it again and ask, {self._ask_like(found.item)}")
+            if not PLAIN_YES.match(_letters_only(answer)):
+                found.expired = True
+                return (f"Not saved: this cannot be undone, and the answer is more than a plain yes (\"{answer}\"). "
+                        "If the user does want it, propose it again with propose_bee_save and ask about it alone.")
+        same = self._claimed.get(same_item(found.item))
+        if same is not None:  # proposed twice, both answered by one yes (measured 2026-10-17)
+            found.expired = True
+            return (f"Not saved: {item_label(found.item, ENGLISH)} is proposal {same}, already saved or tried in this "
+                    "call, and it is not saved twice.")
         found.saved = True
+        self._claimed[same_item(found.item)] = proposal  # before anything waits, so two saves at once see it
         async with self.waiting(context):
-            write = await self._bee_writes.begin(found.item, question, answer)
+            write = await self._bee_writes.begin(found.item, question, answer, before=found.before)
             try:
                 await self._bee_writes.apply(write)
             finally:  # also when the tool is cut off mid-write: the record shows the write, and that Bee may have it
@@ -746,13 +773,23 @@ class BeeCoordinator(Coordinator):
         saved = [w for w in self._bee_writes.all() if w.status == "ok"]
         if not saved:
             return "Nothing saved to Bee in this call is left to take out."
+        if saved[-1].kind in NOT_UNDOABLE:
+            return (f"{label(saved[-1], ENGLISH)} cannot be undone: Bee cannot bring back a deleted fact or a "
+                    "dismissed suggestion. Tell the user in a few words.")
         async with self.waiting(context):
             write = await self._bee_writes.undo(saved[-1].key)
         what = label(write, ENGLISH)
         if write.status != "undone":
             return f"Could not take {what} out of Bee ({write.error}). Tell the user."
         self._recorder.event("bee_write_undone", key=write.key, kind=write.kind, text=write.text)
+        self._claimed.pop(same_item(write.item), None)  # taken out, it may be asked about and saved again
         return f"Took it out of Bee: {what}. Tell the user in a few words."
+
+    def _ask_like(self, item: dict) -> str:
+        """How to ask about an item, in the call's language: one sentence that ends with "?" and holds the item."""
+        templates = ASK_LIKE_KO if self._language.code == "ko" else ASK_LIKE
+        return (f"in one sentence that ends with \"?\" and holds the quoted item, such as: "
+                f"{templates[item['kind']].format(text=item['text'])}")
 
     def _last_user_turn(self) -> str | None:
         """The id of the user's last turn so far (None before they said anything)."""
@@ -768,7 +805,8 @@ class BeeCoordinator(Coordinator):
         them: (question, the answer's breaths). None while there is none yet: no question since the proposal (a save
         in the reply that asks cannot see that reply yet), or no answer to it yet. EXPIRED once the answer is past.
         - The question is the first AI turn since the proposal that names Bee (the word), quotes the item whole and
-          asks ("?"); if the AI said it again before the user answered, its last saying.
+          asks ("?"); if the AI said it again before the user answered, its last saying. With none since, it is the
+          AI turn just before the user's last answer, if that one names Bee and quotes the item (_asked_just_before).
         - The answer is the user's turns right after it (one breath or several), with nothing between but the AI's
           words that ask nothing.
         - The answer is past once the conversation went on: the user spoke again after the AI did, or the AI asked
@@ -783,8 +821,8 @@ class BeeCoordinator(Coordinator):
             return EXPIRED  # the turn it followed is no longer in the conversation
         item = proposal.item["text"]
         asked = [i for i, turn in enumerate(later) if turn.role == "assistant" and asks_about(turn.text_content, item)]
-        if not asked:
-            return None
+        if not asked:  # what cannot be undone counts only when asked about after it was proposed
+            return None if proposal.item["kind"] in NOT_UNDOABLE else self._asked_just_before(proposal, turns, item)
         answered = next((i for i in range(asked[0] + 1, len(later)) if later[i].role == "user"), None)
         if answered is None:
             return None
@@ -798,17 +836,53 @@ class BeeCoordinator(Coordinator):
         return (later[question].text_content or "", [b for b in breaths if b]) if any(breaths) else None
 
 
+    @staticmethod
+    def _asked_just_before(proposal: Proposal, turns: list, item: str) -> tuple[str, list[str]] | None:
+        """The question just before the user's answer when the item was proposed only after that answer (the model
+        often asks first and proposes in its reply to the yes; measured 2026-10-17, 4 of 10 saves): the AI turn right
+        before the answer names Bee and quotes the item whole, and the answer is still the user's last words."""
+        ids = [turn.id for turn in turns]
+        if proposal.after is None or proposal.after not in ids:
+            return None
+        end = ids.index(proposal.after)
+        if any(turn.role == "user" for turn in turns[end + 1:]):  # the conversation went on since
+            return None
+        start = end
+        while start > 0 and turns[start - 1].role == "user":
+            start -= 1
+        if start == 0 or turns[start - 1].role != "assistant" or not asks_about(turns[start - 1].text_content, item):
+            return None
+        breaths = [(turn.text_content or "").strip() for turn in turns[start:end + 1]]
+        return (turns[start - 1].text_content or "", [b for b in breaths if b]) if any(breaths) else None
+
+
 def asks_about(text: str | None, item: str) -> bool:
     """Whether an AI turn asks about the item: it names Bee (the word), and one of its sentences is a question
     ("?") that quotes the item's text whole, in quotation marks. So "I'll add 'Buy milk' to Bee. Anything else?"
     asks about something else, and 'Buy milk and eggs' does not quote 'Buy milk'."""
+    return bool(asking_sentences(text, item))
+
+
+def asking_sentences(text: str | None, item: str) -> list[str]:
+    """The sentences of an AI turn that ask about the item (asks_about); none when the turn does not name Bee."""
     text = re.sub(r"\s+", " ", text or "")
     if not NAMES_BEE.search(text):
-        return False
+        return []
     quote = f"[{re.escape(QUOTES)}]"
     quoted = re.compile(f"{quote}{re.escape(_plain(item))}[.!?。]?{quote}")
-    return any(quoted.search(sentence.casefold()) for sentence in SENTENCES.split(text)
-               if QUESTION.search(sentence.rstrip(QUOTES + " ")[-1:]))
+    return [sentence for sentence in SENTENCES.split(text)
+            if QUESTION.search(sentence.rstrip(QUOTES + " ")[-1:]) and quoted.search(sentence.casefold())]
+
+
+def _letters_only(text: str) -> str:
+    """Letters and digits only, in lower case: how an answer is matched against PLAIN_YES."""
+    return "".join(ch for ch in text.casefold() if ch.isalnum())
+
+
+def same_item(item: dict) -> tuple:
+    """What makes two items the same change to Bee: the kind, the text compared loosely, and what it changes."""
+    return (item.get("kind"), _plain(str(item.get("text") or "")), item.get("fact_id"), item.get("suggestion_id"),
+            item.get("todo_id"), item.get("alarm_at"))
 
 
 def _plain(text: str) -> str:
