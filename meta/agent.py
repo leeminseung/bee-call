@@ -47,6 +47,7 @@ META_READ_S = 15.0  # the longest one Bee read may take while the meta agent thi
 ORGANIZE_ROUNDS = 14  # model requests in an organize run, which reads several days and adds item by item (arbitrary)
 ORGANIZE_ADDS = 15  # items an organize run adds at most (arbitrary)
 ORGANIZE_PAGES = 4  # pages of Bee's facts (in each list) and to-dos read to find what Bee has already (arbitrary)
+ORGANIZE_TRIES = 3  # failed organize runs for one request before it is given up, with one notification (arbitrary)
 
 # Its instructions, in sections (2026-10-18): for a person who connected Bee, three of them shared word for word with
 # the call AI and the call prep (beelink/toolkit.py); for a person without Bee, nothing about Bee. The rules about
@@ -684,10 +685,14 @@ class Thinker:
         events then get the usual think. The entry returned is the last one, with an error if a run failed."""
         entry = None
         for event in [e for e in events if e.get("kind") == "organize_bee"]:
-            if self.bee and not self._organized_before(event):
-                entry = await self._organize(event, now)
-                if entry.get("error"):
-                    return entry
+            if not self.bee or self._organized_before(event):
+                continue
+            if self._organize_failures(event) >= ORGANIZE_TRIES:  # never holding the rest of the inbox for good
+                await self._give_up_organizing(event, now)
+                continue
+            entry = await self._organize(event, now)
+            if entry.get("error"):
+                return entry
         rest = [e for e in events if e.get("kind") != "organize_bee"]
         if rest or entry is None and not events:
             entry = await self._think(rest, now)
@@ -755,9 +760,29 @@ class Thinker:
     # ---------- organizing Bee's memory, on the user's yes in a call ----------
 
     def _organized_before(self, event: dict[str, Any]) -> bool:
-        """Whether this request to organize already had a run that worked (its events came back with others)."""
+        """Whether this request to organize already had a run that worked, or was given up (its events came back with
+        others)."""
         return any(e.get("kind") == "organize" and not e.get("error") and e.get("events") == [event]
                    for e in MetaSession(self.workspace).entries())
+
+    def _organize_failures(self, event: dict[str, Any]) -> int:
+        """How many runs for this request to organize failed (the model unreachable, say)."""
+        return sum(1 for e in MetaSession(self.workspace).entries()
+                   if e.get("kind") == "organize" and e.get("error") and e.get("events") == [event])
+
+    async def _give_up_organizing(self, event: dict[str, Any], now: datetime) -> None:
+        """After ORGANIZE_TRIES failed runs: one notification that says so, with what went in before, and the entry
+        that marks the request done."""
+        language = event.get("language") if event.get("language") in LANGUAGES else self.language
+        added = self._added(f"{event.get('call')}@{event.get('at')}")
+        payload = organized_notification(added, language, finished=False)
+        sent = await self.notify(payload) if self.notify else "not sent (no sender)"
+        MetaSession(self.workspace).log({
+            "at": now.isoformat(timespec="seconds"), "events": [event], "kind": "organize", "model": None,
+            "tools": [], "decision": payload["aps"]["alert"]["body"], "gave_up": True, "seconds": 0.0,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "actions": [{"tool": "notification", "added": added, "body": payload["aps"]["alert"]["body"],
+                         "result": sent}]})
 
     async def _organize(self, event: dict[str, Any], now: datetime) -> dict[str, Any]:
         """The run the user said yes to in a call (organize_bee): it reads the days asked for in Bee and adds what is
@@ -899,10 +924,15 @@ def organize_context(event: dict[str, Any], now: datetime) -> str:
 # The one notification at the end of an organize run, in the person's language: how many went in.
 ORGANIZED = {"ko": ("Bee에 기억 {n}개를 넣었어요. Bee 앱에서 보고 고칠 수 있어요.", "Bee에 새로 넣을 기억은 없었어요."),
              "en": ("Added {n} memories to Bee. You can see and edit them in the Bee app.", "Nothing new to add to Bee.")}
+# The same when the run was given up after ORGANIZE_TRIES failures.
+NOT_ORGANIZED = {"ko": ("Bee 정리를 끝내지 못했어요. 그래도 기억 {n}개는 들어갔어요. Bee 앱에서 보고 고칠 수 있어요.",
+                        "Bee 정리를 끝내지 못했어요. 바뀐 것은 없어요."),
+                 "en": ("Couldn't finish organizing Bee, but {n} memories went in. You can see and edit them in the Bee "
+                        "app.", "Couldn't finish organizing Bee. Nothing was changed.")}
 
 
-def organized_notification(added: int, language: str) -> dict[str, Any]:
-    some, none = ORGANIZED.get(language, ORGANIZED["en"])
+def organized_notification(added: int, language: str, finished: bool = True) -> dict[str, Any]:
+    some, none = (ORGANIZED if finished else NOT_ORGANIZED).get(language, (ORGANIZED if finished else NOT_ORGANIZED)["en"])
     body = some.format(n=added) if added else none
     if added == 1 and language != "ko":
         body = body.replace("1 memories", "1 memory").replace("see and edit them", "see and edit it")

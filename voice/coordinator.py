@@ -243,9 +243,18 @@ PLAIN_YES = re.compile(
 SAYS_IT_REMOVES = re.compile(r"\b(?:delete|remove|dismiss|take (?:it )?out|get rid of|drop|turn (?:it )?down)|"
                              r"지우|지울|지워|삭제|빼|뺄|없애", re.IGNORECASE)
 SENTENCES = re.compile(r"(?<=[.!?。])\s+|\n")
-# The one question that offers to organize Bee names Bee, asks to put things in it, and quotes no item (a quoted item
-# is a question about that item alone, answered with save_to_bee).
-ORGANIZE_WORDS = re.compile(r"정리|넣|남겨|남길|저장|기억|추가|organi[sz]e|keep|add|put|save|store|tidy|sort", re.IGNORECASE)
+# The one question that offers to organize Bee: a sentence that names Bee, offers to put several things in it, and
+# quotes no item (a quoted item is a question about that item alone, answered with save_to_bee). Korean: it ends in
+# organizing (정리해 둘까요?), or is about several things (것들, 내용, 기록, 몇 개...) and ends in putting them in (넣어 둘까요?,
+# 저장할까요?); English: "shall I", "want me to"... with organize, tidy, or put, add, keep or save them, these, all... It
+# is the last question of the AI's turn, so the yes answers it (review of 2026-10-18, finding 1: a check for any Bee
+# question with a word like 기억, 저장 or keep let "Bee가 기억하는 바로는 매운 거 못 드시죠?" "응." write to Bee).
+ORGANIZE_KO = re.compile(r"(?:정리[^?？]{0,10}|(?:정리|것들|내용|기록|몇 ?가지|몇 ?개|전부|모두|한꺼번에).*"
+                         r"(?:넣|남겨|남길|저장|담아|추가|기록|정리)[^?？]{0,8})(?:까요|까)\s*[?？]\s*$")
+ORGANIZE_EN = re.compile(
+    r"\b(?:(?:shall|should|can|may) i|(?:do you )?want me to|would you like me to|how about i)\b.*"
+    r"(?:\borgani[sz]e\b|\btidy\b|\b(?:put|add|keep|save|store|move)\s+(?:them|these|those|all|everything|it all|the "
+    r"rest|what\b|things|a few|today))", re.IGNORECASE)
 ORGANIZE_MOST = 8  # items one organize in a call adds at most (arbitrary)
 ORGANIZE_DAYS = (1, 7, 3)  # the past days an organize of what Bee recorded covers: fewest, most, and when not said
 ORGANIZED = -1  # in BeeCoordinator._claimed: an item organize_bee added
@@ -668,7 +677,7 @@ class BeeCoordinator(Coordinator):
         self._bee_writes = BeeWrites(recorder.dir)  # this call's Bee writes, kept in its folder
         self._proposals: dict[int, Proposal] = {}  # items the AI means to ask about, by number (propose_bee_save)
         self._claimed: dict[tuple, int] = {}  # each item saved or tried in this call (same_item), by its proposal
-        self._organized: set[str] = set()  # the user's yeses organize_bee has taken (their last turn's id)
+        self._organized: set[tuple[str, str]] = set()  # the yeses organize_bee took: (their last turn's id, scope)
         # What the user said yes to organizing beyond this call: the voice server hands it to the meta agent once the
         # call ends (voice/agent.py end_call).
         self.organize_request: dict | None = None
@@ -856,18 +865,18 @@ class BeeCoordinator(Coordinator):
             todos: For "call": the new to-dos, things the user means to do, each one short statement in English.
             days: For "recent": how many past days to organize, 1 to 7 (3 when not given).
         """
-        heard = self._organize_answer()
+        scope = str(scope or "call").strip().lower()
+        heard = self._organize_answer(scope)
         if isinstance(heard, str):
             return heard
         question, answer, answered = heard
-        scope = str(scope or "call").strip().lower()
         if scope == "recent":
             fewest, most, usual = ORGANIZE_DAYS
             try:
                 days = min(most, max(fewest, int(days))) if days is not None else usual
             except (TypeError, ValueError):
                 days = usual
-            self._organized.add(answered)
+            self._organized.add((answered, scope))
             self.organize_request = {"days": days, "question": question, "answer": answer}
             self._recorder.event("bee_organize_requested", days=days, question=question, answer=answer)
             return (f"Started: what Bee recorded over the past {days} days is organized in the background once this "
@@ -891,7 +900,7 @@ class BeeCoordinator(Coordinator):
             return f"Not added: at most {ORGANIZE_MOST} items at once. Keep the ones that matter most and call again."
         if any(len(item["text"]) > 200 for item in items):
             return "Not added: each item is one short statement, under 200 characters. Call again with shorter ones."
-        self._organized.add(answered)
+        self._organized.add((answered, scope))
         for item in items:  # before anything waits, so a save at the same time sees them
             self._claimed[same_item(item)] = ORGANIZED
         async with self.waiting(context):
@@ -923,7 +932,7 @@ class BeeCoordinator(Coordinator):
                      if went else "Tell the user in a few words what happened.")
         return " ".join(parts)
 
-    def _organize_answer(self) -> tuple[str, str, str] | str:
+    def _organize_answer(self, scope: str) -> tuple[str, str, str] | str:
         """The question that offered to organize and the user's yes to it: (question, answer, the answer's last turn
         id); or why there is none, as the tool's answer. The question is the AI's turn just before the user's last
         words: one of its sentences asks ("?"), names Bee, says to put things in it and quotes no item. The answer is
@@ -940,9 +949,10 @@ class BeeCoordinator(Coordinator):
             return ("Not done: organize only after asking the user one question that names Bee and offers to "
                     "organize, and hearing a clear yes to it. Ask it now.")
         question = turns[start - 1].text_content or ""
-        offering = [sentence for sentence in SENTENCES.split(re.sub(r"\s+", " ", question))
-                    if QUESTION.search(sentence) and NAMES_BEE.search(sentence) and ORGANIZE_WORDS.search(sentence)
-                    and not re.search(f"[{re.escape(QUOTES)}]", sentence)]
+        asked = [sentence for sentence in SENTENCES.split(re.sub(r"\s+", " ", question)) if QUESTION.search(sentence)]
+        last = asked[-1] if asked else ""  # the yes answers the turn's last question
+        offering = bool(last) and bool(NAMES_BEE.search(last)) and not re.search(f"[{re.escape(QUOTES)}]", last) and \
+            bool(ORGANIZE_KO.search(last) or ORGANIZE_EN.search(last))
         if not offering:
             return ("Not done: your question just before the user's answer did not offer to organize Bee. Ask one "
                     "question that names Bee and offers to put these things in it, without listing them, and do it "
@@ -950,12 +960,12 @@ class BeeCoordinator(Coordinator):
         breaths = [(turn.text_content or "").strip() for turn in turns[start:end]]
         answer = " ".join(b for b in breaths if b)
         answered = turns[end - 1].id
-        if answered in self._organized:
-            return "Already done for that yes. To organize more, offer it again and wait for the user's yes."
         if not answer or any(REFUSAL.search(sentence) for b in breaths for sentence in SENTENCES.split(b)) or \
                 not AFFIRMATIVE.search(SENTENCES.split(answer)[0]) or TAKES_IT_BACK.search(answer):
             return (f"Not done: the user's answer is not a clear yes (\"{answer}\"). Organize only after a clear yes; "
                     "if they want it, ask again.")
+        if (answered, scope) in self._organized:  # one yes covers this call and the past days, each once
+            return "Already done for that yes. To organize more, offer it again and wait for the user's yes."
         return question, answer, answered
 
     def _ask_like(self, item: dict) -> str:

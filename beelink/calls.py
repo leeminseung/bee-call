@@ -135,30 +135,6 @@ class OurCalls:
         return [item for item in items or [] if (isinstance(item, dict) and item.get("id") in written)
                 or not self.derived(item)]
 
-    def added_todos(self) -> list[dict[str, Any]]:
-        """The to-dos our calls added to Bee (todo_create, todo_accept) and did not take back or mark done, newest
-        first: {"id", "text", "added_at"}. Whether each is still open is Bee's to say (beelink/context.py)."""
-        if self.workspace is None:
-            return []
-        from beelink.writer import BeeWrites, made_todo  # the writer reads call folders as this module does
-
-        added: dict[int, dict[str, Any]] = {}
-        done: set[Any] = set()
-        for folder in self.write_folders():
-            if not (folder / "bee-writes.jsonl").exists():
-                continue
-            for write in BeeWrites(folder).all():
-                if write.status != "ok":
-                    continue
-                if write.kind in ("todo_create", "todo_accept"):
-                    todo = made_todo(write.response)
-                    if isinstance(todo.get("id"), int):
-                        added[todo["id"]] = {"id": todo["id"], "text": write.text or str(todo.get("text") or ""),
-                                             "added_at": write.began}
-                elif write.kind == "todo_complete":
-                    done.add(write.item.get("todo_id"))
-        return [todo for todo in reversed(list(added.values())) if todo["id"] not in done]
-
     def at(self, seconds: float) -> bool:
         """A moment (epoch seconds) inside one of our calls, or a minute before or after it: a line Bee heard then
         is the user talking to us (a conversation Bee keeps recording runs through our calls)."""
@@ -179,13 +155,6 @@ class OurCalls:
     def crosses(self, item: Any) -> bool:
         """A Bee conversation that overlaps one of our calls but is more than Bee's recording of it."""
         return self.conversation(item) and not self.within(item)
-
-    def kept_todos(self, items: Any) -> list[Any]:
-        """To-dos (or to-do suggestions) without those Bee made of our calls (as others()), but with the ones our
-        calls added on the user's yes."""
-        added = {todo["id"] for todo in self.added_todos()}
-        return [item for item in items or [] if (isinstance(item, dict) and item.get("id") in added)
-                or not self.derived(item)]
 
     def derived(self, item: Any) -> bool:
         """A fact, todo or note Bee made during one of our calls, or soon after it."""

@@ -281,3 +281,77 @@ def test_a_to_do_bee_suggests_in_the_same_words_is_not_added_again(tmp_path, fak
         tool_use(1, "bee_add_todo", text="Ask about bonus terms")]}, done("Nothing new.")])  # the fake's suggestion 34
     assert entry["tools"][0]["result"] == "Not added: Bee already has to-do 'Ask about bonus terms'."
     assert bee_commands(fake_bee) == []
+
+
+
+# ---------- review of 2026-10-18 ----------
+
+@pytest.mark.parametrize("question", [
+    "Bee가 기억하는 바로는 매운 거 못 드시죠?",
+    "Bee에 저장된 대화 보니까 어제 회의 있었죠?",
+    "Do you want me to keep going, or look in Bee?",
+    "Shall I add buy milk to your Bee todos?",
+    "Bee에 할 일로 넣어 둘까요?",
+    "Shall I put them in Bee? And how was the trip?",
+    "Bee에 기록된 내용 중에 어제 회의 얘기 해 볼까요?",
+    "Bee에 넣어 둔 것들 확인해 볼까요?",
+])
+def test_a_yes_to_a_question_that_does_not_offer_to_organize_adds_nothing(tmp_path, fake_bee, question):
+    """Finding 1: the offer check took any question with Bee and a word like 기억, 저장, keep or add."""
+    said, agent, rec = organized(tmp_path, [("assistant", question), ("user", "응.")], facts=["Drinks coffee"],
+                                 todos=["Buy milk"])
+    assert said.startswith("Not done") and bee_commands(fake_bee) == [] and BeeWrites(rec.dir).all() == []
+
+
+@pytest.mark.parametrize("question", [
+    OFFER, OFFER_KO, "Shall I organize what Bee recorded over the past three days?",
+    "Now the tidy-up. Shall I organize the last few days of what Bee recorded?",
+    "Bee에 지난 3일 동안 기록된 내용을 정리해서 넣어 둘까요?", "사흘 치 내용을 Bee에 정리해 넣을까요?",
+    "지난 사흘 치 정리도 Bee에 넣어 둘까요? 백그라운드에서 돌리고, 끝나면 알려 드릴게요.",
+    "오늘 나온 것들 Bee에 넣어 둘까?", "Want me to save these to Bee?",
+    "Bee에 쌓인 것 정리는, 지난 며칠 대화에서 오래 갈 내용만 골라서 Bee에 넣어 둘까요?",
+    "최근 3일치를 정리해서 Bee에 넣어 둘까요?", "지난 사흘 동안 쌓인 기록은 Bee에 정리해 둘까요?", "Bee에 정리해 둘까요?",
+])
+def test_the_organize_questions_the_ai_asked_in_measured_calls_still_count(tmp_path, fake_bee, question):
+    said, _, _ = organized(tmp_path, [("assistant", question), ("user", "네, 그렇게 해 주세요.")], facts=["Drinks coffee"])
+    assert said.startswith("Added to Bee"), said
+
+
+def test_one_yes_covers_this_call_and_the_past_days_once_each(tmp_path, fake_bee):
+    """Finding 4: "Yes, and tidy up this week too." answers one offer that covers both."""
+    async def main():
+        agent, rec = await in_a_call(tmp_path, [("assistant", OFFER), ("user", "Yes, and tidy up this week too.")])
+        first = await agent.organize_bee(None, facts=["Drinks coffee"])
+        second = await agent.organize_bee(None, scope="recent", days=7)
+        again = await agent.organize_bee(None, scope="recent", days=3)
+        return first, second, again, agent
+
+    first, second, again, agent = asyncio.run(main())
+    assert first.startswith("Added to Bee") and second.startswith("Started")
+    assert again.startswith("Already done for that yes") and agent.organize_request["days"] == 7
+
+
+def test_an_organize_run_that_keeps_failing_is_given_up_after_three_tries_with_one_notification(tmp_path, fake_bee):
+    """Finding 5: a failing organize run held the rest of the inbox back for good."""
+    from tests.test_meta import Streams
+
+    class Broken(Streams):
+        def converse(self, **request):
+            raise RuntimeError("Bedrock throttled")
+
+    ws = tmp_path / "workspace"
+    sent = []
+
+    async def notify(payload):
+        sent.append(payload)
+        return "notification sent"
+
+    for _ in range(3):
+        entry = asyncio.run(Thinker(ws, on_glm(Broken()), bee=True, notify=notify).think([REQUEST], seoul_now()))
+        assert "throttled" in entry["error"] and sent == []
+    model = ScriptedModel([done("The call went fine.")])
+    ended = {"at": "2026-10-18T15:00:00+09:00", "kind": "call_ended", "call": "2026-10-18/1450"}
+    entry = asyncio.run(Thinker(ws, on_glm(model), bee=True, notify=notify).think([REQUEST, ended], seoul_now()))
+    assert "error" not in entry and entry["decision"] == "The call went fine."  # the rest goes on
+    (payload,) = sent
+    assert payload["aps"]["alert"]["body"] == "Couldn't finish organizing Bee. Nothing was changed."

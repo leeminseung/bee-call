@@ -314,6 +314,46 @@ def _local(ms: Any, zone: tzinfo) -> str:
     return datetime.fromtimestamp(ms / 1000, zone).strftime("%Y-%m-%d %H:%M")
 
 
+# The lists inside an answer that is not itself a list (bee_today's, a day's conversations), and for each: how to read
+# one of its items by id, and which tool lists them all.
+INNER_LISTS = {"recentConversations": ("bee_conversation", "bee_conversations"),
+               "conversations": ("bee_conversation", "bee_conversations"),
+               "recentNotes": ("bee_voice_notes with voice_note_id", "bee_voice_notes"),
+               "activeTodos": ("bee_todos with todo_id", "bee_todos")}
+
+
+def _fit_lists(value: Any, budget: int) -> tuple[Any, list[str]]:
+    """`value` with items cut from the ends of the lists inside it, the longest list first, until it fits `budget`;
+    and a note for each list cut: how many of its items are shown, the ids of the rest and where to read them."""
+    value = json.loads(_json(value))  # a copy to cut
+    lists: list[tuple[str, list, list]] = []  # (key, its items, the items cut from it)
+
+    def walk(node: Any, depth: int) -> None:
+        if isinstance(node, dict) and depth < 3:
+            for key, item in node.items():
+                if isinstance(item, list) and item:
+                    lists.append((key, item, []))
+                walk(item, depth + 1)
+
+    walk(value, 0)
+    while len(_json(value)) > budget:
+        filled = [entry for entry in lists if entry[1]]
+        if not filled:
+            break
+        _, items, cut = max(filled, key=lambda entry: len(_json(entry[1])))
+        cut.insert(0, items.pop())
+    notes = []
+    for key, items, cut in lists:
+        if not cut:
+            continue
+        one, every = INNER_LISTS.get(key, (None, None))
+        ids = [str(item["id"]) for item in cut if isinstance(item, dict) and item.get("id") is not None]
+        where = (f"; the rest are ids {', '.join(ids)}, read each with {one}" if ids and one
+                 else f"; read the rest with {every}" if every else "")
+        notes.append(f"{key}: {len(items)} of {len(items) + len(cut)} shown{where}.")
+    return value, notes
+
+
 def _capped(value: Any, cap: int) -> tuple[Any, bool]:
     """Every text in `value` longer than `cap` cut to it; whether any was."""
     if isinstance(value, str):
@@ -363,6 +403,11 @@ def _answer(data: Any, context: _Context, notes: list[str] | None = None, *, ite
         data, cut = _fit_texts(data, budget)
         if cut:
             notes.append("Long texts are cut where it says (cut).")
+        if len(_json(data)) > budget:  # lists inside it (bee_today's, a day's conversations): cut from their ends
+            data, cut_lists = _fit_lists(data, budget)
+            notes += cut_lists
+            if len(_json(data)) > budget:  # still too long: shorter texts
+                data = _capped(data, 60)[0]
     else:
         rest = {k: v for k, v in data.items() if k != items}
         room = budget - len(_json(rest)) - len(items) - 6
@@ -435,10 +480,12 @@ def _facts(items: Any, context: _Context, notes: list[str]) -> list[Any]:
     return _kept(items, context.ours.kept_facts, "fact", "Bee made of your calls with the user", notes)
 
 
-def _todos(items: Any, context: _Context, notes: list[str], word: str = "to-do") -> list[Any]:
+def _suggestions(items: Any, context: _Context, notes: list[str]) -> list[Any]:
+    """Bee's suggested to-dos without those it made of our calls. The to-do list itself is the user's own (Bee only
+    suggests), so it is never left out by when an item was made (review of 2026-10-18, finding 6)."""
     if context.ours is None:
         return list(items or [])
-    return _kept(items, context.ours.kept_todos, word, "Bee made of your calls with the user", notes)
+    return _kept(items, context.ours.others, "suggested to-do", "Bee made of your calls with the user", notes)
 
 
 def _memos(items: Any, context: _Context, notes: list[str]) -> list[Any]:
@@ -462,8 +509,7 @@ async def _today(args: _Args, context: _Context) -> Read:
     data, notes = await _bee(context, "today", "--context"), []
     if isinstance(data, dict):
         data = _with(data, recentConversations=_conversations(data.get("recentConversations"), context, notes),
-                     recentNotes=_memos(data.get("recentNotes"), context, notes),
-                     activeTodos=_todos(data.get("activeTodos"), context, notes))
+                     recentNotes=_memos(data.get("recentNotes"), context, notes))
     return _answer(data, context, notes)
 
 
@@ -603,8 +649,28 @@ async def _search(args: _Args, context: _Context) -> Read:
     if isinstance(data, dict):
         items = next((key for key in ("results", "conversations", "items") if isinstance(data.get(key), list)), None)
         if items:
-            data = _with(data, **{items: _conversations(data[items], context, notes)})
+            data = _with(data, **{items: _search_results(data[items], context, notes)})
     return _answer(data, context, notes, items=items)
+
+
+def _is_conversation(item: Any) -> bool:
+    return isinstance(item, dict) and (item.get("type") == "conversation" or "start_time" in item
+                                       or isinstance(item.get("conversation"), dict))
+
+
+def _is_fact(item: Any) -> bool:
+    return isinstance(item, dict) and (item.get("type") == "fact" or ("confirmed" in item and "text" in item))
+
+
+def _search_results(items: Any, context: _Context, notes: list[str]) -> list[Any]:
+    """A search's results, of several kinds, each by its own rule: conversations Bee recorded during our calls and
+    facts it made of them are left out (review of 2026-10-18, finding 2); daily summaries are kept."""
+    items = [item for item in items or []]
+    conversations = [item for item in items if _is_conversation(item)]
+    facts = [item for item in items if not _is_conversation(item) and _is_fact(item)]
+    kept = {id(item) for item in _conversations(conversations, context, notes) + _facts(facts, context, notes)}
+    judged = {id(item) for item in conversations + facts}
+    return [item for item in items if id(item) in kept or id(item) not in judged]
 
 
 async def _daily(args: _Args, context: _Context) -> Read:
@@ -669,11 +735,11 @@ async def _todos_read(args: _Args, context: _Context) -> Read:
     if status == "suggested":
         data = await _bee(context, "todos", "suggestions", "--limit", str(args.number("limit", default=20, high=50)))
         if isinstance(data, dict):
-            data = _with(data, todoSuggestions=_todos(data.get("todoSuggestions"), context, notes, "suggested to-do"))
+            data = _with(data, todoSuggestions=_suggestions(data.get("todoSuggestions"), context, notes))
         return _answer(data, context, notes, items="todoSuggestions")
     data = await _bee(context, "todos", "list", *_page(args, 50, 50))
     if isinstance(data, dict):
-        page = _todos(data.get("todos"), context, notes)
+        page = [t for t in data.get("todos") or []]
         done = status == "done"
         kept = [t for t in page if isinstance(t, dict) and bool(t.get("completed")) == done]
         other = len(page) - len(kept)

@@ -244,3 +244,49 @@ def test_a_read_that_fails_says_so_and_never_raises(fake_bee, monkeypatch):
     assert read("bee_transcript", {}).text.startswith("Not read")
     assert read("bee_search", {"query": "x", "mode": "neural", "filter": "facts"}).text.startswith("Not read")
     assert read("bee_location").text == "There is no tool named bee_location."
+
+
+
+def test_a_search_leaves_out_facts_bee_made_of_our_calls_too(fake_bee, tmp_path, monkeypatch):
+    """Review finding 2: bee_search filtered only conversations."""
+    ws = tmp_path / "workspace"
+    a_call(ws, "2026-10-18T10:00", "2026-10-18T10:20")
+    answers(tmp_path, monkeypatch, {"search": {"results": [
+        {"type": "fact", "id": 21, "text": "Wants a quiet home server", "created_at": ms("2026-10-18T10:25"),
+         "confirmed": False},
+        {"type": "fact", "id": 22, "text": "Drinks coffee", "created_at": ms("2026-10-15T08:00"), "confirmed": True},
+        {"type": "daily", "id": 9, "date": "2026-10-17", "short_summary": "A walk"}]}})
+    found = read("bee_search", {"query": "server", "filter": "all"}, ours=OurCalls.of(ws))
+    assert [r["id"] for r in found.data["results"]] == [22, 9] and "1 fact" in found.text
+
+
+def test_an_answer_with_lists_inside_is_cut_to_fit_saying_where_the_rest_is(fake_bee, tmp_path, monkeypatch):
+    """Review finding 3: bee_today came out at about 10,000 characters against a 3,000 limit."""
+    memo = {"id": "j", "text": "x" * 400, "aiResponse": {"message": "y" * 400}, "created_at": 1}
+    answers(tmp_path, monkeypatch, {"today --context": {
+        "date": "2026-10-18", "todayBrief": {"calendar_events": []}, "dailySummary": {"summary": "s" * 1500},
+        "activeTodos": [{"id": n, "text": "t" * 120} for n in range(10)],
+        "recentNotes": [dict(memo, id=f"j{n}") for n in range(5)],
+        "recentConversations": [{"id": n, "short_summary": "c" * 100, "summary": "d" * 600} for n in range(5)]}})
+    found = read("bee_today", max_chars=3000)
+    assert len(found.text) <= 3000
+    # each list cut says how much of it is shown, and the ids of the rest with the tool that reads each
+    assert "(recentConversations: 2 of 5 shown; the rest are ids 2, 3, 4, read each with bee_conversation.)" in found.text
+    assert "the rest are ids j1, j2, j3, j4, read each with bee_voice_notes with voice_note_id" in found.text
+    assert "read each with bee_todos with todo_id" in found.text
+
+
+def test_the_user_s_own_to_dos_are_never_left_out_by_when_they_were_made(fake_bee, tmp_path, monkeypatch):
+    """Review finding 6: Bee suggests to-dos but never makes them; the list is the user's own, also one made right
+    after one of our calls. Suggestions Bee made of our calls are left out."""
+    ws = tmp_path / "workspace"
+    a_call(ws, "2026-10-18T10:00", "2026-10-18T10:20")
+    answers(tmp_path, monkeypatch, {
+        "todos list": {"todos": [{"id": 1, "text": "Call mom", "completed": False, "created_at": ms("2026-10-18T10:25")}]},
+        "todos suggestions": {"todoSuggestions": [
+            {"id": 7, "text": "Order RAM", "created_at": ms("2026-10-18T10:26")},
+            {"id": 8, "text": "Book the dentist", "created_at": ms("2026-10-15T09:00")}]}})
+    ours = OurCalls.of(ws)
+    assert [t["id"] for t in read("bee_todos", ours=ours).data["todos"]] == [1]
+    suggested = read("bee_todos", {"status": "suggested"}, ours=ours)
+    assert [t["id"] for t in suggested.data["todoSuggestions"]] == [8] and "1 suggested to-do" in suggested.text
