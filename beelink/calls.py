@@ -71,6 +71,17 @@ def overlaps_our_call(start_ms: int | None, end_ms: int | None, windows: list[tu
     return any(start <= w_end + MARGIN_SECONDS and end >= w_start - MARGIN_SECONDS for w_start, w_end in windows)
 
 
+def _span(item: Any) -> tuple[float, float] | None:
+    """A Bee conversation's start and end in epoch seconds (its start again when it is still recording), or None."""
+    if not isinstance(item, dict):
+        return None
+    start, end = item.get("start_time"), item.get("end_time")
+    if not isinstance(start, (int, float)) or isinstance(start, bool):
+        return None
+    end = end if isinstance(end, (int, float)) and not isinstance(end, bool) and end else start
+    return start / 1000.0, end / 1000.0
+
+
 def _seconds(value: Any) -> float | None:
     """A Bee time as epoch seconds: milliseconds, or an ISO string."""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -94,15 +105,20 @@ class OurCalls:
     def of(cls, workspace: Path) -> "OurCalls":
         return cls(our_call_windows(workspace), workspace)
 
+    def write_folders(self) -> list[Path]:
+        """Where our Bee writes are kept, oldest first: each call's folder, then the meta agent's (an organize run the
+        user said yes to in a call, meta/agent.py)."""
+        return [*call_folders(self.workspace), self.workspace / "meta"] if self.workspace is not None else []
+
     def written_facts(self) -> set[int]:
-        """The facts our calls wrote on the user's yes (made, confirmed or corrected, and not taken back): the
-        user's own, not something Bee made of a call."""
+        """The facts our calls wrote on the user's yes (made, confirmed or corrected, and not taken back), and those an
+        organize run added: the user's own, not something Bee made of a call."""
         if self.workspace is None:
             return set()
         from beelink.writer import BeeWrites, the_fact
 
         written: set[int] = set()
-        for folder in call_folders(self.workspace):
+        for folder in self.write_folders():
             if not (folder / "bee-writes.jsonl").exists():
                 continue
             for write in BeeWrites(folder).all():
@@ -128,7 +144,7 @@ class OurCalls:
 
         added: dict[int, dict[str, Any]] = {}
         done: set[Any] = set()
-        for folder in call_folders(self.workspace):
+        for folder in self.write_folders():
             if not (folder / "bee-writes.jsonl").exists():
                 continue
             for write in BeeWrites(folder).all():
@@ -151,6 +167,25 @@ class OurCalls:
     def conversation(self, item: Any) -> bool:
         """A Bee conversation that overlaps one of our calls."""
         return isinstance(item, dict) and overlaps_our_call(item.get("start_time"), item.get("end_time"), self.windows)
+
+    def within(self, item: Any) -> bool:
+        """A Bee conversation that lies within one of our calls (a minute's margin each side): Bee's recording of the
+        call itself. A longer recording that runs through a call is not (crosses): the Bee read tools keep it and
+        leave out only its lines said during the call (beelink/toolkit.py)."""
+        span = _span(item)
+        return span is not None and any(w_start - MARGIN_SECONDS <= span[0] and span[1] <= w_end + MARGIN_SECONDS
+                                        for w_start, w_end in self.windows)
+
+    def crosses(self, item: Any) -> bool:
+        """A Bee conversation that overlaps one of our calls but is more than Bee's recording of it."""
+        return self.conversation(item) and not self.within(item)
+
+    def kept_todos(self, items: Any) -> list[Any]:
+        """To-dos (or to-do suggestions) without those Bee made of our calls (as others()), but with the ones our
+        calls added on the user's yes."""
+        added = {todo["id"] for todo in self.added_todos()}
+        return [item for item in items or [] if (isinstance(item, dict) and item.get("id") in added)
+                or not self.derived(item)]
 
     def derived(self, item: Any) -> bool:
         """A fact, todo or note Bee made during one of our calls, or soon after it."""
