@@ -115,17 +115,8 @@ async def changed(cursor: str | None = None) -> dict[str, Any]:
     return await run_json(*args)
 
 
-async def unconfirmed_facts(limit: int = 20, timeout: float = TIMEOUT) -> list[dict[str, Any]]:
-    return (await run_json("facts", "list", "--unconfirmed", "--limit", str(limit), timeout=timeout)).get("facts", [])
-
-
 async def todo_suggestions(limit: int = 20, timeout: float = TIMEOUT) -> list[dict[str, Any]]:
     return (await run_json("todos", "suggestions", "--limit", str(limit), timeout=timeout)).get("todoSuggestions", [])
-
-
-async def search_conversations(query: str, limit: int = 5, timeout: float = TIMEOUT) -> list[dict[str, Any]]:
-    args = ("search", "--query", query, "--neural", "--limit", str(limit))
-    return (await run_json(*args, timeout=timeout)).get("results", [])
 
 
 async def conversation(conversation_id: int, timeout: float = TIMEOUT) -> dict[str, Any]:
@@ -134,24 +125,6 @@ async def conversation(conversation_id: int, timeout: float = TIMEOUT) -> dict[s
 
 async def transcript(conversation_id: int, timeout: float = TIMEOUT) -> dict[str, Any]:
     return await run_json("conversations", "transcript", str(conversation_id), timeout=timeout)
-
-
-async def recent() -> dict[str, Any]:
-    return await run_json("now")
-
-
-async def today_context(timeout: float = TIMEOUT) -> dict[str, Any]:
-    """Today's Bee context: daily summary, active todos, notes and recent conversations."""
-    return await run_json("today", "--context", timeout=timeout)
-
-
-async def conversations(limit: int = 10, timeout: float = TIMEOUT) -> list[dict[str, Any]]:
-    return (await run_json("conversations", "list", "--limit", str(limit), timeout=timeout)).get("conversations", [])
-
-
-async def daily(date: str, timeout: float = TIMEOUT) -> dict[str, Any]:
-    """The daily summary for one date, YYYY-MM-DD."""
-    return await run_json("daily", "find", date, timeout=timeout)
 
 
 async def me(timeout: float = TIMEOUT) -> dict[str, Any]:

@@ -9,7 +9,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from beelink.context import CallInputs
-from voice.coordinator import INSTRUCTIONS, instructions
+from voice.coordinator import BEE_INSTRUCTIONS, INSTRUCTIONS, instructions
 from voice.language import call_language
 from voice.prep import PREP_INSTRUCTIONS, PREP_INSTRUCTIONS_WITHOUT_BEE, seed_text
 
@@ -18,7 +18,7 @@ NOW = datetime(2026, 10, 16, 13, 5, tzinfo=ZoneInfo("Asia/Seoul"))
 
 def test_one_principle_with_its_examples():
     principle = INSTRUCTIONS.split("\n\n")[1]
-    assert principle.startswith("Everything you write is spoken aloud in a real phone call")
+    assert principle.startswith("## How to talk\nEverything you write is spoken aloud in a real phone call")
     assert "talk the way a person talks on the phone" in principle and "For example:" in principle
     for example in ("Keep turns short", "A casual line gets a casual answer, not a summary",
                     "People on the phone do not keep saying each other's names", "no reading out lists",
@@ -28,11 +28,23 @@ def test_one_principle_with_its_examples():
 
 
 def test_a_call_needs_no_task_and_chatting_is_a_reason_for_one():
-    first = INSTRUCTIONS.split("\n\n")[0]
-    assert "to chat" in first and "a call needs no task" in first
-    assert "one concrete thing" not in INSTRUCTIONS and "Lead with the conclusion" not in INSTRUCTIONS
-    assert "be curious about what they said" in INSTRUCTIONS and "a light opinion of your own" in INSTRUCTIONS
-    assert "or answers in a word, be curious" in INSTRUCTIONS  # "Cool.", "응.": where it handed the call back
+    """2026-10-18 (the user's decision): "Who you are" says what every call is for, to come to know the user and help
+    them know themselves, so a call needs no task; being curious and bringing up something new moved there from the
+    casual-line example."""
+    for text in (INSTRUCTIONS, BEE_INSTRUCTIONS):
+        first = text.split("\n\n")[0]
+        assert first.startswith("## Who you are\n") and "to chat" in first and "A call needs no task." in first
+        assert "Your purpose in every call is to come to know the user better" in first
+        assert "help the user come to know themselves better" in first
+        for words in ("follow what they say with interest", "add a light thought of your own",
+                      "When a topic runs thin, open one that helps you know them", "You are not an interviewer",
+                      "One question at a time, never a questionnaire", "the user's own topic always comes first",
+                      "on personal or painful topics, follow their lead"):
+            assert words in first, words
+        assert "one concrete thing" not in text and "Lead with the conclusion" not in text
+    assert "A casual line gets a casual answer, not a summary." in INSTRUCTIONS
+    assert "Bee is where that knowledge is kept" in BEE_INSTRUCTIONS.split("\n\n")[0]
+    assert "Bee" not in INSTRUCTIONS.split("\n\n")[0].replace("Bee Call", "")
 
 
 def test_the_ai_never_steers_toward_ending_and_a_goodbye_still_ends_the_call():
@@ -56,7 +68,7 @@ def test_the_name_is_said_at_most_once_and_the_prep_greets_without_it():
     # Told so only in the instructions, every Korean opening still greeted by name: the seed's last words ask too.
     for meta in ({"direction": "inbound"}, {"direction": "outbound"}, {"direction": "outbound", "agreed": "yes"},
                  {"direction": "inbound", "earlier_call": "..."}):
-        seed = seed_text(CallInputs(first_name="Minseung"), meta, NOW, bee=True)
+        seed = seed_text(CallInputs(), meta, NOW, bee=True)
         assert "greet the user without their name" in seed, meta
 
 
@@ -79,8 +91,9 @@ def test_after_a_job_s_result_the_conversation_goes_on_and_a_job_outlives_the_ca
 
 def test_the_prep_frames_a_call_the_same_way():
     for text in (PREP_INSTRUCTIONS, PREP_INSTRUCTIONS_WITHOUT_BEE):
-        assert "to chat or to get something done" in text and "an assistant that talks" not in text
-    seed = seed_text(CallInputs(first_name="Minseung"), {"direction": "inbound"}, NOW, bee=True)
+        assert text.startswith("## What you are doing\n") and "an assistant that talks" not in text
+        assert "the way a good assistant glances at their notes before answering" in text
+    seed = seed_text(CallInputs(), {"direction": "inbound"}, NOW, bee=True)
     assert "they may just want to chat" in seed
 
 
@@ -136,48 +149,46 @@ def test_end_call_goes_through_whenever_the_ai_calls_it(tmp_path):
 def test_bee_is_the_user_s_memory_kept_accurate_and_tidy_with_a_light_limit():
     """2026-10-17: when to offer a Bee change is one principle with examples, and a light limit on Bee questions
     per call, in the instructions only (no rule in code decides it)."""
-    from voice.coordinator import BEE_NOTE_RULES
 
-    assert "Bee is the user's memory." in BEE_NOTE_RULES and "Help keep that memory accurate and tidy" in BEE_NOTE_RULES
+    assert "each call should leave the user's memory in Bee a little truer and more complete" in BEE_INSTRUCTIONS
+    assert "Without turning the call into a review of Bee, for example:" in BEE_INSTRUCTIONS
     for example in ("something lasting about themselves", "fact_create", "fact_delete", "todo_complete",
                     '"그거 주문했어"', "todo_dismiss", "To-dos you added to Bee in earlier calls"):
-        assert example in BEE_NOTE_RULES, example
-    assert "Ask about Bee at most twice in a call" in BEE_NOTE_RULES and "never twice about the same item" in BEE_NOTE_RULES
+        assert example in BEE_INSTRUCTIONS, example
+    assert "Ask about Bee at most twice in a call" in BEE_INSTRUCTIONS and "never twice about the same item" in BEE_INSTRUCTIONS
     for step in ("propose_bee_save", "names Bee", "quotes the item exactly", "Only after a clear yes", "save_to_bee",
                  "undo_bee_write"):
-        assert step in BEE_NOTE_RULES, step  # the safety steps stay as they were
+        assert step in BEE_INSTRUCTIONS, step  # the safety steps stay as they were
 
 
 def test_what_bee_keeps_is_brought_up_when_it_connects_and_never_recited():
     """2026-10-17 ("the next call starts from what Bee keeps"): the prep carries the kept facts that may connect to
     the call into its note, and the call AI mentions one when the topic connects, never as a list."""
-    from voice.coordinator import BEE_NOTE_RULES
 
-    assert "What Bee keeps about the user" in BEE_NOTE_RULES and "never as a list" in BEE_NOTE_RULES
+    assert "What Bee keeps about the user" in BEE_INSTRUCTIONS and "never as a list" in BEE_INSTRUCTIONS
     assert "what Bee keeps about them that this call may touch" in PREP_INSTRUCTIONS
 
 
 def test_bee_items_are_english_and_the_question_quotes_them_in_the_call_s_language():
     """2026-10-17: Bee's language is English; the question around the item stays in the call's language."""
-    from voice.coordinator import BEE_NOTE_RULES
 
-    assert "Write every Bee item in English, Bee's language, whatever the call's language" in BEE_NOTE_RULES
-    assert "\"Bee에 'My home server has to be quiet'로 기억해 둘까요?\"" in BEE_NOTE_RULES
-    assert "keep its text as Bee has it" in BEE_NOTE_RULES and "a correction in English" in BEE_NOTE_RULES
-    assert "written in the user's language" not in BEE_NOTE_RULES
+    assert "Write every Bee item in English, Bee's language, whatever the call's language" in BEE_INSTRUCTIONS
+    assert "\"Bee에 'My home server has to be quiet'로 기억해 둘까요?\"" in BEE_INSTRUCTIONS
+    assert "keep its text as Bee has it" in BEE_INSTRUCTIONS and "a correction in English" in BEE_INSTRUCTIONS
+    assert "written in the user's language" not in BEE_INSTRUCTIONS
 
 
 def test_the_item_is_proposed_and_quoted_in_the_one_reply_that_offers_the_change():
     """Measured 2026-10-17 (Haiku 5.5): it asked first in other words ("Should I save that to Bee so it sticks
     around?") and proposed after the user's yes, so the yes did not count and it had to ask again; in English calls
     it did so in 3 of 3. One reply both proposes the item and asks about it, quoted, and the reason is given."""
-    from voice.coordinator import BEE_NOTE_RULES, BeeCoordinator
+    from voice.coordinator import BeeCoordinator
 
-    assert "The user can agree only to words they heard" in BEE_NOTE_RULES
-    assert "an offer to change Bee is one reply that does two things" in BEE_NOTE_RULES
-    assert "which changes nothing in Bee yet" in BEE_NOTE_RULES
-    assert "Never ask in other words first (\"Want me to save that to Bee?\")" in BEE_NOTE_RULES
-    assert "the user has to say yes twice" in BEE_NOTE_RULES
+    assert "The user can agree only to words they heard" in BEE_INSTRUCTIONS
+    assert "an offer to change Bee is one reply that does two things" in BEE_INSTRUCTIONS
+    assert "which changes nothing in Bee yet" in BEE_INSTRUCTIONS
+    assert "Never ask in other words first (\"Want me to save that to Bee?\")" in BEE_INSTRUCTIONS
+    assert "the user has to say yes twice" in BEE_INSTRUCTIONS
     assert "changes nothing in Bee, so it needs no yes" in BeeCoordinator.propose_bee_save.__doc__
 
 
@@ -187,12 +198,11 @@ def test_a_lasting_fact_is_offered_to_bee_with_the_question_quoting_it_not_kept_
     during a talk about dinner, it offered in 2 of 4 and went on about dinner in the others; in English, 4 of 4. The
     example is now one said in passing, in Korean, and the offer comes in the reply to it. The examples are not the
     measured lines (a peanut allergy), so the measurement is not of the example itself."""
-    from voice.coordinator import BEE_NOTE_RULES
 
-    assert "rather than saying you will remember it" in BEE_NOTE_RULES
-    assert "\"Shall I keep 'Can't eat spicy food' in Bee?\"" in BEE_NOTE_RULES
-    assert "even in passing (\"참고로 나 매운 거 못 먹어\"" in BEE_NOTE_RULES and "in your reply to it" in BEE_NOTE_RULES
-    assert "peanut" not in BEE_NOTE_RULES.casefold()
+    assert "rather than saying you will remember it" in BEE_INSTRUCTIONS
+    assert "\"Shall I keep 'Can't eat spicy food' in Bee?\"" in BEE_INSTRUCTIONS
+    assert "even in passing (\"참고로 나 매운 거 못 먹어\"" in BEE_INSTRUCTIONS and "in your reply to it" in BEE_INSTRUCTIONS
+    assert "peanut" not in BEE_INSTRUCTIONS.casefold()
 
 
 def test_the_item_is_proposed_before_anything_is_said_about_bee_and_a_korean_question_quotes_english():
@@ -200,11 +210,10 @@ def test_the_item_is_proposed_before_anything_is_said_about_bee_and_a_korean_que
     4 of 4, but in 3 it first asked with the item in Korean ("Bee에 '땅콩 알레르기 있음'으로 기억해 둘까요?") and
     proposed the English item only after the yes, which then did not count. The proposal comes before any word about
     Bee in the reply, and the example for a Korean call is a Korean question quoting the English item."""
-    from voice.coordinator import BEE_NOTE_RULES
 
     assert "first it calls propose_bee_save with the item, which changes nothing in Bee yet, before saying anything " \
-           "about Bee" in BEE_NOTE_RULES
-    assert "in a Korean call, \"Bee에 'Can't eat spicy food'로 기억해 둘까요?\"" in BEE_NOTE_RULES
+           "about Bee" in BEE_INSTRUCTIONS
+    assert "in a Korean call, \"Bee에 'Can't eat spicy food'로 기억해 둘까요?\"" in BEE_INSTRUCTIONS
 
 
 def test_no_notes_to_itself_are_written_since_everything_is_said():

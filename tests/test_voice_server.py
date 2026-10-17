@@ -126,7 +126,7 @@ def test_an_ai_call_s_opening_never_waits_for_the_bee_read_kept_for_the_record(t
 
     async def slow_read(*a, **kw):
         await asyncio.sleep(1.5)
-        return CallInputs(facts=[{"id": 7, "text": "Bonus is 15%"}])
+        return CallInputs(changes={"since": None, "batches": 1, "facts": [{"id": 7, "text": "Bonus is 15%"}]})
 
     monkeypatch.setattr(agent, "fetch_call_inputs", slow_read)
     said_at = []
@@ -148,7 +148,7 @@ def test_an_ai_call_s_opening_never_waits_for_the_bee_read_kept_for_the_record(t
     assert said_at and said_at[0] - answered < 0.3
     assert "Bonus is 15%" in instructions  # the plain Bee context still reached the AI, once read
     (folder,) = call_folders(me.workspace)
-    assert (folder / "inputs" / "unconfirmed_facts.json").exists()  # and the record keeps the read
+    assert (folder / "inputs" / "changes_since_last_call.json").exists()  # and the record keeps the read
     (said,) = [json.loads(l) for l in (folder / "events.jsonl").read_text().splitlines() if '"type": "call"' in l]
     assert (said["topic"], said["kind"]) == ("the interview", "voice note")  # an AI call without a topic falls back by it
 
@@ -935,7 +935,8 @@ def test_the_record_server_never_serves_a_call_s_audio_or_its_raw_bee_inputs(tmp
 
 def test_a_call_starts_on_an_empty_bee_day_and_keeps_its_prep_note(tmp_path, monkeypatch, quick, bee_log):
     """BC-028: a person with Use Bee on and nothing in Bee today still gets their call. BC-031: the prep note is
-    kept as prep.md in the call's folder."""
+    kept as prep.md in the call's folder. A call the user starts reads nothing from Bee before its prep (2026-10-17):
+    the prep starts from the meta agent's notes and what changed since the last call, and may read with its tools."""
     me = signed_in(tmp_path)
     me.people.change_settings("matt", {"bee": True}, allowed=("bee",))
     monkeypatch.setenv("FAKE_BEE_EMPTY", "1")
@@ -953,7 +954,7 @@ def test_a_call_starts_on_an_empty_bee_day_and_keeps_its_prep_note(tmp_path, mon
     assert call.session.said == ["Hi Matt, what's on your mind?"]
     (folder,) = call_folders(me.workspace)
     assert "Matt is weighing a job offer." in (folder / "prep.md").read_text()
-    assert any("today" in line for line in bee_log.read_text().splitlines())  # Bee was read, and was empty
+    assert not bee_log.exists()  # no fixed bundle of Bee reads before the prep
 
 
 def test_a_call_keeps_the_language_it_started_in(tmp_path, monkeypatch, quick):

@@ -155,8 +155,11 @@ def test_voice_server_greets_and_briefs_by_who_called(monkeypatch):
     note = agent.call_meta('{"direction": "outbound", "kind": "voice note"}')
     assert agent.greeting(note, english) == "Hi, it's Bee Call. I'm calling about your new voice note. Do you have a minute?"
     assert agent.call_meta("not json") == {}
-    brief = call_brief(CallInputs(facts=[{"id": 7, "text": "Bonus is 15%"}]), out)
-    assert brief == "You placed this call. Why: A Bee conversation just ended.\nUnconfirmed Bee fact (id 7): Bonus is 15%"
+    changes = {"since": None, "batches": 1, "conversations": [], "journals": [], "todos": [], "dailies": [],
+               "facts": [{"id": 7, "text": "Bonus is 15%", "confirmed": False}]}
+    brief = call_brief(CallInputs(changes=changes), out)
+    assert brief == ("You placed this call. Why: A Bee conversation just ended.\nWhat changed in Bee since the last "
+                     "call, newest first:\nFacts:\n- [fact 7, unconfirmed] Bonus is 15%")
 
 
 def test_answering_a_call_that_already_ended_is_refused(tmp_path):

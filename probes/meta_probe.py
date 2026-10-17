@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
-from beelink import cli, reads
+from beelink import toolkit
 from meta.agent import Thinker
 from meta.session import MetaSession, add_event
 
@@ -59,26 +59,21 @@ def scratch_workspace(root: Path) -> Path:
     return ws
 
 
-async def canned_today() -> str:
-    return ("Bee's context for today: a 14-utterance conversation weighing two job offers (Offer A and Offer B, "
-            "answer due Friday); a quick hello; one unconfirmed fact: \"Offer B bonus is 15%\".")
+# What the Bee read tools answer in this probe (beelink/toolkit.py read), by tool: canned, never the user's Bee.
+CANNED = {
+    "bee_today": ('{"date": "today", "recentConversations": [{"id": 901, "short_summary": "Weighing two job offers", '
+                  '"utterances_count": 14}, {"id": 902, "short_summary": "Quick hello", "utterances_count": 2}]}'),
+    "bee_conversation": ('{"conversation": {"id": 901, "short_summary": "Weighing two job offers", "summary": '
+                         '"Offer A: salary 92k, 5% bonus. Offer B: salary 88k, 15% bonus, remote. Answer both by '
+                         'Friday."}}'),
+    "bee_search": '{"results": [{"id": 901, "short_summary": "Weighing two job offers"}]}',
+    "bee_facts": '{"facts": [{"id": 5501, "text": "Offer B bonus is 15%", "confirmed": false}]}',
+    "bee_todos": '{"todoSuggestions": [{"id": 6601, "text": "Reply to both offers by Friday"}]}',
+}
 
 
-async def canned_conversation(conversation_id: int) -> str:
-    return ("[conversation 901] Weighing two job offers. Offer A: salary 92k, 5% bonus. Offer B: salary 88k, "
-            "15% bonus, remote. Minseung: 'I have to answer both by Friday.'")
-
-
-async def canned_search(query: str, limit: int = 3) -> str:
-    return '[{"id": 901, "short_summary": "Weighing two job offers"}]'
-
-
-async def canned_facts(limit: int = 20, timeout: float = 0) -> list[dict]:
-    return [{"id": 5501, "text": "Offer B bonus is 15%"}]
-
-
-async def canned_suggestions(limit: int = 20, timeout: float = 0) -> list[dict]:
-    return [{"id": 6601, "text": "Reply to both offers by Friday"}]
+async def canned_read(name: str, args: dict, **kwargs) -> toolkit.Read:
+    return toolkit.Read(CANNED.get(name, '{"note": "nothing in Bee for this in the probe"}'))
 
 
 async def main() -> None:
@@ -86,8 +81,7 @@ async def main() -> None:
     parser.add_argument("--out", type=Path, help="make the scratch workspace in a new folder under this one")
     args = parser.parse_args()
     load_dotenv(".env.local")
-    reads.today, reads.conversation, reads.search = canned_today, canned_conversation, canned_search
-    cli.unconfirmed_facts, cli.todo_suggestions = canned_facts, canned_suggestions
+    toolkit.read = canned_read
     root = Path(tempfile.mkdtemp(prefix="meta-probe-", dir=args.out))
     ws = scratch_workspace(root)
     sent = []
