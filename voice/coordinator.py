@@ -169,9 +169,13 @@ AFFIRMATIVE = re.compile(r"^\W*(?:(?:음|어|아|그|저|um|uh|hmm|well|oh)\W+)?
                          r"네|넵|넹|예|응|그래|그럼|좋아|좋습니다|좋네요|넣어|해 ?줘|해 ?주세요|맞아|맞습니다|그렇게|부탁|"
                          r"물론|당연|오케이)", re.IGNORECASE)
 # Words anywhere in the answer that take its yes back: "Yes. Actually no, don't delete it.", "Yeah wait no, keep
-# it.", "네, 아 잠깐만요 지우지 마세요." (review of 2026-10-17, finding 1: each of these deleted the fact).
+# it.", "네, 아 잠깐만요 지우지 마세요." (review of 2026-10-17, finding 1: each of these deleted the fact). "아니야"
+# takes it back only as a word of its own, at a clause's start or right after the yes ("응, 아니다", "응 아니야"),
+# not after a noun, where it says what something is not ("급한 건 아니야").
 TAKES_IT_BACK = re.compile(r"\b(?:wait,? no|no,? wait|actually,? no|actually,? don'?t|never ?mind|scratch that|"
-                           r"forget (?:it|that)|on second thought)\b|잠깐|아니다|아니야|아냐|생각해 ?보니", re.IGNORECASE)
+                           r"forget (?:it|that)|on second thought)\b|잠깐(?:만|[\s,.!?…]|$)|"
+                           r"(?:^|[,.!?…]\s*|(?:응|네|예|어|그래|좋아)\s+)(?:아\s+)?(?:아니다|아니야|아냐)(?=[\s,.!?…]|$)",
+                           re.IGNORECASE)
 SENTENCES = re.compile(r"(?<=[.!?。])\s+|\n")
 QUOTES = "'\"‘’“”「」『』«»"
 EXPIRED = "expired"  # a proposal whose question was answered and passed (BeeCoordinator._answer_to)

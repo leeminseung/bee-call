@@ -919,7 +919,8 @@ def test_a_yes_given_before_a_delete_was_proposed_never_deletes(tmp_path, fake_b
 
 
 @pytest.mark.parametrize("answer", ["Yes. Actually no, don't delete it.", "Yeah wait no, keep it.",
-                                    "네, 아 잠깐만요 지우지 마세요.", "Yes, never mind, leave it.", "응, 아니다 그냥 둬."])
+                                    "네, 아 잠깐만요 지우지 마세요.", "Yes, never mind, leave it.", "응, 아니다 그냥 둬.",
+                                    "응 아니야 그냥 둬", "네, 잠깐, 지우지 마세요."])
 def test_a_yes_taken_back_in_the_same_answer_saves_nothing(tmp_path, fake_bee, answer):
     """Review of 2026-10-17, finding 1: each of these deleted the fact, since only how each sentence starts was
     looked at."""
@@ -930,6 +931,18 @@ def test_a_yes_taken_back_in_the_same_answer_saves_nothing(tmp_path, fake_bee, a
 
     said = asyncio.run(main())
     assert said.startswith("Not saved") and "propose it again" in said and writes_to_bee(fake_bee) == []
+
+
+@pytest.mark.parametrize("answer", ["응, 넣어 줘. 급한 건 아니야.", "네, 그렇게 해 주세요. 잠깐이면 되죠?",
+                                    "Yes, and no rush on it."])
+def test_a_yes_that_only_says_something_is_not_so_is_still_a_yes(tmp_path, fake_bee, answer):
+    """"아니야" after a noun says what something is not ("급한 건 아니야": it is not urgent); it takes a yes back only
+    as a word of its own, at the start or right after the yes ("응, 아니다", "응 아니야")."""
+    async def main():
+        agent, _ = await in_a_call(tmp_path, language="ko")
+        return await saved(agent, "Bee 할 일로 'Call mom' 넣을까요?", answer, kind="todo_create", text="Call mom")
+
+    assert asyncio.run(main()).startswith("Saved to Bee") and writes_to_bee(fake_bee) == [["todos", "create"]]
 
 
 @pytest.mark.parametrize("kind, item, missing", [("fact_delete", {}, "fact_id"), ("todo_complete", {}, "todo_id"),
