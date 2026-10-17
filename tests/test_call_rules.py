@@ -195,6 +195,18 @@ def test_a_lasting_fact_is_offered_to_bee_with_the_question_quoting_it_not_kept_
     assert "peanut" not in BEE_NOTE_RULES.casefold()
 
 
+def test_the_item_is_proposed_before_anything_is_said_about_bee_and_a_korean_question_quotes_english():
+    """Measured 2026-10-17 (Haiku 5.5, Korean calls, with an example that is not the measured line): it offered in
+    4 of 4, but in 3 it first asked with the item in Korean ("Bee에 '땅콩 알레르기 있음'으로 기억해 둘까요?") and
+    proposed the English item only after the yes, which then did not count. The proposal comes before any word about
+    Bee in the reply, and the example for a Korean call is a Korean question quoting the English item."""
+    from voice.coordinator import BEE_NOTE_RULES
+
+    assert "first it calls propose_bee_save with the item, which changes nothing in Bee yet, before saying anything " \
+           "about Bee" in BEE_NOTE_RULES
+    assert "in a Korean call, \"Bee에 'Can't eat spicy food'로 기억해 둘까요?\"" in BEE_NOTE_RULES
+
+
 def test_no_notes_to_itself_are_written_since_everything_is_said():
     """Measured 2026-10-17 (Haiku 5.5, a Korean call): one reply ended with "Also, the allergy is a lasting fact
     about the user. Offer once to keep it in Bee. Propose it first.", which the user would have heard."""
