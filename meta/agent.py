@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from beelink import cli, reads
+from beelink.reads import one_transcription
 from beelink.calls import OurCalls
 from beelink.clock import now_text
 from beelink.planner import Plan
@@ -34,7 +35,7 @@ from voice.call_models import coordinator_llm
 from voice.language import LANGUAGES
 from voice.model_catalog import Role
 from voice.providers import ToolResult, ToolSpec, Turn, Usage
-from voice.said import said_in
+from voice.said import TAKEN_BACK, said_in
 
 log = logging.getLogger("bee-call.meta")
 
@@ -82,7 +83,8 @@ WITH_BEE = {"wears_bee": " The user wears Bee, a wearable that records and summa
                      "the wearer asks you, the assistant, to call them: \"오늘 밤 9시에 전화해서 같이 정리하자\", "
                      "\"call me at nine tonight\". Words they say to another person (\"나중에 전화해\" to a friend), "
                      "or a time mentioned without asking for a call, do not. In a conversation's lines Bee names the "
-                     "wearer, the user, and marks other speakers \"Unknown\". When they ask for a call now or soon, "
+                     "wearer, the user, and marks other speakers \"Unknown\", though it sometimes marks the wearer "
+                     "\"Unknown\" too: judge by what is said and to whom. When they ask for a call now or soon, "
                      "offer one for now with offer_call, naming the memo or the conversation. When nothing asks for "
                      "a call, decide as for any other change. A voice memo is the user speaking to you on purpose; "
                      "Bee's reply to it shows what Bee made of it.\n",
@@ -177,8 +179,7 @@ MEMO_BOOK_HOURS = 12
 CONVERSATIONS_READ = 3  # conversations of one think whose lines are read
 LINES_SHOWN, LINES_CHARS = 20, 1500  # of one conversation's lines
 EARLIER_BATCHES = 50  # earlier changes looked through for when a conversation was last shown
-# Speaker names Bee gives anyone but the wearer: "Unknown" (and the fake's "speaker_1"); the wearer is named.
-NOT_THE_WEARER = re.compile(r"^\s*(?:unknown.*|speaker[ _-]?\d*|someone|other|)\s*$", re.IGNORECASE)
+TAKE_BACK_LINES, TAKE_BACK_S = 3, 120  # the lines after a request, and how soon, in which a take-back cancels it
 
 
 def memo_ids(workspace: Path, events: list[dict[str, Any]]) -> list[str]:
@@ -213,7 +214,7 @@ def recorded(memo: dict[str, Any], now: datetime) -> datetime | None:
             except ValueError:
                 return None
             return (moment if moment.tzinfo else moment.replace(tzinfo=now.tzinfo)).astimezone(now.tzinfo)
-    if not isinstance(made, (int, float)) or made <= 0:
+    if not isinstance(made, (int, float)) or made <= 1e9:  # as the Bee CLI: no time (a line's start in seconds)
         return None
     try:
         return datetime.fromtimestamp(made / 1000 if made > 1e11 else made, now.tzinfo)  # milliseconds, or seconds
@@ -253,14 +254,10 @@ def spoken_at(utterance: dict[str, Any], now: datetime) -> datetime | None:
     return recorded({"created_at": utterance.get("spoken_at") or utterance.get("start")}, now)
 
 
-def by_wearer(utterance: dict[str, Any]) -> bool:
-    """A line Bee gives to the wearer, the user: it names them, and marks everyone else "Unknown"."""
-    return not NOT_THE_WEARER.match(str(utterance.get("speaker") or ""))
-
-
 def last_shown(workspace: Path, conv_id: Any, inbox: str) -> datetime | None:
-    """When a conversation ended as the latest change before `inbox` had it (end_time), or None: lines spoken
-    after that are new."""
+    """Up to when the latest change before `inbox` that had this conversation held its lines: its end_time, or,
+    for a conversation still recording then, that change's own time (its folder's name, the watcher's local clock);
+    None if no earlier change had it. Lines spoken after that are new."""
     root = workspace / "inbox"
     current = Path(str(inbox)).name
     try:
@@ -274,7 +271,13 @@ def last_shown(workspace: Path, conv_id: Any, inbox: str) -> datetime | None:
             continue
         for c in changed.get("conversations") or []:
             if isinstance(c, dict) and c.get("id") == conv_id:
-                return recorded({"created_at": c.get("end_time")}, datetime.now().astimezone())
+                ended = recorded({"created_at": c.get("end_time")}, datetime.now().astimezone())
+                if ended is not None:
+                    return ended
+                try:  # the watcher names a change's folder by its local time (beelink/watcher.py catch_up)
+                    return datetime.strptime(folder.name, "%Y-%m-%d-%H%M%S").astimezone()
+                except ValueError:
+                    return None
     return None
 
 
@@ -284,6 +287,10 @@ def _conversation_lines(seen: dict[str, Any], now: datetime) -> str:
     text = ""
     if seen.get("earlier"):
         text += f"\n    ({seen['earlier']} earlier lines were in an earlier change)"
+    if seen.get("more"):
+        text += f"\n    ({seen['more']} more new lines before these are not shown)"
+    if seen.get("ours"):
+        text += f"\n    ({seen['ours']} lines said during your calls with the user are left out: those calls' records hold them)"
     if not lines:
         return text + "\n    no new lines"
     shown = []
@@ -542,8 +549,10 @@ class Thinker:
         return None
 
     def _conversation_asks(self, conv_id: Any, asked: Any, now: datetime) -> str | None:
-        """Why a Bee conversation books no call (None: the wearer's own words in the lines the agent was shown ask
-        for it, and it is recent and not Bee's recording of one of our calls)."""
+        """Why a Bee conversation books no call (None: its own words, in the lines the agent was shown, ask for it;
+        they were said recently, outside our calls, and no line soon after takes them back). Who said them is the
+        model's reading of Bee's speaker names, which are often wrong (FINDINGS 2026-10-09: 3 of 17 lines the user
+        said alone were "Unknown")."""
         try:
             conv_id = int(conv_id)
         except (TypeError, ValueError):
@@ -556,34 +565,31 @@ class Thinker:
         if OurCalls.of(self.workspace).conversation(conv):  # the watcher leaves these out; never book from one
             return (f"Not booked: Bee recorded conversation {conv_id} during one of the user's calls with you; that "
                     "call's own record is the source, and it books no call.")
-        times = [t for t in (spoken_at(u, now) for u in lines) if t is not None]
-        made = recorded({"created_at": conv.get("end_time")}, now) or (max(times) if times else None)
-        if made is None:
-            return (f"Not booked: Bee did not say when conversation {conv_id} was recorded, so its times cannot be "
-                    "read. If it still matters, offer a call with offer_call or put it on the agenda.")
-        if now - made > timedelta(hours=MEMO_BOOK_HOURS):
-            return (f"Not booked: conversation {conv_id} was recorded {ago(made, now)}, and a conversation that old "
-                    "books no call: its times meant another day. If it still matters, offer a call with offer_call "
-                    "or put it on the agenda.")
-        runs, run = [], []  # the wearer's lines, in runs of lines said one after another
-        for u in lines:
-            if by_wearer(u):
-                run.append(str(u.get("text") or ""))
-            elif run:
-                runs.append(run)
-                run = []
-        if run:
-            runs.append(run)
-        if any(said_in(texts, asked) for texts in runs):
-            return None
-        other = next((u for u in lines if not by_wearer(u) and said_in([str(u.get("text") or "")], asked)), None)
-        if other is not None:
-            return (f"Not booked: those words are said by a speaker Bee marks \"{other.get('speaker') or 'Unknown'}\", "
-                    "not by the wearer, and a call is booked only when the user asks for it. If you think the user "
-                    "wants a call, offer one with offer_call.")
-        return ("Not booked: asked must be the wearer's own words asking for the call, copied word for word from the "
-                "conversation's lines you were shown: their sentence, or most of it with nothing left out that "
-                "changes it. Book only a call the user asks for.")
+        texts = [str(u.get("text") or "") for u in lines]
+        found = next(((first, last) for last in range(len(texts)) for first in range(last, max(-1, last - 3), -1)
+                      if said_in(["\n".join(texts[first:last + 1])], asked)), None)  # in one line, or up to three
+        if found is None:
+            return ("Not booked: asked must be the user's own words asking for the call, copied word for word from the "
+                    "conversation's lines you were shown: their sentence, or most of it with nothing left out that "
+                    "changes it. Book only a call the user asks for.")
+        first, last = found
+        times = [t for t in (spoken_at(u, now) for u in lines[first:last + 1]) if t is not None]
+        if not times:
+            return ("Not booked: Bee did not say when those words were said, so their times cannot be read. If it "
+                    "still matters, offer a call with offer_call or put it on the agenda.")
+        said = max(times)
+        if now - said > timedelta(hours=MEMO_BOOK_HOURS):  # the line's age, not the conversation's (finding 2)
+            return (f"Not booked: those words were said {ago(said, now)}, and words that old book no call: their "
+                    "times meant another day. If it still matters, offer a call with offer_call or put it on the "
+                    "agenda.")
+        for line in lines[last + 1:last + 1 + TAKE_BACK_LINES]:  # a take-back on a line soon after (finding 6)
+            when = spoken_at(line, now)
+            if when is not None and when - said > timedelta(seconds=TAKE_BACK_S):
+                break
+            if TAKEN_BACK.search(str(line.get("text") or "")):
+                return (f"Not booked: a line soon after takes it back (\"{line.get('text')}\"), so the user did not "
+                        "ask for the call in the end. If you think they still want one, offer it with offer_call.")
+        return None
 
     async def _read_memos(self, events: list[dict[str, Any]], now: datetime) -> None:
         """What these events' Bee changes hold, as Bee has it now: each voice memo (bee journals get: the finished
@@ -592,26 +598,33 @@ class Thinker:
         self._events = events
         ids = memo_ids(self.workspace, events)[:MEMOS_SHOWN] if self.bee else []
         convs = self._changed_conversations(events)[:CONVERSATIONS_READ] if self.bee else []
-        found, said = await asyncio.gather(
+        found, got_conversations = await asyncio.gather(
             asyncio.gather(*(cli.journal(i, timeout=MEMO_READ_S) for i in ids), return_exceptions=True),
-            asyncio.gather(*(cli.transcript(c["id"], timeout=MEMO_READ_S) for c, _ in convs), return_exceptions=True))
+            asyncio.gather(*(cli.conversation(c["id"], timeout=MEMO_READ_S) for c, _ in convs), return_exceptions=True))
         self._memos = {i: memo for i, memo in zip(ids, found) if isinstance(memo, dict) and memo.get("id") is not None}
         self._conversations = {}
-        for (conv, inbox), got in zip(convs, said):
-            if isinstance(got, BaseException) or not isinstance(got, dict):
-                continue
-            lines = [u for u in got.get("transcript") or [] if isinstance(u, dict) and str(u.get("text") or "").strip()]
-            lines.sort(key=lambda u: (spoken_at(u, now) or now).timestamp())
+        ours = OurCalls.of(self.workspace)
+        for (conv, inbox), got in zip(convs, got_conversations):
+            lines = one_transcription(got.get("conversation")) if isinstance(got, dict) else None
+            if lines is None:  # an answer without its transcriptions: every transcription's lines, read on their own
+                try:
+                    lines = (await cli.transcript(conv["id"], timeout=MEMO_READ_S)).get("transcript") or []
+                except Exception:
+                    continue
+            lines = [u for u in lines if isinstance(u, dict) and str(u.get("text") or "").strip()]
+            lines.sort(key=lambda u: spoken_at(u, now).timestamp() if spoken_at(u, now) else float("inf"))
+            # What Bee heard during our calls is the user talking to us: those calls' records hold it (finding 1).
+            kept = [u for u in lines if not (spoken_at(u, now) and ours.at(spoken_at(u, now).timestamp()))]
             before = last_shown(self.workspace, conv["id"], inbox)
-            new = [u for u in lines if before is None or (spoken_at(u, now) or now) > before]
+            new = [u for u in kept if before is None or (spoken_at(u, now) is not None and spoken_at(u, now) > before)]
             shown, size = [], 0
             for u in reversed(new):  # the newest, within LINES_SHOWN and LINES_CHARS
                 size += len(str(u.get("text")))
                 if len(shown) >= LINES_SHOWN or (shown and size > LINES_CHARS):
                     break
                 shown.insert(0, u)
-            self._conversations[conv["id"]] = {"conversation": conv, "lines": shown,
-                                               "earlier": len(lines) - len(shown)}
+            self._conversations[conv["id"]] = {"conversation": conv, "lines": shown, "earlier": len(kept) - len(new),
+                                               "more": len(new) - len(shown), "ours": len(lines) - len(kept)}
 
     def _changed_conversations(self, events: list[dict[str, Any]]) -> list[tuple[dict[str, Any], str]]:
         """The conversations these events' Bee changes hold, as the agent is shown them, with their change's inbox."""
@@ -624,10 +637,13 @@ class Thinker:
             except (OSError, ValueError):
                 continue
             kept = set(event.get("conversation_ids") or [])
-            for c in [c for c in changed.get("conversations", []) if not kept or c.get("id") in kept][:6]:
+            for c in [c for c in changed.get("conversations", []) if not kept or c.get("id") in kept]:
                 if isinstance(c, dict) and isinstance(c.get("id"), int) and \
                         all(c["id"] != seen["id"] for seen, _ in found):
                     found.append((c, str(event.get("inbox"))))
+        # The newest first: those still recording, then by their end (review of 2026-10-17, finding 7).
+        found.sort(key=lambda pair: pair[0].get("end_time") if isinstance(pair[0].get("end_time"), (int, float))
+                   else float("inf"), reverse=True)
         return found
 
     async def think(self, events: list[dict[str, Any]], now: datetime) -> dict[str, Any]:

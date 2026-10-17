@@ -143,6 +143,11 @@ class OurCalls:
                     done.add(write.item.get("todo_id"))
         return [todo for todo in reversed(list(added.values())) if todo["id"] not in done]
 
+    def at(self, seconds: float) -> bool:
+        """A moment (epoch seconds) inside one of our calls, or a minute before or after it: a line Bee heard then
+        is the user talking to us (a conversation Bee keeps recording runs through our calls)."""
+        return any(start - MARGIN_SECONDS <= seconds <= end + MARGIN_SECONDS for start, end in self.windows)
+
     def conversation(self, item: Any) -> bool:
         """A Bee conversation that overlaps one of our calls."""
         return isinstance(item, dict) and overlaps_our_call(item.get("start_time"), item.get("end_time"), self.windows)
