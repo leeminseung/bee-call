@@ -165,3 +165,12 @@ def test_bee_items_are_english_and_the_question_quotes_them_in_the_call_s_langua
     assert "\"Bee에 'My home server has to be quiet'로 기억해 둘까요?\"" in BEE_NOTE_RULES
     assert "keep its text as Bee has it" in BEE_NOTE_RULES and "a correction in English" in BEE_NOTE_RULES
     assert "written in the user's language" not in BEE_NOTE_RULES
+
+
+def test_the_item_is_proposed_in_the_reply_that_asks_about_it():
+    """Measured 2026-10-17 (Haiku 5.5): it asked first and proposed after the user's yes, so the yes did not count
+    and it had to ask again."""
+    from voice.coordinator import BEE_NOTE_RULES
+
+    assert "First, in the reply in which you ask, call propose_bee_save with the item" in BEE_NOTE_RULES
+    assert "a question asked before the item was proposed does not count" in BEE_NOTE_RULES
