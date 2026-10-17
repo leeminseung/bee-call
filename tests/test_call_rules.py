@@ -173,4 +173,4 @@ def test_the_item_is_proposed_in_the_reply_that_asks_about_it():
     from voice.coordinator import BEE_NOTE_RULES
 
     assert "First, in the reply in which you ask, call propose_bee_save with the item" in BEE_NOTE_RULES
-    assert "a question asked before the item was proposed does not count" in BEE_NOTE_RULES
+    assert "so that the user's yes to your question counts" in BEE_NOTE_RULES

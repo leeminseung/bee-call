@@ -143,12 +143,32 @@ def test_a_save_in_the_reply_that_asks_is_no_yes(tmp_path, fake_bee):
     assert writes_to_bee(fake_bee) == [["todos", "create"]]  # call mom only
 
 
-def test_a_yes_given_before_the_item_was_proposed_is_no_yes(tmp_path, fake_bee):
-    """The AI asked first and proposed after the yes: it has to ask again, about the item it fixed."""
+def test_a_yes_to_the_question_just_before_the_proposal_counts_when_it_quoted_the_item(tmp_path, fake_bee):
+    """Measured 2026-10-17 (Haiku 5.5, Korean and English calls): in 4 of 10 saves it asked first and proposed in
+    its reply to the yes; the yes did not count, so it asked again, up to four times. A yes counts when it answers
+    the question just before it, which named Bee and quoted the item whole, and the item was proposed right after
+    that answer. The quote is what ties the yes to the item; anything looser still saves nothing (below)."""
     async def main():
         agent, _ = await in_a_call(tmp_path, [("assistant", "Shall I add 'call mom' to your Bee todos?"),
                                               ("user", "Yes.")])
         number = await proposed(agent, kind="todo_create", text="Call mom")
+        return await agent.save_to_bee(None, proposal=number)
+
+    assert asyncio.run(main()).startswith("Saved to Bee") and writes_to_bee(fake_bee) == [["todos", "create"]]
+
+
+@pytest.mark.parametrize("said", [
+    [("assistant", "Shall I add 'call mom' to your Bee todos?"), ("user", "Yes.")],  # another item than proposed
+    [("assistant", "Shall I add 'email Jun' to your Bee todos?"), ("assistant", "Also, how was your day?"),
+     ("user", "Yes.")],  # not the question just before the answer
+    [("assistant", "Shall I add 'email Jun' to your Bee todos?"), ("user", "Hmm, let me think."),
+     ("assistant", "Sure."), ("user", "Yes.")],  # the answer to it was no yes, and the talk went on
+    [("assistant", "Want me to remember that in Bee?"), ("user", "Yes.")],  # no item quoted
+])
+def test_a_yes_before_the_proposal_counts_only_for_the_quoted_item_just_asked_about(tmp_path, fake_bee, said):
+    async def main():
+        agent, _ = await in_a_call(tmp_path, said)
+        number = await proposed(agent, kind="todo_create", text="Email Jun")
         return await agent.save_to_bee(None, proposal=number)
 
     assert asyncio.run(main()).startswith("Not saved") and writes_to_bee(fake_bee) == []

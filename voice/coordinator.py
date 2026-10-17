@@ -135,8 +135,7 @@ Ask about Bee at most twice in a call, unless the user brings Bee up, and never 
 Write every Bee item in English, Bee's language, whatever the call's language: Bee keeps the user's memory in \
 English. To confirm, mark done, take or delete what Bee has, keep its text as Bee has it, and write a correction in \
 English. Changing Bee happens right away, in the call, in three steps. First, in the reply in which you ask, call \
-propose_bee_save with the item: a question asked before the item was proposed does not count, and you would have \
-to ask it again. Then, in that reply, ask one question, in the call's language, that names Bee and, in the question \
+propose_bee_save with the item, so that the user's yes to your question counts. Then, in that reply, ask one question, in the call's language, that names Bee and, in the question \
 itself, quotes the item exactly as you proposed it, such as "Shall I add 'Note the bug' to your Bee todos?" or "Bee에 'My home server has to be \
 quiet'로 기억해 둘까요?" (write Bee as "Bee" in every language). Only after a clear yes to that question, call \
 save_to_bee with the number propose_bee_save gave, then tell the user in a few words what you did. A yes to any other question, or one \
@@ -734,7 +733,8 @@ class BeeCoordinator(Coordinator):
         them: (question, the answer's breaths). None while there is none yet: no question since the proposal (a save
         in the reply that asks cannot see that reply yet), or no answer to it yet. EXPIRED once the answer is past.
         - The question is the first AI turn since the proposal that names Bee (the word), quotes the item whole and
-          asks ("?"); if the AI said it again before the user answered, its last saying.
+          asks ("?"); if the AI said it again before the user answered, its last saying. With none since, it is the
+          AI turn just before the user's last answer, if that one names Bee and quotes the item (_asked_just_before).
         - The answer is the user's turns right after it (one breath or several), with nothing between but the AI's
           words that ask nothing.
         - The answer is past once the conversation went on: the user spoke again after the AI did, or the AI asked
@@ -750,7 +750,7 @@ class BeeCoordinator(Coordinator):
         item = proposal.item["text"]
         asked = [i for i, turn in enumerate(later) if turn.role == "assistant" and asks_about(turn.text_content, item)]
         if not asked:
-            return None
+            return self._asked_just_before(proposal, turns, item)
         answered = next((i for i in range(asked[0] + 1, len(later)) if later[i].role == "user"), None)
         if answered is None:
             return None
@@ -762,6 +762,26 @@ class BeeCoordinator(Coordinator):
             return EXPIRED
         breaths = [(turn.text_content or "").strip() for turn in later[answered:end]]
         return (later[question].text_content or "", [b for b in breaths if b]) if any(breaths) else None
+
+
+    @staticmethod
+    def _asked_just_before(proposal: Proposal, turns: list, item: str) -> tuple[str, list[str]] | None:
+        """The question just before the user's answer when the item was proposed only after that answer (the model
+        often asks first and proposes in its reply to the yes; measured 2026-10-17, 4 of 10 saves): the AI turn right
+        before the answer names Bee and quotes the item whole, and the answer is still the user's last words."""
+        ids = [turn.id for turn in turns]
+        if proposal.after is None or proposal.after not in ids:
+            return None
+        end = ids.index(proposal.after)
+        if any(turn.role == "user" for turn in turns[end + 1:]):  # the conversation went on since
+            return None
+        start = end
+        while start > 0 and turns[start - 1].role == "user":
+            start -= 1
+        if start == 0 or turns[start - 1].role != "assistant" or not asks_about(turns[start - 1].text_content, item):
+            return None
+        breaths = [(turn.text_content or "").strip() for turn in turns[start:end + 1]]
+        return (turns[start - 1].text_content or "", [b for b in breaths if b]) if any(breaths) else None
 
 
 def asks_about(text: str | None, item: str) -> bool:
