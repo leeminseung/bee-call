@@ -85,12 +85,38 @@ def _seconds(value: Any) -> float | None:
 
 @dataclass
 class OurCalls:
-    """What Bee recorded during our own calls, which is never read as new context (BC-060)."""
+    """What Bee recorded during our own calls, which is never read as new context (BC-060), and what our calls
+    wrote to Bee."""
     windows: list[tuple[float, float]]
+    workspace: Path | None = None
 
     @classmethod
     def of(cls, workspace: Path) -> "OurCalls":
-        return cls(our_call_windows(workspace))
+        return cls(our_call_windows(workspace), workspace)
+
+    def added_todos(self) -> list[dict[str, Any]]:
+        """The to-dos our calls added to Bee (todo_create, todo_accept) and did not take back or mark done, newest
+        first: {"id", "text", "added_at"}. Whether each is still open is Bee's to say (beelink/context.py)."""
+        if self.workspace is None:
+            return []
+        from beelink.writer import BeeWrites, made_todo  # the writer reads call folders as this module does
+
+        added: dict[int, dict[str, Any]] = {}
+        done: set[Any] = set()
+        for folder in call_folders(self.workspace):
+            if not (folder / "bee-writes.jsonl").exists():
+                continue
+            for write in BeeWrites(folder).all():
+                if write.status != "ok":
+                    continue
+                if write.kind in ("todo_create", "todo_accept"):
+                    todo = made_todo(write.response)
+                    if isinstance(todo.get("id"), int):
+                        added[todo["id"]] = {"id": todo["id"], "text": write.text or str(todo.get("text") or ""),
+                                             "added_at": write.began}
+                elif write.kind == "todo_complete":
+                    done.add(write.item.get("todo_id"))
+        return [todo for todo in reversed(list(added.values())) if todo["id"] not in done]
 
     def conversation(self, item: Any) -> bool:
         """A Bee conversation that overlaps one of our calls."""

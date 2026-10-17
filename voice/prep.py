@@ -177,6 +177,9 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: b
         parts.append("Unconfirmed Bee facts:\n" + reads.facts_text(inputs.facts))
     if inputs.suggestions:
         parts.append("Bee todo suggestions:\n" + reads.suggestions_text(inputs.suggestions))
+    if inputs.our_todos:
+        parts.append("To-dos you added to Bee in earlier calls, still open:\n"
+                     + "\n".join(f"[todo {t['id']}] {t['text']}" for t in inputs.our_todos))
     if inputs.errors:
         parts.append("Bee reads that failed: " + "; ".join(inputs.errors))
     parts.append(ask)
@@ -199,6 +202,8 @@ def call_brief(inputs: CallInputs, meta: dict[str, Any]) -> str | None:
                      f"{meta['meta_notes']}\n</notes>")
     lines += [f"Unconfirmed Bee fact (id {f.get('id')}): {f.get('text')}" for f in inputs.facts[:10]]
     lines += [f"Bee todo suggestion (id {s.get('id')}): {s.get('text')}" for s in inputs.suggestions[:10]]
+    lines += [f"To-do you added to Bee in an earlier call, still open (id {t['id']}): {t['text']}"
+              for t in inputs.our_todos]
     return "\n".join(lines) if lines else None
 
 

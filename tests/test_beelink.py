@@ -343,3 +343,44 @@ def test_the_bee_login_link_is_read_as_the_readme_documents(tmp_path, monkeypatc
         else:
             with pytest.raises(cli.BeeError):
                 asyncio.run(cli.start_login(folder))
+
+
+def our_todo_call(workspace: Path, *writes: dict) -> Path:
+    """An earlier call of ours, ended two days ago, with these Bee writes (bee-writes.jsonl lines)."""
+    started = datetime.fromtimestamp(time.time() - 2 * 86400)
+    make_session(workspace, started, 120)
+    folder = workspace / started.strftime("%Y-%m-%d") / started.strftime("%H%M")
+    (folder / "bee-writes.jsonl").write_text("".join(json.dumps(w, ensure_ascii=False) + "\n" for w in writes))
+    return folder
+
+
+def todo_write(key: str, todo_id: int, text: str, *after: str) -> list[dict]:
+    lines = [{"key": key, "status": "applying", "item": {"kind": "todo_create", "text": text}, "question": "q",
+              "answer": "a", "at": "2026-10-15T20:00:00+09:00"},
+             {"key": key, "status": "ok", "response": {"todo": {"id": todo_id, "text": text, "created_at": 1,
+                                                                "completed": False}}, "at": "2026-10-15T20:00:01+09:00"}]
+    return lines + [{"key": key, "status": status, "at": "2026-10-15T20:00:05+09:00"} for status in after]
+
+
+def test_a_call_reads_the_to_dos_our_earlier_calls_added_that_are_still_open(tmp_path, fake_bee, monkeypatch):
+    """2026-10-17: the prep reads open to-dos Bee Call made earlier, so a later call can ask whether one is done. A
+    to-do taken back in its call, or marked done since, is left out; each is asked about in Bee (todos get)."""
+    from beelink.calls import OurCalls
+
+    workspace = tmp_path / "workspace"
+    our_todo_call(workspace, *todo_write("w1", 99, "삼각대 주문하기"), *todo_write("w2", 100, "Call Dana", "undone"))
+    inputs = asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
+    assert [(t["id"], t["text"]) for t in inputs.our_todos] == [(99, "Reply to the recruiter")]  # as Bee has it now
+    assert ["todos", "get", "99", "--json"] in calls(fake_bee) and ["todos", "get", "100", "--json"] not in calls(fake_bee)
+    monkeypatch.setenv("FAKE_BEE_TODO_DONE", "1")
+    assert asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace))).our_todos == []
+    assert asyncio.run(context.fetch_call_inputs()).our_todos == []  # without our calls, nothing of them is read
+
+
+def test_the_prep_and_the_plain_context_list_our_open_to_dos(tmp_path):
+    from voice.prep import call_brief, seed_text
+
+    inputs = context.CallInputs(our_todos=[{"id": 99, "text": "삼각대 주문하기", "added_at": "2026-10-15T20:00:01+09:00"}])
+    seed = seed_text(inputs, {"direction": "inbound"}, datetime.now().astimezone(), bee=True)
+    assert "To-dos you added to Bee in earlier calls, still open:\n[todo 99] 삼각대 주문하기" in seed
+    assert "To-do you added to Bee in an earlier call, still open (id 99): 삼각대 주문하기" in call_brief(inputs, {})

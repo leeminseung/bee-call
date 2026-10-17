@@ -131,3 +131,18 @@ def test_end_call_goes_through_whenever_the_ai_calls_it(tmp_path):
     (tests/test_jobs_after_call.py), as "조사 끝나는 대로 다시 알려줘" asks."""
     ending, events = end_call_after(tmp_path, "아니야, 조사 끝나는 대로 다시 알려줘.")
     assert ending and [e["type"] for e in events if e["type"].startswith("end_call")] == ["end_call_requested"]
+
+
+def test_bee_is_the_user_s_memory_kept_accurate_and_tidy_with_a_light_limit():
+    """2026-10-17: when to offer a Bee change is one principle with examples, and a light limit on Bee questions
+    per call, in the instructions only (no rule in code decides it)."""
+    from voice.coordinator import BEE_NOTE_RULES
+
+    assert "Bee is the user's memory: help keep it accurate and tidy" in BEE_NOTE_RULES
+    for example in ("something lasting about themselves", "fact_create", "fact_delete", "todo_complete",
+                    '"그거 주문했어"', "todo_dismiss", "To-dos you added to Bee in earlier calls"):
+        assert example in BEE_NOTE_RULES, example
+    assert "Ask about Bee at most twice in a call" in BEE_NOTE_RULES and "never twice about the same item" in BEE_NOTE_RULES
+    for step in ("propose_bee_save", "names Bee", "quotes the item exactly", "Only after a clear yes", "save_to_bee",
+                 "undo_bee_write"):
+        assert step in BEE_NOTE_RULES, step  # the safety steps stay as they were

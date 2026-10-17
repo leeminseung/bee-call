@@ -20,6 +20,7 @@ from beelink import cli
 from beelink.calls import OurCalls
 
 MAX_CONVERSATIONS = 3
+MAX_OUR_TODOS = 8  # to-dos our earlier calls added, asked about in Bee before a call (arbitrary)
 CARD_UTTERANCES = 6
 RECENT_CONVERSATIONS = 8
 READ_TIMEOUT_S = 6.0  # one Bee CLI call took 0.9-2.6 s on 2026-10-13; this bounds a hung one (arbitrary)
@@ -35,6 +36,8 @@ class CallInputs:
     first_name: str | None = None
     # (id, conversation, transcript lines) for each conversation that led to the call
     conversations: list[tuple[int, dict[str, Any], list[dict[str, Any]]]] = field(default_factory=list)
+    # To-dos our earlier calls added that Bee still has open: {"id", "text", "added_at"}, newest first
+    our_todos: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 
@@ -61,7 +64,9 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
     reads += [asyncio.gather(cli.conversation(i, timeout=timeout), cli.transcript(i, timeout=timeout)) for i in ids]
     names = ["unconfirmed facts", "todo suggestions", "today", "recent conversations", "profile"]
     names += [f"conversation {i}" for i in ids]
-    results = await asyncio.gather(*reads, return_exceptions=True)
+    added = ours.added_todos()[:MAX_OUR_TODOS] if ours is not None else []
+    todo_reads = asyncio.gather(*(cli.todo(t["id"], timeout=timeout) for t in added), return_exceptions=True)
+    results, todo_results = await asyncio.gather(asyncio.gather(*reads, return_exceptions=True), todo_reads)
     inputs = CallInputs(inbox_dir=inbox_dir)
     for name, result in zip(names, results):
         if isinstance(result, BaseException):
@@ -72,6 +77,12 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
     inputs.today = today
     inputs.recent = recent or []
     inputs.first_name = (me or {}).get("first_name") or None
+    from beelink.writer import made_todo
+
+    for todo, found in zip(added, todo_results):
+        now = made_todo(found) if not isinstance(found, BaseException) else {}
+        if now.get("completed") is False:  # still open in Bee (a read that failed leaves it out)
+            inputs.our_todos.append({**todo, "text": str(now.get("text") or todo["text"])})
     for conv_id, pair in zip(ids, convs):
         if pair is not None:
             conv_raw, transcript_raw = pair
@@ -101,6 +112,8 @@ def save_call_inputs(session_dir: Path, inputs: CallInputs, zone: tzinfo) -> dic
     if inputs.today is not None:
         _write(folder / "today.json", inputs.today)
     _write(folder / "recent_conversations.json", inputs.recent)
+    if inputs.our_todos:
+        _write(folder / "our_open_todos.json", inputs.our_todos)
 
     card: dict[str, Any] = {"summary": None, "conversation_id": None, "started_at": None, "utterances": [],
                             "pending_fact_ids": [f["id"] for f in inputs.facts if "id" in f]}
