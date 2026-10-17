@@ -29,7 +29,8 @@ from beelink.calls import OurCalls
 from beelink.clock import now_text
 from beelink.planner import Plan
 from meta import files
-from meta.session import DAILY_NOTIFICATIONS, META_DIR, MetaSession, quiet, quiet_ends
+from meta.session import (DAILY_NOTIFICATIONS, META_DIR, MetaSession, bee_off, notes_rewritten_without_bee, quiet,
+                          quiet_ends)
 from voice.offers import AlreadyOffered, Offer, OfferStore, QuestionWaiting
 from voice.people import DEFAULT_CALL_TIME
 from voice import model_catalog, providers
@@ -78,7 +79,10 @@ time or right now. Offer a call only when talking would clearly help: a decision
 Never for small talk, never about something the user turned down. Never offer a call because a background job \
 finished or stopped after its call ended: the user continues that call from its record when they want to, so put the \
 job's result on the agenda instead. One question at a time: while the user has not answered an offer, put new topics \
-on the agenda instead."""
+on the agenda instead.
+- The evening call time is only the time an offer suggests: no call is set for it until the user says yes, so never \
+write of "tonight's call" as if one were coming. A call is booked only when Open offers shows it booked, with its \
+time."""
 DECIDING = f"""\
 ## Deciding whether to call
 {OFFER_CALL}
@@ -121,6 +125,16 @@ the to-dos it suggests) so nothing is added twice, and add them with bee_add_fac
 statement in English. Never delete, merge away or rewrite what Bee \
 already has. Finish with one sentence for the user's notification: how many you added, and that they can see and \
 edit them in the Bee app. At any other time you have no tools that change Bee."""
+# For a person who turned Bee off, until the meta agent has rewritten its notes (meta/session.py bee_turned_off; the
+# user's decision of 2026-10-18): the only time a person without Bee is told about Bee, so that nothing of it reaches
+# their calls (BC-057).
+BEE_TURNED_OFF = """\
+## Bee was turned off
+The user turned Bee off for Bee Call, so nothing that came from Bee may reach their calls any more. Your notes may \
+still hold some of it: facts Bee keeps, Bee's ids, its insights, what Bee recorded of the user's conversations and \
+voice memos, and what you planned to check in Bee. Rewrite your notes now with write_state and leave all of that out. \
+Keep what came from the calls themselves and from the user's answers to your offers. If nothing in your notes came \
+from Bee, write them again as they are."""
 FINISHING = """\
 ## Finishing
 Finish with a few sentences for the user, who reads them in the app's timeline exactly as you write them: what you \
@@ -129,14 +143,15 @@ offer_call's topic and why in {language}. The topic is the question's title on t
 user, as you would tell them why you would call (it shows on the call's card and the call's AI reads it)."""
 
 
-def instructions(bee: bool, language: str = "English") -> str:
-    """The meta agent's instructions for a person who connected Bee (`bee`) or not, the user's language named."""
+def instructions(bee: bool, language: str = "English", bee_turned_off: bool = False) -> str:
+    """The meta agent's instructions for a person who connected Bee (`bee`) or not, the user's language named.
+    `bee_turned_off`: a person without Bee whose notes wait to be rewritten without what came from Bee."""
     if bee:
         sections = [WHO_YOU_ARE, toolkit.WHAT_BEE_KNOWS, toolkit.reading_bee("meta") + "\n" + BESIDES_BEE, DECIDING,
                     NOTES_FOR_THE_NEXT_CALL, ORGANIZING, FINISHING, toolkit.INFORMATION]
     else:
-        sections = [WHO_YOU_ARE_WITHOUT_BEE, LOOKING_THINGS_UP, DECIDING_WITHOUT_BEE, NOTES_WITHOUT_BEE, FINISHING,
-                    toolkit.INFORMATION_WITHOUT_BEE]
+        sections = [WHO_YOU_ARE_WITHOUT_BEE, *([BEE_TURNED_OFF] if bee_turned_off else []), LOOKING_THINGS_UP,
+                    DECIDING_WITHOUT_BEE, NOTES_WITHOUT_BEE, FINISHING, toolkit.INFORMATION_WITHOUT_BEE]
     return "\n\n".join(sections).replace("{language}", language)
 
 
@@ -399,13 +414,16 @@ def _event_line(workspace: Path, event: dict[str, Any], memos: dict[str, dict[st
         return f"[{at}] The user declined an AI call while it rang: \"{event.get('topic')}\""
     if kind == "booked_soon":
         return f"[{at}] A booked call is coming up at {event.get('call_at')}: \"{event.get('topic')}\""
+    if kind == "bee_disconnected":  # meta/session.py bee_turned_off
+        return f"[{at}] The user turned Bee off."
     return f"[{at}] {kind}: {json.dumps({k: v for k, v in event.items() if k not in ('at', 'kind')}, ensure_ascii=False)}"
 
 
 def context(workspace: Path, events: list[dict[str, Any]], now: datetime, call_time: str | None = None,
             memos: dict[str, dict[str, Any]] | None = None,
-            conversations: dict[Any, dict[str, Any]] | None = None) -> str:
-    """The first message: the time and limits, open offers, the agent's notes and past entries, and the events."""
+            conversations: dict[Any, dict[str, Any]] | None = None, since: str | None = None) -> str:
+    """The first message: the time and limits, open offers, the agent's notes and past entries (with `since`, only
+    those from then on), and the events."""
     session, store = MetaSession(workspace), OfferStore(workspace)
     left = max(0, DAILY_NOTIFICATIONS - store.notified_on(now))
     limits = f"Notifications left today: {left} of {DAILY_NOTIFICATIONS}."
@@ -414,10 +432,11 @@ def context(workspace: Path, events: list[dict[str, Any]], now: datetime, call_t
     offers = [f"- {o.id} {o.state}: \"{o.topic}\"" + (f", call at {o.call_at}" if o.call_at else "")
               + (f", suggested {o.suggested_at}" if o.state == "asked" else "") for o in store.open(now)]
     return "\n\n".join([
-        f"It is now {now_text(now)}. The evening call time is {call_time or DEFAULT_CALL_TIME}. {limits}",
+        f"It is now {now_text(now)}. The evening call time (the time an offer suggests, not a booking) is "
+        f"{call_time or DEFAULT_CALL_TIME}. {limits}",
         "Open offers:\n" + ("\n".join(offers) if offers else "none"),
         "Your notes (state.md):\n" + session.state(),
-        "Your recent entries (meta session):\n" + session.recent_text(),
+        "Your recent entries (meta session):\n" + session.recent_text(since=since),
         "What just happened:\n" + "\n".join(_event_line(workspace, e, memos, now, conversations) for e in events),
     ])
 
@@ -436,7 +455,9 @@ class Thinker:
         # An organize run (organize_bee): it reads, and it adds to Bee; it offers or books no call.
         self.organize_tools = [t for t in TOOLS if t.name in ORGANIZE_TOOLS] + ADD_TOOLS
         # What the person reads (an offer's topic and why) is in their language (`language`, their setting).
-        self.instructions = instructions(bee, LANGUAGES.get(language, LANGUAGES["en"]).name)
+        self.language_name = LANGUAGES.get(language, LANGUAGES["en"]).name
+        self.instructions = instructions(bee, self.language_name)
+        self._rewriting = False  # this think rewrites the notes of a person who turned Bee off (BEE_TURNED_OFF)
         # The meta role as the COORDINATOR_LLM mode runs it (model_catalog.mode_role).
         self.role = role or model_catalog.mode_role("meta", coordinator_llm())
         self.send = send
@@ -476,6 +497,8 @@ class Thinker:
             if name == "write_state":
                 MetaSession(ws).write_state(str(args.get("text", "")))
                 actions.append({"tool": "write_state", "result": "notes updated"})
+                if self._rewriting:  # rewritten without Bee, as told: calls get the notes again
+                    notes_rewritten_without_bee(ws)
                 return "Saved."
             if name == "offer_call":
                 return await self._offer_call(args, now, actions)
@@ -693,7 +716,8 @@ class Thinker:
             entry = await self._organize(event, now)
             if entry.get("error"):
                 return entry
-        rest = [e for e in events if e.get("kind") != "organize_bee"]
+        # Without Bee, a Bee change from before the user turned Bee off is not looked at (BC-057).
+        rest = [e for e in events if e.get("kind") != "organize_bee" and (self.bee or e.get("kind") != "bee_change")]
         if rest or entry is None and not events:
             entry = await self._think(rest, now)
         return entry or {"at": now.isoformat(timespec="seconds"), "events": events, "decision": "already done",
@@ -701,15 +725,26 @@ class Thinker:
 
     async def _think(self, events: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
         await self._read_memos(events, now)
-        first = context(self.workspace, events, now, self.call_time, self._memos, self._conversations)
-        entry = await self._loop(events, first, self.tools, MAX_ROUNDS, now)
+        # A person who turned Bee off: the entries from before are left out, and until the notes are rewritten
+        # without Bee, each think is told to do it (meta/session.py bee_turned_off).
+        off = None if self.bee else bee_off(self.workspace)
+        self._rewriting = off is not None and not off.get("notes_rewritten")
+        first = context(self.workspace, events, now, self.call_time, self._memos, self._conversations,
+                        since=str(off.get("at")) if off is not None else None)
+        told = instructions(False, self.language_name, bee_turned_off=True) if self._rewriting else None
+        try:
+            entry = await self._loop(events, first, self.tools, MAX_ROUNDS, now, told)
+        finally:
+            self._rewriting = False
         MetaSession(self.workspace).log(entry)
         return entry
 
     async def _loop(self, events: list[dict[str, Any]], first: str, tools: list[ToolSpec], rounds: int,
-                    now: datetime) -> dict[str, Any]:
+                    now: datetime, told: str | None = None) -> dict[str, Any]:
         """One conversation with the model from `first`, the tools it may use, at most `rounds` requests: the entry
-        for the meta session, not logged yet. Never raises but CancelledError."""
+        for the meta session, not logged yet. `told`: instructions for this think other than the agent's own. Never
+        raises but CancelledError."""
+        told = told or self.instructions
         started = time.monotonic()
         usage = Usage()
         entry: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "events": events,
@@ -721,12 +756,12 @@ class Thinker:
         try:
             for _ in range(rounds):
                 if answering is None:
-                    reply = await providers.answer_with(self.role, self.instructions, turns, tools, usage=usage)
+                    reply = await providers.answer_with(self.role, told, turns, tools, usage=usage)
                     answering, entry["model"] = reply.choice, reply.model
                     if reply.instead_of:
                         entry["standby_reason"] = reply.reason
                 else:
-                    reply = await providers.reply(answering, self.instructions, turns, tools, usage=usage)
+                    reply = await providers.reply(answering, told, turns, tools, usage=usage)
                 turns.append(reply.turn)
                 if not reply.turn.calls:
                     entry["decision"] = reply.turn.text.strip()

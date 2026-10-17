@@ -976,7 +976,9 @@ async def run_call(ctx: JobContext, people: People) -> None:
     if meta.get("continue_from"):  # the user tapped "Continue this call" in an earlier call's record
         meta["earlier_call"] = earlier_call(workspace, meta["continue_from"])
         meta["continue_from"] = record_id(workspace, meta["continue_from"])  # recorded by its folder, either way
-    meta["meta_notes"] = meta_notes(workspace)  # the meta agent's agenda and open threads, for the opening
+    # The meta agent's agenda and open threads, for the opening (held back from a person who turned Bee off until
+    # they are rewritten without it, meta/session.py bee_turned_off).
+    meta["meta_notes"] = meta_notes(workspace, bee=caller.uses_bee)
     # The last calls, from their records (the user's amendment of 2026-10-18); the one a continued call has whole is
     # left out.
     meta["last_calls"] = last_calls(workspace, caller.someone.now().tzinfo, skip=meta.get("continue_from"))

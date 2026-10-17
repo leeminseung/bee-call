@@ -311,6 +311,10 @@ def test_a_yes_to_a_question_that_does_not_offer_to_organize_adds_nothing(tmp_pa
     "오늘 나온 것들 Bee에 넣어 둘까?", "Want me to save these to Bee?",
     "Bee에 쌓인 것 정리는, 지난 며칠 대화에서 오래 갈 내용만 골라서 Bee에 넣어 둘까요?",
     "최근 3일치를 정리해서 Bee에 넣어 둘까요?", "지난 사흘 동안 쌓인 기록은 Bee에 정리해 둘까요?", "Bee에 정리해 둘까요?",
+    # collect, then offer once (2026-10-18): the instructions' examples, and one thing put in Bee the same way
+    "오늘 나온 것 몇 개 Bee에 넣어 둘까요?", "오늘 나온 내용 Bee에 넣어 둘까요?", "Shall I put what came up today in Bee?",
+    "A few things from today are worth keeping. Shall I put them in Bee?", "Shall I put that in Bee?",
+    "그거 Bee에 넣어 둘까요?", "오늘 나온 거 Bee에 기억해 둘까요?",
 ])
 def test_the_organize_questions_the_ai_asked_in_measured_calls_still_count(tmp_path, fake_bee, question):
     said, _, _ = organized(tmp_path, [("assistant", question), ("user", "네, 그렇게 해 주세요.")], facts=["Drinks coffee"])

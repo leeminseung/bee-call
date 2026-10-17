@@ -222,7 +222,7 @@ async def prepare_offer(offer: Offer, person: Person, *, prepare=prepare_outboun
     It reads the Bee login chosen for the work it runs in: the person's loops choose theirs (serve_person)."""
     workspace = person.workspace
     deadline_s = prep_deadline(offer) if deadline_s is None else deadline_s
-    extra = {"agreed": agreed(offer), "meta_notes": meta_notes(workspace),
+    extra = {"agreed": agreed(offer), "meta_notes": meta_notes(workspace, bee=person.settings().bee),
              "last_calls": last_calls(workspace, person.now().tzinfo, skip=offer.continue_from)}
     if offer.continue_from:
         extra["earlier_call"] = earlier_call(workspace, offer.continue_from)

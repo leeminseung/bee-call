@@ -110,7 +110,7 @@ def test_the_evening_call_time_has_one_default(tmp_path, monkeypatch):
     noon = datetime(2026, 10, 15, 12, 0, tzinfo=SEOUL)
     assert DEFAULT_CALL_TIME == Settings().call_time == "21:00"
     assert call_time(noon) == noon.replace(hour=21)
-    assert "The evening call time is 21:00." in context(tmp_path, [], noon)
+    assert "The evening call time (the time an offer suggests, not a booking) is 21:00." in context(tmp_path, [], noon)
 
 
 def test_a_call_decision_becomes_a_question_with_the_plan_behind_it(tmp_path):

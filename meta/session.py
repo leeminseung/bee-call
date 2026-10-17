@@ -7,6 +7,7 @@ workspace/meta/ (design: the meta agent proposes the user's next step and acts o
                  and the agent's own words, shown as they are in the app's timeline.
   state.md       the agent's working notes, rewritten by the agent itself: open threads, the next call's agenda,
                  what the user turned down, what it learned the user prefers, what is worth getting to know next.
+  bee-off.json   when the user last turned Bee off, and whether the notes were rewritten without Bee since.
 
 Appending one short line is atomic on POSIX, so writers need no lock; the cursor is the inbox's byte offset.
 """
@@ -44,8 +45,47 @@ def add_event(workspace: Path, kind: str, *, now: datetime, **data: Any) -> None
         f.write(line + "\n")
 
 
-def meta_notes(workspace: Path) -> str | None:
-    """The meta agent's notes for a call's prep, or None before it has written any."""
+def _replace(path: Path, text: str) -> None:
+    """Writes a file whole: a temp file and a rename, so a reader never sees half of it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
+BEE_OFF = "bee-off.json"  # under meta/: when the user last turned Bee off, and whether the notes were rewritten since
+
+
+def bee_turned_off(workspace: Path, now: datetime) -> None:
+    """The user turned Use Bee off (the token server's /bee/disconnect; the user's decision of 2026-10-18). The meta
+    agent's notes may hold what came from Bee, so no call's prep gets them (meta_notes) until the meta agent has
+    rewritten them without it, which a bee_disconnected event wakes it to do (meta/agent.py)."""
+    _replace(workspace / META_DIR / BEE_OFF, json.dumps({"at": now.isoformat(timespec="seconds"),
+                                                         "notes_rewritten": False}) + "\n")
+    add_event(workspace, "bee_disconnected", now=now)
+
+
+def bee_off(workspace: Path) -> dict[str, Any] | None:
+    """{"at", "notes_rewritten"} from the last time the user turned Bee off; None if they never did."""
+    try:
+        found = json.loads((workspace / META_DIR / BEE_OFF).read_text())
+    except (OSError, ValueError):
+        return None
+    return found if isinstance(found, dict) else None
+
+
+def notes_rewritten_without_bee(workspace: Path) -> None:
+    """The meta agent rewrote its notes after the user turned Bee off: calls get them again."""
+    off = bee_off(workspace)
+    if off is not None and not off.get("notes_rewritten"):
+        _replace(workspace / META_DIR / BEE_OFF, json.dumps({**off, "notes_rewritten": True}) + "\n")
+
+
+def meta_notes(workspace: Path, *, bee: bool) -> str | None:
+    """The meta agent's notes for a call's prep, or None before it has written any. For a person with Bee off
+    (`bee` False), None too while the notes from before they turned Bee off wait to be rewritten without it."""
+    if not bee and (off := bee_off(workspace)) is not None and not off.get("notes_rewritten"):
+        return None
     try:
         text = (workspace / META_DIR / "state.md").read_text().strip()
     except OSError:
@@ -130,11 +170,15 @@ class MetaSession:
                 continue
         return out
 
-    def recent_text(self, limit_chars: int = 6000) -> str:
-        """The latest entries, newest last, as the agent reads them back: when, why, and what it decided."""
+    def recent_text(self, limit_chars: int = 6000, since: str | None = None) -> str:
+        """The latest entries, newest last, as the agent reads them back: when, why, and what it decided. With
+        `since` (an ISO time), only the entries from then on."""
         parts: list[str] = []
         used = 0
-        for entry in reversed(self.entries()):
+        entries = self.entries()
+        if since is not None:
+            entries = [entry for entry in entries if _not_before(entry.get("at"), since)]
+        for entry in reversed(entries):
             events = "; ".join(f"{e.get('kind')}" + (f" ({e.get('summary')})" if e.get("summary") else "")
                                for e in entry.get("events", []))
             actions = "; ".join(f"{a.get('tool')}: {a.get('result')}" for a in entry.get("actions", []))
@@ -144,7 +188,8 @@ class MetaSession:
                 break
             parts.append(text)
             used += len(text)
-        return "\n\n".join(reversed(parts)) or "Nothing yet: this is the first time you look."
+        return "\n\n".join(reversed(parts)) or ("Nothing yet." if since is not None else
+                                                "Nothing yet: this is the first time you look.")
 
     def state(self) -> str:
         try:
@@ -153,7 +198,12 @@ class MetaSession:
             return STATE_TEMPLATE
 
     def write_state(self, text: str) -> None:
-        self.dir.mkdir(parents=True, exist_ok=True)
-        tmp = self.dir / f".state.{os.getpid()}.tmp"
-        tmp.write_text(text.strip() + "\n")
-        tmp.replace(self.dir / "state.md")
+        _replace(self.dir / "state.md", text.strip() + "\n")
+
+
+def _not_before(at: Any, since: str) -> bool:
+    """Whether the ISO time `at` is `since` or later (an entry without a readable time is left out)."""
+    try:
+        return datetime.fromisoformat(str(at)) >= datetime.fromisoformat(since)
+    except (TypeError, ValueError):
+        return False

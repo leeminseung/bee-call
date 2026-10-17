@@ -134,44 +134,29 @@ the user's own topic is done; never interrupt the user's topic with them. What B
 told it: mention a kept fact when it connects, as someone who remembers would, never as a list. What Bee keeps is the \
 user's life, never yours: bring it up as theirs ("Bee says you're building a home server"), and when they ask about \
 you, answer in a few words and turn back to them."""
-# One item at a time keeps the wording measured on 2026-10-17 (its examples, and never asking in other words first).
+# Collect, then offer once (the user's decision of 2026-10-18): what comes up new in a call goes into Bee together,
+# after one question; one item at a time is only for what Bee already has and for what the user asks to put in Bee.
+# The one-item rules keep the wording measured on 2026-10-17 (their examples, and never asking in other words first).
 KEEPING_WHAT_YOU_LEARN = """\
 ## Keeping what you learn in Bee
-### One item at a time
-Without turning the call into a review of Bee, for example:
-- When the user says something lasting about themselves, even in passing ("참고로 나 매운 거 못 먹어": a \
-preference, a routine, an allergy, where they work), offer once, in your reply to it, to keep it in Bee \
-(fact_create), rather than saying you will remember it: "Shall I keep 'Can't eat spicy food' in Bee?", or, in a \
-Korean call, "Bee에 'Can't eat spicy food'로 기억해 둘까요?"
-- When the prep note lists an unconfirmed Bee fact, check it at a natural moment (fact_confirm), quoting it as Bee \
-has it: "Did Bee hear 'Bonus is 15%' right?" If the user corrects it, offer to fix it (fact_update, quoting the new \
-text); if it should not be there at all, offer to delete it (fact_delete).
-- When the user says they did what an open Bee to-do is about ("그거 주문했어"), offer to mark it done \
-(todo_complete). To-dos you added to Bee in earlier calls may be in the prep note: ask whether one is done only when \
-it fits.
-- When the user wants something done later, offer a to-do (todo_create); take one Bee suggested (todo_accept) or \
-turn it down (todo_dismiss) when they say so.
-Ask about Bee at most twice in a call, unless the user brings Bee up, and never twice about the same item.
+Each call should leave Bee a little truer without turning into a review of Bee: what comes up new, you collect as \
+the call goes and put in Bee together, after one question; what Bee already has, you check one item at a time. Ask \
+about Bee at most twice in a call, that one question included, unless the user brings Bee up, and never twice about \
+the same item. In a call where nothing lasting comes up and nothing in the prep note needs checking, ask nothing \
+about Bee.
 Write every Bee item in English, Bee's language, whatever the call's language: Bee keeps the user's memory in \
 English. To confirm, mark done, take or delete what Bee has, keep its text as Bee has it, and write a correction in \
 English.
-Changing Bee happens right away, in the call. The user can agree only to words they heard, so an offer to change Bee \
-is one reply that does two things: first it calls propose_bee_save with the item, which changes nothing in Bee yet, \
-before saying anything about Bee; then it asks one question, in the call's language, that names Bee and, in the \
-question itself, quotes the item exactly as you proposed it, such as "Shall I add 'Note the bug' to your Bee todos?" \
-or "Bee에 'My home server has to be quiet'로 기억해 둘까요?" (write Bee as "Bee" in every language). Never ask in \
-other words first ("Want me to save that to Bee?"): a yes to a question that does not quote the item saves nothing, \
-and the user has to say yes twice. Only after a clear yes to your question, call save_to_bee with the number \
-propose_bee_save gave, then tell the user in a few words what you did. A yes to any other question is no yes; only \
-the answer to your first question about an item counts, so to ask again, propose it again first. If the user asks \
-you to take it back, call undo_bee_write (a deleted fact or a dismissed suggestion cannot be brought back). If it \
-does not go through, say what save_to_bee tells you to say.
-### Several at once: organizing
-Sometimes there is more to keep than one item: several lasting things came up in this call, or the user wants Bee \
-tidied. Then, at a natural pause, offer once to organize, in one question that names Bee, in a few words and without \
-listing the items, for example "A few things from today are worth keeping. Shall I put them in Bee?", or, in a \
-Korean call, "오늘 이야기 중에 오래 갈 내용이 몇 개 있었는데, Bee에 정리해서 넣어 둘까요?". This counts as one of your \
-two Bee questions, and you never offer it while the user is in the middle of their own topic.
+### What comes up new: collect it, then offer once
+When the user says something lasting about themselves, even in passing ("참고로 나 매운 거 못 먹어": a preference, a \
+routine, an allergy, where they work), or something they mean to do later ("이번 주에 학원 알아봐야 해"), keep it in \
+mind and stay with what they are saying: ask nothing about Bee then, and do not say you will remember it. Once their \
+topic is done, at a natural pause or as the call winds down, before the goodbye, ask once whether to put what came \
+up in Bee, in one question that names Bee, in a few words and without listing the items, for example "A few things \
+from today are worth keeping. Shall I put them in Bee?", or, in a Korean call, "오늘 나온 것 몇 개 Bee에 넣어 \
+둘까요?". Ask the same way when only one thing came up ("Shall I put what came up today in Bee?", "오늘 나온 내용 \
+Bee에 넣어 둘까요?"), and not at all when nothing lasting did. Never ask it while the user is in the middle of their \
+own topic.
 After a clear yes:
 - For what came up in this call, call organize_bee with the new facts and to-dos, each one short statement in \
 English. They go into Bee at once as confirmed facts and open to-dos. Then say in a few words that it is done and \
@@ -179,8 +164,29 @@ that the user can see and edit them in the Bee app, for example "Done. You can s
 "넣었어요. Bee 앱에서 보고 고칠 수 있어요."
 - When the user wants more than this call organized (what Bee recorded over the past days), call organize_bee with \
 scope "recent". It runs in the background like a job, and the user gets one notification when it is done.
-Organizing only adds. It never deletes, merges away or rewrites what Bee already has: those stay one item at a time, \
-after a yes to that item, or in the Bee app."""
+Organizing only adds. It never deletes, merges away or rewrites what Bee already has.
+### One item at a time: what Bee already has, or what the user asks for
+Ask about a single item only for what Bee already has, or when the user asks you to put one thing in Bee ("그거 Bee에 \
+넣어 줘"), for example:
+- When the prep note lists an unconfirmed Bee fact, check it at a natural moment (fact_confirm), quoting it as Bee \
+has it: "Did Bee hear 'Bonus is 15%' right?" If the user corrects it, offer to fix it (fact_update, quoting the new \
+text); if it should not be there at all, offer to delete it (fact_delete).
+- When the user says they did what an open Bee to-do is about ("그거 주문했어"), offer to mark it done \
+(todo_complete). To-dos you added to Bee in earlier calls may be in the prep note: ask whether one is done only when \
+it fits.
+- Take a to-do Bee suggested (todo_accept) or turn it down (todo_dismiss) when the user says so.
+- When the user asks you to put one thing in Bee, offer that item (fact_create or todo_create).
+Changing Bee happens right away, in the call. The user can agree only to words they heard, so an offer to change one \
+item is one reply that does two things: first it calls propose_bee_save with the item, which changes nothing in Bee \
+yet, before saying anything about Bee; then it asks one question, in the call's language, that names Bee and, in the \
+question itself, quotes the item exactly as you proposed it, such as "Shall I add 'Note the bug' to your Bee todos?" \
+or "Bee에 'My home server has to be quiet'로 기억해 둘까요?" (write Bee as "Bee" in every language). Never ask about \
+one item in other words first ("Want me to save that to Bee?"): a yes to a question that does not quote the item \
+saves nothing, and the user has to say yes twice. Only after a clear yes to your question, call save_to_bee with the \
+number propose_bee_save gave, then tell the user in a few words what you did. A yes to any other question is no yes; \
+only the answer to your first question about an item counts, so to ask again, propose it again first. If the user \
+asks you to take it back, call undo_bee_write (a deleted fact or a dismissed suggestion cannot be brought back). If \
+it does not go through, say what save_to_bee tells you to say."""
 
 
 def instructions(audio_tags: bool = False, bee: bool = False) -> str:
@@ -243,18 +249,19 @@ PLAIN_YES = re.compile(
 SAYS_IT_REMOVES = re.compile(r"\b(?:delete|remove|dismiss|take (?:it )?out|get rid of|drop|turn (?:it )?down)|"
                              r"지우|지울|지워|삭제|빼|뺄|없애", re.IGNORECASE)
 SENTENCES = re.compile(r"(?<=[.!?。])\s+|\n")
-# The one question that offers to organize Bee: a sentence that names Bee, offers to put several things in it, and
+# The one question that offers to put what came up in Bee: a sentence that names Bee, offers to put things in it, and
 # quotes no item (a quoted item is a question about that item alone, answered with save_to_bee). Korean: it ends in
-# organizing (정리해 둘까요?), or is about several things (것들, 내용, 기록, 몇 개...) and ends in putting them in (넣어 둘까요?,
-# 저장할까요?); English: "shall I", "want me to"... with organize, tidy, or put, add, keep or save them, these, all... It
-# is the last question of the AI's turn, so the yes answers it (review of 2026-10-18, finding 1: a check for any Bee
-# question with a word like 기억, 저장 or keep let "Bee가 기억하는 바로는 매운 거 못 드시죠?" "응." write to Bee).
-ORGANIZE_KO = re.compile(r"(?:정리[^?？]{0,10}|(?:정리|것들|내용|기록|몇 ?가지|몇 ?개|전부|모두|한꺼번에).*"
-                         r"(?:넣|남겨|남길|저장|담아|추가|기록|정리)[^?？]{0,8})(?:까요|까)\s*[?？]\s*$")
+# organizing (정리해 둘까요?), or is about what came up (것, 거, 내용, 몇 개...) and ends in putting it in (넣어 둘까요?,
+# 저장할까요?, 기억해 둘까요?); English: "shall I", "want me to"... with organize, tidy, or put, add, keep or save them,
+# these, that, what came up... It is the last question of the AI's turn, so the yes answers it (review of 2026-10-18,
+# finding 1: a check for any Bee question with a word like 기억, 저장 or keep let "Bee가 기억하는 바로는 매운 거 못
+# 드시죠?" "응." write to Bee).
+ORGANIZE_KO = re.compile(r"(?:정리[^?？]{0,10}|(?:정리|것|거|내용|기록|몇 ?가지|몇 ?개|전부|모두|한꺼번에).*"
+                         r"(?:넣|남겨|남길|저장|담아|추가|기록|기억|정리)[^?？]{0,8})(?:까요|까)\s*[?？]\s*$")
 ORGANIZE_EN = re.compile(
     r"\b(?:(?:shall|should|can|may) i|(?:do you )?want me to|would you like me to|how about i)\b.*"
-    r"(?:\borgani[sz]e\b|\btidy\b|\b(?:put|add|keep|save|store|move)\s+(?:them|these|those|all|everything|it all|the "
-    r"rest|what\b|things|a few|today))", re.IGNORECASE)
+    r"(?:\borgani[sz]e\b|\btidy\b|\b(?:put|add|keep|save|store|move)\s+(?:them|these|those|that|this|it|all|"
+    r"everything|the rest|what\b|things|a few|today))", re.IGNORECASE)
 ORGANIZE_MOST = 8  # items one organize in a call adds at most (arbitrary)
 ORGANIZE_DAYS = (1, 7, 3)  # the past days an organize of what Bee recorded covers: fewest, most, and when not said
 ORGANIZED = -1  # in BeeCoordinator._claimed: an item organize_bee added
@@ -709,10 +716,11 @@ class BeeCoordinator(Coordinator):
         that names Bee and quotes the item, and call save_to_bee with the number only after the user says yes to it.
 
         Args:
-            kind: fact_create (keep something lasting the user said about themselves), fact_confirm (Bee heard a
-                fact right), fact_update (fix a fact Bee has wrong), fact_delete (take a wrong fact out; cannot be
-                undone), todo_create (a new todo), todo_accept (take Bee's suggested todo), todo_complete (mark a
-                todo done) or todo_dismiss (turn down Bee's suggested todo; cannot be undone).
+            kind: fact_create (one lasting thing the user asked you to put in Bee; what just comes up goes in
+                together with organize_bee), fact_confirm (Bee heard a fact right), fact_update (fix a fact Bee has
+                wrong), fact_delete (take a wrong fact out; cannot be undone), todo_create (one to-do the user asked
+                you to put in Bee), todo_accept (take Bee's suggested todo), todo_complete (mark a todo done) or
+                todo_dismiss (turn down Bee's suggested todo; cannot be undone).
             text: The item as your question will quote it: in English, Bee's language, for what you write
                 (fact_create, fact_update, todo_create), whatever the call's language; for the others, the fact or
                 the todo as Bee has it.
@@ -854,8 +862,9 @@ class BeeCoordinator(Coordinator):
     @function_tool
     async def organize_bee(self, context: RunContext, scope: str = "call", facts: list[str] | None = None,
                            todos: list[str] | None = None, days: int | None = None) -> str:
-        """Organize the user's Bee memory, only after a clear yes to your one question offering it (one that names
-        Bee and lists no items). Organizing only adds: it never deletes or rewrites what Bee has.
+        """Put what came up new in this call into Bee together, or organize what Bee recorded over the past days,
+        only after a clear yes to your one question offering it (one that names Bee and lists no items). Organizing
+        only adds: it never deletes or rewrites what Bee has.
 
         Args:
             scope: "call" (the default): add what came up in this call at once, facts as confirmed facts and todos as
