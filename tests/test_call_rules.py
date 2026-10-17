@@ -183,11 +183,16 @@ def test_the_item_is_proposed_and_quoted_in_the_one_reply_that_offers_the_change
 
 def test_a_lasting_fact_is_offered_to_bee_with_the_question_quoting_it_not_kept_in_words():
     """Measured 2026-10-17 (Haiku 5.5, a Korean call): told "나 땅콩 알레르기 있어.", it said "기억해 둘게요" and
-    offered nothing, though only Bee keeps it."""
+    offered nothing, though only Bee keeps it. Later rounds: in Korean calls that mentioned the allergy in passing
+    during a talk about dinner, it offered in 2 of 4 and went on about dinner in the others; in English, 4 of 4. The
+    example is now one said in passing, in Korean, and the offer comes in the reply to it. The examples are not the
+    measured lines (a peanut allergy), so the measurement is not of the example itself."""
     from voice.coordinator import BEE_NOTE_RULES
 
     assert "rather than saying you will remember it" in BEE_NOTE_RULES
-    assert "\"Shall I keep 'Allergic to peanuts' in Bee?\"" in BEE_NOTE_RULES
+    assert "\"Shall I keep 'Can't eat spicy food' in Bee?\"" in BEE_NOTE_RULES
+    assert "even in passing (\"참고로 나 매운 거 못 먹어\"" in BEE_NOTE_RULES and "in your reply to it" in BEE_NOTE_RULES
+    assert "peanut" not in BEE_NOTE_RULES.casefold()
 
 
 def test_no_notes_to_itself_are_written_since_everything_is_said():
