@@ -326,8 +326,11 @@ A voice memo can book a call too (since 2026-10-17): when the person's memo asks
 전화해서 같이 정리하자"), the server books it, as `booked` with that `call_at` and a topic in the person's language,
 and sends one plain notification, "오늘 밤 9시에 전화할게요: {topic}. 앱에서 취소할 수 있어요." / "I'll call you at 9:00 PM
 today: {topic}. You can call it off in the app." (`{"aps": {"alert": {"title": "Bee Call", "body": ...}, "sound":
-"default", "thread-id": "offers"}, "offer": <id>}`, no buttons). It is pinned and called off like any booked call; the
-app needs no change for it. A memo that asks for a call now or soon becomes a question (`asked`) instead.
+"default", "thread-id": "offers"}, "offer": <id>}`, no buttons). After tomorrow the time names the date and weekday
+("10월 20일 화요일 밤 9시에 전화할게요: …" / "I'll call you at 9:00 PM on Tuesday, October 20: …"). It is pinned and
+called off like any booked call; the app needs no change for it. A memo that asks for a time within 30 minutes of a
+call already booked joins that call: no second offer and no second notification. A memo that asks for a call now or
+soon becomes a question (`asked`) instead.
 
 ## 5. Voices: `GET /voices?language=ko`
 
