@@ -31,9 +31,13 @@ from beelink.calls import OurCalls
 
 log = logging.getLogger("beelink.watcher")
 
-STREAM_TYPES = "new-conversation,update-conversation,update-conversation-summary,journal-created,journal-text"
+STREAM_TYPES = ("new-conversation,update-conversation,update-conversation-summary,journal-created,journal-text,"
+                "journal-updated")
 # Events that mean a conversation or voice note has settled enough to look at.
 SETTLED_EVENTS = {"update-conversation-summary", "update-conversation", "journal-created"}
+# A voice memo still coming in: its text in pieces, then Bee's reply to it. Each starts the quiet period over, so a
+# memo is looked at once it is finished (2026-10-17).
+MEMO_PIECES = {"journal-text", "journal-updated"}
 
 
 @dataclass
@@ -121,9 +125,13 @@ class BeeWatcher:
 
     def on_event(self, name: str) -> None:
         """One event from `bee stream`: a settled change starts the quiet period before a catch-up, and a later one
-        starts it over; a catch-up already running (placing a call) is never cancelled."""
+        starts it over, as a piece of a voice memo does (keeping the reason it was started for); a catch-up already
+        running (placing a call) is never cancelled."""
         if name in SETTLED_EVENTS:
             self._schedule(name)
+        elif name in MEMO_PIECES:
+            pending = self._timer is not None and not self._timer.done()
+            self._schedule(self._reason if pending else name)
 
     def _schedule(self, reason: str) -> None:
         self._reason = reason

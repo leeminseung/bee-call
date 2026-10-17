@@ -313,11 +313,39 @@ def test_a_new_event_never_cancels_a_call_being_placed(tmp_path, fake_bee, monke
         watcher.on_event("update-conversation-summary")  # as bee stream reports them (server review 16)
         await asyncio.sleep(0.15)  # past the quiet period: the first catch-up is placing its call
         watcher.on_event("journal-created")
-        watcher.on_event("journal-text")  # not a settled change: it starts nothing
+        watcher.on_event("journal-text")  # a piece of the memo's text: the quiet period starts over, for the memo
         await asyncio.sleep(1.0)
 
     asyncio.run(main())
     assert finished == ["update-conversation-summary", "journal-created"]
+
+
+def test_a_voice_memo_is_looked_at_once_its_text_stopped_coming(tmp_path, fake_bee, monkeypatch):
+    """2026-10-17: a memo's text arrives in pieces (journal-text) after journal-created, and Bee's reply to it later
+    (journal-updated): each piece starts the quiet period over, so the catch-up sees the finished memo."""
+    from beelink.watcher import STREAM_TYPES
+
+    assert "journal-updated" in STREAM_TYPES.split(",") and "journal-text" in STREAM_TYPES.split(",")
+    workspace = tmp_path / "workspace"
+    one_conversation(tmp_path, monkeypatch)
+    seen = []
+
+    async def on_trigger(trigger):
+        seen.append((trigger.reason, time.monotonic()))
+
+    async def main():
+        watcher = BeeWatcher(workspace, on_trigger, debounce=0.15)
+        watcher.on_event("journal-created")
+        for _ in range(5):
+            await asyncio.sleep(0.08)  # shorter than the quiet period
+            watcher.on_event("journal-text")
+        last = time.monotonic()
+        watcher.on_event("journal-updated")  # Bee's reply came
+        await asyncio.sleep(0.6)
+        return last
+
+    last = asyncio.run(main())
+    assert [reason for reason, _ in seen] == ["journal-created"] and seen[0][1] >= last + 0.14
 
 
 def test_the_bee_login_link_is_read_as_the_readme_documents(tmp_path, monkeypatch):
