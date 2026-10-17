@@ -836,3 +836,18 @@ def test_the_notification_says_what_was_done_and_what_was_taken_out(language, bo
               BeeWrite("w2", {"kind": "todo_complete", "text": texts[1], "todo_id": 51}, "q", "a", "ok"),
               BeeWrite("w3", {"kind": "fact_delete", "text": texts[2], "fact_id": 7}, "q", "a", "ok")]
     assert summary_notification(writes, call_language(language))["aps"]["alert"]["body"] == body
+
+
+def test_in_a_korean_call_the_example_question_is_korean_with_the_english_item_inside_it(tmp_path, fake_bee):
+    """Measured 2026-10-17 (Haiku 5.5, a Korean call): told only the English example, the AI asked "그 알레르기 Bee에
+    기억해 둘까요? 'Has a peanut allergy'로 저장하려고 하는데..." with the item outside the question, so the user's yes
+    saved nothing and it had to ask again. The example it is given is now a Korean question holding the item."""
+    async def main():
+        agent, _ = await in_a_call(tmp_path, [("user", "나 땅콩 알레르기 있어.")], "ko")
+        said = await agent.propose_bee_save(None, kind="fact_create", text="Has a peanut allergy")
+        english, _ = await in_a_call(tmp_path / "en", [("user", "I'm allergic to peanuts.")])
+        return said, await english.propose_bee_save(None, kind="fact_create", text="Has a peanut allergy")
+
+    korean, english = asyncio.run(main())
+    assert "Bee에 'Has a peanut allergy' 기억해 둘까요?" in korean and "one sentence that ends with" in korean
+    assert "Shall I keep 'Has a peanut allergy' in Bee?" in english

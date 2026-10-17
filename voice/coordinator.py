@@ -175,6 +175,16 @@ ASK_LIKE = {"todo_create": "Shall I add '{text}' to your Bee todos?",
             "fact_confirm": "Did Bee hear '{text}' right?",
             "fact_update": "Shall I fix it in Bee to '{text}'?",
             "fact_delete": "Shall I delete '{text}' from Bee?"}
+# The same questions for a Korean call: the English item inside the Korean question, which ends with it (the save
+# check needs the quote in the question; a measured call asked "Bee에 기억해 둘까요?" and quoted the item after it).
+ASK_LIKE_KO = {"todo_create": "Bee 할 일로 '{text}' 넣을까요?",
+               "todo_accept": "Bee가 제안한 할 일 '{text}', 넣을까요?",
+               "todo_complete": "Bee에서 '{text}' 끝난 걸로 할까요?",
+               "todo_dismiss": "Bee가 제안한 '{text}', 뺄까요?",
+               "fact_create": "Bee에 '{text}' 기억해 둘까요?",
+               "fact_confirm": "Bee가 '{text}'라고 들었는데, 맞아요?",
+               "fact_update": "Bee에서 '{text}'로 고칠까요?",
+               "fact_delete": "Bee에서 '{text}' 지울까요?"}
 ENGLISH = call_language("en")  # what the tools tell the model is in English, like the rest of its instructions
 
 
@@ -636,9 +646,8 @@ class BeeCoordinator(Coordinator):
         number = len(self._proposals) + 1
         self._proposals[number] = Proposal(item, after=self._last_user_turn())
         return (f"Proposal {number}: {item_label(item, ENGLISH)}. Ask the user now (unless you already asked it in "
-                f"this reply), in one question that names Bee and quotes the item exactly, such as: "
-                f"{ASK_LIKE[kind].format(text=item['text'])} Call save_to_bee with proposal {number} only after they "
-                "say yes to that question.")
+                f"this reply), in one question that names Bee and quotes the item exactly, {self._ask_like(item)} Call "
+                f"save_to_bee with proposal {number} only after they say yes to that question.")
 
     @function_tool
     async def save_to_bee(self, context: RunContext, proposal: int) -> str:
@@ -655,9 +664,8 @@ class BeeCoordinator(Coordinator):
         heard = EXPIRED if found.expired else self._answer_to(found)
         if heard is None:
             return (f"Not saved: the user has not yet said yes to a question about proposal {proposal}. Ask now, in "
-                    "one question that names Bee and quotes the item exactly, such as: "
-                    f"{ASK_LIKE[found.item['kind']].format(text=found.item['text'])} Call save_to_bee again only "
-                    "after they say yes to it.")
+                    f"one question that names Bee and quotes the item exactly, {self._ask_like(found.item)} Call "
+                    "save_to_bee again only after they say yes to it.")
         if heard == EXPIRED:
             found.expired = True
             return (f"Not saved: proposal {proposal} was asked about, and the conversation went on past the answer. If "
@@ -704,6 +712,12 @@ class BeeCoordinator(Coordinator):
             return f"Could not take {what} out of Bee ({write.error}). Tell the user."
         self._recorder.event("bee_write_undone", key=write.key, kind=write.kind, text=write.text)
         return f"Took it out of Bee: {what}. Tell the user in a few words."
+
+    def _ask_like(self, item: dict) -> str:
+        """How to ask about an item, in the call's language: one sentence that ends with "?" and holds the item."""
+        templates = ASK_LIKE_KO if self._language.code == "ko" else ASK_LIKE
+        return (f"in one sentence that ends with \"?\" and holds the quoted item, such as: "
+                f"{templates[item['kind']].format(text=item['text'])}")
 
     def _last_user_turn(self) -> str | None:
         """The id of the user's last turn so far (None before they said anything)."""
