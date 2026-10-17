@@ -132,6 +132,13 @@ final class CallsListTests: XCTestCase {
         XCTAssertEqual(CallsList.Row(entry, korean: false, ownCall: nil).pills.map(\.text),
                        ["Report", "Table", "Chart", "Bee to-do 2", "Bee fact 1"])
         XCTAssertEqual(CallsList.Row(try call("2026-10-15T01:23:05+09:00"), korean: true, ownCall: nil).pills, [])
+        // What is in Bee after the call: a completed to-do and a new fact count; a turned-down suggestion, a deleted
+        // fact and a kind this build does not know take nothing in, so they do not.
+        let more = try call("2026-10-15T01:23:05+09:00",
+                            results: [write("w1", "todo_complete", "written"), write("w2", "fact_create", "written"),
+                                      write("w3", "todo_dismiss", "written"), write("w4", "fact_delete", "written"),
+                                      write("w5", "fact_merge", "written")])
+        XCTAssertEqual(CallsList.Row(more, korean: true, ownCall: nil).pills.map(\.text), ["Bee 할 일 1", "Bee 사실 1"])
     }
 
     /// The examples' rows, each from its own file entry: the marks and writes the file gives become its pills.
