@@ -187,13 +187,13 @@ Every item has `type`, `id` and `at` (when it began, or for a finished job when 
 The step, the summary and a chart's title are in the call's language only once the worker is told that language
 (section 10). Today it writes them in English.
 
-**`bee_write`**: a fact or to-do written to Bee after the person's spoken yes. Built from the call's
+**`bee_write`**: a fact or to-do written to Bee after the person's spoken yes, one item per write. Built from the call's
 `bee-writes.jsonl`, the writer's own record of every step, not from the `bee_write` events: an undo that failed and
 a write cut off by a stopped process appear only there.
 
 | Field | Meaning |
 |---|---|
-| `kind` | `todo_create`, `todo_accept`, `fact_confirm` or `fact_update`. |
+| `kind` | `todo_create` (a new to-do), `todo_accept` (Bee's suggested to-do taken), `todo_complete` (a to-do marked done), `todo_dismiss` (Bee's suggested to-do turned down), `fact_create` (a new fact Bee keeps), `fact_confirm` (Bee's fact confirmed), `fact_update` (Bee's fact corrected) or `fact_delete` (a wrong fact taken out). `todo_dismiss` and `fact_delete` cannot be undone, so they are never `undoable`; the app labels each kind in the call's language ("Bee에 기억해 뒀어요", "Bee 할 일을 끝냈어요", "Bee 제안을 뺐어요", "Bee에서 지웠어요"). |
 | `text` | The item as the AI quoted it when it asked: "토요일 촬영 장소 정하기". Null only in records from before 2026-10-15. |
 | `state` | `written`: in Bee, "넣음" (the writer's `ok`, or `undo_failed`). `undone`: taken out with "빼 줘". `unknown`: Bee may or may not have it, "Bee에서 확인해 주세요", never tried again (the writer's `unknown`, or `applying` left by a stopped process). `failed`: not in Bee. |
 | `will_retry` | A failed write of a live call: it is tried once more right after the call. False once the call is over. |

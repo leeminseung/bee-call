@@ -655,7 +655,7 @@
       ]
     },
     "bee_write": {
-      "description": "A fact or to-do the call AI wrote to the person's Bee after their spoken yes.",
+      "description": "A fact or to-do the call AI wrote to the person's Bee after their spoken yes: made, accepted, confirmed, corrected, completed, dismissed or deleted.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -684,7 +684,11 @@
             "todo_create",
             "todo_accept",
             "fact_confirm",
-            "fact_update"
+            "fact_update",
+            "fact_create",
+            "fact_delete",
+            "todo_complete",
+            "todo_dismiss"
           ]
         },
         "text": {
