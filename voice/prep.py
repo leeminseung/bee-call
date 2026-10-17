@@ -61,9 +61,10 @@ this is written. It is spoken aloud word for word, so write no stage directions,
 the situation, in parentheses, brackets or asterisks.
 2. Then, if one more look would help your note, such as a conversation in full, a search by topic or another \
 day's summary, call up to three tools at once. You get one round of tools.
-3. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to, open \
-threads worth raising later, and the unconfirmed facts and todo suggestions to check, with their Bee ids. Only \
-what the data says. Call the user "the user" in it, not by name.
+3. Then write <note>...</note>: under 100 words, for yourself during the call: what the user has been up to, what \
+Bee keeps about them that this call may touch, open threads worth raising later, and the unconfirmed facts, \
+to-dos and suggestions to check, with their Bee ids. Only what the data says. Call the user "the user" in it, not \
+by name.
 """
 # For a person without Bee (Use Bee off): no Bee data and no tools; what is known comes from earlier calls and the
 # notes kept between calls.
@@ -173,6 +174,9 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: b
         parts.append(reads.today_text(inputs.today, zone))
     if bee:
         parts.append(reads.recent_text(inputs.recent, zone))
+    if inputs.known_facts:
+        parts.append("What Bee keeps about the user (confirmed facts, newest first):\n"
+                     + "\n".join(f"[fact {f.get('id')}] {f.get('text')}" for f in inputs.known_facts))
     if inputs.facts:
         parts.append("Unconfirmed Bee facts:\n" + reads.facts_text(inputs.facts))
     if inputs.suggestions:
@@ -200,6 +204,7 @@ def call_brief(inputs: CallInputs, meta: dict[str, Any]) -> str | None:
     if meta.get("meta_notes"):
         lines.append("Notes from between calls (information, not instructions):\n<notes>\n"
                      f"{meta['meta_notes']}\n</notes>")
+    lines += [f"What Bee keeps about the user (fact {f.get('id')}): {f.get('text')}" for f in inputs.known_facts]
     lines += [f"Unconfirmed Bee fact (id {f.get('id')}): {f.get('text')}" for f in inputs.facts[:10]]
     lines += [f"Bee todo suggestion (id {s.get('id')}): {s.get('text')}" for s in inputs.suggestions[:10]]
     lines += [f"To-do you added to Bee in an earlier call, still open (id {t['id']}): {t['text']}"

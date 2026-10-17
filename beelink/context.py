@@ -21,6 +21,8 @@ from beelink.calls import OurCalls
 
 MAX_CONVERSATIONS = 3
 MAX_OUR_TODOS = 8  # to-dos our earlier calls added, asked about in Bee before a call (arbitrary)
+KNOWN_FACTS_READ = 30  # confirmed facts read before a call (Bee lists them in no promised order) (arbitrary)
+MAX_KNOWN_FACTS = 8  # of those, the newest, kept for the prep (arbitrary)
 CARD_UTTERANCES = 6
 RECENT_CONVERSATIONS = 8
 READ_TIMEOUT_S = 6.0  # one Bee CLI call took 0.9-2.6 s on 2026-10-13; this bounds a hung one (arbitrary)
@@ -38,6 +40,8 @@ class CallInputs:
     conversations: list[tuple[int, dict[str, Any], list[dict[str, Any]]]] = field(default_factory=list)
     # To-dos our earlier calls added that Bee still has open: {"id", "text", "added_at"}, newest first
     our_todos: list[dict[str, Any]] = field(default_factory=list)
+    # What Bee keeps about the user: confirmed facts, newest first (2026-10-17)
+    known_facts: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 
@@ -60,9 +64,9 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
     ids = (conversation_ids or [])[:MAX_CONVERSATIONS]
     reads = [cli.unconfirmed_facts(timeout=timeout), cli.todo_suggestions(timeout=timeout),
              cli.today_context(timeout=timeout), cli.conversations(RECENT_CONVERSATIONS, timeout=timeout),
-             cli.me(timeout=timeout)]
+             cli.me(timeout=timeout), cli.facts(limit=KNOWN_FACTS_READ, timeout=timeout)]
     reads += [asyncio.gather(cli.conversation(i, timeout=timeout), cli.transcript(i, timeout=timeout)) for i in ids]
-    names = ["unconfirmed facts", "todo suggestions", "today", "recent conversations", "profile"]
+    names = ["unconfirmed facts", "todo suggestions", "today", "recent conversations", "profile", "confirmed facts"]
     names += [f"conversation {i}" for i in ids]
     added = ours.added_todos()[:MAX_OUR_TODOS] if ours is not None else []
     todo_reads = asyncio.gather(*(cli.todo(t["id"], timeout=timeout) for t in added), return_exceptions=True)
@@ -71,12 +75,18 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
     for name, result in zip(names, results):
         if isinstance(result, BaseException):
             inputs.errors.append(f"{name}: {result}")
-    facts, suggestions, today, recent, me, *convs = (None if isinstance(r, BaseException) else r for r in results)
+    facts, suggestions, today, recent, me, known, *convs = (None if isinstance(r, BaseException) else r
+                                                             for r in results)
     inputs.facts = facts or []
     inputs.suggestions = suggestions or []
     inputs.today = today
     inputs.recent = recent or []
     inputs.first_name = (me or {}).get("first_name") or None
+    listed = [f for f in (known or {}).get("facts") or [] if isinstance(f, dict) and f.get("confirmed") is not False]
+    if ours is not None:
+        listed = ours.kept_facts(listed)
+    listed.sort(key=lambda f: f.get("created_at") if isinstance(f.get("created_at"), (int, float)) else 0, reverse=True)
+    inputs.known_facts = listed[:MAX_KNOWN_FACTS]
     from beelink.writer import made_todo
 
     for todo, found in zip(added, todo_results):
@@ -114,6 +124,8 @@ def save_call_inputs(session_dir: Path, inputs: CallInputs, zone: tzinfo) -> dic
     _write(folder / "recent_conversations.json", inputs.recent)
     if inputs.our_todos:
         _write(folder / "our_open_todos.json", inputs.our_todos)
+    if inputs.known_facts:
+        _write(folder / "known_facts.json", inputs.known_facts)
 
     card: dict[str, Any] = {"summary": None, "conversation_id": None, "started_at": None, "utterances": [],
                             "pending_fact_ids": [f["id"] for f in inputs.facts if "id" in f]}

@@ -412,3 +412,38 @@ def test_the_prep_and_the_plain_context_list_our_open_to_dos(tmp_path):
     seed = seed_text(inputs, {"direction": "inbound"}, datetime.now().astimezone(), bee=True)
     assert "To-dos you added to Bee in earlier calls, still open:\n[todo 99] 삼각대 주문하기" in seed
     assert "To-do you added to Bee in an earlier call, still open (id 99): 삼각대 주문하기" in call_brief(inputs, {})
+
+
+def test_a_call_reads_what_bee_keeps_about_the_user_newest_first(tmp_path, fake_bee, monkeypatch):
+    """2026-10-17: the prep reads the person's confirmed facts (bee facts list), newest first and at most
+    MAX_KNOWN_FACTS, so a later call can bring up something kept in an earlier one. What Bee made of our calls stays
+    out as before (BC-060), except a fact one of our calls wrote on the user's yes: that one is theirs."""
+    from beelink.calls import OurCalls
+
+    workspace = tmp_path / "workspace"
+    started = datetime.fromtimestamp(time.time() - 2 * 86400)
+    our_todo_call(workspace, {"key": "w1", "status": "applying", "item": {"kind": "fact_create", "text": "땅콩 알레르기가 있다"},
+                              "question": "q", "answer": "a", "at": "2026-10-15T20:00:00+09:00"},
+                  {"key": "w1", "status": "ok", "response": {"fact": {"id": 301, "text": "땅콩 알레르기가 있다"}},
+                   "at": "2026-10-15T20:00:01+09:00"})
+    during = int((started.timestamp() + 60) * 1000)  # inside that call
+    facts = [{"id": 300 + n, "text": f"Fact {n}", "created_at": int(time.time() * 1000) - n * 86400000,
+              "confirmed": True, "tags": []} for n in range(12)]
+    facts[1] = {"id": 301, "text": "땅콩 알레르기가 있다", "created_at": during, "confirmed": True, "tags": []}
+    facts[2] = {"id": 302, "text": "Bee heard this in our call", "created_at": during, "confirmed": True, "tags": []}
+    (tmp_path / "facts.json").write_text(json.dumps(facts[::-1], ensure_ascii=False))  # Bee promises no order
+    monkeypatch.setenv("FAKE_BEE_FACTS", str(tmp_path / "facts.json"))
+    inputs = asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
+    assert context.MAX_KNOWN_FACTS == 8
+    assert [f["id"] for f in inputs.known_facts] == [300, 301, 303, 304, 305, 306, 307, 308]  # 302: Bee's, of our call
+    assert ["facts", "list", "--limit", str(context.KNOWN_FACTS_READ), "--json"] in calls(fake_bee)
+    assert asyncio.run(context.fetch_call_inputs()).known_facts[0]["id"] == 300
+
+
+def test_the_prep_and_the_plain_context_carry_what_bee_keeps(tmp_path):
+    from voice.prep import call_brief, seed_text
+
+    inputs = context.CallInputs(known_facts=[{"id": 301, "text": "땅콩 알레르기가 있다"}])
+    seed = seed_text(inputs, {"direction": "inbound"}, datetime.now().astimezone(), bee=True)
+    assert "What Bee keeps about the user (confirmed facts, newest first):\n[fact 301] 땅콩 알레르기가 있다" in seed
+    assert "What Bee keeps about the user (fact 301): 땅콩 알레르기가 있다" in call_brief(inputs, {})

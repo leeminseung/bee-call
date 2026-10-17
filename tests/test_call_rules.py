@@ -138,7 +138,7 @@ def test_bee_is_the_user_s_memory_kept_accurate_and_tidy_with_a_light_limit():
     per call, in the instructions only (no rule in code decides it)."""
     from voice.coordinator import BEE_NOTE_RULES
 
-    assert "Bee is the user's memory: help keep it accurate and tidy" in BEE_NOTE_RULES
+    assert "Bee is the user's memory." in BEE_NOTE_RULES and "Help keep that memory accurate and tidy" in BEE_NOTE_RULES
     for example in ("something lasting about themselves", "fact_create", "fact_delete", "todo_complete",
                     '"그거 주문했어"', "todo_dismiss", "To-dos you added to Bee in earlier calls"):
         assert example in BEE_NOTE_RULES, example
@@ -146,3 +146,12 @@ def test_bee_is_the_user_s_memory_kept_accurate_and_tidy_with_a_light_limit():
     for step in ("propose_bee_save", "names Bee", "quotes the item exactly", "Only after a clear yes", "save_to_bee",
                  "undo_bee_write"):
         assert step in BEE_NOTE_RULES, step  # the safety steps stay as they were
+
+
+def test_what_bee_keeps_is_brought_up_when_it_connects_and_never_recited():
+    """2026-10-17 ("the next call starts from what Bee keeps"): the prep carries the kept facts that may connect to
+    the call into its note, and the call AI mentions one when the topic connects, never as a list."""
+    from voice.coordinator import BEE_NOTE_RULES
+
+    assert "What Bee keeps about the user" in BEE_NOTE_RULES and "never as a list" in BEE_NOTE_RULES
+    assert "what Bee keeps about them that this call may touch" in PREP_INSTRUCTIONS
