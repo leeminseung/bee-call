@@ -79,8 +79,9 @@ WITH_BEE = {"wears_bee": " The user wears Bee, a wearable that records and summa
                      "copying the memo's own words that ask for it. When it asks for a call now or soon, offer one "
                      "for now with offer_call, with its memo_id. When it asks for no call, decide as for any other "
                      "change. Bee's reply to a memo shows what Bee made of it.\n",
-            "bee_changes": " Changes to Bee (confirming or fixing a fact, adding a todo) go on the agenda: the AI "
-                           "makes them in a call, after the user agrees.",
+            "bee_changes": " Changes to Bee (keeping, confirming, fixing or deleting a fact; adding a todo, marking "
+                           "one done or turning down one Bee suggested) go on the agenda: the AI makes them in a call, "
+                           "after the user agrees.",
             "lookups": "list_files, read_file and grep over the workspace, and the bee_ tools",
             "bee_inbox": " each Bee change the watcher saw is in inbox/<time>/changed.json;",
             "sources": "Bee records, transcripts and files"}
