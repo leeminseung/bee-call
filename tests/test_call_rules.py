@@ -167,10 +167,31 @@ def test_bee_items_are_english_and_the_question_quotes_them_in_the_call_s_langua
     assert "written in the user's language" not in BEE_NOTE_RULES
 
 
-def test_the_item_is_proposed_in_the_reply_that_asks_about_it():
-    """Measured 2026-10-17 (Haiku 5.5): it asked first and proposed after the user's yes, so the yes did not count
-    and it had to ask again."""
+def test_the_item_is_proposed_and_quoted_in_the_one_reply_that_offers_the_change():
+    """Measured 2026-10-17 (Haiku 5.5): it asked first in other words ("Should I save that to Bee so it sticks
+    around?") and proposed after the user's yes, so the yes did not count and it had to ask again; in English calls
+    it did so in 3 of 3. One reply both proposes the item and asks about it, quoted, and the reason is given."""
+    from voice.coordinator import BEE_NOTE_RULES, BeeCoordinator
+
+    assert "The user can agree only to words they heard" in BEE_NOTE_RULES
+    assert "an offer to change Bee is one reply that does two things" in BEE_NOTE_RULES
+    assert "which changes nothing in Bee yet" in BEE_NOTE_RULES
+    assert "Never ask in other words first (\"Want me to save that to Bee?\")" in BEE_NOTE_RULES
+    assert "the user has to say yes twice" in BEE_NOTE_RULES
+    assert "changes nothing in Bee, so it needs no yes" in BeeCoordinator.propose_bee_save.__doc__
+
+
+def test_a_lasting_fact_is_offered_to_bee_with_the_question_quoting_it_not_kept_in_words():
+    """Measured 2026-10-17 (Haiku 5.5, a Korean call): told "나 땅콩 알레르기 있어.", it said "기억해 둘게요" and
+    offered nothing, though only Bee keeps it."""
     from voice.coordinator import BEE_NOTE_RULES
 
-    assert "First, in the reply in which you ask, call propose_bee_save with the item" in BEE_NOTE_RULES
-    assert "so that the user's yes to your question counts" in BEE_NOTE_RULES
+    assert "rather than saying you will remember it" in BEE_NOTE_RULES
+    assert "\"Shall I keep 'Allergic to peanuts' in Bee?\"" in BEE_NOTE_RULES
+
+
+def test_no_notes_to_itself_are_written_since_everything_is_said():
+    """Measured 2026-10-17 (Haiku 5.5, a Korean call): one reply ended with "Also, the allergy is a lasting fact
+    about the user. Offer once to keep it in Bee. Propose it first.", which the user would have heard."""
+    assert "no notes to yourself" in instructions(audio_tags=False)
+    assert "no notes to yourself" in instructions(audio_tags=True)

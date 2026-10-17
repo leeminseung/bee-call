@@ -326,6 +326,57 @@ def test_a_proposal_is_saved_once(tmp_path, fake_bee):
     assert writes_to_bee(fake_bee) == [["todos", "create"]]
 
 
+def test_one_yes_writes_an_item_once_even_when_it_was_proposed_twice(tmp_path, fake_bee):
+    """Measured 2026-10-17 (Haiku 5.5, a Korean call): the AI proposed the same fact twice in one reply and asked
+    once. Both proposals answer to that one yes, so saving both would have kept the fact in Bee twice."""
+    async def main():
+        agent, _ = await in_a_call(tmp_path, [("user", "나 땅콩 알레르기 있어.")], "ko")
+        first = await proposed(agent, kind="fact_create", text="Has a peanut allergy")
+        second = await proposed(agent, kind="fact_create", text="Has a peanut allergy.")
+        await say(agent, ("assistant", "Bee에 'Has a peanut allergy'로 기억해 둘까요?"), ("user", "응."))
+        both = await asyncio.gather(agent.save_to_bee(None, proposal=second), agent.save_to_bee(None, proposal=first))
+        undone = await agent.undo_bee_write(None)
+        third = await proposed(agent, kind="fact_create", text="Has a peanut allergy")
+        await say(agent, ("assistant", "다시 Bee에 'Has a peanut allergy'로 기억해 둘까요?"), ("user", "응, 넣어 줘."))
+        return both, undone, await agent.save_to_bee(None, proposal=third)
+
+    (saved, again), undone, after_undo = asyncio.run(main())
+    assert saved.startswith("Saved to Bee") and again.startswith("Not saved") and "not saved twice" in again
+    assert undone.startswith("Took it out of Bee") and after_undo.startswith("Saved to Bee")  # taken out, then wanted
+    assert [c for c in writes_to_bee(fake_bee) if c == ["facts", "create"]] == [["facts", "create"]] * 2
+
+
+def test_a_proposal_made_after_the_quoted_question_and_its_yes_is_told_to_save_without_asking_again(tmp_path,
+                                                                                                    fake_bee):
+    """Measured 2026-10-17 (Haiku 5.5, a Korean call): it asked "Bee에 'My home server has to be quiet'로 기억해
+    둘까요?", heard "응.", and proposed the item only then; told to ask now, it asked three more times and never
+    saved. Its question just before the yes counts (_asked_just_before), and propose_bee_save now says so."""
+    async def main():
+        agent, _ = await in_a_call(tmp_path, [("assistant", "Bee에 'My home server has to be quiet'로 기억해 둘까요?"),
+                                              ("user", "응.")], "ko")
+        said = await agent.propose_bee_save(None, kind="fact_create", text="My home server has to be quiet")
+        vague, _ = await in_a_call(tmp_path / "vague", [("assistant", "Want me to remember that in Bee?"),
+                                                        ("user", "Yes.")])
+        asked_vaguely = await vague.propose_bee_save(None, kind="fact_create", text="Allergic to peanuts")
+        return said, await agent.save_to_bee(None, proposal=1), asked_vaguely
+
+    said, saved, asked_vaguely = asyncio.run(main())
+    assert "call save_to_bee with proposal 1 now, without asking again" in said and "Ask the user now" not in said
+    assert saved.startswith("Saved to Bee")
+    assert "Ask the user now" in asked_vaguely and "without asking again" not in asked_vaguely  # no item was quoted
+
+
+def test_saving_before_proposing_says_to_propose_first(tmp_path, fake_bee):
+    async def main():
+        agent, _ = await in_a_call(tmp_path, [("assistant", "Shall I keep 'Allergic to peanuts' in Bee?"),
+                                              ("user", "Yes.")])
+        return await agent.save_to_bee(None, proposal=1)
+
+    said = asyncio.run(main())
+    assert said.startswith("There is no proposal 1; call propose_bee_save first")
+    assert "it says whether you still need to ask" in said and writes_to_bee(fake_bee) == []
+
+
 def test_two_saves_at_once_are_kept_apart(tmp_path, fake_bee):
     """LiveKit runs the tool calls of one reply at the same time (livekit/agents/voice/generation.py); each write
     keeps its own record, so one cannot take the other's result or be undone in its place."""

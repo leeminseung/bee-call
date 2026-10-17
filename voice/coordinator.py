@@ -38,11 +38,12 @@ from worker.runner import JobNotification, JobRunner, short
 
 # How the call AI may write sounds (voice/audio_tags.py): no tags at all, or, when its voice performs them, a few
 # ElevenLabs audio tags used sparingly. One of the "instructions for speech that sounds real" to tune by ear.
-SPEECH_RULE = ('- Write only words to say: no stage directions, sound effects or descriptions of the situation, in '
-               'parentheses, brackets or asterisks, such as "(pauses)", "[laughs]" or "*sighs*".')
+SPEECH_RULE = ('- Write only words to say: no notes to yourself about what to do next, and no stage directions, '
+               'sound effects or descriptions of the situation, in parentheses, brackets or asterisks, such as '
+               '"(pauses)", "[laughs]" or "*sighs*".')
 SPEECH_RULE_WITH_TAGS = (
-    '- Write only words to say: no stage directions or descriptions of the situation, in parentheses, brackets or '
-    'asterisks, such as "(pauses)" or "*smiles*". Your voice can make a few sounds, written exactly as these tags: '
+    '- Write only words to say: no notes to yourself about what to do next, and no stage directions or descriptions '
+    'of the situation, in parentheses, brackets or asterisks, such as "(pauses)" or "*smiles*". Your voice can make a few sounds, written exactly as these tags: '
     + ", ".join(f"[{tag}]" for tag in SPOKEN) + '. Use them sparingly, only where a person on the phone would make '
     'that sound: at most one in a reply, and most replies have none. Put a tag where the sound happens, as in '
     '"[laughs] That\'s a good one."')
@@ -122,7 +123,8 @@ Bee is the user's memory. What Bee keeps about the user (in the prep note) is wh
 when it connects to what they are talking about, as someone who remembers would, never as a list. Help keep that \
 memory accurate and tidy, without turning the call into a review of Bee. For example:
 - When the user says something lasting about themselves (a preference, a routine, an allergy, where they work), \
-offer once to keep it in Bee (fact_create).
+offer once to keep it in Bee (fact_create), rather than saying you will remember it: "Shall I keep 'Allergic to \
+peanuts' in Bee?"
 - When the prep note lists an unconfirmed Bee fact, check it at a natural moment (fact_confirm), quoting it as Bee \
 has it: "Did Bee hear 'Bonus is 15%' right?" If the user corrects it, offer to fix it (fact_update, quoting the new \
 text); if it should not be there at all, offer to delete it (fact_delete).
@@ -134,14 +136,18 @@ turn it down (todo_dismiss) when they say so.
 Ask about Bee at most twice in a call, unless the user brings Bee up, and never twice about the same item.
 Write every Bee item in English, Bee's language, whatever the call's language: Bee keeps the user's memory in \
 English. To confirm, mark done, take or delete what Bee has, keep its text as Bee has it, and write a correction in \
-English. Changing Bee happens right away, in the call, in three steps. First, in the reply in which you ask, call \
-propose_bee_save with the item, so that the user's yes to your question counts. Then, in that reply, ask one question, in the call's language, that names Bee and, in the question \
-itself, quotes the item exactly as you proposed it, such as "Shall I add 'Note the bug' to your Bee todos?" or "Bee에 'My home server has to be \
-quiet'로 기억해 둘까요?" (write Bee as "Bee" in every language). Only after a clear yes to that question, call \
-save_to_bee with the number propose_bee_save gave, then tell the user in a few words what you did. A yes to any other question, or one \
-given before you proposed the item, is no yes; only the answer to your first question about an item counts, so to \
-ask again, propose it again first. If the user asks you to take it back, call undo_bee_write (a deleted fact or a \
-dismissed suggestion cannot be brought back). If it does not go through, say what save_to_bee tells you to say.
+English.
+Changing Bee happens right away, in the call. The user can agree only to words they heard, so an offer to change Bee \
+is one reply that does two things: it calls propose_bee_save with the item, which changes nothing in Bee yet, and it \
+asks one question, in the call's language, that names Bee and, in the question itself, quotes the item exactly as \
+you proposed it, such as "Shall I add 'Note the bug' to your Bee todos?" or "Bee에 'My home server has to be \
+quiet'로 기억해 둘까요?" (write Bee as "Bee" in every language). Never ask in other words first ("Want me to save \
+that to Bee?"): a yes to a question that does not quote the item saves nothing, and the user has to say yes twice. \
+Only after a clear yes to your question, call save_to_bee with the number propose_bee_save gave, then tell the user \
+in a few words what you did. A yes to any other question is no yes; only the answer to your first question about an \
+item counts, so to ask again, propose it again first. If the user asks you to take it back, call undo_bee_write (a \
+deleted fact or a dismissed suggestion cannot be brought back). If it does not go through, say what save_to_bee \
+tells you to say.
 """
 
 NOTE_WAIT_S = 2.0  # the first reply waits at most this long for a prep note still being written (arbitrary)
@@ -574,6 +580,7 @@ class BeeCoordinator(Coordinator):
         super().__init__(recorder, jobs, workspace, **kwargs)
         self._bee_writes = BeeWrites(recorder.dir)  # this call's Bee writes, kept in its folder
         self._proposals: dict[int, Proposal] = {}  # items the AI means to ask about, by number (propose_bee_save)
+        self._claimed: dict[tuple, int] = {}  # each item saved or tried in this call (same_item), by its proposal
 
     @function_tool
     async def search_bee(self, context: RunContext, query: str) -> str:
@@ -607,9 +614,9 @@ class BeeCoordinator(Coordinator):
     async def propose_bee_save(self, context: RunContext, kind: str, text: str, fact_id: int | None = None,
                                suggestion_id: int | None = None, todo_id: int | None = None,
                                alarm_at: str | None = None) -> str:
-        """Before you ask the user whether to change something in their Bee: fixes the item and gives it a number.
-        Then ask one question that names Bee and quotes the item, and call save_to_bee with the number only after
-        the user says yes to it.
+        """Call it in the reply that asks the user whether to change something in their Bee, before the question: it
+        fixes the item and gives it a number, and changes nothing in Bee, so it needs no yes. Then ask one question
+        that names Bee and quotes the item, and call save_to_bee with the number only after the user says yes to it.
 
         Args:
             kind: fact_create (keep something lasting the user said about themselves), fact_confirm (Bee heard a
@@ -644,7 +651,11 @@ class BeeCoordinator(Coordinator):
                 return "todo_id is required."
             item["todo_id"] = todo_id
         number = len(self._proposals) + 1
-        self._proposals[number] = Proposal(item, after=self._last_user_turn())
+        proposal = self._proposals[number] = Proposal(item, after=self._last_user_turn())
+        if self._asked_just_before(proposal, self._turns(), item["text"]):  # its yes counts (_answer_to)
+            return (f"Proposal {number}: {item_label(item, ENGLISH)}. Your words just before the user's last answer "
+                    f"asked about it, quoting it: if that answer was a clear yes, call save_to_bee with proposal "
+                    f"{number} now, without asking again; if it was not, do not save it.")
         return (f"Proposal {number}: {item_label(item, ENGLISH)}. Ask the user now (unless you already asked it in "
                 f"this reply), in one question that names Bee and quotes the item exactly, {self._ask_like(item)} Call "
                 f"save_to_bee with proposal {number} only after they say yes to that question.")
@@ -658,7 +669,8 @@ class BeeCoordinator(Coordinator):
         """
         found = self._proposals.get(proposal)
         if found is None:
-            return f"There is no proposal {proposal}; call propose_bee_save first."
+            return (f"There is no proposal {proposal}; call propose_bee_save first, and it says whether you still "
+                    "need to ask.")
         if found.saved:
             return f"Proposal {proposal} was already saved; it is not saved twice."
         heard = EXPIRED if found.expired else self._answer_to(found)
@@ -680,7 +692,13 @@ class BeeCoordinator(Coordinator):
             found.expired = True
             return (f"Not saved: the answer is not a yes (\"{answer}\"). If the user wants it, propose it again with "
                     "propose_bee_save and ask about it alone.")
+        same = self._claimed.get(same_item(found.item))
+        if same is not None:  # proposed twice, both answered by one yes (measured 2026-10-17)
+            found.expired = True
+            return (f"Not saved: {item_label(found.item, ENGLISH)} is proposal {same}, already saved or tried in this "
+                    "call, and it is not saved twice.")
         found.saved = True
+        self._claimed[same_item(found.item)] = proposal  # before anything waits, so two saves at once see it
         async with self.waiting(context):
             write = await self._bee_writes.begin(found.item, question, answer)
             try:
@@ -711,6 +729,7 @@ class BeeCoordinator(Coordinator):
         if write.status != "undone":
             return f"Could not take {what} out of Bee ({write.error}). Tell the user."
         self._recorder.event("bee_write_undone", key=write.key, kind=write.kind, text=write.text)
+        self._claimed.pop(same_item(write.item), None)  # taken out, it may be asked about and saved again
         return f"Took it out of Bee: {what}. Tell the user in a few words."
 
     def _ask_like(self, item: dict) -> str:
@@ -795,6 +814,12 @@ def asks_about(text: str | None, item: str) -> bool:
     quoted = re.compile(f"{quote}{re.escape(_plain(item))}[.!?。]?{quote}")
     return any(quoted.search(sentence.casefold()) for sentence in SENTENCES.split(text)
                if QUESTION.search(sentence.rstrip(QUOTES + " ")[-1:]))
+
+
+def same_item(item: dict) -> tuple:
+    """What makes two items the same change to Bee: the kind, the text compared loosely, and what it changes."""
+    return (item.get("kind"), _plain(str(item.get("text") or "")), item.get("fact_id"), item.get("suggestion_id"),
+            item.get("todo_id"), item.get("alarm_at"))
 
 
 def _plain(text: str) -> str:
