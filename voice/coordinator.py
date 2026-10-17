@@ -132,11 +132,13 @@ it fits.
 - When the user wants something done later, offer a to-do (todo_create); take one Bee suggested (todo_accept) or \
 turn it down (todo_dismiss) when they say so.
 Ask about Bee at most twice in a call, unless the user brings Bee up, and never twice about the same item.
-Changing Bee happens right away, in the call, in three steps. First call propose_bee_save with the item, written in \
-the user's language. Then ask one question that names Bee and, in the question itself, quotes the item exactly as \
-you proposed it, such as "Shall I add 'Note the bug' to your Bee todos?" (write Bee as "Bee" in every language, as \
-in "Bee에 할 일로 '버그 기록'을 넣을까요?"). Only after a clear yes to that question, call save_to_bee with the \
-number propose_bee_save gave, then tell the user in a few words what you did. A yes to any other question, or one \
+Write every Bee item in English, Bee's language, whatever the call's language: Bee keeps the user's memory in \
+English. To confirm, mark done, take or delete what Bee has, keep its text as Bee has it, and write a correction in \
+English. Changing Bee happens right away, in the call, in three steps. First call propose_bee_save with the item. \
+Then ask one question, in the call's language, that names Bee and, in the question itself, quotes the item exactly \
+as you proposed it, such as "Shall I add 'Note the bug' to your Bee todos?" or "Bee에 'My home server has to be \
+quiet'로 기억해 둘까요?" (write Bee as "Bee" in every language). Only after a clear yes to that question, call \
+save_to_bee with the number propose_bee_save gave, then tell the user in a few words what you did. A yes to any other question, or one \
 given before you proposed the item, is no yes; only the answer to your first question about an item counts, so to \
 ask again, propose it again first. If the user asks you to take it back, call undo_bee_write (a deleted fact or a \
 dismissed suggestion cannot be brought back). If it does not go through, say what save_to_bee tells you to say.
@@ -147,7 +149,6 @@ NOTE_WAIT_S = 2.0  # the first reply waits at most this long for a prep note sti
 # call has been silent this long, so the caller does not think it dropped (Matt, 2026-10-15). One rule for
 # every such tool; how long they may wait at most is beelink/cli.py CALL_WAIT_S.
 WAITING_LINE_AFTER_S = 2.0
-HANGUL = re.compile(r"[\uac00-\ud7a3]")
 QUESTION = re.compile(r"[?？]")
 NAMES_BEE = re.compile(r"(?<![A-Za-z])Bee(?![a-z]| Call)")  # "Bee", "Bee에"; not "been", "beer" or "Bee Call"
 # A sentence of the answer that starts by saying no. Such an answer never counts as a yes to saving, whatever the
@@ -605,8 +606,9 @@ class BeeCoordinator(Coordinator):
                 fact right), fact_update (fix a fact Bee has wrong), fact_delete (take a wrong fact out; cannot be
                 undone), todo_create (a new todo), todo_accept (take Bee's suggested todo), todo_complete (mark a
                 todo done) or todo_dismiss (turn down Bee's suggested todo; cannot be undone).
-            text: The item as your question will quote it, in the user's language for what you write
-                (fact_create, fact_update, todo_create); for the others, the fact or the todo as Bee has it.
+            text: The item as your question will quote it: in English, Bee's language, for what you write
+                (fact_create, fact_update, todo_create), whatever the call's language; for the others, the fact or
+                the todo as Bee has it.
             fact_id: The Bee fact id (fact_confirm, fact_update, fact_delete).
             suggestion_id: The Bee todo suggestion id (todo_accept, todo_dismiss).
             todo_id: The Bee todo id (todo_complete).
@@ -616,9 +618,6 @@ class BeeCoordinator(Coordinator):
             return f"Unknown kind {kind!r}; use one of {', '.join(KINDS)}."
         if not text or not text.strip():
             return "text is required: the item as your question will quote it."
-        if kind in ("fact_update", "fact_create", "todo_create") and self._language.code == "ko" \
-                and not HANGUL.search(text):
-            return "Write the text in Korean, the user's language, then propose it again."
         item: dict = {"kind": kind, "text": text.strip()}
         if kind in ("fact_confirm", "fact_update", "fact_delete"):
             if fact_id is None:

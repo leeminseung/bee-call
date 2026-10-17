@@ -79,7 +79,7 @@ def test_the_examples_are_the_code_s_output(tmp_path):
         "report": True, "table": True, "chart": True, "bee_writes": 2}
     kept = [(i["kind"], i["text"], i["state"], i["undoable"]) for i in ended["items"] if i["type"] == "bee_write"]
     assert kept == [("todo_create", "토요일 촬영 장소 정하기", "written", False),
-                    ("fact_create", "거의 매일 도서관에서 일한다", "written", False)]  # a kind of 2026-10-17 in the example
+                    ("fact_create", "Works at the library almost every day", "written", False)]  # 2026-10-17: a new kind, in English
     assert [i["id"] for i in ended["items"]][:6] == ["speech-9", "speech-14", "speech-19", "speech-24", "write-w1",
                                                      "speech-29"]
     assert ended["captions_included"] == {"person": 14, "ai": 13}

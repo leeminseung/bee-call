@@ -249,7 +249,7 @@
       "id": "speech-139",
       "at": "2026-10-15T01:28:50+09:00",
       "speaker": "ai",
-      "text": "Bee에 '거의 매일 도서관에서 일한다'를 기억해 둘까요?",
+      "text": "Bee에 'Works at the library almost every day'로 기억해 둘까요?",
       "interrupted": false
     },
     {
@@ -273,7 +273,7 @@
       "id": "write-w2",
       "at": "2026-10-15T01:28:53+09:00",
       "kind": "fact_create",
-      "text": "거의 매일 도서관에서 일한다",
+      "text": "Works at the library almost every day",
       "state": "written",
       "will_retry": false,
       "undoable": false
@@ -299,5 +299,5 @@
     "person": 14,
     "ai": 13
   },
-  "version": "a2c9cda747a42566"
+  "version": "d59148b8ce779647"
 }

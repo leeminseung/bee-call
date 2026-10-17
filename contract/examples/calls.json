@@ -102,7 +102,7 @@
           "id": "write-w2",
           "at": "2026-10-15T01:28:53+09:00",
           "kind": "fact_create",
-          "text": "거의 매일 도서관에서 일한다",
+          "text": "Works at the library almost every day",
           "state": "written",
           "will_retry": false,
           "undoable": false
@@ -208,5 +208,5 @@
   ],
   "more": true,
   "before": "MjAyNi0xMC0xNFQwODozMTowMCswOTowMHxjYWxsLW1pbnNldW5nLTIwMjYxMDE0LTA4MzEwMA",
-  "version": "f630e583079ac00f"
+  "version": "2a6de123b519c2b2"
 }

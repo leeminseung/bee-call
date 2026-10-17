@@ -323,16 +323,23 @@ def test_two_saves_at_once_are_kept_apart(tmp_path, fake_bee):
     assert len({e["key"] for e in events(rec) if e["type"] == "bee_write"}) == 2
 
 
-def test_the_text_written_to_bee_is_in_the_person_s_language(tmp_path, fake_bee):
+def test_a_korean_call_writes_bee_items_in_english_and_asks_in_korean_quoting_them(tmp_path, fake_bee):
+    """2026-10-17, the user's decision: English is Bee's language (Bee writes its own summaries in English for a
+    Korean speaker), so the item is English whatever the call's language, and the Korean question quotes it whole.
+    The language is the instructions' to set; no check in code turns an item away for its language."""
     async def main():
-        agent, _ = await in_a_call(tmp_path, [("user", "버그를 찾았어요.")], "ko")
-        english = await agent.propose_bee_save(None, kind="todo_create", text="Note the bug")
-        korean = await saved(agent, "Bee에 할 일로 '버그 기록'을 넣을까요?", "네.", kind="todo_create", text="버그 기록")
-        return english, korean
+        agent, _ = await in_a_call(tmp_path, [("user", "홈서버는 조용해야 해. 그리고 버그도 하나 찾았어.")], "ko")
+        fact = await saved(agent, "Bee에 'My home server has to be quiet'로 기억해 둘까요?", "응.",
+                           kind="fact_create", text="My home server has to be quiet")
+        todo = await saved(agent, "Bee 할 일에 'Note the bug'을 넣을까요?", "네, 넣어 줘.",
+                           kind="todo_create", text="Note the bug")
+        return fact, todo
 
-    english, korean = asyncio.run(main())
-    assert "Korean" in english and korean.startswith("Saved to Bee")
-    assert writes_to_bee(fake_bee) == [["todos", "create"]]
+    fact, todo = asyncio.run(main())
+    assert fact.startswith("Saved to Bee: fact 'My home server has to be quiet'")
+    assert todo.startswith("Saved to Bee: todo 'Note the bug'")
+    assert ["facts", "create", "--text", "My home server has to be quiet", "--json"] in calls(fake_bee)
+    assert ["todos", "create", "--text", "Note the bug", "--json"] in calls(fake_bee)
 
 
 def test_take_it_out_undoes_the_last_write_of_the_call(tmp_path, fake_bee):
