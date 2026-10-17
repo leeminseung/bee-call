@@ -54,8 +54,13 @@ KINDS = ("fact_confirm", "fact_update", "fact_create", "fact_delete", "todo_crea
 NOT_UNDOABLE = ("fact_delete", "todo_dismiss")  # Bee cannot bring a deleted fact or a dismissed suggestion back
 ADDING = ("fact_confirm", "fact_update", "fact_create", "todo_create", "todo_accept")  # how the summary groups them
 MAYBE_WRITTEN = ("unknown", "applying")  # Bee may or may not have the item; never written again by itself
+# Changes to something Bee has that go by its id and are hard or impossible to take back: what the id points to is
+# read from Bee when the AI proposes the change, the AI asks about it as Bee has it, and the write keeps it (review
+# of 2026-10-17, finding 1: a delete went by the id the model named, whatever text the user heard).
+AS_BEE_HAS_IT = ("fact_delete", "todo_complete", "todo_dismiss")
 CLOCK_SLACK_S = 120  # Bee's clock and this machine's may differ; a todo made this much before a write is older
 TODO_PAGES = 10  # pages of 50 todos looked through for a write that may have gone in; more cannot be told
+FACT_PAGES = 10  # the same for facts, in each of Bee's two lists (confirmed, unconfirmed)
 
 
 @dataclass
@@ -135,6 +140,20 @@ def the_fact(response: Any) -> dict[str, Any]:
     return response if shaped else {}
 
 
+async def as_bee_has_it(item: dict[str, Any]) -> dict[str, Any] | None:
+    """What a change in AS_BEE_HAS_IT acts on, as Bee shows it now: the fact, the todo or the todo suggestion; None
+    when Bee shows no such thing. Raises when Bee cannot be read."""
+    kind = item["kind"]
+    if kind == "fact_delete":
+        return the_fact(await cli.fact(item["fact_id"], timeout=cli.CALL_WAIT_S)) or None
+    if kind == "todo_complete":
+        return made_todo(await cli.todo(item["todo_id"], timeout=cli.CALL_WAIT_S)) or None
+    if kind == "todo_dismiss":
+        pending = await cli.todo_suggestions(limit=50, timeout=cli.CALL_WAIT_S)
+        return next((s for s in pending if isinstance(s, dict) and s.get("id") == item["suggestion_id"]), None)
+    raise ValueError(f"{kind} is not read before it is proposed")
+
+
 async def take_back(write: BeeWrite) -> dict[str, Any]:
     """Undoes a write that went in."""
     if write.kind in ("todo_create", "todo_accept"):
@@ -202,11 +221,12 @@ class BeeWrites:
         with self.path.open("a") as f:
             f.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
 
-    async def begin(self, item: dict[str, Any], question: str, answer: str) -> BeeWrite:
+    async def begin(self, item: dict[str, Any], question: str, answer: str,
+                    before: dict[str, Any] | None = None) -> BeeWrite:
         """Records a write the user said yes to, as "applying", before anything reaches Bee; `question` is what the
-        AI asked, `answer` the user's reply. apply() then writes it."""
-        before = None
-        if item.get("kind") == "fact_update":  # kept so the user can take the fix back
+        AI asked, `answer` the user's reply, `before` what it changes as Bee had it (AS_BEE_HAS_IT). apply() then
+        writes it."""
+        if before is None and item.get("kind") == "fact_update":  # kept so the user can take the fix back
             try:
                 before = the_fact(await cli.fact(item["fact_id"], timeout=cli.CALL_WAIT_S)) or None
             except Exception:
@@ -321,19 +341,26 @@ async def in_bee_after_all(write: BeeWrite) -> dict[str, Any] | bool | None:
             return False  # still suggested: not accepted (or dismissed) yet
         return None  # accepted or dismissed, here or in the Bee app meanwhile
     if write.kind == "fact_create":  # as for a todo: Bee may have made it before its error
-        for unconfirmed in (False, True):
-            page = await cli.facts(limit=50, unconfirmed=unconfirmed)
-            listed = page.get("facts")
-            if not isinstance(listed, list):
-                return None
-            for fact in listed:
-                if not isinstance(fact, dict) or _plain(fact.get("text")) != _plain(write.text):
-                    continue
-                made = fact.get("created_at")
-                if isinstance(made, (int, float)) and write.began is not None \
-                        and made / 1000 < write.began - CLOCK_SLACK_S:
-                    continue  # an older fact of the same words
-                return {"fact": fact}
+        for unconfirmed in (False, True):  # made unconfirmed, and confirmed unless that failed too
+            cursor = None
+            for _ in range(FACT_PAGES):  # every page: Bee promises no order (review of 2026-10-17, finding 5)
+                page = await cli.facts(limit=50, cursor=cursor, unconfirmed=unconfirmed)
+                listed = page.get("facts")
+                if not isinstance(listed, list):
+                    return None
+                for fact in listed:
+                    if not isinstance(fact, dict) or _plain(fact.get("text")) != _plain(write.text):
+                        continue
+                    made = fact.get("created_at")
+                    if isinstance(made, (int, float)) and write.began is not None \
+                            and made / 1000 < write.began - CLOCK_SLACK_S:
+                        continue  # an older fact of the same words
+                    return {"fact": fact}
+                cursor = page.get("next_cursor")
+                if not cursor:
+                    break
+            else:
+                return None  # more facts than are looked through
         return False
     if write.kind == "todo_complete":
         todo = made_todo(await cli.todo(write.item["todo_id"]))

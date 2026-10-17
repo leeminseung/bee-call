@@ -25,7 +25,7 @@ from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_inst
 from beelink import reads
 from beelink.calls import OurCalls
 from beelink.clock import now_text
-from beelink.writer import KINDS, NOT_UNDOABLE, BeeWrites, event_fields, item_label, label
+from beelink.writer import AS_BEE_HAS_IT, KINDS, NOT_UNDOABLE, BeeWrites, as_bee_has_it, event_fields, item_label, label
 from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
 from voice.recorder import CallRecorder
@@ -168,6 +168,10 @@ AFFIRMATIVE = re.compile(r"^\W*(?:(?:음|어|아|그|저|um|uh|hmm|well|oh)\W+)?
                          r"absolutely\b|of course\b|sounds good\b|that'?s right\b|right\b|correct\b|"
                          r"네|넵|넹|예|응|그래|그럼|좋아|좋습니다|좋네요|넣어|해 ?줘|해 ?주세요|맞아|맞습니다|그렇게|부탁|"
                          r"물론|당연|오케이)", re.IGNORECASE)
+# Words anywhere in the answer that take its yes back: "Yes. Actually no, don't delete it.", "Yeah wait no, keep
+# it.", "네, 아 잠깐만요 지우지 마세요." (review of 2026-10-17, finding 1: each of these deleted the fact).
+TAKES_IT_BACK = re.compile(r"\b(?:wait,? no|no,? wait|actually,? no|actually,? don'?t|never ?mind|scratch that|"
+                           r"forget (?:it|that)|on second thought)\b|잠깐|아니다|아니야|아냐|생각해 ?보니", re.IGNORECASE)
 SENTENCES = re.compile(r"(?<=[.!?。])\s+|\n")
 QUOTES = "'\"‘’“”「」『』«»"
 EXPIRED = "expired"  # a proposal whose question was answered and passed (BeeCoordinator._answer_to)
@@ -567,6 +571,7 @@ class Proposal:
     after: str | None
     saved: bool = False
     expired: bool = False
+    before: dict | None = None  # what it changes, as Bee had it when it was proposed (AS_BEE_HAS_IT)
 
 
 class BeeCoordinator(Coordinator):
@@ -650,14 +655,29 @@ class BeeCoordinator(Coordinator):
             if todo_id is None:
                 return "todo_id is required."
             item["todo_id"] = todo_id
+        before, as_bee_has_it_note = None, ""
+        if kind in AS_BEE_HAS_IT:  # asked about as Bee has it, so the user hears what the id points to
+            what = {"fact_delete": f"fact {fact_id}", "todo_complete": f"todo {todo_id}",
+                    "todo_dismiss": f"todo suggestion {suggestion_id}"}[kind]
+            try:
+                async with self.waiting(context):
+                    before = await as_bee_has_it(item)
+            except Exception as exc:
+                return (f"Could not read {what} from Bee ({short(str(exc) or type(exc).__name__, 120)}), so it cannot "
+                        "be changed now. Tell the user in a few words.")
+            if not before or not isinstance(before.get("text"), str) or not before["text"].strip():
+                return f"Bee has no {what}. Take the id from the prep note, bee_today or search_bee."
+            if _plain(before["text"]) != _plain(item["text"]):
+                as_bee_has_it_note = f" Bee has it as '{before['text']}': quote that, not other words."
+            item["text"] = before["text"]
         number = len(self._proposals) + 1
-        proposal = self._proposals[number] = Proposal(item, after=self._last_user_turn())
-        if self._asked_just_before(proposal, self._turns(), item["text"]):  # its yes counts (_answer_to)
+        proposal = self._proposals[number] = Proposal(item, after=self._last_user_turn(), before=before)
+        if kind not in NOT_UNDOABLE and self._asked_just_before(proposal, self._turns(), item["text"]):
             return (f"Proposal {number}: {item_label(item, ENGLISH)}. Your words just before the user's last answer "
                     f"asked about it, quoting it: if that answer was a clear yes, call save_to_bee with proposal "
                     f"{number} now, without asking again; if it was not, do not save it.")
-        return (f"Proposal {number}: {item_label(item, ENGLISH)}. Ask the user now (unless you already asked it in "
-                f"this reply), in one question that names Bee and quotes the item exactly, {self._ask_like(item)} Call "
+        return (f"Proposal {number}: {item_label(item, ENGLISH)}.{as_bee_has_it_note} Ask the user now (unless you "
+                f"already asked it in this reply), in one question that names Bee and quotes the item exactly, {self._ask_like(item)} Call "
                 f"save_to_bee with proposal {number} only after they say yes to that question.")
 
     @function_tool
@@ -692,6 +712,10 @@ class BeeCoordinator(Coordinator):
             found.expired = True
             return (f"Not saved: the answer is not a yes (\"{answer}\"). If the user wants it, propose it again with "
                     "propose_bee_save and ask about it alone.")
+        if TAKES_IT_BACK.search(answer):
+            found.expired = True
+            return (f"Not saved: the answer takes the yes back (\"{answer}\"). If the user does want it, propose it "
+                    "again with propose_bee_save and ask about it alone.")
         same = self._claimed.get(same_item(found.item))
         if same is not None:  # proposed twice, both answered by one yes (measured 2026-10-17)
             found.expired = True
@@ -700,7 +724,7 @@ class BeeCoordinator(Coordinator):
         found.saved = True
         self._claimed[same_item(found.item)] = proposal  # before anything waits, so two saves at once see it
         async with self.waiting(context):
-            write = await self._bee_writes.begin(found.item, question, answer)
+            write = await self._bee_writes.begin(found.item, question, answer, before=found.before)
             try:
                 await self._bee_writes.apply(write)
             finally:  # also when the tool is cut off mid-write: the record shows the write, and that Bee may have it
@@ -768,8 +792,8 @@ class BeeCoordinator(Coordinator):
             return EXPIRED  # the turn it followed is no longer in the conversation
         item = proposal.item["text"]
         asked = [i for i, turn in enumerate(later) if turn.role == "assistant" and asks_about(turn.text_content, item)]
-        if not asked:
-            return self._asked_just_before(proposal, turns, item)
+        if not asked:  # what cannot be undone counts only when asked about after it was proposed
+            return None if proposal.item["kind"] in NOT_UNDOABLE else self._asked_just_before(proposal, turns, item)
         answered = next((i for i in range(asked[0] + 1, len(later)) if later[i].role == "user"), None)
         if answered is None:
             return None

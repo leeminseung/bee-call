@@ -150,8 +150,11 @@ if cmd[:2] == ["facts", "create"]:  # made unconfirmed, as Bee does for a fact f
     if facts_file:
         json.dump(made_facts() + [fact], open(facts_file, "w"))
     out({"fact": fact})
-if cmd[:2] == ["facts", "list"]:  # the facts made here (the --unconfirmed list is answered above)
-    out({"facts": made_facts(), "next_cursor": None})
+if cmd[:2] == ["facts", "list"]:  # the facts made here, a page at a time (the --unconfirmed list is answered above)
+    limit = int(cmd[cmd.index("--limit") + 1]) if "--limit" in cmd else 50
+    start = int(cmd[cmd.index("--cursor") + 1]) if "--cursor" in cmd else 0
+    more = start + limit < len(made_facts())
+    out({"facts": made_facts()[start:start + limit], "next_cursor": str(start + limit) if more else None})
 if cmd[:2] == ["facts", "delete"]:
     out({"deleted": True, "id": int(cmd[2])})
 if cmd[:2] == ["todos", "get"]:
