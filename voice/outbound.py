@@ -41,7 +41,7 @@ from beelink.clock import parse_time
 from beelink.planner import COOLDOWN, MAX_AGE, OUTBOUND_LOG, RulePlanner, call_in_progress, last_outbound
 from beelink.watcher import BeeWatcher, Trigger
 from voice import voip_push
-from voice.continuation import earlier_call
+from voice.continuation import earlier_call, last_calls
 from voice.dispatch import DECLINES, RING_SECONDS, place_call
 from voice.costs import SpendLog, day_budget
 from voice.language import CallLanguage, call_language
@@ -222,7 +222,8 @@ async def prepare_offer(offer: Offer, person: Person, *, prepare=prepare_outboun
     It reads the Bee login chosen for the work it runs in: the person's loops choose theirs (serve_person)."""
     workspace = person.workspace
     deadline_s = prep_deadline(offer) if deadline_s is None else deadline_s
-    extra = {"agreed": agreed(offer), "meta_notes": meta_notes(workspace)}
+    extra = {"agreed": agreed(offer), "meta_notes": meta_notes(workspace),
+             "last_calls": last_calls(workspace, person.now().tzinfo, skip=offer.continue_from)}
     if offer.continue_from:
         extra["earlier_call"] = earlier_call(workspace, offer.continue_from)
     return await prepare(plan_of(offer), extra=extra, spend=SpendLog(workspace), bee=person.settings().bee,

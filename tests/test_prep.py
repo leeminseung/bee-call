@@ -311,3 +311,78 @@ def test_the_prep_of_a_call_a_memo_asked_for_reads_the_memo_and_bee_s_reply(fake
     assert "Bee's reply to it: 이사 준비 목록을 정리해 드릴게요." in seed and "Bee's to-dos from it: 이사 업체 알아보기" in seed
     assert seed.index("The voice memo behind this call") < seed.index("What changed in Bee")  # before the rest
     assert "They agreed to this call: the user asked for this call in a voice memo" in seed
+
+
+# ---------- the user's amendment of 2026-10-18: the last calls, and a note that compacts what came before ----------
+
+def a_record(workspace, folder: str, started: str, lines: list[tuple[str, str]], *, title: str | None = None,
+             ended: str = "goodbye") -> None:
+    """One earlier call's record: its events (started, its end) and its transcript."""
+    path = workspace / folder
+    path.mkdir(parents=True)
+    events = [{"t": 0, "type": "call_started", "room": f"call-{folder}", "started_at": started}]
+    if ended == "goodbye":
+        events += [{"t": 50, "type": "end_call_requested"},
+                   {"t": 51, "type": "session_closed", "reason": "CloseReason.USER_INITIATED"}]
+    elif ended == "hung up":
+        events.append({"t": 51, "type": "session_closed", "reason": "CloseReason.PARTICIPANT_DISCONNECTED"})
+    elif ended == "dropped":
+        events.append({"t": 51, "type": "session_closed", "reason": "CloseReason.JOB_SHUTDOWN"})
+    events.append({"t": 52, "type": "call_ended"})
+    if title:
+        events.append({"t": 55, "type": "call_titled", "title": title})
+    (path / "events.jsonl").write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events))
+    talk = "".join(f"- 00:{n:02d}.0 **{who}:** {text}\n" for n, (who, text) in enumerate(lines))
+    (path / "transcript.md").write_text("# Call\n\n" + talk)
+
+
+def test_the_prep_reads_the_last_three_calls_built_from_their_records(tmp_path):
+    """Each with its title, when it was, how it ended and its last few lines, from the call records (no model call);
+    at most three, the newest last."""
+    from voice.continuation import last_calls
+
+    ws = tmp_path / "workspace"
+    a_record(ws, "2026-10-16/0900", "2026-10-16T09:00:00+09:00", [("User", "Old news.")], title="Oldest call")
+    a_record(ws, "2026-10-18/2000", "2026-10-18T20:00:00+09:00", [("User", "Saturday hike?"), ("AI", "Sounds fun.")],
+             title="Planning the hike", ended="dropped")
+    a_record(ws, "2026-10-19/1200", "2026-10-19T12:00:00+09:00", [("AI", "Lunch?"), ("User", "Gimbap again.")],
+             title=None, ended="hung up")
+    a_record(ws, "2026-10-19/2130", "2026-10-19T21:30:00+09:00",
+             [("User", f"Line {n}") for n in range(8)] + [("User", "Let's pick the offer up tomorrow. Bye!"),
+                                                          ("AI", "Talk tomorrow. Bye!")], title="The two job offers")
+    text = last_calls(ws, NOW.tzinfo)
+    assert "Oldest call" not in text  # three at most
+    assert text.index("Planning the hike") < text.index("Gimbap again.") < text.index("The two job offers")
+    assert '"Planning the hike"' in text and "Sun Oct 18, 8:00 PM" in text and "it dropped" in text
+    assert "the user hung up" in text and "no title" in text
+    assert "it ended with a goodbye, and you ended the call" in text
+    assert "User: Let's pick the offer up tomorrow. Bye!" in text and "AI (you): Talk tomorrow. Bye!" in text
+    assert "Line 1" not in text  # only its last few lines
+    assert last_calls(tmp_path / "nobody", NOW.tzinfo) is None
+    assert "The two job offers" not in last_calls(ws, NOW.tzinfo, skip="2026-10-19/2130")  # the call continued
+
+
+def test_the_seed_carries_the_last_calls_for_a_person_with_bee_or_without(tmp_path):
+    for bee in (True, False):
+        seed = seed_text(CallInputs(), {"direction": "inbound", "last_calls": "Your last calls with the user ..."},
+                         NOW, bee=bee)
+        assert "Your last calls with the user ..." in seed
+
+
+def test_the_prep_is_told_to_compact_what_came_before_into_what_this_call_must_know():
+    """The user's texts (2026-10-18) for "What you are doing" and "Your note"; the opening and "What to read" stay."""
+    from voice.prep import PREP_INSTRUCTIONS
+
+    assert ("## What you are doing\nYou are the voice of Bee Call, which the user talks with on the phone. A call is "
+            "about to start, and the phone is ringing on their side while you get ready. In these seconds you compact "
+            "what came before into what this call must know: from the meta agent's notes, the last few calls and what "
+            "changed in Bee since the last call, pick the context this call cannot do without, the way a good "
+            "assistant glances at their notes before answering.") in PREP_INSTRUCTIONS
+    assert ("## Your note\nThen write <note>...</note>: under 100 words, for yourself during the call. It is the context "
+            "this call must know, compacted from what came before; leave out whatever this call will not need. Include "
+            "what applies:\n- where things stand: the threads still open from recent calls, and how the last call "
+            "ended;\n- what the user has been up to, from Bee since the last call;\n- what the user wants from calls "
+            "like this one: tone, topics to avoid, things they asked not to repeat;\n- what this call could get to "
+            "know about the user, from the meta agent's notes;\n- the unconfirmed facts, to-dos and suggestions to "
+            "check, with their Bee ids.\nOnly what the data says. Call the user \"the user\" in it, not by name."
+            ) in PREP_INSTRUCTIONS

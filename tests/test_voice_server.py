@@ -1150,3 +1150,27 @@ def test_every_kind_of_line_the_code_writes_to_a_call_s_record_is_in_the_readme(
     assert {"call_started", "claude_turn", "job_standby", "call_titled", "bee_write"} <= set(kinds)  # the walk works
     assert {kind: sorted(where) for kind, where in kinds.items() if f"`{kind}`" not in documented} == {}
 
+
+
+def test_the_prep_of_a_call_the_user_starts_reads_the_last_calls(tmp_path, monkeypatch, quick):
+    """The user's amendment of 2026-10-18: the prep's first message carries the last three calls, built from their
+    records."""
+    from tests.test_prep import a_record
+
+    me = signed_in(tmp_path)
+    a_record(me.workspace, "2026-10-14/2100", "2026-10-14T21:00:00+09:00", [("User", "Let's pick it up tomorrow.")],
+             title="The two job offers")
+    client = Converse(text(OPENING + NOTE))
+    with_prep_model(monkeypatch, client)
+    call = FakeCall(me.people, {"direction": "inbound", "person": "matt"})
+    use_fakes(monkeypatch, call)
+
+    async def main():
+        call.join()
+        await agent.run_call(call, me.people)
+        await call.end()
+
+    asyncio.run(main())
+    first = client.requests[0]["messages"][0]["content"][0]["text"]
+    assert "Your last calls with the user, oldest first" in first and '"The two job offers"' in first
+    assert "User: Let's pick it up tomorrow." in first

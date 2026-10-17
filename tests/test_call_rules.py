@@ -166,7 +166,8 @@ def test_what_bee_keeps_is_brought_up_when_it_connects_and_never_recited():
     the call into its note, and the call AI mentions one when the topic connects, never as a list."""
 
     assert "What Bee keeps about the user" in BEE_INSTRUCTIONS and "never as a list" in BEE_INSTRUCTIONS
-    assert "what Bee keeps about them that this call may touch" in PREP_INSTRUCTIONS
+    # The prep note is what this call must know, compacted from what came before (the user's text, 2026-10-18).
+    assert "It is the context this call must know, compacted from what came before" in PREP_INSTRUCTIONS
 
 
 def test_bee_items_are_english_and_the_question_quotes_them_in_the_call_s_language():

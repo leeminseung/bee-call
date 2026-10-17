@@ -99,7 +99,7 @@ def test_what_to_get_to_know_next_goes_from_the_meta_agent_s_notes_to_the_prep_n
     assert "The next call's prep reads them first, so they are how what you learned reaches the call." in text
     assert ("and what is worth getting to know about the user next: a gap in what Bee keeps, two facts that disagree, "
             "an insight the user might want to talk through.") in text
-    assert "what this call could get to know about the user (from the meta agent's notes)" in PREP_INSTRUCTIONS
+    assert "- what this call could get to know about the user, from the meta agent's notes;" in PREP_INSTRUCTIONS
     assert ("the meta agent's notes (open threads and the agenda for this call), and what changed in Bee since the "
             "last call. Start from those.") in PREP_INSTRUCTIONS
     from meta.session import STATE_TEMPLATE
