@@ -997,9 +997,9 @@ def test_a_call_booked_from_a_memo_is_called_off_from_the_app_and_carries_its_me
 
     now = datetime(2026, 10, 17, 18, 30, tzinfo=SEOUL)
     store = OfferStore(tmp_path)
-    offer = store.book_from_memo("이사 준비 정리", now.replace(hour=21, minute=0), now, reason="메모에서 부탁하셨어요.",
-                                 memo_id="j-41", asked="오늘 밤 9시에 전화해서 같이 정리하자")
-    assert offer.view("ko", SEOUL)["state"] == "booked"  # the app shows its "Call off"
+    offer, joined = store.book_from_memo("이사 준비 정리", now.replace(hour=21, minute=0), now,
+                                         reason="메모에서 부탁하셨어요.", memo_id="j-41", asked="오늘 밤 9시에 전화해서 같이 정리하자")
+    assert offer.view("ko", SEOUL)["state"] == "booked" and not joined  # the app shows its "Call off"
     plan = plan_of(offer)
     assert plan.memo_ids == ["j-41"] and json.loads(call_metadata("outbound", plan))["memo_ids"] == ["j-41"]
     assert "voice memo" in agreed(offer) and "오늘 밤 9시에 전화해서 같이 정리하자" in agreed(offer)
@@ -1009,3 +1009,32 @@ def test_a_call_booked_from_a_memo_is_called_off_from_the_app_and_carries_its_me
     assert english["aps"]["alert"]["body"] == "I'll call you at 9:00 PM today: 이사 준비 정리. You can call it off in the app."
     assert "category" not in english["aps"]  # a plain notification: no buttons
     assert store.answer(offer.id, "decline", now).state == "declined"
+
+
+def test_a_memo_asking_for_a_time_near_a_booked_call_joins_it_and_one_further_off_is_booked(tmp_path):
+    """Review of 2026-10-17, finding 3: two memos asking for 9 tonight booked two calls at 21:00."""
+    now = datetime(2026, 10, 17, 18, 30, tzinfo=SEOUL)
+    store = OfferStore(tmp_path)
+    first, _ = store.book_from_memo("이사", now.replace(hour=21, minute=0), now, reason="r", memo_id="j-41", asked="a")
+    near, joined = store.book_from_memo("짐", now.replace(hour=21, minute=20), now, reason="r", memo_id="j-42", asked="b")
+    assert joined and near.id == first.id and near.memo_ids == ["j-41", "j-42"]
+    assert near.call_at == first.call_at and near.topic == "이사"  # the call stays as booked and told
+    apart, joined = store.book_from_memo("청소", now.replace(hour=22, minute=0), now, reason="r", memo_id="j-43",
+                                         asked="c")
+    assert not joined and apart.id != first.id and len(store.all()) == 2
+
+
+@pytest.mark.parametrize("days, ko, en", [
+    (0, "오늘 밤 9시에 전화할게요", "I'll call you at 9:00 PM today"),
+    (1, "내일 밤 9시에 전화할게요", "I'll call you at 9:00 PM tomorrow"),
+    (3, "10월 20일 화요일 밤 9시에 전화할게요", "I'll call you at 9:00 PM on Tuesday, October 20"),
+])
+def test_the_memo_booking_notification_names_the_day_of_the_call(tmp_path, days, ko, en):
+    """Review of 2026-10-17, finding 4: a call booked for three days ahead read "tomorrow"."""
+    from voice.offers import memo_booked_notification
+
+    now = datetime(2026, 10, 17, 18, 30, tzinfo=SEOUL)
+    offer, _ = OfferStore(tmp_path).book_from_memo("이사", (now + timedelta(days=days)).replace(hour=21, minute=0), now,
+                                                   reason="r", memo_id="j-41", asked="a")
+    assert memo_booked_notification(offer, now, call_language("ko"))["aps"]["alert"]["body"].startswith(ko)
+    assert memo_booked_notification(offer, now, call_language("en"))["aps"]["alert"]["body"].startswith(en)

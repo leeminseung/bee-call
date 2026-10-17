@@ -348,6 +348,29 @@ def test_a_voice_memo_is_looked_at_once_its_text_stopped_coming(tmp_path, fake_b
     assert [reason for reason, _ in seen] == ["journal-created"] and seen[0][1] >= last + 0.14
 
 
+def test_a_burst_of_events_that_never_stops_is_looked_at_within_the_longest_wait(tmp_path, fake_bee, monkeypatch):
+    """Review of 2026-10-17, finding 6: with an event every 0.2 s and a 0.3 s quiet period, nothing was looked at
+    until the events stopped. A conversation Bee keeps updating is looked at once the longest wait is up; a voice
+    memo's pieces still start the quiet period over (above), since a memo ends."""
+    workspace = tmp_path / "workspace"
+    one_conversation(tmp_path, monkeypatch)
+    seen = []
+
+    async def on_trigger(trigger):
+        seen.append(time.monotonic())
+
+    async def main():
+        watcher = BeeWatcher(workspace, on_trigger, debounce=0.3, longest_wait=1.0)
+        started = time.monotonic()
+        while time.monotonic() - started < 2.5:
+            watcher.on_event("update-conversation")
+            await asyncio.sleep(0.2)
+        return started
+
+    started = asyncio.run(main())
+    assert seen and seen[0] - started < 1.4
+
+
 def test_the_bee_login_link_is_read_as_the_readme_documents(tmp_path, monkeypatch):
     """Outside test seam 8 (README, "A Bee login"): `bee login --no-wait` must exit 0 and print, on its output or
     error stream, `Authentication link: https://...`; the first such link is the one the app opens. Without one, the
@@ -392,15 +415,23 @@ def todo_write(key: str, todo_id: int, text: str, *after: str) -> list[dict]:
 
 def test_a_call_reads_the_to_dos_our_earlier_calls_added_that_are_still_open(tmp_path, fake_bee, monkeypatch):
     """2026-10-17: the prep reads open to-dos Bee Call made earlier, so a later call can ask whether one is done. A
-    to-do taken back in its call, or marked done since, is left out; each is asked about in Bee (todos get)."""
+    to-do taken back in its call, or marked done since, is left out. One page of Bee's to-dos is read for all of
+    them (review of 2026-10-17, finding 7: one `todos get` each made up to 21 Bee processes start at once before a
+    call); one not on that page is left out, as one Bee could not be asked about is."""
     from beelink.calls import OurCalls
 
     workspace = tmp_path / "workspace"
-    our_todo_call(workspace, *todo_write("w1", 99, "삼각대 주문하기"), *todo_write("w2", 100, "Call Dana", "undone"))
+    our_todo_call(workspace, *todo_write("w1", 99, "삼각대 주문하기"), *todo_write("w2", 100, "Call Dana", "undone"),
+                  *todo_write("w3", 101, "Email Jun"))
+    todos = tmp_path / "todos.json"
+    todos.write_text(json.dumps([{"id": 99, "text": "Order the camera tripod", "created_at": 1, "completed": False},
+                                 {"id": 100, "text": "Call Dana", "created_at": 1, "completed": False}]))
+    monkeypatch.setenv("FAKE_BEE_TODOS", str(todos))
     inputs = asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
-    assert [(t["id"], t["text"]) for t in inputs.our_todos] == [(99, "Reply to the recruiter")]  # as Bee has it now
-    assert ["todos", "get", "99", "--json"] in calls(fake_bee) and ["todos", "get", "100", "--json"] not in calls(fake_bee)
-    monkeypatch.setenv("FAKE_BEE_TODO_DONE", "1")
+    assert [(t["id"], t["text"]) for t in inputs.our_todos] == [(99, "Order the camera tripod")]  # as Bee has it now
+    assert [c[:2] for c in calls(fake_bee)].count(["todos", "list"]) == 1
+    assert not [c for c in calls(fake_bee) if c[:2] == ["todos", "get"]]
+    todos.write_text(json.dumps([{"id": 99, "text": "Order the camera tripod", "created_at": 1, "completed": True}]))
     assert asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace))).our_todos == []
     assert asyncio.run(context.fetch_call_inputs()).our_todos == []  # without our calls, nothing of them is read
 

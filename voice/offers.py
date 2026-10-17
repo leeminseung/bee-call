@@ -62,6 +62,9 @@ class QuestionWaiting(ValueError):
         self.waiting = waiting
 
 
+BOOKED_NEAR = timedelta(minutes=30)  # a memo asking for a call this close to a booked one joins it (arbitrary)
+
+
 class AlreadyOffered(ValueError):
     """A Bee conversation that already had an offer, whatever became of it: one conversation leads to at most one
     offer (BC-014)."""
@@ -327,16 +330,24 @@ class OfferStore:
                                  f"({earlier.id}, {earlier.state})")
 
     def book_from_memo(self, topic: str, call_at: datetime, now: datetime, *, reason: str, memo_id: str,
-                       asked: str, inbox: str | None = None) -> Offer:
+                       asked: str, inbox: str | None = None) -> tuple[Offer, bool]:
         """The call a voice memo asks for, at the time it asks ("오늘 밤 9시에 전화해서 같이 정리하자"): the memo is the
-        user's yes, so it is booked, and the person can call it off in the app (meta/agent.py book_call)."""
+        user's yes, so it is booked, and the person can call it off in the app (meta/agent.py book_call). A memo
+        asking for a time within BOOKED_NEAR of a call already booked joins that call instead, which then reads it
+        too; the call keeps its time and topic (review of 2026-10-17, finding 3: two memos booked two calls at
+        21:00). Returns the offer, and whether the memo joined a call booked before."""
         offer = Offer(id=self._new_id(now), state="booked", reason=reason, topic=topic, kind="voice note",
                       call_at=_iso(call_at), inbox=inbox, memo_ids=[memo_id], asked=asked,
                       history=[{"at": _iso(now), "state": "booked"}])
         with self._lock():
             for earlier in self.all():
                 self._once([], [memo_id], earlier)
-            return self._save(offer)
+            near = next((o for o in self.all() if o.state == "booked" and o.at("call_at") is not None
+                         and abs(o.at("call_at") - call_at) <= BOOKED_NEAR), None)
+            if near is not None:
+                near.memo_ids = [*near.memo_ids, memo_id]
+                return self._save(near), True
+            return self._save(offer), False
 
     def book(self, topic: str, call_at: datetime, now: datetime, continue_from: str | None = None,
              language: CallLanguage | None = None) -> Offer:
@@ -463,12 +474,20 @@ def clock_label(moment: datetime, language: CallLanguage) -> str:
     return moment.strftime("%-I:%M %p")
 
 
+KO_WEEKDAYS = "월화수목금토일"
+
+
 def when_label(moment: datetime, now: datetime, language: CallLanguage) -> str:
+    """When a call is, as the user reads it: "오늘 밤 9시", "9:00 PM tomorrow", and after tomorrow its date and
+    weekday (review of 2026-10-17, finding 4: a call three days ahead read "tomorrow")."""
     moment = moment.astimezone(now.tzinfo)  # on the person's clock now
-    tomorrow = moment.date() != now.date()
+    days = (moment.date() - now.date()).days
     if language.code == "ko":
-        return f"{'내일' if tomorrow else '오늘'} {clock_label(moment, language)}"
-    return f"{clock_label(moment, language)} {'tomorrow' if tomorrow else 'today'}"
+        day = "오늘" if days <= 0 else "내일" if days == 1 else \
+            f"{moment.month}월 {moment.day}일 {KO_WEEKDAYS[moment.weekday()]}요일"
+        return f"{day} {clock_label(moment, language)}"
+    day = "today" if days <= 0 else "tomorrow" if days == 1 else f"on {moment:%A, %B} {moment.day}"
+    return f"{clock_label(moment, language)} {day}"
 
 
 NOT_PLACED = {  # why an agreed call was not placed, as the user reads it

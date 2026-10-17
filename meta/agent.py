@@ -155,6 +155,10 @@ def clean(value: Any, limit: int) -> str:
 
 MEMO_CHARS = 1500  # of a voice memo's text, in the agent's first message
 MEMO_READ_S = 8.0  # one memo read from Bee before a think (arbitrary)
+MEMOS_SHOWN = 3  # voice memos of one Bee change shown to the agent, and read from Bee for it (arbitrary)
+# A memo recorded longer ago than this books no call: "tonight" in it meant another night (review of 2026-10-17,
+# finding 2: a memo four days old, back in a later batch, booked a call for tonight). Arbitrary.
+MEMO_BOOK_HOURS = 12
 
 
 def memo_ids(workspace: Path, events: list[dict[str, Any]]) -> list[str]:
@@ -167,15 +171,37 @@ def memo_ids(workspace: Path, events: list[dict[str, Any]]) -> list[str]:
             changed = json.loads((workspace / str(event.get("inbox")) / "changed.json").read_text())
         except (OSError, ValueError):
             continue
-        for journal in changed.get("journals") or []:
+        for journal in (changed.get("journals") or [])[:MEMOS_SHOWN]:
             if isinstance(journal, dict) and journal.get("id") is not None and str(journal["id"]) not in found:
                 found.append(str(journal["id"]))
     return found
 
 
-def _memo_lines(memo: dict[str, Any]) -> str:
+def recorded(memo: dict[str, Any], now: datetime) -> datetime | None:
+    """When a voice memo was recorded (Bee's epoch milliseconds), on the person's clock; None if Bee did not say."""
+    made = memo.get("created_at")
+    if not isinstance(made, (int, float)) or isinstance(made, bool):
+        return None
+    return datetime.fromtimestamp(made / 1000, now.tzinfo)
+
+
+def ago(then: datetime, now: datetime) -> str:
+    """How long ago, in words: "1 minute ago", "3 hours ago", "4 days ago"."""
+    minutes = max(0, int((now - then).total_seconds() // 60))
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes} minute{'s' * (minutes != 1)} ago"
+    if minutes < 48 * 60:
+        return f"{minutes // 60} hour{'s' * (minutes // 60 != 1)} ago"
+    return f"{minutes // 1440} days ago"
+
+
+def _memo_lines(memo: dict[str, Any], now: datetime | None = None) -> str:
     text = str(memo.get("text") or memo.get("transcript") or "").strip()
-    line = f"\n  voice memo {memo.get('id')}: \"{text[:MEMO_CHARS]}\""
+    made = recorded(memo, now) if now is not None else None
+    when = f" (recorded {made:%A, %B} {made.day} at {made:%H:%M}, {ago(made, now)})" if made and now else ""
+    line = f"\n  voice memo {memo.get('id')}{when}: \"{text[:MEMO_CHARS]}\""
     reply = memo.get("aiResponse") if isinstance(memo.get("aiResponse"), dict) else {}
     if reply.get("message"):
         line += f"\n    Bee's reply to it: {reply['message']}"
@@ -184,7 +210,8 @@ def _memo_lines(memo: dict[str, Any]) -> str:
     return line
 
 
-def _event_line(workspace: Path, event: dict[str, Any], memos: dict[str, dict[str, Any]] | None = None) -> str:
+def _event_line(workspace: Path, event: dict[str, Any], memos: dict[str, dict[str, Any]] | None = None,
+                now: datetime | None = None) -> str:
     """One event as the agent reads it, with the Bee change's essentials so it need not open the file for them: a
     voice memo whole, as Bee has it now (`memos`, read with bee journals get), with Bee's reply to it."""
     kind, at = event.get("kind"), event.get("at")
@@ -198,8 +225,8 @@ def _event_line(workspace: Path, event: dict[str, Any], memos: dict[str, dict[st
         for c in [c for c in changed.get("conversations", []) if not kept or c.get("id") in kept][:6]:
             line += (f"\n  conversation {c.get('id')} ({c.get('utterances_count') or '?'} utterances, "
                      f"{c.get('state', '')}): {c.get('short_summary') or 'no summary yet'}")
-        for j in changed.get("journals", [])[:3]:
-            line += _memo_lines((memos or {}).get(str(j.get("id"))) or j)
+        for j in changed.get("journals", [])[:MEMOS_SHOWN]:
+            line += _memo_lines((memos or {}).get(str(j.get("id"))) or j, now)
         others = {k: len(v) for k, v in changed.items() if isinstance(v, list) and k not in ("conversations", "journals") and v}
         return line + (f"\n  also changed: {others}" if others else "")
     if kind == "call_ended":
@@ -233,7 +260,7 @@ def context(workspace: Path, events: list[dict[str, Any]], now: datetime, call_t
         "Open offers:\n" + ("\n".join(offers) if offers else "none"),
         "Your notes (state.md):\n" + session.state(),
         "Your recent entries (meta session):\n" + session.recent_text(),
-        "What just happened:\n" + "\n".join(_event_line(workspace, e, memos) for e in events),
+        "What just happened:\n" + "\n".join(_event_line(workspace, e, memos, now) for e in events),
     ])
 
 
@@ -345,8 +372,17 @@ class Thinker:
         memo = self._memos.get(memo_id)
         if memo is None:
             return f"Not booked: there is no voice memo {memo_id} among the changes you were told about."
+        made = recorded(memo, now)
+        if made is not None and now - made > timedelta(hours=MEMO_BOOK_HOURS):
+            return (f"Not booked: voice memo {memo_id} was recorded {ago(made, now)}, and a memo that old books no "
+                    "call: its times meant another day. If it still matters, offer a call with offer_call or put it "
+                    "on the agenda for the next call.")
         text = str(memo.get("text") or "").strip()
-        if not said_in([text], args.get("asked")):
+        reply = memo.get("aiResponse") if isinstance(memo.get("aiResponse"), dict) else {}
+        cleaned = reply.get("cleanedUpText") if isinstance(reply.get("cleanedUpText"), str) else ""
+        # Bee's cleaned-up text of the same words has sentences where the raw text may have none (review of
+        # 2026-10-17); the words still have to be the memo's, in one or the other, never across the two.
+        if not (said_in([text], args.get("asked")) or (cleaned.strip() and said_in([cleaned], args.get("asked")))):
             return ("Not booked: asked must be the memo's own words asking for the call, copied word for word from it: "
                     "its sentence, or most of it with nothing left out that changes it. Book only a call the memo "
                     "asks for.")
@@ -364,11 +400,18 @@ class Thinker:
             return "Not booked: book_call needs a topic and a why."
         inbox = next((e.get("inbox") for e in self._events if e.get("kind") == "bee_change"), None)
         try:
-            offer = OfferStore(self.workspace).book_from_memo(
+            offer, joined = OfferStore(self.workspace).book_from_memo(
                 topic, when, now, reason=why, memo_id=memo_id, asked=clean(args.get("asked"), MAX_WHY),
                 inbox=str(files._inside(self.workspace, str(inbox))) if inbox else None)
         except AlreadyOffered as exc:
             return f"Not booked: {exc}."
+        if joined:  # a call is booked for about that time: the memo goes into it, and the user was told of it
+            at = offer.at("call_at") or when
+            actions.append({"tool": "book_call", "offer": offer.id, "call_at": offer.call_at, "topic": offer.topic,
+                            "result": f"joined the call booked before, with voice memo {memo_id}"})
+            return (f"Not booked again: voice memo {memo_id} joined the call already booked at {at:%H:%M} on "
+                    f"{at:%A, %B} {at.day} (offer {offer.id}, \"{offer.topic}\"), which will read it too. No "
+                    "second notification goes out.")
         told = await self.tell(offer, self.workspace, now) if self.tell else "not told (no sender)"
         actions.append({"tool": "book_call", "offer": offer.id, "call_at": offer.call_at, "topic": topic,
                         "result": told})
@@ -378,7 +421,7 @@ class Thinker:
         """The voice memos these events name, as Bee has them now (bee journals get): the finished text and Bee's
         reply. A memo that cannot be read is shown as the watcher saved it."""
         self._events = events
-        ids = memo_ids(self.workspace, events) if self.bee else []
+        ids = memo_ids(self.workspace, events)[:MEMOS_SHOWN] if self.bee else []
         found = await asyncio.gather(*(cli.journal(i, timeout=MEMO_READ_S) for i in ids), return_exceptions=True)
         self._memos = {i: memo for i, memo in zip(ids, found) if isinstance(memo, dict) and memo.get("id") is not None}
 

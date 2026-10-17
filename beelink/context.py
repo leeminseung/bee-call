@@ -74,15 +74,17 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
     names = ["unconfirmed facts", "todo suggestions", "today", "recent conversations", "profile", "confirmed facts"]
     names += [f"conversation {i}" for i in ids] + [f"voice memo {m}" for m in memos]
     added = ours.added_todos()[:MAX_OUR_TODOS] if ours is not None else []
-    todo_reads = asyncio.gather(*(cli.todo(t["id"], timeout=timeout) for t in added), return_exceptions=True)
-    results, todo_results = await asyncio.gather(asyncio.gather(*reads, return_exceptions=True), todo_reads)
+    if added:  # one page of Bee's to-dos for all of them (review of 2026-10-17, finding 7: one read each before)
+        reads.append(cli.todos(limit=50, timeout=timeout))
+        names.append("to-dos")
+    results = await asyncio.gather(*reads, return_exceptions=True)
     inputs = CallInputs(inbox_dir=inbox_dir)
     for name, result in zip(names, results):
         if isinstance(result, BaseException):
             inputs.errors.append(f"{name}: {result}")
     facts, suggestions, today, recent, me, known, *rest = (None if isinstance(r, BaseException) else r
                                                             for r in results)
-    convs, memo_reads = rest[:len(ids)], rest[len(ids):]
+    convs, memo_reads, todo_page = rest[:len(ids)], rest[len(ids):len(ids) + len(memos)], rest[len(ids) + len(memos):]
     inputs.memos = [m for m in memo_reads if isinstance(m, dict) and m.get("id") is not None]
     inputs.facts = facts or []
     inputs.suggestions = suggestions or []
@@ -94,11 +96,11 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
         listed = ours.kept_facts(listed)
     listed.sort(key=lambda f: f.get("created_at") if isinstance(f.get("created_at"), (int, float)) else 0, reverse=True)
     inputs.known_facts = listed[:MAX_KNOWN_FACTS]
-    from beelink.writer import made_todo
-
-    for todo, found in zip(added, todo_results):
-        now = made_todo(found) if not isinstance(found, BaseException) else {}
-        if now.get("completed") is False:  # still open in Bee (a read that failed leaves it out)
+    listed_todos = (todo_page[0] or {}).get("todos") if todo_page and isinstance(todo_page[0], dict) else None
+    in_bee = {t["id"]: t for t in listed_todos or [] if isinstance(t, dict) and isinstance(t.get("id"), int)}
+    for todo in added:
+        now = in_bee.get(todo["id"]) or {}
+        if now.get("completed") is False:  # still open in Bee (one not on the page, or a failed read, is left out)
             inputs.our_todos.append({**todo, "text": str(now.get("text") or todo["text"])})
     for conv_id, pair in zip(ids, convs):
         if pair is not None:

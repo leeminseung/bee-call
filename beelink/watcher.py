@@ -9,8 +9,9 @@ skipped. Each new batch is saved raw under workspace/inbox/<time>/.
 It never calls anyone by itself: it hands a Trigger to a callback, and the
 planner decides whether the AI should call. The cursor is saved only after the
 callback returns, so a batch whose handling failed is looked at again on the
-next catch-up. A new Bee event restarts the quiet period before a catch-up, but
-never cancels a catch-up that has already started.
+next catch-up. A new Bee event restarts the quiet period before a catch-up (a
+conversation's events at most until LONGEST_WAIT_S has passed since the first
+of them), but never cancels a catch-up that has already started.
 
 Run on its own to watch and print triggers:
     uv run python -m beelink.watcher
@@ -38,6 +39,10 @@ SETTLED_EVENTS = {"update-conversation-summary", "update-conversation", "journal
 # A voice memo still coming in: its text in pieces, then Bee's reply to it. Each starts the quiet period over, so a
 # memo is looked at once it is finished (2026-10-17).
 MEMO_PIECES = {"journal-text", "journal-updated"}
+# A conversation Bee keeps updating starts the quiet period over and over: its changes are looked at once this long
+# has passed since the first event of the burst (review of 2026-10-17, finding 6). A memo's pieces are not held to
+# it, since a memo ends. Arbitrary.
+LONGEST_WAIT_S = 180.0
 
 
 @dataclass
@@ -66,10 +71,12 @@ def parse_stream_line(line: str) -> tuple[str, dict[str, Any]] | None:
 
 class BeeWatcher:
     def __init__(self, workspace: Path, on_trigger: Callable[[Trigger], Awaitable[None]],
-                 debounce: float = 20.0) -> None:
+                 debounce: float = 20.0, longest_wait: float = LONGEST_WAIT_S) -> None:
         self.workspace = workspace
         self.on_trigger = on_trigger
         self.debounce = debounce
+        self.longest_wait = longest_wait
+        self._burst_started = 0.0  # when the first event of the quiet period's burst came (the loop's clock)
         self._cursor_file = workspace / "state" / "bee_cursor.json"
         self._timer: asyncio.Task | None = None  # the quiet period before a catch-up; the only thing ever cancelled
         self._reason = "event"
@@ -128,19 +135,26 @@ class BeeWatcher:
         starts it over, as a piece of a voice memo does (keeping the reason it was started for); a catch-up already
         running (placing a call) is never cancelled."""
         if name in SETTLED_EVENTS:
-            self._schedule(name)
+            self._schedule(name, held=True)
         elif name in MEMO_PIECES:
             pending = self._timer is not None and not self._timer.done()
-            self._schedule(self._reason if pending else name)
+            self._schedule(self._reason if pending else name, held=False)
 
-    def _schedule(self, reason: str) -> None:
+    def _schedule(self, reason: str, held: bool) -> None:
+        """Starts the quiet period, or starts it over; `held`: never past the longest wait of the burst."""
         self._reason = reason
+        now = asyncio.get_running_loop().time()
         if self._timer and not self._timer.done():
             self._timer.cancel()  # still in the quiet period: start it over
-        self._timer = asyncio.create_task(self._after_quiet())
+        else:
+            self._burst_started = now
+        wait = self.debounce
+        if held:
+            wait = min(wait, max(0.0, self._burst_started + self.longest_wait - now))
+        self._timer = asyncio.create_task(self._after_quiet(wait))
 
-    async def _after_quiet(self) -> None:
-        await asyncio.sleep(self.debounce)
+    async def _after_quiet(self, wait: float) -> None:
+        await asyncio.sleep(wait)
         self._timer = None  # past the quiet period: a new event schedules another catch-up instead of cancelling this one
         async with self._lock:
             try:

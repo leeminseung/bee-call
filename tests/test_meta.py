@@ -544,8 +544,9 @@ def test_with_meta_agent_rules_the_meta_agent_needs_no_model(tmp_path, monkeypat
 
 # ---------- 2026-10-17: voice memos are the input; a memo that asks for a call books it ----------
 
+RECORDED = int((NOW - timedelta(minutes=1)).timestamp() * 1000)  # the memo was recorded a minute ago
 MEMO = {"id": "j-41", "text": "오늘 이사 준비할 게 너무 많네. 오늘 밤 9시에 전화해서 같이 정리하자.", "state": "COMPLETED",
-        "created_at": 1792150000000, "updated_at": 1792150030000,
+        "created_at": RECORDED, "updated_at": RECORDED + 30000,
         "aiResponse": {"message": "이사 준비 목록을 정리해 드릴게요.", "cleanedUpText": "오늘 이사 준비할 게 너무 많다.",
                        "followUp": None, "todos": ["이사 업체 알아보기"]}}
 
@@ -648,3 +649,76 @@ def test_the_meta_agent_is_told_a_memo_that_asks_for_a_call_is_the_user_s_yes():
     assert "A voice memo is the user speaking to you on purpose" in text
     for words in ("book_call", "copying the memo's own words", "now or soon", "offer_call", "decide as for any other"):
         assert words in text, words
+
+
+# ---------- review of 2026-10-17: memo bookings ----------
+
+BOOK = dict(memo_id="j-41", asked="오늘 밤 9시에 전화해서 같이 정리하자", at="2026-10-14T21:00", topic="이사 준비 정리",
+            why="메모에서 부탁하셨어요.")
+
+
+def test_the_agent_is_told_when_each_memo_was_recorded(tmp_path, monkeypatch):
+    """Finding 2: the memo was shown without its time, so "tonight" in a memo days old read as tonight."""
+    ws = memo_change(tmp_path, monkeypatch)
+    model, _, _, _ = think_with(ws, done())
+    first = model.sent[0]["messages"][0]["content"][0]["text"]
+    assert "voice memo j-41 (recorded Wednesday, October 14 at 18:29, 1 minute ago)" in first
+
+
+def test_a_memo_recorded_long_ago_books_no_call(tmp_path, monkeypatch):
+    """Finding 2: a memo four days old that said "Call me tonight at 9" booked a call for tonight. It may come back in
+    a later batch (Bee updated it), or in the first catch-up of a newly connected person."""
+    old = int((NOW - timedelta(days=4)).timestamp() * 1000)
+    ws = memo_change(tmp_path, monkeypatch, {**MEMO, "created_at": old, "updated_at": old})
+    _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(1, "book_call", **BOOK)]}, done())
+    assert OfferStore(ws).all() == [] and told == []
+    result = entry["tools"][0]["result"]
+    assert result.startswith("Not booked") and "recorded 4 days ago" in result
+
+
+def test_a_memo_asking_for_the_time_of_a_call_already_booked_joins_that_call(tmp_path, monkeypatch):
+    """Finding 3: two memos asking for 9 tonight booked two calls at 21:00, with two notifications. A memo asking for
+    a time within 30 minutes of a booked call joins it: the call's prep reads both memos, and no second notification
+    goes out. A time further apart is a call of its own."""
+    ws = memo_change(tmp_path, monkeypatch)
+    think_with(ws, {"role": "assistant", "content": [tool_use(1, "book_call", **BOOK)]}, done())
+    second = {**MEMO, "id": "j-42", "text": "그리고 오늘 밤 9시 15분에 전화해서 짐 얘기도 하자."}
+    inbox = ws / "inbox" / "2026-10-14-183500"
+    inbox.mkdir(parents=True)
+    (inbox / "changed.json").write_text(json.dumps({"conversations": [], "journals": [
+        {"id": "j-42", "text": second["text"][:12], "state": "PROCESSING", "created_at": RECORDED}]},
+        ensure_ascii=False))
+    (tmp_path / "memo.json").write_text(json.dumps(second, ensure_ascii=False))
+    add_event(ws, "bee_change", now=NOW, inbox="inbox/2026-10-14-183500", conversation_ids=[], counts={"journals": 1})
+    _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(
+        1, "book_call", memo_id="j-42", asked="그리고 오늘 밤 9시 15분에 전화해서 짐 얘기도 하자", at="2026-10-14T21:15",
+        topic="짐 이야기", why="메모에서 부탁하셨어요.")]}, done())
+    (offer,) = OfferStore(ws).all()
+    assert offer.memo_ids == ["j-41", "j-42"] and offer.call_at == "2026-10-14T21:00:00+09:00" and told == []
+    assert "joined" in entry["tools"][0]["result"] and "21:00" in entry["tools"][0]["result"]
+
+
+def test_at_most_three_memos_are_read_before_a_think(tmp_path, monkeypatch):
+    """Finding 7: every memo of a batch was read from Bee, though the agent is shown three."""
+    log = tmp_path / "fake-bee-calls.jsonl"  # tests/conftest.py
+    ws = memo_change(tmp_path, monkeypatch)
+    inbox = ws / "inbox" / "2026-10-14-182900"
+    (inbox / "changed.json").write_text(json.dumps({"conversations": [], "journals": [
+        {"id": f"j-{n}", "text": "메모", "state": "COMPLETED", "created_at": RECORDED} for n in range(5)]}))
+    think_with(ws, done())
+    reads = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [r[:2] for r in reads].count(["journals", "get"]) == 3
+
+
+def test_a_memo_without_punctuation_books_from_the_words_bee_cleaned_up(tmp_path, monkeypatch):
+    """Review of 2026-10-17 (not verified there): a memo's text with little punctuation is one long clause, and the
+    words asking for the call were too small a part of it. Bee's cleaned-up text of the same words has sentences."""
+    raw = ("so much to sort out for the move the boxes the truck the keys and the cleaning call me tonight at 9 so "
+           "we can go through it together ok bye")
+    memo = {**MEMO, "text": raw, "aiResponse": {**MEMO["aiResponse"], "cleanedUpText": (
+        "So much to sort out for the move: the boxes, the truck, the keys and the cleaning. Call me tonight at 9 so "
+        "we can go through it together. Okay, bye.")}}
+    ws = memo_change(tmp_path, monkeypatch, memo)
+    _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(1, "book_call", **{
+        **BOOK, "asked": "call me tonight at 9 so we can go through it together"})]}, done())
+    assert entry["tools"][0]["result"].startswith("Booked") and len(told) == 1
