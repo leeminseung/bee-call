@@ -1012,16 +1012,23 @@ def test_a_call_booked_from_a_memo_is_called_off_from_the_app_and_carries_its_me
 
 
 def test_a_memo_asking_for_a_time_near_a_booked_call_joins_it_and_one_further_off_is_booked(tmp_path):
-    """Review of 2026-10-17, finding 3: two memos asking for 9 tonight booked two calls at 21:00."""
+    """Review of 2026-10-17, finding 3: two memos asking for 9 tonight booked two calls at 21:00. A memo asking for a
+    time within 10 minutes of a booked call joins it; one asking for 9:25 does not join a 9:00 call, since the call
+    keeps its time and the memo may have said why it wanted later ("9시 반 넘어서 전화해 줘, 그 전엔 밥 먹어";
+    second review, finding 3)."""
     now = datetime(2026, 10, 17, 18, 30, tzinfo=SEOUL)
     store = OfferStore(tmp_path)
     first, _ = store.book_from_memo("이사", now.replace(hour=21, minute=0), now, reason="r", memo_id="j-41", asked="a")
-    near, joined = store.book_from_memo("짐", now.replace(hour=21, minute=20), now, reason="r", memo_id="j-42", asked="b")
+    near, joined = store.book_from_memo("짐", now.replace(hour=21, minute=5), now, reason="r", memo_id="j-42", asked="b")
     assert joined and near.id == first.id and near.memo_ids == ["j-41", "j-42"]
     assert near.call_at == first.call_at and near.topic == "이사"  # the call stays as booked and told
-    apart, joined = store.book_from_memo("청소", now.replace(hour=22, minute=0), now, reason="r", memo_id="j-43",
+    later, joined = store.book_from_memo("밥 다음", now.replace(hour=21, minute=25), now, reason="r", memo_id="j-43",
                                          asked="c")
-    assert not joined and apart.id != first.id and len(store.all()) == 2
+    assert not joined and later.id != first.id and later.call_at == "2026-10-17T21:25:00+09:00"
+    call_back = OfferStore(tmp_path / "other").book("통화 이어서", now.replace(hour=21, minute=0), now)
+    joined_call, joined = OfferStore(tmp_path / "other").book_from_memo(
+        "메모", now.replace(hour=21, minute=2), now, reason="r", memo_id="j-44", asked="d")
+    assert joined and joined_call.id == call_back.id  # a call-back booked out loud is joined the same way
 
 
 @pytest.mark.parametrize("days, ko, en", [
@@ -1038,3 +1045,16 @@ def test_the_memo_booking_notification_names_the_day_of_the_call(tmp_path, days,
                                                    reason="r", memo_id="j-41", asked="a")
     assert memo_booked_notification(offer, now, call_language("ko"))["aps"]["alert"]["body"].startswith(ko)
     assert memo_booked_notification(offer, now, call_language("en"))["aps"]["alert"]["body"].startswith(en)
+
+
+def test_a_call_after_midnight_reads_as_early_morning_in_korean(tmp_path):
+    """Second review of 2026-10-17, finding 7: "내일 밤 12시 30분" for a call 40 minutes away reads as the next night."""
+    from voice.offers import clock_label, when_label
+
+    now = datetime(2026, 10, 17, 23, 50, tzinfo=SEOUL)
+    soon = datetime(2026, 10, 18, 0, 30, tzinfo=SEOUL)
+    assert clock_label(soon, call_language("ko")) == "새벽 12시 30분"
+    assert when_label(soon, now, call_language("ko")) == "내일 새벽 12시 30분"
+    assert when_label(soon + timedelta(days=1), now, call_language("ko")) == "10월 19일 월요일 새벽 12시 30분"
+    assert when_label(soon, now, call_language("en")) == "12:30 AM tomorrow"
+    assert clock_label(datetime(2026, 10, 17, 21, 0, tzinfo=SEOUL), call_language("ko")) == "밤 9시"

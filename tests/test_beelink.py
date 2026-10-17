@@ -371,6 +371,37 @@ def test_a_burst_of_events_that_never_stops_is_looked_at_within_the_longest_wait
     assert seen and seen[0] - started < 1.4
 
 
+def test_the_longest_wait_never_cuts_a_voice_memo_still_coming_in(tmp_path, fake_bee, monkeypatch):
+    """Second review of 2026-10-17, finding 2: once the longest wait was up, a conversation event started a catch-up at
+    once, while the memo's text was still coming in, and the meta agent read the memo unfinished. A catch-up the
+    longest wait brings forward still waits the quiet period after the memo's last piece."""
+    workspace = tmp_path / "workspace"
+    one_conversation(tmp_path, monkeypatch)
+    seen = []
+
+    async def on_trigger(trigger):
+        seen.append(time.monotonic())
+
+    async def main():
+        watcher = BeeWatcher(workspace, on_trigger, debounce=0.3, longest_wait=1.0)
+        started = time.monotonic()
+        watcher.on_event("journal-created")
+        last, sent = started, []
+        while time.monotonic() - started < 1.3:
+            await asyncio.sleep(0.1)
+            if time.monotonic() - started > 1.15 and not sent:
+                sent.append(True)
+                watcher.on_event("update-conversation-summary")  # past the longest wait, mid-memo
+                await asyncio.sleep(0.05)  # time for a catch-up to start, before the memo's next piece
+            watcher.on_event("journal-text")
+            last = time.monotonic()
+        await asyncio.sleep(0.8)
+        return last
+
+    last = asyncio.run(main())
+    assert len(seen) == 1 and seen[0] >= last + 0.25
+
+
 def test_the_bee_login_link_is_read_as_the_readme_documents(tmp_path, monkeypatch):
     """Outside test seam 8 (README, "A Bee login"): `bee login --no-wait` must exit 0 and print, on its output or
     error stream, `Authentication link: https://...`; the first such link is the one the app opens. Without one, the
@@ -434,6 +465,25 @@ def test_a_call_reads_the_to_dos_our_earlier_calls_added_that_are_still_open(tmp
     todos.write_text(json.dumps([{"id": 99, "text": "Order the camera tripod", "created_at": 1, "completed": True}]))
     assert asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace))).our_todos == []
     assert asyncio.run(context.fetch_call_inputs()).our_todos == []  # without our calls, nothing of them is read
+
+
+def test_our_to_dos_are_looked_for_past_bee_s_first_page(tmp_path, fake_bee, monkeypatch):
+    """Second review of 2026-10-17, finding 5: one page of 50 to-dos was read, so ours past it (Bee promises no order)
+    were left out without a word. The pages are read one after another until all of ours are found, at most
+    OUR_TODO_PAGES of them, within one read's time."""
+    from beelink.calls import OurCalls
+
+    workspace = tmp_path / "workspace"
+    our_todo_call(workspace, *todo_write("w1", 161, "Order the camera tripod"))
+    todos = tmp_path / "todos.json"
+    todos.write_text(json.dumps([{"id": 100 + n, "text": f"Todo {n}", "created_at": 1, "completed": n % 2 == 0}
+                                 for n in range(61)] + [{"id": 161, "text": "Order the camera tripod", "created_at": 2,
+                                                          "completed": False}] +
+                                [{"id": 300 + n, "text": "later", "created_at": 3, "completed": False} for n in range(60)]))
+    monkeypatch.setenv("FAKE_BEE_TODOS", str(todos))
+    inputs = asyncio.run(context.fetch_call_inputs(ours=OurCalls.of(workspace)))
+    assert [t["id"] for t in inputs.our_todos] == [161] and inputs.errors == []
+    assert [c[:2] for c in calls(fake_bee)].count(["todos", "list"]) == 2  # found on page 2: page 3 is not read
 
 
 def test_the_prep_and_the_plain_context_list_our_open_to_dos(tmp_path):

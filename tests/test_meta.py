@@ -678,11 +678,11 @@ def test_a_memo_recorded_long_ago_books_no_call(tmp_path, monkeypatch):
 
 def test_a_memo_asking_for_the_time_of_a_call_already_booked_joins_that_call(tmp_path, monkeypatch):
     """Finding 3: two memos asking for 9 tonight booked two calls at 21:00, with two notifications. A memo asking for
-    a time within 30 minutes of a booked call joins it: the call's prep reads both memos, and no second notification
+    a time within 10 minutes of a booked call joins it: the call's prep reads both memos, and no second notification
     goes out. A time further apart is a call of its own."""
     ws = memo_change(tmp_path, monkeypatch)
     think_with(ws, {"role": "assistant", "content": [tool_use(1, "book_call", **BOOK)]}, done())
-    second = {**MEMO, "id": "j-42", "text": "그리고 오늘 밤 9시 15분에 전화해서 짐 얘기도 하자."}
+    second = {**MEMO, "id": "j-42", "text": "그리고 오늘 밤 9시에 전화해서 짐 얘기도 하자."}
     inbox = ws / "inbox" / "2026-10-14-183500"
     inbox.mkdir(parents=True)
     (inbox / "changed.json").write_text(json.dumps({"conversations": [], "journals": [
@@ -691,7 +691,7 @@ def test_a_memo_asking_for_the_time_of_a_call_already_booked_joins_that_call(tmp
     (tmp_path / "memo.json").write_text(json.dumps(second, ensure_ascii=False))
     add_event(ws, "bee_change", now=NOW, inbox="inbox/2026-10-14-183500", conversation_ids=[], counts={"journals": 1})
     _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(
-        1, "book_call", memo_id="j-42", asked="그리고 오늘 밤 9시 15분에 전화해서 짐 얘기도 하자", at="2026-10-14T21:15",
+        1, "book_call", memo_id="j-42", asked="그리고 오늘 밤 9시에 전화해서 짐 얘기도 하자", at="2026-10-14T21:00",
         topic="짐 이야기", why="메모에서 부탁하셨어요.")]}, done())
     (offer,) = OfferStore(ws).all()
     assert offer.memo_ids == ["j-41", "j-42"] and offer.call_at == "2026-10-14T21:00:00+09:00" and told == []
@@ -721,4 +721,35 @@ def test_a_memo_without_punctuation_books_from_the_words_bee_cleaned_up(tmp_path
     ws = memo_change(tmp_path, monkeypatch, memo)
     _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(1, "book_call", **{
         **BOOK, "asked": "call me tonight at 9 so we can go through it together"})]}, done())
+    assert entry["tools"][0]["result"].startswith("Booked") and len(told) == 1
+
+
+@pytest.mark.parametrize("created_at, booked", [
+    ((NOW - timedelta(days=4)).isoformat(), False),  # an ISO time, four days old
+    (int((NOW - timedelta(days=4)).timestamp()), False),  # epoch seconds, four days old
+    (str(int((NOW - timedelta(days=4)).timestamp() * 1000)), False),  # milliseconds in a string
+    (None, False),  # not given: its times cannot be read
+    (int((NOW - timedelta(minutes=2)).timestamp()), True),  # epoch seconds, just now
+])
+def test_a_memo_books_only_when_its_recording_time_is_known_and_recent(tmp_path, monkeypatch, created_at, booked):
+    """Second review of 2026-10-17, finding 6: the 12-hour rule was skipped when created_at was not a number, and an
+    ISO time four days old booked a call. Bee's milliseconds, seconds and ISO times are read; a memo whose time
+    cannot be read books nothing (the watcher's copy of it is looked at too)."""
+    ws = memo_change(tmp_path, monkeypatch, {**MEMO, "created_at": created_at})
+    if created_at is None:  # Bee's answer for the memo has no time at all
+        (tmp_path / "memo.json").write_text(json.dumps({k: v for k, v in MEMO.items() if k != "created_at"},
+                                                       ensure_ascii=False))
+    changed = ws / "inbox" / "2026-10-14-182900" / "changed.json"
+    batch = json.loads(changed.read_text())
+    batch["journals"][0].pop("created_at")  # only what Bee answers for the memo says when it was recorded
+    changed.write_text(json.dumps(batch, ensure_ascii=False))
+    _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(1, "book_call", **BOOK)]}, done())
+    assert entry["tools"][0]["result"].startswith("Booked" if booked else "Not booked") and len(told) == int(booked)
+
+
+def test_the_watcher_s_copy_of_a_memo_says_when_it_was_recorded_if_bee_s_answer_does_not(tmp_path, monkeypatch):
+    memo = {k: v for k, v in MEMO.items() if k != "created_at"}
+    ws = memo_change(tmp_path, monkeypatch, {**memo, "created_at": RECORDED})
+    (tmp_path / "memo.json").write_text(json.dumps(memo, ensure_ascii=False))  # journals get answers without it
+    _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(1, "book_call", **BOOK)]}, done())
     assert entry["tools"][0]["result"].startswith("Booked") and len(told) == 1

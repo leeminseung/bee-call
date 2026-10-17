@@ -62,7 +62,9 @@ class QuestionWaiting(ValueError):
         self.waiting = waiting
 
 
-BOOKED_NEAR = timedelta(minutes=30)  # a memo asking for a call this close to a booked one joins it (arbitrary)
+# A memo asking for a call this close to a booked one joins it, and the call keeps its time; further apart, the memo
+# may have said why it wanted its own time, so it is booked on its own (second review of 2026-10-17). Arbitrary.
+BOOKED_NEAR = timedelta(minutes=10)
 
 
 class AlreadyOffered(ValueError):
@@ -469,7 +471,7 @@ def clock_label(moment: datetime, language: CallLanguage) -> str:
     """The time of day as the user reads it: "밤 9시", "9:00 PM"."""
     if language.code == "ko":
         hour = moment.hour
-        period = "밤" if hour >= 20 or hour < 5 else "저녁" if hour >= 17 else "오후" if hour >= 12 else "오전"
+        period = "새벽" if hour < 5 else "밤" if hour >= 20 else "저녁" if hour >= 17 else "오후" if hour >= 12 else "오전"
         return f"{period} {hour % 12 or 12}시" + (f" {moment.minute}분" if moment.minute else "")
     return moment.strftime("%-I:%M %p")
 

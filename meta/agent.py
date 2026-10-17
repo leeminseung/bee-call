@@ -178,11 +178,42 @@ def memo_ids(workspace: Path, events: list[dict[str, Any]]) -> list[str]:
 
 
 def recorded(memo: dict[str, Any], now: datetime) -> datetime | None:
-    """When a voice memo was recorded (Bee's epoch milliseconds), on the person's clock; None if Bee did not say."""
+    """When a voice memo was recorded, on the person's clock: Bee's epoch milliseconds, or seconds, or an ISO time,
+    as a number or a string; None if it does not say (second review of 2026-10-17, finding 6)."""
     made = memo.get("created_at")
-    if not isinstance(made, (int, float)) or isinstance(made, bool):
+    if isinstance(made, bool):
         return None
-    return datetime.fromtimestamp(made / 1000, now.tzinfo)
+    if isinstance(made, str):
+        text = made.strip()
+        try:
+            made = float(text)
+        except ValueError:
+            try:
+                moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            return (moment if moment.tzinfo else moment.replace(tzinfo=now.tzinfo)).astimezone(now.tzinfo)
+    if not isinstance(made, (int, float)) or made <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(made / 1000 if made > 1e11 else made, now.tzinfo)  # milliseconds, or seconds
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def batch_memo(workspace: Path, events: list[dict[str, Any]], memo_id: str) -> dict[str, Any]:
+    """The watcher's copy of a voice memo (its saved batch), or {}."""
+    for event in events:
+        if event.get("kind") != "bee_change":
+            continue
+        try:
+            changed = json.loads((workspace / str(event.get("inbox")) / "changed.json").read_text())
+        except (OSError, ValueError):
+            continue
+        for journal in changed.get("journals") or []:
+            if isinstance(journal, dict) and str(journal.get("id")) == memo_id:
+                return journal
+    return {}
 
 
 def ago(then: datetime, now: datetime) -> str:
@@ -200,7 +231,8 @@ def ago(then: datetime, now: datetime) -> str:
 def _memo_lines(memo: dict[str, Any], now: datetime | None = None) -> str:
     text = str(memo.get("text") or memo.get("transcript") or "").strip()
     made = recorded(memo, now) if now is not None else None
-    when = f" (recorded {made:%A, %B} {made.day} at {made:%H:%M}, {ago(made, now)})" if made and now else ""
+    when = f" (recorded {made:%A, %B} {made.day} at {made:%H:%M}, {ago(made, now)})" if made and now else \
+        " (recorded at a time Bee did not give)" if now is not None else ""
     line = f"\n  voice memo {memo.get('id')}{when}: \"{text[:MEMO_CHARS]}\""
     reply = memo.get("aiResponse") if isinstance(memo.get("aiResponse"), dict) else {}
     if reply.get("message"):
@@ -372,8 +404,11 @@ class Thinker:
         memo = self._memos.get(memo_id)
         if memo is None:
             return f"Not booked: there is no voice memo {memo_id} among the changes you were told about."
-        made = recorded(memo, now)
-        if made is not None and now - made > timedelta(hours=MEMO_BOOK_HOURS):
+        made = recorded(memo, now) or recorded(batch_memo(self.workspace, self._events, memo_id), now)
+        if made is None:
+            return (f"Not booked: Bee did not say when voice memo {memo_id} was recorded, so its times cannot be read. "
+                    "If it still matters, offer a call with offer_call or put it on the agenda for the next call.")
+        if now - made > timedelta(hours=MEMO_BOOK_HOURS):
             return (f"Not booked: voice memo {memo_id} was recorded {ago(made, now)}, and a memo that old books no "
                     "call: its times meant another day. If it still matters, offer a call with offer_call or put it "
                     "on the agenda for the next call.")

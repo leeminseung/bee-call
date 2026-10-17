@@ -77,6 +77,7 @@ class BeeWatcher:
         self.debounce = debounce
         self.longest_wait = longest_wait
         self._burst_started = 0.0  # when the first event of the quiet period's burst came (the loop's clock)
+        self._last_piece: float | None = None  # when the burst's last voice memo piece came, if it had one
         self._cursor_file = workspace / "state" / "bee_cursor.json"
         self._timer: asyncio.Task | None = None  # the quiet period before a catch-up; the only thing ever cancelled
         self._reason = "event"
@@ -147,10 +148,14 @@ class BeeWatcher:
         if self._timer and not self._timer.done():
             self._timer.cancel()  # still in the quiet period: start it over
         else:
-            self._burst_started = now
+            self._burst_started, self._last_piece = now, None
+        if not held:
+            self._last_piece = now
         wait = self.debounce
         if held:
             wait = min(wait, max(0.0, self._burst_started + self.longest_wait - now))
+            if self._last_piece is not None:  # never mid-memo (second review of 2026-10-17, finding 2)
+                wait = max(wait, self._last_piece + self.debounce - now)
         self._timer = asyncio.create_task(self._after_quiet(wait))
 
     async def _after_quiet(self, wait: float) -> None:

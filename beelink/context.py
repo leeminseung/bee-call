@@ -21,6 +21,7 @@ from beelink.calls import OurCalls
 
 MAX_CONVERSATIONS = 3
 MAX_OUR_TODOS = 8  # to-dos our earlier calls added, asked about in Bee before a call (arbitrary)
+OUR_TODO_PAGES = 4  # pages of Bee's to-dos read one after another to find them, within one read's time (arbitrary)
 KNOWN_FACTS_READ = 30  # confirmed facts read before a call (Bee lists them in no promised order) (arbitrary)
 MAX_KNOWN_FACTS = 8  # of those, the newest, kept for the prep (arbitrary)
 CARD_UTTERANCES = 6
@@ -74,8 +75,8 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
     names = ["unconfirmed facts", "todo suggestions", "today", "recent conversations", "profile", "confirmed facts"]
     names += [f"conversation {i}" for i in ids] + [f"voice memo {m}" for m in memos]
     added = ours.added_todos()[:MAX_OUR_TODOS] if ours is not None else []
-    if added:  # one page of Bee's to-dos for all of them (review of 2026-10-17, finding 7: one read each before)
-        reads.append(cli.todos(limit=50, timeout=timeout))
+    if added:  # Bee's to-dos a page at a time, one read at once (review of 2026-10-17, finding 7: one read each before)
+        reads.append(_todos_by_id({t["id"] for t in added}, timeout))
         names.append("to-dos")
     results = await asyncio.gather(*reads, return_exceptions=True)
     inputs = CallInputs(inbox_dir=inbox_dir)
@@ -96,11 +97,10 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
         listed = ours.kept_facts(listed)
     listed.sort(key=lambda f: f.get("created_at") if isinstance(f.get("created_at"), (int, float)) else 0, reverse=True)
     inputs.known_facts = listed[:MAX_KNOWN_FACTS]
-    listed_todos = (todo_page[0] or {}).get("todos") if todo_page and isinstance(todo_page[0], dict) else None
-    in_bee = {t["id"]: t for t in listed_todos or [] if isinstance(t, dict) and isinstance(t.get("id"), int)}
+    in_bee = todo_page[0] if todo_page and isinstance(todo_page[0], dict) else {}
     for todo in added:
         now = in_bee.get(todo["id"]) or {}
-        if now.get("completed") is False:  # still open in Bee (one not on the page, or a failed read, is left out)
+        if now.get("completed") is False:  # still open in Bee (one not found, or a failed read, is left out)
             inputs.our_todos.append({**todo, "text": str(now.get("text") or todo["text"])})
     for conv_id, pair in zip(ids, convs):
         if pair is not None:
@@ -114,6 +114,33 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
             inputs.today = {**inputs.today,
                             "recentConversations": ours.conversations(inputs.today.get("recentConversations"))}
     return inputs
+
+
+async def _todos_by_id(ids: set[int], timeout: float) -> dict[int, dict[str, Any]]:
+    """Bee's to-dos with these ids, read a page at a time until all are found or OUR_TODO_PAGES pages were read, all
+    within `timeout` (Bee lists them in no promised order: second review of 2026-10-17, finding 5). A page that
+    fails after the first ends the search with what was found."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    found: dict[int, dict[str, Any]] = {}
+    cursor = None
+    for page_number in range(OUR_TODO_PAGES):
+        left = deadline - loop.time()
+        if left <= 0.2:
+            break
+        try:
+            page = await cli.todos(limit=50, cursor=cursor, timeout=left)
+        except Exception:
+            if page_number == 0:
+                raise  # the first page failing is the read failing (CallInputs.errors)
+            break
+        for todo in page.get("todos") or []:
+            if isinstance(todo, dict) and todo.get("id") in ids:
+                found[todo["id"]] = todo
+        cursor = page.get("next_cursor")
+        if not cursor or ids <= found.keys():
+            break
+    return found
 
 
 def save_call_inputs(session_dir: Path, inputs: CallInputs, zone: tzinfo) -> dict[str, Any]:
