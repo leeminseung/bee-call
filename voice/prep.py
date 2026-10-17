@@ -170,6 +170,15 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: b
     for conv_id, conv, lines in inputs.conversations:
         parts.append("The conversation behind this call:\n" + reads.conversation_text(conv or {"id": conv_id}, lines,
                                                                                          zone))
+    for memo in inputs.memos:  # the user's own words, the reason for the call: before anything else of Bee
+        reply = memo.get("aiResponse") if isinstance(memo.get("aiResponse"), dict) else {}
+        made = _when(memo.get("created_at"), zone)
+        part = f"The voice memo behind this call{f' (recorded {made})' if made else ''}:\n{memo.get('text') or ''}"
+        if reply.get("message"):
+            part += f"\nBee's reply to it: {reply['message']}"
+        if reply.get("todos"):
+            part += "\nBee's to-dos from it: " + ", ".join(str(t) for t in reply["todos"][:5])
+        parts.append(part)
     if inputs.today is not None:
         parts.append(reads.today_text(inputs.today, zone))
     if bee:
@@ -190,6 +199,13 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: b
     return "\n\n".join(parts)
 
 
+def _when(ms: Any, zone) -> str | None:
+    """A Bee time (epoch milliseconds) on the person's clock, for the prep: "Oct 17, 18:29"."""
+    if not isinstance(ms, (int, float)) or isinstance(ms, bool):
+        return None
+    return datetime.fromtimestamp(ms / 1000, zone).strftime("%b %-d, %H:%M")
+
+
 def call_brief(inputs: CallInputs, meta: dict[str, Any]) -> str | None:
     """The plain Bee context, for a call without a prep note (or until the note arrives)."""
     lines = []
@@ -198,6 +214,8 @@ def call_brief(inputs: CallInputs, meta: dict[str, Any]) -> str | None:
         lines.append(f"You placed this call. Why: {why}")
     elif meta.get("direction") == "inbound":
         lines.append("The user called you from the app.")
+    for memo in inputs.memos[:1]:
+        lines.append(f"The voice memo behind this call: {memo.get('text') or ''}")
     for conv_id, conv, _ in inputs.conversations[:1]:
         if conv.get("short_summary"):
             lines.append(f"Latest Bee conversation (id {conv_id}): {conv['short_summary']}")
@@ -383,7 +401,7 @@ async def prepare_outbound(plan: Plan, *, spend: SpendLog, bee: bool, now: datet
     prepares. `extra` adds to the call's metadata (agreed, earlier_call); a shorter `deadline_s` rings sooner,
     with the note given up earlier. `ours`: the person's own calls, whose Bee records are left out (BC-060)."""
     started = time.monotonic()
-    inputs = await fetch_call_inputs(plan.inbox_dir, plan.conversation_ids, ours=ours)
+    inputs = await fetch_call_inputs(plan.inbox_dir, plan.conversation_ids, ours=ours, memo_ids=plan.memo_ids)
     prep = await prepare_call(inputs, {**plan_meta(plan), **(extra or {})},
                               prep_role(mode or coordinator_llm()), spend=spend, bee=bee,
                               now=now, deadline_s=deadline_s, language=language, ours=ours)

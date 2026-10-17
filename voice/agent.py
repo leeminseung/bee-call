@@ -644,7 +644,8 @@ async def answer_ai_call(ctx: JobContext, caller: Caller, meta: dict, inbox: Pat
     """A call the AI places, prepared before the phone rang (voice/outbound.py): it rings until the phone answers.
     None when it was missed or declined, which the meta agent hears about."""
     # Bee is read again meanwhile, for the call's record.
-    inputs_task = asyncio.create_task(fetch_call_inputs(inbox, conversation_ids, ours=OurCalls.of(caller.workspace)))
+    inputs_task = asyncio.create_task(fetch_call_inputs(inbox, conversation_ids, ours=OurCalls.of(caller.workspace),
+                                                        memo_ids=meta.get("memo_ids") or []))
     answer = await wait_for_answer(ctx, caller.workspace)
     if answer != "answered":
         log.info("the call in room %s was %s", ctx.room.name, answer)

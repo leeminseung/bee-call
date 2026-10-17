@@ -276,3 +276,21 @@ def test_the_first_turn_waits_a_little_for_the_note(tmp_path):
 def test_a_note_after_the_first_turn_changes_nothing(tmp_path):
     turn, later, waited = late_note_turn(tmp_path, arrives_after=2.5)  # past the 2 s wait
     assert turn.endswith("The user called you from the app.\n") and later == turn and 1.9 < waited < 2.3
+
+
+def test_the_prep_of_a_call_a_memo_asked_for_reads_the_memo_and_bee_s_reply(fake_bee, tmp_path, monkeypatch):
+    """2026-10-17: the call's prep and opening use the voice memo and Bee's reply to it (bee journals get), so the AI
+    opens with what the memo was about; the memo comes before the rest of Bee in the seed."""
+    memo = {"id": "j-41", "text": "오늘 밤 9시에 전화해서 이사 준비 같이 정리하자.", "state": "COMPLETED",
+            "created_at": 1792150000000, "updated_at": 1792150030000,
+            "aiResponse": {"message": "이사 준비 목록을 정리해 드릴게요.", "todos": ["이사 업체 알아보기"]}}
+    (tmp_path / "memo.json").write_text(json.dumps(memo, ensure_ascii=False))
+    monkeypatch.setenv("FAKE_BEE_JOURNAL", str(tmp_path / "memo.json"))
+    got = asyncio.run(fetch_call_inputs(memo_ids=["j-41"]))
+    assert [m["id"] for m in got.memos] == ["j-41"]
+    seed = seed_text(got, {"direction": "outbound", "reason": "메모에서 부탁하셨어요.", "topic": "이사 준비 정리",
+                           "agreed": "the user asked for this call in a voice memo"}, NOW, bee=True)
+    assert "The voice memo behind this call (recorded" in seed and memo["text"] in seed
+    assert "Bee's reply to it: 이사 준비 목록을 정리해 드릴게요." in seed and "Bee's to-dos from it: 이사 업체 알아보기" in seed
+    assert seed.index("The voice memo behind this call") < seed.index("Recent")  # before the rest of Bee
+    assert "They agreed to this call: the user asked for this call in a voice memo" in seed

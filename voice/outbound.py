@@ -47,7 +47,7 @@ from voice.costs import SpendLog, day_budget
 from voice.language import CallLanguage, call_language
 from voice.people import People, Person, Settings, dev_person
 from voice.offers import (OPEN, AlreadyOffered, Offer, OfferStore, QuestionWaiting, agreed, booked_call,
-                          not_placed_notification, notification, plan_of)
+                          memo_booked_notification, not_placed_notification, notification, plan_of)
 from voice.prep import NOTE_SECONDS, OPENING_BY_S, prepare_outbound
 from meta.agent import Thinker, thinker_for
 from meta.session import DAILY_NOTIFICATIONS, MetaSession, add_event, meta_notes, quiet, quiet_ends
@@ -161,6 +161,21 @@ async def send_offer(offer: Offer, person: Person, now: datetime, language: Call
     if not sent:
         return "no notification (no APNs key, or the app has not sent its token yet); it shows in the app"
     print(f"asked: offer {offer.id}, {payload['aps']['alert']['body']!r} (apns-id {sent})", flush=True)
+    return f"notification sent: {payload['aps']['alert']['body']}"
+
+
+async def tell_booked(offer: Offer, person: Person, now: datetime, language: CallLanguage | None = None) -> str:
+    """The one plain notification for a call a voice memo asked for (meta/agent.py book_call): when, about what,
+    and that the app can call it off. It follows the user's own request, so quiet hours hold it not, and it does not
+    count among the day's offers. Returns what happened, in words."""
+    payload = memo_booked_notification(offer, now, language or call_language())
+    try:
+        sent = await voip_push.alert(payload, person, collapse_id=f"{offer.id}-booked")
+    except Exception as exc:  # the booked call still shows in the app's list, with its "Call off"
+        log.warning("could not tell %s about the call booked from a memo (%s): %s", person.id, offer.id, exc)
+        return f"the notification failed ({exc}); the call shows in the app"
+    if not sent:
+        return "no notification (no APNs key, or the app has not sent its token yet); the call shows in the app"
     return f"notification sent: {payload['aps']['alert']['body']}"
 
 
@@ -352,11 +367,14 @@ async def serve_person(people: People, person_id: str, settings: Settings) -> No
     async def send(offer: Offer, ws: Path, now: datetime) -> str:
         return await send_offer(offer, person, now, language)
 
+    async def tell(offer: Offer, ws: Path, now: datetime) -> str:
+        return await tell_booked(offer, person, now, language)
+
     async def on_trigger(trigger: Trigger) -> None:
         add_event(workspace, "bee_change", now=person.now(), **bee_event(trigger, workspace))
 
     thinker = thinker_for(workspace, send=send, call_time=settings.call_time, bee=settings.bee,
-                          language=settings.language)
+                          language=settings.language, tell=tell)
     # A TaskGroup: if one loop fails, the others stop too, so serve_people() never starts a second set beside
     # survivors of the first.
     async with asyncio.TaskGroup() as group:
@@ -430,8 +448,11 @@ async def main() -> None:
     async def send(offer: Offer, ws: Path, now: datetime) -> str:
         return await send_offer(offer, person, now, language)
 
+    async def tell(offer: Offer, ws: Path, now: datetime) -> str:
+        return await tell_booked(offer, person, now, language)
+
     thinker = thinker_for(workspace, send=send, call_time=settings.call_time, bee=settings.bee,
-                          language=settings.language)
+                          language=settings.language, tell=tell)
     if args.once:
         if args.rules:
             made = await handle(saved_trigger(args.once), planner, args.dry_run, person)

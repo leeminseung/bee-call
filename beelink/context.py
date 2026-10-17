@@ -42,6 +42,8 @@ class CallInputs:
     our_todos: list[dict[str, Any]] = field(default_factory=list)
     # What Bee keeps about the user: confirmed facts, newest first (2026-10-17)
     known_facts: list[dict[str, Any]] = field(default_factory=list)
+    # The voice memos behind the call (Bee journals: id, text, aiResponse), as Bee has them now
+    memos: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 
@@ -55,7 +57,8 @@ def _moment(ms: int | None, zone: tzinfo) -> str | None:
 
 
 async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: list[int] | None = None,
-                            timeout: float = READ_TIMEOUT_S, *, ours: OurCalls | None = None) -> CallInputs:
+                            timeout: float = READ_TIMEOUT_S, *, ours: OurCalls | None = None,
+                            memo_ids: list[str] | None = None) -> CallInputs:
     """Everything a call reads from Bee, or nothing at all for a person with Use Bee off (no reads, no errors).
     `ours`: the person's own calls, whose Bee conversations, facts and todo suggestions are left out (BC-060)."""
     if not cli.connected():
@@ -66,8 +69,10 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
              cli.today_context(timeout=timeout), cli.conversations(RECENT_CONVERSATIONS, timeout=timeout),
              cli.me(timeout=timeout), cli.facts(limit=KNOWN_FACTS_READ, timeout=timeout)]
     reads += [asyncio.gather(cli.conversation(i, timeout=timeout), cli.transcript(i, timeout=timeout)) for i in ids]
+    memos = [str(m) for m in (memo_ids or [])][:MAX_CONVERSATIONS]
+    reads += [cli.journal(m, timeout=timeout) for m in memos]
     names = ["unconfirmed facts", "todo suggestions", "today", "recent conversations", "profile", "confirmed facts"]
-    names += [f"conversation {i}" for i in ids]
+    names += [f"conversation {i}" for i in ids] + [f"voice memo {m}" for m in memos]
     added = ours.added_todos()[:MAX_OUR_TODOS] if ours is not None else []
     todo_reads = asyncio.gather(*(cli.todo(t["id"], timeout=timeout) for t in added), return_exceptions=True)
     results, todo_results = await asyncio.gather(asyncio.gather(*reads, return_exceptions=True), todo_reads)
@@ -75,8 +80,10 @@ async def fetch_call_inputs(inbox_dir: Path | None = None, conversation_ids: lis
     for name, result in zip(names, results):
         if isinstance(result, BaseException):
             inputs.errors.append(f"{name}: {result}")
-    facts, suggestions, today, recent, me, known, *convs = (None if isinstance(r, BaseException) else r
-                                                             for r in results)
+    facts, suggestions, today, recent, me, known, *rest = (None if isinstance(r, BaseException) else r
+                                                            for r in results)
+    convs, memo_reads = rest[:len(ids)], rest[len(ids):]
+    inputs.memos = [m for m in memo_reads if isinstance(m, dict) and m.get("id") is not None]
     inputs.facts = facts or []
     inputs.suggestions = suggestions or []
     inputs.today = today
@@ -126,9 +133,14 @@ def save_call_inputs(session_dir: Path, inputs: CallInputs, zone: tzinfo) -> dic
         _write(folder / "our_open_todos.json", inputs.our_todos)
     if inputs.known_facts:
         _write(folder / "known_facts.json", inputs.known_facts)
+    for memo in inputs.memos:
+        _write(folder / f"memo-{memo['id']}.json", memo)
 
     card: dict[str, Any] = {"summary": None, "conversation_id": None, "started_at": None, "utterances": [],
                             "pending_fact_ids": [f["id"] for f in inputs.facts if "id" in f]}
+    if inputs.memos and not inputs.conversations:  # the voice memo behind an AI call
+        reply = inputs.memos[0].get("aiResponse") if isinstance(inputs.memos[0].get("aiResponse"), dict) else {}
+        card["summary"] = reply.get("cleanedUpText") or inputs.memos[0].get("text")
     for conv_id, conv, lines in inputs.conversations:
         _write(folder / f"conversation-{conv_id}.json", conv)
         _write(folder / f"transcript-{conv_id}.json", lines)

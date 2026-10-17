@@ -482,7 +482,9 @@ def test_the_meta_agent_only_reads_offers_and_keeps_notes():
     and three ways a run ends (offer a call, rewrite its notes, nothing). No tool places a call or writes to Bee."""
     names = {tool.name for tool in TOOLS}
     assert names == {"list_files", "read_file", "grep", "bee_today", "bee_conversation", "search_bee", "bee_day",
-                     "bee_pending", "write_state", "offer_call"}
+                     "bee_pending", "bee_facts", "write_state", "offer_call", "book_call"}
+    # 2026-10-17: book_call books only the call a voice memo asks for, quoting the memo (the memo is the user's yes);
+    # nothing else of it places a call or writes to Bee.
 
 
 def test_without_bee_the_meta_agent_has_no_bee_tools_or_words(tmp_path):
@@ -538,3 +540,111 @@ def test_with_meta_agent_rules_the_meta_agent_needs_no_model(tmp_path, monkeypat
     assert entry["tools"] == [] and entry["decision"] and len(MetaSession(ws).entries()) == 2
     monkeypatch.delenv("META_AGENT")
     assert not isinstance(thinker_for(ws, send=send, call_time=None, bee=True), RuleThinker)
+
+
+# ---------- 2026-10-17: voice memos are the input; a memo that asks for a call books it ----------
+
+MEMO = {"id": "j-41", "text": "오늘 이사 준비할 게 너무 많네. 오늘 밤 9시에 전화해서 같이 정리하자.", "state": "COMPLETED",
+        "created_at": 1792150000000, "updated_at": 1792150030000,
+        "aiResponse": {"message": "이사 준비 목록을 정리해 드릴게요.", "cleanedUpText": "오늘 이사 준비할 게 너무 많다.",
+                       "followUp": None, "todos": ["이사 업체 알아보기"]}}
+
+
+def memo_change(tmp_path: Path, monkeypatch, memo: dict = MEMO) -> Path:
+    """A workspace whose Bee just reported this voice memo (the watcher's inbox), and the fake Bee's `journals get`
+    answering with it."""
+    ws = workspace_with_a_call(tmp_path)
+    inbox = ws / "inbox" / "2026-10-14-182900"
+    inbox.mkdir(parents=True)
+    (inbox / "changed.json").write_text(json.dumps({"conversations": [], "journals": [
+        {"id": memo["id"], "text": memo["text"][:12], "state": "PROCESSING", "created_at": memo["created_at"]}]},
+        ensure_ascii=False))
+    (tmp_path / "memo.json").write_text(json.dumps(memo, ensure_ascii=False))
+    monkeypatch.setenv("FAKE_BEE_JOURNAL", str(tmp_path / "memo.json"))
+    add_event(ws, "bee_change", now=NOW, inbox="inbox/2026-10-14-182900", conversation_ids=[],
+              counts={"journals": 1})
+    return ws
+
+
+def think_with(ws: Path, *replies, language: str = "ko"):
+    model = ScriptedModel(list(replies))
+    told, asked = [], []
+
+    async def tell(offer, workspace, now):
+        told.append(offer)
+        return "notification sent"
+
+    async def send(offer, workspace, now):
+        asked.append(offer)
+        return "notification sent"
+
+    entry = asyncio.run(Thinker(ws, on_glm(model), send=send, tell=tell, bee=True, language=language).think(
+        MetaSession(ws).take_events(), NOW))
+    return model, entry, told, asked
+
+
+def done(text="정리했어요."):
+    return {"role": "assistant", "content": [{"text": text}]}
+
+
+def test_a_memo_that_asks_for_a_call_at_a_time_books_it_and_says_so_once(tmp_path, monkeypatch):
+    ws = memo_change(tmp_path, monkeypatch)
+    model, entry, told, asked = think_with(ws, {"role": "assistant", "content": [tool_use(
+        1, "book_call", memo_id="j-41", asked="오늘 밤 9시에 전화해서 같이 정리하자", at="2026-10-14T21:00",
+        topic="이사 준비 정리", why="음성 메모에서 오늘 밤 9시에 같이 정리하자고 하셨어요.")]}, done())
+    first = model.sent[0]["messages"][0]["content"][0]["text"]
+    assert MEMO["text"] in first and "이사 준비 목록을 정리해 드릴게요." in first  # the finished memo, with Bee's reply
+    (offer,) = OfferStore(ws).all()
+    assert (offer.state, offer.kind, offer.memo_ids, offer.topic) == ("booked", "voice note", ["j-41"], "이사 준비 정리")
+    assert offer.call_at == "2026-10-14T21:00:00+09:00" and offer.asked == "오늘 밤 9시에 전화해서 같이 정리하자"
+    assert told == [offer] and asked == []  # one plain notification, no question
+    assert entry["actions"] == [{"tool": "book_call", "offer": offer.id, "call_at": offer.call_at,
+                                 "topic": "이사 준비 정리", "result": "notification sent"}]
+
+
+@pytest.mark.parametrize("args, why", [
+    ({"asked": "오늘 밤 9시에 전화해 줘"}, "the memo's own words"),  # words the memo does not have
+    ({"at": "2026-10-14T18:00"}, "has passed"),
+    ({"at": "2026-10-30T21:00"}, "a week ahead"),
+    ({"memo_id": "j-99"}, "no voice memo j-99"),
+])
+def test_a_booking_from_a_memo_must_quote_the_memo_and_be_in_the_coming_week(tmp_path, monkeypatch, args, why):
+    ws = memo_change(tmp_path, monkeypatch)
+    call = {"memo_id": "j-41", "asked": "오늘 밤 9시에 전화해서 같이 정리하자", "at": "2026-10-14T21:00",
+            "topic": "이사 준비 정리", "why": "메모에서 부탁하셨어요.", **args}
+    model, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(1, "book_call", **call)]}, done())
+    assert OfferStore(ws).all() == [] and told == []
+    assert why in entry["tools"][0]["result"] and entry["tools"][0]["result"].startswith("Not booked")
+
+
+def test_one_memo_books_at_most_one_call(tmp_path, monkeypatch):
+    """As one Bee conversation leads to at most one offer (BC-014): the memo may come back in a later batch (its text
+    or Bee's reply arrived after a catch-up)."""
+    ws = memo_change(tmp_path, monkeypatch)
+    book = tool_use(1, "book_call", memo_id="j-41", asked="오늘 밤 9시에 전화해서 같이 정리하자", at="2026-10-14T21:00",
+                    topic="이사 준비 정리", why="메모에서 부탁하셨어요.")
+    think_with(ws, {"role": "assistant", "content": [book]}, done())
+    add_event(ws, "bee_change", now=NOW, inbox="inbox/2026-10-14-182900", conversation_ids=[])
+    _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [book]}, done())
+    assert len(OfferStore(ws).all()) == 1 and told == [] and "already" in entry["tools"][0]["result"]
+    offer_now = tool_use(2, "offer_call", topic="이사 준비 정리", why="메모에서 부탁하셨어요.", memo_id="j-41")
+    add_event(ws, "bee_change", now=NOW, inbox="inbox/2026-10-14-182900", conversation_ids=[])
+    _, entry, _, asked = think_with(ws, {"role": "assistant", "content": [offer_now]}, done())
+    assert asked == [] and "already" in entry["tools"][0]["result"]
+
+
+def test_a_memo_that_asks_for_a_call_now_is_offered_now(tmp_path, monkeypatch):
+    ws = memo_change(tmp_path, monkeypatch, {**MEMO, "text": "지금 좀 통화할 수 있어? 이사 얘기 하자."})
+    _, entry, told, asked = think_with(ws, {"role": "assistant", "content": [tool_use(
+        1, "offer_call", topic="이사 이야기", why="메모에서 지금 통화하자고 하셨어요.", memo_id="j-41")]}, done())
+    (offer,) = OfferStore(ws).all()
+    assert (offer.state, offer.memo_ids) == ("asked", ["j-41"]) and asked == [offer] and told == []
+
+
+def test_the_meta_agent_is_told_a_memo_that_asks_for_a_call_is_the_user_s_yes():
+    from meta.agent import INSTRUCTIONS, WITH_BEE
+
+    text = INSTRUCTIONS.format(**WITH_BEE, language="Korean")
+    assert "A voice memo is the user speaking to you on purpose" in text
+    for words in ("book_call", "copying the memo's own words", "now or soon", "offer_call", "decide as for any other"):
+        assert words in text, words

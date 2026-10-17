@@ -987,3 +987,25 @@ def test_a_call_booked_in_a_korean_call_says_why_in_korean():
     offer = OfferStore(store_dir).book("도서관에서 정리한 할 일 다시 보기", now + timedelta(hours=4), now,
                                        language=call_language("ko"))
     assert offer.reason == "오후 2시 27분 통화에서 이 시간에 다시 전화해 달라고 하셨어요."
+
+
+# ---------- 2026-10-17: a call a voice memo asks for ----------
+
+def test_a_call_booked_from_a_memo_is_called_off_from_the_app_and_carries_its_memo(tmp_path):
+    from voice.dispatch import call_metadata
+    from voice.offers import agreed, memo_booked_notification, plan_of
+
+    now = datetime(2026, 10, 17, 18, 30, tzinfo=SEOUL)
+    store = OfferStore(tmp_path)
+    offer = store.book_from_memo("이사 준비 정리", now.replace(hour=21, minute=0), now, reason="메모에서 부탁하셨어요.",
+                                 memo_id="j-41", asked="오늘 밤 9시에 전화해서 같이 정리하자")
+    assert offer.view("ko", SEOUL)["state"] == "booked"  # the app shows its "Call off"
+    plan = plan_of(offer)
+    assert plan.memo_ids == ["j-41"] and json.loads(call_metadata("outbound", plan))["memo_ids"] == ["j-41"]
+    assert "voice memo" in agreed(offer) and "오늘 밤 9시에 전화해서 같이 정리하자" in agreed(offer)
+    body = memo_booked_notification(offer, now, call_language("ko"))["aps"]["alert"]["body"]
+    assert body == "오늘 밤 9시에 전화할게요: 이사 준비 정리. 앱에서 취소할 수 있어요."
+    english = memo_booked_notification(offer, now, call_language("en"))
+    assert english["aps"]["alert"]["body"] == "I'll call you at 9:00 PM today: 이사 준비 정리. You can call it off in the app."
+    assert "category" not in english["aps"]  # a plain notification: no buttons
+    assert store.answer(offer.id, "decline", now).state == "declined"
