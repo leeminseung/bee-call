@@ -627,10 +627,12 @@ async def disconnect_bee(request: web.Request) -> web.Response:
             await bee.logout(folder)
         except (bee.BeeError, OSError, asyncio.TimeoutError) as exc:
             log.warning("bee logout for %s failed (%s); removing the login here anyway", who, exc)
-        was_on = people.settings(who).bee
-        people.change_settings(who, {"bee": False}, allowed=("bee",))
-        if was_on:  # the meta agent rewrites its notes without what came from Bee; calls get none of it meanwhile
+        # The meta agent rewrites its notes without what came from Bee, and calls get none of them meanwhile. Marked
+        # before Bee is turned off, so no call sees Bee off without it, and a retry after a failure here still finds
+        # Bee on (second review of 2026-10-18, finding 4).
+        if people.settings(who).bee:
             bee_turned_off(workspace(request), someone(request).now())
+        people.change_settings(who, {"bee": False}, allowed=("bee",))
         try:
             shutil.rmtree(folder)
         except FileNotFoundError:

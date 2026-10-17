@@ -74,17 +74,26 @@ def bee_off(workspace: Path) -> dict[str, Any] | None:
     return found if isinstance(found, dict) else None
 
 
-def notes_rewritten_without_bee(workspace: Path) -> None:
-    """The meta agent rewrote its notes after the user turned Bee off: calls get them again."""
+def rewrite_pending(workspace: Path) -> bool:
+    """The user turned Bee off, and the meta agent has not yet rewritten its notes without Bee."""
+    off = bee_off(workspace)
+    return off is not None and not off.get("notes_rewritten")
+
+
+def notes_rewritten_without_bee(workspace: Path, at: str) -> None:
+    """The meta agent rewrote its notes after the user turned Bee off, in the think that began at `at`: calls get
+    them again, and its later thinks see only its entries after that one (its words there may name what it took
+    out)."""
     off = bee_off(workspace)
     if off is not None and not off.get("notes_rewritten"):
-        _replace(workspace / META_DIR / BEE_OFF, json.dumps({**off, "notes_rewritten": True}) + "\n")
+        _replace(workspace / META_DIR / BEE_OFF,
+                 json.dumps({**off, "notes_rewritten": True, "notes_rewritten_at": at}) + "\n")
 
 
 def meta_notes(workspace: Path, *, bee: bool) -> str | None:
     """The meta agent's notes for a call's prep, or None before it has written any. For a person with Bee off
     (`bee` False), None too while the notes from before they turned Bee off wait to be rewritten without it."""
-    if not bee and (off := bee_off(workspace)) is not None and not off.get("notes_rewritten"):
+    if not bee and rewrite_pending(workspace):
         return None
     try:
         text = (workspace / META_DIR / "state.md").read_text().strip()
@@ -170,14 +179,16 @@ class MetaSession:
                 continue
         return out
 
-    def recent_text(self, limit_chars: int = 6000, since: str | None = None) -> str:
+    def recent_text(self, limit_chars: int = 6000, since: str | None = None, after: str | None = None) -> str:
         """The latest entries, newest last, as the agent reads them back: when, why, and what it decided. With
-        `since` (an ISO time), only the entries from then on."""
+        `since` (an ISO time), only the entries from then on; with `after`, only those that began later."""
         parts: list[str] = []
         used = 0
         entries = self.entries()
         if since is not None:
             entries = [entry for entry in entries if _not_before(entry.get("at"), since)]
+        if after is not None:
+            entries = [entry for entry in entries if _later(entry.get("at"), after)]
         for entry in reversed(entries):
             events = "; ".join(f"{e.get('kind')}" + (f" ({e.get('summary')})" if e.get("summary") else "")
                                for e in entry.get("events", []))
@@ -188,7 +199,7 @@ class MetaSession:
                 break
             parts.append(text)
             used += len(text)
-        return "\n\n".join(reversed(parts)) or ("Nothing yet." if since is not None else
+        return "\n\n".join(reversed(parts)) or ("Nothing yet." if since is not None or after is not None else
                                                 "Nothing yet: this is the first time you look.")
 
     def state(self) -> str:
@@ -205,5 +216,13 @@ def _not_before(at: Any, since: str) -> bool:
     """Whether the ISO time `at` is `since` or later (an entry without a readable time is left out)."""
     try:
         return datetime.fromisoformat(str(at)) >= datetime.fromisoformat(since)
+    except (TypeError, ValueError):
+        return False
+
+
+def _later(at: Any, than: str) -> bool:
+    """Whether the ISO time `at` is later than `than` (an entry without a readable time is left out)."""
+    try:
+        return datetime.fromisoformat(str(at)) > datetime.fromisoformat(than)
     except (TypeError, ValueError):
         return False

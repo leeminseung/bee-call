@@ -250,18 +250,21 @@ SAYS_IT_REMOVES = re.compile(r"\b(?:delete|remove|dismiss|take (?:it )?out|get r
                              r"지우|지울|지워|삭제|빼|뺄|없애", re.IGNORECASE)
 SENTENCES = re.compile(r"(?<=[.!?。])\s+|\n")
 # The one question that offers to put what came up in Bee: a sentence that names Bee, offers to put things in it, and
-# quotes no item (a quoted item is a question about that item alone, answered with save_to_bee). Korean: it ends in
-# organizing (정리해 둘까요?), or is about what came up (것, 거, 내용, 몇 개...) and ends in putting it in (넣어 둘까요?,
-# 저장할까요?, 기억해 둘까요?); English: "shall I", "want me to"... with organize, tidy, or put, add, keep or save them,
-# these, that, what came up... It is the last question of the AI's turn, so the yes answers it (review of 2026-10-18,
-# finding 1: a check for any Bee question with a word like 기억, 저장 or keep let "Bee가 기억하는 바로는 매운 거 못
-# 드시죠?" "응." write to Bee).
-ORGANIZE_KO = re.compile(r"(?:정리[^?？]{0,10}|(?:정리|것|거|내용|기록|몇 ?가지|몇 ?개|전부|모두|한꺼번에).*"
-                         r"(?:넣|남겨|남길|저장|담아|추가|기록|기억|정리)[^?？]{0,8})(?:까요|까)\s*[?？]\s*$")
+# quotes no item (a quoted item is a question about that item alone, answered with save_to_bee). Korean: it is about
+# what came up (정리, 것, 거, 내용, 몇 개...) and ends in a verb that puts in or organizes (넣어 둘까요?, 정리해 둘까요?,
+# 저장할까요?, 기억해 둘까요?); English: "shall I", "want me to"... organize or tidy, or put, add, save or store them,
+# these, that, what came up... in or to Bee. It is the last question of the AI's turn, so the yes answers it. Review of
+# 2026-10-18: a check for any Bee question with a word like 기억, 저장 or keep let "Bee가 기억하는 바로는 매운 거 못
+# 드시죠?" "응." write to Bee (first review); a verb near the end, not the last one, let "그거 Bee 기록에서 지울까요?"
+# through, and "keep it" took "want me to keep it short?" and "Shall I keep it as it is in Bee?" (second review), so
+# the verb is the one that ends the question, and "keep" and "남겨 둘까요" (keep, leave as it is) are not offers.
+ORGANIZE_KO = re.compile(r"^(?=.*(?:정리|것|거|내용|몇 ?가지|몇 ?개|전부|모두|한꺼번에))"
+                         r".*(?:(?:넣어|정리해|저장해|기억해|추가해|담아)\s?(?:둘|드릴|놓을|놔\s?둘|줄)|넣을|정리할|저장할|추가할)"
+                         r"까(?:요)?\s*[?？]\s*$")
 ORGANIZE_EN = re.compile(
     r"\b(?:(?:shall|should|can|may) i|(?:do you )?want me to|would you like me to|how about i)\b.*"
-    r"(?:\borgani[sz]e\b|\btidy\b|\b(?:put|add|keep|save|store|move)\s+(?:them|these|those|that|this|it|all|"
-    r"everything|the rest|what\b|things|a few|today))", re.IGNORECASE)
+    r"(?:\borgani[sz]e\b|\btidy\b|\b(?:put|add|save|store)\s+(?:them|these|those|that|this|it|all|everything|"
+    r"the rest|what\b|things|a few|today)\b.*\b(?:in|into|to|on)\s+(?:your\s+)?Bee\b)", re.IGNORECASE)
 ORGANIZE_MOST = 8  # items one organize in a call adds at most (arbitrary)
 ORGANIZE_DAYS = (1, 7, 3)  # the past days an organize of what Bee recorded covers: fewest, most, and when not said
 ORGANIZED = -1  # in BeeCoordinator._claimed: an item organize_bee added

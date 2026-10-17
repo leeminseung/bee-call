@@ -125,6 +125,11 @@ the to-dos it suggests) so nothing is added twice, and add them with bee_add_fac
 statement in English. Never delete, merge away or rewrite what Bee \
 already has. Finish with one sentence for the user's notification: how many you added, and that they can see and \
 edit them in the Bee app. At any other time you have no tools that change Bee."""
+# What the meta agent's file tools also hide from a person who turned Bee off (second review of 2026-10-18, finding 3):
+# the files that hold what came from Bee, so none of it finds its way back into the notes after the rewrite: Bee's
+# batches (inbox/), what calls wrote to Bee, each call's prep note and record (Bee's reads and their results), and the
+# meta agent's own inbox and session, which name Bee's ids and facts. The calls' transcripts and jobs stay.
+BEE_FILES = ("inbox", "bee-writes.jsonl", "prep.md", "events.jsonl", "session.jsonl")
 # For a person who turned Bee off, until the meta agent has rewritten its notes (meta/session.py bee_turned_off; the
 # user's decision of 2026-10-18): the only time a person without Bee is told about Bee, so that nothing of it reaches
 # their calls (BC-057).
@@ -421,9 +426,10 @@ def _event_line(workspace: Path, event: dict[str, Any], memos: dict[str, dict[st
 
 def context(workspace: Path, events: list[dict[str, Any]], now: datetime, call_time: str | None = None,
             memos: dict[str, dict[str, Any]] | None = None,
-            conversations: dict[Any, dict[str, Any]] | None = None, since: str | None = None) -> str:
+            conversations: dict[Any, dict[str, Any]] | None = None, since: str | None = None,
+            after: str | None = None) -> str:
     """The first message: the time and limits, open offers, the agent's notes and past entries (with `since`, only
-    those from then on), and the events."""
+    those from then on; with `after`, only those that began later), and the events."""
     session, store = MetaSession(workspace), OfferStore(workspace)
     left = max(0, DAILY_NOTIFICATIONS - store.notified_on(now))
     limits = f"Notifications left today: {left} of {DAILY_NOTIFICATIONS}."
@@ -436,7 +442,7 @@ def context(workspace: Path, events: list[dict[str, Any]], now: datetime, call_t
         f"{call_time or DEFAULT_CALL_TIME}. {limits}",
         "Open offers:\n" + ("\n".join(offers) if offers else "none"),
         "Your notes (state.md):\n" + session.state(),
-        "Your recent entries (meta session):\n" + session.recent_text(since=since),
+        "Your recent entries (meta session):\n" + session.recent_text(since=since, after=after),
         "What just happened:\n" + "\n".join(_event_line(workspace, e, memos, now, conversations) for e in events),
     ])
 
@@ -477,15 +483,17 @@ class Thinker:
         if name in BEE_TOOLS and not self.bee:
             return f"There is no tool named {name}."
         try:
+            # A person who turned Bee off: what came from Bee in their folder is hidden too (BEE_FILES).
+            hidden = BEE_FILES if not self.bee and bee_off(ws) is not None else ()
             if name == "list_files":  # file tools run in a thread, so a slow one never stalls placing calls
                 return await asyncio.to_thread(files.list_files, ws, str(args.get("path") or "."),
-                                               str(args.get("pattern") or "*"))
+                                               str(args.get("pattern") or "*"), hidden)
             if name == "read_file":
                 return await asyncio.to_thread(files.read_file, ws, str(args["path"]), int(args.get("start_line") or 1),
-                                               int(args.get("max_lines") or 200))
+                                               int(args.get("max_lines") or 200), hidden)
             if name == "grep":
                 return await asyncio.to_thread(files.grep, ws, str(args["pattern"]), str(args.get("path") or "."),
-                                               str(args.get("glob") or "*"))
+                                               str(args.get("glob") or "*"), hidden)
             if name in toolkit.NAMES:
                 found = await toolkit.read(name, args, ours=OurCalls.of(ws), zone=now.tzinfo, timeout=META_READ_S,
                                            max_chars=MAX_RESULT_CHARS - 200)
@@ -498,7 +506,7 @@ class Thinker:
                 MetaSession(ws).write_state(str(args.get("text", "")))
                 actions.append({"tool": "write_state", "result": "notes updated"})
                 if self._rewriting:  # rewritten without Bee, as told: calls get the notes again
-                    notes_rewritten_without_bee(ws)
+                    notes_rewritten_without_bee(ws, now.isoformat(timespec="seconds"))
                 return "Saved."
             if name == "offer_call":
                 return await self._offer_call(args, now, actions)
@@ -716,8 +724,10 @@ class Thinker:
             entry = await self._organize(event, now)
             if entry.get("error"):
                 return entry
-        # Without Bee, a Bee change from before the user turned Bee off is not looked at (BC-057).
-        rest = [e for e in events if e.get("kind") != "organize_bee" and (self.bee or e.get("kind") != "bee_change")]
+        # Without Bee, a Bee change from before the user turned Bee off is not looked at (BC-057); with Bee (connected
+        # again), neither is the event that Bee was turned off.
+        rest = [e for e in events if e.get("kind") != "organize_bee"
+                and e.get("kind") != ("bee_disconnected" if self.bee else "bee_change")]
         if rest or entry is None and not events:
             entry = await self._think(rest, now)
         return entry or {"at": now.isoformat(timespec="seconds"), "events": events, "decision": "already done",
@@ -725,12 +735,15 @@ class Thinker:
 
     async def _think(self, events: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
         await self._read_memos(events, now)
-        # A person who turned Bee off: the entries from before are left out, and until the notes are rewritten
-        # without Bee, each think is told to do it (meta/session.py bee_turned_off).
+        # A person who turned Bee off: until the notes are rewritten without Bee, each think is told to do it and sees
+        # only its entries since the switch; after that, only those after the think that rewrote them, whose words
+        # may name what it took out (meta/session.py bee_turned_off).
         off = None if self.bee else bee_off(self.workspace)
         self._rewriting = off is not None and not off.get("notes_rewritten")
+        rewritten_at = off.get("notes_rewritten_at") if off is not None and not self._rewriting else None
         first = context(self.workspace, events, now, self.call_time, self._memos, self._conversations,
-                        since=str(off.get("at")) if off is not None else None)
+                        since=str(off.get("at")) if off is not None else None,
+                        after=str(rewritten_at) if rewritten_at else None)
         told = instructions(False, self.language_name, bee_turned_off=True) if self._rewriting else None
         try:
             entry = await self._loop(events, first, self.tools, MAX_ROUNDS, now, told)

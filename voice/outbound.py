@@ -50,7 +50,8 @@ from voice.offers import (OPEN, AlreadyOffered, Offer, OfferStore, QuestionWaiti
                           memo_booked_notification, not_placed_notification, notification, plan_of)
 from voice.prep import NOTE_SECONDS, OPENING_BY_S, prepare_outbound
 from meta.agent import Thinker, thinker_for
-from meta.session import DAILY_NOTIFICATIONS, MetaSession, add_event, meta_notes, quiet, quiet_ends
+from meta.session import (DAILY_NOTIFICATIONS, MetaSession, add_event, meta_notes, quiet, quiet_ends,
+                          rewrite_pending)
 
 load_dotenv(".env.local")
 log = logging.getLogger("bee-call.outbound")
@@ -318,11 +319,13 @@ def bee_event(trigger: Trigger, workspace: Path) -> dict:
             "reason": trigger.reason}
 
 
-async def think_about_new_events(session: MetaSession, thinker: Thinker, now: datetime, tries: int) -> int:
+async def think_about_new_events(session: MetaSession, thinker: Thinker, now: datetime, tries: int,
+                                 wake: bool = False) -> int:
     """One look at the inbox. The cursor moves only after a think that worked; after a failed one the same events
-    stay for the next try (BC-061). Returns the failed tries in a row so far."""
+    stay for the next try (BC-061). With `wake`, it thinks even when nothing new is in the inbox. Returns the failed
+    tries in a row so far."""
     events, offset = session.peek_events()
-    if not events:
+    if not events and not wake:
         return tries
     entry = await thinker.think(events, now)
     print(f"meta agent ({entry['seconds']} s): {entry.get('decision') or entry.get('error')}", flush=True)
@@ -345,6 +348,10 @@ async def serve_meta(person: Person, thinker: Thinker, until_offer_closes: bool 
     workspace = person.workspace
     session, store, tries = MetaSession(workspace), OfferStore(workspace), 0
     think_after = 0.0  # time.monotonic() after which the meta agent may think again (later after a failed think)
+    # A person who turned Bee off, whose notes wait to be rewritten without Bee: this loop thinks once as it starts,
+    # new events or not, since the loop that ran while Bee was on may have taken the inbox's bee_disconnected before
+    # serve_people started this one (second review of 2026-10-18, finding 2).
+    rewrite = not getattr(thinker, "bee", True) and rewrite_pending(workspace)  # a stand-in without .bee: no wake
     while True:
         now = person.now()
         try:
@@ -355,8 +362,9 @@ async def serve_meta(person: Person, thinker: Thinker, until_offer_closes: bool 
                     add_event(workspace, "booked_soon", now=now, offer=offer.id, call_at=offer.call_at,
                               topic=offer.topic)
             if not day_budget(person, now).used_up and time.monotonic() >= think_after:
-                tries = await think_about_new_events(session, thinker, now, tries)
+                tries = await think_about_new_events(session, thinker, now, tries, wake=rewrite)
                 think_after = time.monotonic() + retry_wait(tries) if tries else 0.0
+                rewrite = rewrite and bool(tries)  # once it thought (the notes rewritten or not), as for any event
             await send_held(person, now, language)
         except Exception:
             log.exception("the meta loop failed")

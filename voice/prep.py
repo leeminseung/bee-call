@@ -71,16 +71,22 @@ call), and what changed in Bee since the last call. Start from those. If one mor
 a conversation in full or an insight the agenda mentions, read it with the Bee tools, once."""
 YOUR_NOTE = """\
 ## Your note
-Then write <note>...</note>: under 100 words, for yourself during the call. It is the context this call must know, \
-compacted from what came before; leave out whatever this call will not need. Include what applies, a short line \
+Then write <note>...</note>: about 70 words and never more than 100, for yourself during the call. It is the context this call must know, \
+compacted from what came before; leave out whatever this call will not need. Include what applies, one short line \
 each:
 - where things stand: the threads still open from recent calls, and how the last call ended;
-- what the user has been up to, from Bee since the last call;
+- what the user has been up to, from Bee since the last call, only what this call may touch;
 - what the user wants from calls like this one: tone, topics to avoid, things they asked not to repeat;
 - what this call could get to know about the user, from the meta agent's notes;
 - the unconfirmed facts, to-dos and suggestions to check, with their Bee ids.
-Only what the data says. Call the user "the user" in it, not by name. Count before you finish: past 100 words, cut \
-what this call needs least."""
+Only what the data says. Call the user "the user" in it, not by name. A note of the right length, for another user:
+<note>- Open: moving to Busan in March; the answer on the lease is due Monday.
+- The last call ended mid-topic: the user had to go into a meeting.
+- Avoid their brother's wedding: they asked not to talk about it.
+- Since then: Bee heard them compare two moving companies.
+- Get to know: what draws them to Busan.
+- Check fact 88 "Lease ends in February" (unconfirmed).</note>
+Count before you finish: past 100 words, cut what this call needs least."""
 PREP_INSTRUCTIONS = "\n\n".join([WHAT_YOU_ARE_DOING, YOUR_OPENING, WHAT_TO_READ, YOUR_NOTE, toolkit.WHAT_BEE_KNOWS,
                                   toolkit.reading_bee("prep"), toolkit.INFORMATION])
 # For a person without Bee (Use Bee off): no Bee data and no tools; what is known comes from the notes kept between
@@ -95,14 +101,19 @@ way a good assistant glances at their notes before answering.""", YOUR_OPENING, 
 The next message holds who is calling whom and why, the notes kept between calls and your last few calls with the \
 user.""", """\
 ## Your note
-Then write <note>...</note>: under 100 words, for yourself during the call. It is the context this call must know, \
-compacted from what came before; leave out whatever this call will not need. Include what applies, a short line \
+Then write <note>...</note>: about 70 words and never more than 100, for yourself during the call. It is the context this call must know, \
+compacted from what came before; leave out whatever this call will not need. Include what applies, one short line \
 each:
 - where things stand: the threads still open from recent calls, and how the last call ended;
 - what the user wants from calls like this one: tone, topics to avoid, things they asked not to repeat;
 - what this call could get to know about the user, from the notes kept between calls.
 Only what the message says; when it says little, note that, and plan to ask the user about their day. Call the user \
-"the user" in it, not by name. Count before you finish: past 100 words, cut what this call needs least.""",
+"the user" in it, not by name. A note of the right length, for another user:
+<note>- Open: moving to Busan in March; the answer on the lease is due Monday.
+- The last call ended mid-topic: the user had to go into a meeting.
+- Avoid their brother's wedding: they asked not to talk about it.
+- Get to know: what draws them to Busan.</note>
+Count before you finish: past 100 words, cut what this call needs least.""",
     toolkit.INFORMATION_WITHOUT_BEE])
 PREP_READ_CHARS = 2500  # about the longest one of the prep's reads is, so the note is written within seconds (arbitrary)
 # The Bee read toolkit, the same tools the call AI and the meta agent have.
@@ -202,8 +213,8 @@ def seed_text(inputs: CallInputs, meta: dict[str, Any], now: datetime, *, bee: b
     sources = "the notes, the earlier calls or Bee are" if bee else "the notes or the earlier calls are"
     # Measured 2026-10-18: 1 of 8 notes kept under the 100 words the instructions ask for, so the seed says it too,
     # before the language, which stays last.
-    parts.append(f"{ask} Keep the note under 100 words. The call is in {name}: write the opening in {name}, "
-                 f"whatever language {sources} in.")
+    parts.append(f"{ask} Keep the note to about 70 words, never more than 100. The call is in {name}: write the "
+                 f"opening in {name}, whatever language {sources} in.")
     return "\n\n".join(parts)
 
 
@@ -431,8 +442,8 @@ class Preparation:
         if first.turn.calls:
             results = await asyncio.gather(*(_read(c, self.prep, self._now.tzinfo, self._ours) if n < MAX_READS
                                              else _not_read(c) for n, c in enumerate(first.turn.calls)))
-            ask = ("Now write the note, under 100 words." if self.prep.opening
-                   else "Now write the opening and the note, under 100 words.")
+            ask = ("Now write the note, about 70 words." if self.prep.opening
+                   else "Now write the opening and the note, about 70 words.")
             turns += [first.turn, Turn("user", text=ask, results=list(results))]
             # The same model that answered writes the rest (the standby, if it took over).
             second = await providers.reply(first.choice, self._system, turns, tools,
