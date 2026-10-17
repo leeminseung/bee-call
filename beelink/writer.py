@@ -18,8 +18,12 @@ one notification says what went into Bee (summary_notification).
 Items:
   {"kind": "fact_confirm", "fact_id": 12}
   {"kind": "fact_update", "fact_id": 12, "text": "Bonus is 10%"}
+  {"kind": "fact_create", "text": "Allergic to peanuts"}          made, then confirmed if Bee made it unconfirmed
+  {"kind": "fact_delete", "fact_id": 12}                          a wrong fact taken out; never undone
   {"kind": "todo_create", "text": "Ask about bonus terms", "alarm_at": "2026-10-13T09:00:00+09:00"}
   {"kind": "todo_accept", "suggestion_id": 34}
+  {"kind": "todo_complete", "todo_id": 51}                        undone by marking it open again
+  {"kind": "todo_dismiss", "suggestion_id": 34}                   Bee's suggestion turned down; never undone
 (an item may also carry "text" for how it reads, as a todo suggestion or a confirmed fact does).
 
 Run by hand: uv run python -m beelink.writer data/people/<id>/<date>/<time>            what was written, and how
@@ -45,7 +49,10 @@ log = logging.getLogger("beelink.writer")
 
 WRITES = "bee-writes.jsonl"
 OLD_QUEUE = "bee-queue.jsonl"
-KINDS = ("fact_confirm", "fact_update", "todo_create", "todo_accept")
+KINDS = ("fact_confirm", "fact_update", "fact_create", "fact_delete", "todo_create", "todo_accept", "todo_complete",
+         "todo_dismiss")
+NOT_UNDOABLE = ("fact_delete", "todo_dismiss")  # Bee cannot bring a deleted fact or a dismissed suggestion back
+ADDING = ("fact_confirm", "fact_update", "fact_create", "todo_create", "todo_accept")  # how the summary groups them
 MAYBE_WRITTEN = ("unknown", "applying")  # Bee may or may not have the item; never written again by itself
 CLOCK_SLACK_S = 120  # Bee's clock and this machine's may differ; a todo made this much before a write is older
 TODO_PAGES = 10  # pages of 50 todos looked through for a write that may have gone in; more cannot be told
@@ -82,6 +89,22 @@ async def apply_one(item: dict[str, Any]) -> dict[str, Any]:
         return await cli.create_todo(item["text"], item.get("alarm_at"))
     if kind == "todo_accept":
         return await cli.accept_suggestion(item["suggestion_id"])
+    if kind == "fact_create":
+        response = await cli.create_fact(item["text"])
+        made = the_fact(response)
+        if made.get("confirmed") is False and isinstance(made.get("id"), int):  # the user's yes is its confirmation
+            try:
+                await cli.confirm_fact(made["id"])
+            except Exception as exc:  # the fact is in Bee either way; Bee shows it to be confirmed there
+                log.warning("fact %s was made but not confirmed: %s", made["id"], exc)
+                return {**response, "confirm_error": str(exc)[:200]}
+        return response
+    if kind == "fact_delete":
+        return await cli.delete_fact(item["fact_id"])
+    if kind == "todo_complete":
+        return await cli.complete_todo(item["todo_id"])
+    if kind == "todo_dismiss":
+        return await cli.dismiss_suggestion(item["suggestion_id"])
     raise ValueError(f"unknown kind: {kind!r}")
 
 
@@ -126,6 +149,15 @@ async def take_back(write: BeeWrite) -> dict[str, Any]:
         if not isinstance(before.get("text"), str):
             raise ValueError("the fact's earlier text is not known")
         return await cli.update_fact(write.item["fact_id"], before["text"], confirmed=bool(before.get("confirmed")))
+    if write.kind == "fact_create":
+        made = the_fact(write.response)
+        if not isinstance(made.get("id"), int):
+            raise ValueError("Bee did not say which fact it made")
+        return await cli.delete_fact(made["id"])
+    if write.kind == "todo_complete":
+        return await cli.reopen_todo(write.item["todo_id"])
+    if write.kind in NOT_UNDOABLE:
+        raise ValueError(f"a {write.kind} cannot be undone")
     raise ValueError(f"unknown kind: {write.kind!r}")
 
 
@@ -211,6 +243,8 @@ class BeeWrites:
         (write,) = [w for w in self.all() if w.key == key]
         if write.status != "ok":
             raise ValueError(f"write {key} is {write.status}")
+        if write.kind in NOT_UNDOABLE:
+            raise ValueError(f"a {write.kind} cannot be undone")
         try:
             await take_back(write)
             write.status = "undone"
@@ -281,12 +315,30 @@ async def in_bee_after_all(write: BeeWrite) -> dict[str, Any] | bool | None:
             if not cursor:
                 return False
         return None  # more todos than are looked through
-    if write.kind == "todo_accept":
+    if write.kind in ("todo_accept", "todo_dismiss"):
         pending = await cli.todo_suggestions(limit=50)
         if any(isinstance(s, dict) and s.get("id") == write.item.get("suggestion_id") for s in pending):
-            return False  # still suggested: not accepted yet
-        return None  # accepted, or dismissed in the Bee app meanwhile
-    return False  # a fact set to a value: setting it again changes nothing
+            return False  # still suggested: not accepted (or dismissed) yet
+        return None  # accepted or dismissed, here or in the Bee app meanwhile
+    if write.kind == "fact_create":  # as for a todo: Bee may have made it before its error
+        for unconfirmed in (False, True):
+            page = await cli.facts(limit=50, unconfirmed=unconfirmed)
+            listed = page.get("facts")
+            if not isinstance(listed, list):
+                return None
+            for fact in listed:
+                if not isinstance(fact, dict) or _plain(fact.get("text")) != _plain(write.text):
+                    continue
+                made = fact.get("created_at")
+                if isinstance(made, (int, float)) and write.began is not None \
+                        and made / 1000 < write.began - CLOCK_SLACK_S:
+                    continue  # an older fact of the same words
+                return {"fact": fact}
+        return False
+    if write.kind == "todo_complete":
+        todo = made_todo(await cli.todo(write.item["todo_id"]))
+        return {"todo": todo} if todo.get("completed") is True else False
+    return False  # a fact set to a value, or one deleted: doing it again changes nothing
 
 
 def _plain(text: Any) -> str:
@@ -331,8 +383,8 @@ def item_label(item: dict[str, Any], language: CallLanguage) -> str:
 
 
 def summary_notification(writes: list[BeeWrite], language: CallLanguage) -> dict[str, Any] | None:
-    """The one plain notification after a call (contract section 5): what went into Bee, and what did not; None
-    when the call wrote nothing."""
+    """The one plain notification after a call (contract section 5): what went into Bee, what was marked done or
+    taken out, and what did not go through; None when the call wrote nothing."""
     went_in = [w for w in writes if w.status == "ok"]
     left_out = [w for w in writes if w.status == "failed"]
     maybe = [w for w in writes if w.status in MAYBE_WRITTEN]
@@ -345,8 +397,12 @@ def summary_notification(writes: list[BeeWrite], language: CallLanguage) -> dict
         return label(found[0], language) + ((f" 외 {more}개" if korean else f" and {more} more") if more else "")
 
     parts = []
-    if went_in:
-        parts.append(f"Bee에 넣었어요: {some(went_in)}" if korean else f"Added to Bee: {some(went_in)}")
+    for kinds, ko, en in ((ADDING, "Bee에 넣었어요", "Added to Bee"), (("todo_complete",), "Bee에서 끝냈어요",
+                                                                     "Marked done in Bee"),
+                          (NOT_UNDOABLE, "Bee에서 뺐어요", "Removed from Bee")):
+        done = [w for w in went_in if w.kind in kinds]
+        if done:
+            parts.append(f"{ko if korean else en}: {some(done)}")
     if left_out:
         parts.append(f"넣지 못했어요: {some(left_out)}" if korean else f"Couldn't add: {some(left_out)}")
     if maybe:

@@ -25,7 +25,7 @@ from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_inst
 from beelink import reads
 from beelink.calls import OurCalls
 from beelink.clock import now_text
-from beelink.writer import KINDS, BeeWrites, event_fields, item_label, label
+from beelink.writer import KINDS, NOT_UNDOABLE, BeeWrites, event_fields, item_label, label
 from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
 from voice.recorder import CallRecorder
@@ -156,8 +156,12 @@ EXPIRED = "expired"  # a proposal whose question was answered and passed (BeeCoo
 # language.
 ASK_LIKE = {"todo_create": "Shall I add '{text}' to your Bee todos?",
             "todo_accept": "Shall I add Bee's suggested todo '{text}'?",
+            "todo_complete": "Shall I mark '{text}' done in Bee?",
+            "todo_dismiss": "Shall I remove Bee's suggestion '{text}'?",
+            "fact_create": "Shall I keep '{text}' in Bee?",
             "fact_confirm": "Did Bee hear '{text}' right?",
-            "fact_update": "Shall I fix it in Bee to '{text}'?"}
+            "fact_update": "Shall I fix it in Bee to '{text}'?",
+            "fact_delete": "Shall I delete '{text}' from Bee?"}
 ENGLISH = call_language("en")  # what the tools tell the model is in English, like the rest of its instructions
 
 
@@ -655,36 +659,46 @@ class BeeCoordinator(Coordinator):
 
     @function_tool
     async def propose_bee_save(self, context: RunContext, kind: str, text: str, fact_id: int | None = None,
-                               suggestion_id: int | None = None, alarm_at: str | None = None) -> str:
-        """Before you ask the user whether to save something to their Bee: fixes the item and gives it a number.
+                               suggestion_id: int | None = None, todo_id: int | None = None,
+                               alarm_at: str | None = None) -> str:
+        """Before you ask the user whether to change something in their Bee: fixes the item and gives it a number.
         Then ask one question that names Bee and quotes the item, and call save_to_bee with the number only after
         the user says yes to it.
 
         Args:
-            kind: One of fact_confirm, fact_update, todo_create, todo_accept.
-            text: The item as your question will quote it: the todo, or the fact as it should read, in the user's
-                language; for fact_confirm and todo_accept, the fact or the suggested todo as Bee has it.
-            fact_id: The Bee fact id (fact_confirm, fact_update).
-            suggestion_id: The Bee todo suggestion id (todo_accept).
+            kind: fact_create (keep something lasting the user said about themselves), fact_confirm (Bee heard a
+                fact right), fact_update (fix a fact Bee has wrong), fact_delete (take a wrong fact out; cannot be
+                undone), todo_create (a new todo), todo_accept (take Bee's suggested todo), todo_complete (mark a
+                todo done) or todo_dismiss (turn down Bee's suggested todo; cannot be undone).
+            text: The item as your question will quote it, in the user's language for what you write
+                (fact_create, fact_update, todo_create); for the others, the fact or the todo as Bee has it.
+            fact_id: The Bee fact id (fact_confirm, fact_update, fact_delete).
+            suggestion_id: The Bee todo suggestion id (todo_accept, todo_dismiss).
+            todo_id: The Bee todo id (todo_complete).
             alarm_at: Optional ISO 8601 time for a todo alarm (todo_create).
         """
         if kind not in KINDS:
             return f"Unknown kind {kind!r}; use one of {', '.join(KINDS)}."
         if not text or not text.strip():
             return "text is required: the item as your question will quote it."
-        if kind in ("fact_update", "todo_create") and self._language.code == "ko" and not HANGUL.search(text):
+        if kind in ("fact_update", "fact_create", "todo_create") and self._language.code == "ko" \
+                and not HANGUL.search(text):
             return "Write the text in Korean, the user's language, then propose it again."
         item: dict = {"kind": kind, "text": text.strip()}
-        if kind in ("fact_confirm", "fact_update"):
+        if kind in ("fact_confirm", "fact_update", "fact_delete"):
             if fact_id is None:
                 return "fact_id is required."
             item["fact_id"] = fact_id
         if kind == "todo_create" and alarm_at:
             item["alarm_at"] = alarm_at
-        if kind == "todo_accept":
+        if kind in ("todo_accept", "todo_dismiss"):
             if suggestion_id is None:
                 return "suggestion_id is required."
             item["suggestion_id"] = suggestion_id
+        if kind == "todo_complete":
+            if todo_id is None:
+                return "todo_id is required."
+            item["todo_id"] = todo_id
         number = len(self._proposals) + 1
         self._proposals[number] = Proposal(item, after=self._last_user_turn())
         return (f"Proposal {number}: {item_label(item, ENGLISH)}. Ask the user now (unless you already asked it in "
@@ -746,6 +760,9 @@ class BeeCoordinator(Coordinator):
         saved = [w for w in self._bee_writes.all() if w.status == "ok"]
         if not saved:
             return "Nothing saved to Bee in this call is left to take out."
+        if saved[-1].kind in NOT_UNDOABLE:
+            return (f"{label(saved[-1], ENGLISH)} cannot be undone: Bee cannot bring back a deleted fact or a "
+                    "dismissed suggestion. Tell the user in a few words.")
         async with self.waiting(context):
             write = await self._bee_writes.undo(saved[-1].key)
         what = label(write, ENGLISH)

@@ -13,7 +13,7 @@
       "report": true,
       "table": true,
       "chart": true,
-      "bee_writes": 1
+      "bee_writes": 2
     }
   },
   "why_calling": null,
@@ -238,7 +238,49 @@
     },
     {
       "type": "speech",
-      "id": "speech-151",
+      "id": "speech-136",
+      "at": "2026-10-15T01:28:50+09:00",
+      "speaker": "person",
+      "text": "참, 저 거의 매일 도서관에서 일해요. 그건 기억해 둬요.",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-139",
+      "at": "2026-10-15T01:28:50+09:00",
+      "speaker": "ai",
+      "text": "Bee에 '거의 매일 도서관에서 일한다'를 기억해 둘까요?",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-140",
+      "at": "2026-10-15T01:28:53+09:00",
+      "speaker": "person",
+      "text": "네, 기억해 줘요.",
+      "interrupted": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-144",
+      "at": "2026-10-15T01:28:53+09:00",
+      "speaker": "ai",
+      "text": "기억해 뒀어요.",
+      "interrupted": false
+    },
+    {
+      "type": "bee_write",
+      "id": "write-w2",
+      "at": "2026-10-15T01:28:53+09:00",
+      "kind": "fact_create",
+      "text": "거의 매일 도서관에서 일한다",
+      "state": "written",
+      "will_retry": false,
+      "undoable": false
+    },
+    {
+      "type": "speech",
+      "id": "speech-160",
       "at": "2026-10-15T01:30:15+09:00",
       "speaker": "person",
       "text": "알겠어요. 장소는 내일 성현이랑 정할게요. 오늘은 여기까지 할게요. 고마워요.",
@@ -246,7 +288,7 @@
     },
     {
       "type": "speech",
-      "id": "speech-156",
+      "id": "speech-165",
       "at": "2026-10-15T01:30:33+09:00",
       "speaker": "ai",
       "text": "네, 민승 님. 좋은 밤 보내세요.",
@@ -254,8 +296,8 @@
     }
   ],
   "captions_included": {
-    "person": 12,
-    "ai": 11
+    "person": 14,
+    "ai": 13
   },
-  "version": "0e3b4362146fe8bb"
+  "version": "a2c9cda747a42566"
 }

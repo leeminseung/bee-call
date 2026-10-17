@@ -162,6 +162,24 @@ async def fact(fact_id: int, timeout: float = TIMEOUT) -> dict[str, Any]:
     return await run_json("facts", "get", str(fact_id), timeout=timeout)
 
 
+async def facts(limit: int = 50, cursor: Any = None, unconfirmed: bool = False,
+                timeout: float = TIMEOUT) -> dict[str, Any]:
+    """One page of facts: {"facts": [{"id", "text", "created_at" (ms), "confirmed", "tags"}, ...], "next_cursor"}."""
+    args = ["facts", "list", "--limit", str(limit)] + (["--unconfirmed"] if unconfirmed else []) + \
+        (["--cursor", str(cursor)] if cursor else [])
+    return await run_json(*args, timeout=timeout)
+
+
+async def todo(todo_id: int, timeout: float = TIMEOUT) -> dict[str, Any]:
+    return await run_json("todos", "get", str(todo_id), timeout=timeout)
+
+
+async def journal(journal_id: str, timeout: float = TIMEOUT) -> dict[str, Any]:
+    """One voice memo (a journal): {"id", "text", "state", "created_at", "updated_at", "aiResponse": {"message",
+    "cleanedUpText", "followUp", "todos"}}, as the API answers it (bee journals get prints it as it came)."""
+    return await run_json("journals", "get", str(journal_id), timeout=timeout)
+
+
 async def todos(limit: int = 50, cursor: Any = None, timeout: float = TIMEOUT) -> dict[str, Any]:
     """One page of todos, open and completed, in no promised order: {"todos": [{"id", "text", "created_at" (ms),
     "completed"}, ...], "next_cursor": ...}."""
@@ -195,6 +213,26 @@ async def create_todo(text: str, alarm_at: str | None = None) -> dict[str, Any]:
 
 async def accept_suggestion(suggestion_id: int) -> dict[str, Any]:
     return await run_json("todos", "accept-suggestion", str(suggestion_id), timeout=WRITE_TIMEOUT)
+
+
+async def create_fact(text: str) -> dict[str, Any]:
+    return await run_json("facts", "create", "--text", text, timeout=WRITE_TIMEOUT)
+
+
+async def delete_fact(fact_id: int) -> dict[str, Any]:
+    return await run_json("facts", "delete", str(fact_id), timeout=WRITE_TIMEOUT)
+
+
+async def complete_todo(todo_id: int) -> dict[str, Any]:
+    return await run_json("todos", "complete", str(todo_id), timeout=WRITE_TIMEOUT)
+
+
+async def reopen_todo(todo_id: int) -> dict[str, Any]:
+    return await run_json("todos", "update", str(todo_id), "--completed", "false", timeout=WRITE_TIMEOUT)
+
+
+async def dismiss_suggestion(suggestion_id: int) -> dict[str, Any]:
+    return await run_json("todos", "dismiss-suggestion", str(suggestion_id), timeout=WRITE_TIMEOUT)
 
 
 # ---------- one person's Bee login (voice/token_server.py /bee/...) ----------

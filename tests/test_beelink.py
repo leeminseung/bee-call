@@ -13,7 +13,9 @@ from tests.helpers import SEOUL
 from beelink.watcher import BeeWatcher, parse_stream_line
 
 FAKE_BEE = Path(__file__).parent / "fakebee" / "bee"
-WRITE_COMMANDS = {("facts", "confirm"), ("facts", "update"), ("todos", "create"), ("todos", "accept-suggestion")}
+WRITE_COMMANDS = {("facts", "confirm"), ("facts", "update"), ("facts", "create"), ("facts", "delete"),
+                  ("todos", "create"), ("todos", "accept-suggestion"), ("todos", "complete"),
+                  ("todos", "update"), ("todos", "dismiss-suggestion")}
 
 
 @pytest.fixture

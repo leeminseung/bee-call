@@ -138,6 +138,40 @@ if cmd[:2] == ["todos", "accept-suggestion"]:
     made({"id": 100, "text": "Ask about bonus terms", "created_at": now_ms, "completed": False})
 if cmd[:2] == ["todos", "delete"]:
     out({"deleted": True, "id": int(cmd[2])})
+# The facts Bee made (facts create), kept in the file FAKE_BEE_FACTS names (none when it is not set).
+facts_file = os.environ.get("FAKE_BEE_FACTS")
+
+def made_facts():
+    return json.load(open(facts_file)) if facts_file and os.path.exists(facts_file) else []
+
+if cmd[:2] == ["facts", "create"]:  # made unconfirmed, as Bee does for a fact from the API
+    fact = {"id": 200 + len(made_facts()), "text": cmd[cmd.index("--text") + 1], "created_at": now_ms,
+            "confirmed": bool(os.environ.get("FAKE_BEE_FACT_CONFIRMED")), "tags": []}
+    if facts_file:
+        json.dump(made_facts() + [fact], open(facts_file, "w"))
+    out({"fact": fact})
+if cmd[:2] == ["facts", "list"]:  # the facts made here (the --unconfirmed list is answered above)
+    out({"facts": made_facts(), "next_cursor": None})
+if cmd[:2] == ["facts", "delete"]:
+    out({"deleted": True, "id": int(cmd[2])})
+if cmd[:2] == ["todos", "get"]:
+    out({"todo": {"id": int(cmd[2]), "text": "Reply to the recruiter", "created_at": now_ms - 86400000,
+                  "completed": bool(os.environ.get("FAKE_BEE_TODO_DONE"))}})
+if cmd[:2] == ["todos", "complete"]:
+    out({"todo": {"id": int(cmd[2]), "text": "Reply to the recruiter", "created_at": now_ms, "completed": True}})
+if cmd[:2] == ["todos", "update"]:
+    out({"todo": {"id": int(cmd[2]), "text": "Reply to the recruiter", "created_at": now_ms,
+                  "completed": cmd[cmd.index("--completed") + 1] == "true" if "--completed" in cmd else False}})
+if cmd[:2] == ["todos", "dismiss-suggestion"]:
+    out({"dismissed": True, "id": int(cmd[2])})
+if cmd[:2] == ["journals", "get"]:  # a voice memo, from the file FAKE_BEE_JOURNAL names, or a plain one
+    memo_file = os.environ.get("FAKE_BEE_JOURNAL")
+    if memo_file and os.path.exists(memo_file):
+        out(json.load(open(memo_file)))
+    out({"id": cmd[2], "text": "Remember to book the dentist.", "state": "COMPLETED", "created_at": now_ms - 60000,
+         "updated_at": now_ms - 30000, "aiResponse": {"message": "Got it, a reminder to book the dentist.",
+                                                      "cleanedUpText": "Remember to book the dentist.",
+                                                      "followUp": None, "todos": ["Book the dentist"]}})
 if cmd[:2] == ["facts", "get"]:  # wrapped, or bare with FAKE_BEE_BARE_FACT=1 (the CLI's parseFactResponse takes both)
     fact = {"id": int(cmd[2]), "text": "Bonus is 15%", "created_at": now_ms, "confirmed": False, "tags": ["work"]}
     out(fact if os.environ.get("FAKE_BEE_BARE_FACT") else {"fact": fact})

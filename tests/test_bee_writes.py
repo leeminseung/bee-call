@@ -721,3 +721,111 @@ def test_every_tool_the_call_ai_waits_on_says_one_line_after_2_s(tmp_path, fake_
     for name in ("search_bee", "bee_today", "bee_conversation", "save_to_bee", "undo_bee_write"):
         assert fillers[name] == [(line, 2.0, None)], name
     assert fillers["propose_bee_save"] == []
+
+
+# ---------- 2026-10-17: Bee writes also keep and delete facts, complete to-dos and turn down suggestions ----------
+
+def test_a_fact_the_user_wants_kept_is_made_and_confirmed_and_can_be_taken_back(tmp_path, fake_bee):
+    """fact_create: `bee facts create` makes it unconfirmed, so it is confirmed at once (the user said yes to keeping
+    it); taking it back deletes the fact Bee made."""
+    async def main():
+        agent, rec = await in_a_call(tmp_path, [("user", "I'm allergic to peanuts, by the way.")])
+        said = await saved(agent, "Shall I keep 'Allergic to peanuts' in Bee?", "Yes, please.",
+                           kind="fact_create", text="Allergic to peanuts")
+        undone = await agent.undo_bee_write(None)
+        return said, undone, rec
+
+    said, undone, rec = asyncio.run(main())
+    assert said.startswith("Saved to Bee: fact 'Allergic to peanuts'.")
+    assert ["facts", "create", "--text", "Allergic to peanuts", "--json"] in calls(fake_bee)
+    assert ["facts", "confirm", "200", "--json"] in calls(fake_bee) and ["facts", "delete", "200", "--json"] in calls(fake_bee)
+    assert undone.startswith("Took it out of Bee: fact 'Allergic to peanuts'.")
+    (event,) = [e for e in events(rec) if e["type"] == "bee_write"]
+    assert (event["kind"], event["result"]) == ("fact_create", "ok")
+
+
+def test_a_wrong_fact_is_deleted_only_after_a_yes_and_cannot_be_undone(tmp_path, fake_bee):
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        number = await proposed(agent, kind="fact_delete", text="Bonus is 15%", fact_id=7)
+        before = await agent.save_to_bee(None, proposal=number)  # nothing asked yet
+        await say(agent, ("assistant", "Shall I delete 'Bonus is 15%' from Bee?"), ("user", "Yes, delete it."))
+        said = await agent.save_to_bee(None, proposal=number)
+        undone = await agent.undo_bee_write(None)
+        return before, said, undone, rec
+
+    before, said, undone, rec = asyncio.run(main())
+    assert before.startswith("Not saved") and said.startswith("Saved to Bee: fact 'Bonus is 15%'")
+    assert writes_to_bee(fake_bee) == [["facts", "delete"]]  # the undo touched nothing
+    assert "cannot be undone" in undone
+
+
+def test_a_todo_the_user_did_is_marked_done_and_can_be_reopened(tmp_path, fake_bee):
+    async def main():
+        agent, rec = await in_a_call(tmp_path, [("user", "그거 주문했어.")], language="ko")
+        said = await saved(agent, "Bee에서 '삼각대 주문하기'를 끝낸 걸로 할까요?", "응, 그렇게 해 줘.",
+                           kind="todo_complete", text="삼각대 주문하기", todo_id=51)
+        undone = await agent.undo_bee_write(None)
+        return said, undone
+
+    said, undone = asyncio.run(main())
+    assert said.startswith("Saved to Bee: todo '삼각대 주문하기'") and undone.startswith("Took it out of Bee")
+    assert ["todos", "complete", "51", "--json"] in calls(fake_bee)
+    assert ["todos", "update", "51", "--completed", "false", "--json"] in calls(fake_bee)
+
+
+def test_a_suggestion_turned_down_is_dismissed_and_cannot_be_undone(tmp_path, fake_bee):
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        said = await saved(agent, "Shall I remove Bee's suggestion 'Ask about bonus terms'?", "Yes.",
+                           kind="todo_dismiss", text="Ask about bonus terms", suggestion_id=34)
+        undone = await agent.undo_bee_write(None)
+        return said, undone
+
+    said, undone = asyncio.run(main())
+    assert said.startswith("Saved to Bee") and "cannot be undone" in undone
+    assert writes_to_bee(fake_bee) == [["todos", "dismiss-suggestion"]]
+
+
+@pytest.mark.parametrize("kind, item, missing", [("fact_delete", {}, "fact_id"), ("todo_complete", {}, "todo_id"),
+                                                 ("todo_dismiss", {}, "suggestion_id")])
+def test_each_new_kind_needs_the_id_of_what_it_changes(tmp_path, fake_bee, kind, item, missing):
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        return await agent.propose_bee_save(None, kind=kind, text="Something", **item)
+
+    assert asyncio.run(main()) == f"{missing} is required."
+
+
+def test_a_fact_bee_made_before_its_error_is_not_made_again(tmp_path, fake_bee, monkeypatch):
+    """As for a todo: the retry after the call looks for the fact by its text before making it again."""
+    monkeypatch.setenv("FAKE_BEE_FACTS", str(tmp_path / "facts.json"))
+    flag = tmp_path / "fail-after"
+    flag.write_text("facts create")
+    monkeypatch.setenv("FAKE_BEE_FAIL_AFTER_ONCE", str(flag))
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        said = await saved(agent, "Shall I keep 'Allergic to peanuts' in Bee?", "Yes.", kind="fact_create",
+                           text="Allergic to peanuts")
+        retried = await BeeWrites(rec.dir).retry_failed()
+        return said, retried
+
+    said, retried = asyncio.run(main())
+    assert "did not go through" in said and [w.status for w in retried] == ["ok"]
+    assert [c[:2] for c in calls(fake_bee)].count(["facts", "create"]) == 1
+
+
+@pytest.mark.parametrize("language,body", [
+    ("en", "Added to Bee: fact 'Allergic to peanuts'. Marked done in Bee: todo 'Order the tripod'. Removed from "
+           "Bee: fact 'Bonus is 15%'"),
+    ("ko", "Bee에 넣었어요: 사실 '땅콩 알레르기'. Bee에서 끝냈어요: 할 일 '삼각대 주문'. Bee에서 뺐어요: 사실 '보너스 15%'")])
+def test_the_notification_says_what_was_done_and_what_was_taken_out(language, body):
+    from beelink.writer import BeeWrite, summary_notification
+
+    texts = ("Allergic to peanuts", "Order the tripod", "Bonus is 15%") if language == "en" else \
+        ("땅콩 알레르기", "삼각대 주문", "보너스 15%")
+    writes = [BeeWrite("w1", {"kind": "fact_create", "text": texts[0]}, "q", "a", "ok"),
+              BeeWrite("w2", {"kind": "todo_complete", "text": texts[1], "todo_id": 51}, "q", "a", "ok"),
+              BeeWrite("w3", {"kind": "fact_delete", "text": texts[2], "fact_id": 7}, "q", "a", "ok")]
+    assert summary_notification(writes, call_language(language))["aps"]["alert"]["body"] == body

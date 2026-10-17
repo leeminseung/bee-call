@@ -76,10 +76,13 @@ def test_the_examples_are_the_code_s_output(tmp_path):
     assert listed["more"] is True and listed["before"]
 
     assert ended["call"]["duration_s"] == 460 and ended["call"]["marks"] == {
-        "report": True, "table": True, "chart": True, "bee_writes": 1}
+        "report": True, "table": True, "chart": True, "bee_writes": 2}
+    kept = [(i["kind"], i["text"], i["state"], i["undoable"]) for i in ended["items"] if i["type"] == "bee_write"]
+    assert kept == [("todo_create", "토요일 촬영 장소 정하기", "written", False),
+                    ("fact_create", "거의 매일 도서관에서 일한다", "written", False)]  # a kind of 2026-10-17 in the example
     assert [i["id"] for i in ended["items"]][:6] == ["speech-9", "speech-14", "speech-19", "speech-24", "write-w1",
                                                      "speech-29"]
-    assert ended["captions_included"] == {"person": 12, "ai": 11}
+    assert ended["captions_included"] == {"person": 14, "ai": 13}
     job = next(i for i in ended["items"] if i["type"] == "job")
     assert (job["state"], job["duration_s"], job["at"]) == ("done", 87, "2026-10-15T01:27:03+09:00")
     assert [(f["name"], f["kind"]) for f in job["files"]] == [
@@ -446,6 +449,27 @@ def test_in_a_live_call_a_failed_write_will_be_retried_and_the_last_write_in_bee
              if i["type"] == "bee_write"]
     assert found == [("write-w1", "written", False, True), ("write-w2", "written", False, False),
                      ("write-w3", "failed", True, False)]
+
+
+def test_the_new_kinds_show_and_a_write_bee_cannot_bring_back_is_never_undoable(tmp_path):
+    """Contract section 2.4 (2026-10-17): fact_create, fact_delete, todo_complete and todo_dismiss are writes too;
+    todo_dismiss and fact_delete cannot be undone, so even as the last write in a live call they are not undoable,
+    and the call AI's undo says so (voice/coordinator.py undo_bee_write)."""
+    writes = [bee("w1", "applying", "2026-10-15T20:00:10+09:00", item={"kind": "fact_create", "text": "Allergic to peanuts"},
+                  **ASKED), bee("w1", "ok", "2026-10-15T20:00:11+09:00"),
+              bee("w2", "applying", "2026-10-15T20:00:20+09:00", item={"kind": "todo_complete", "todo_id": 51,
+                                                                       "text": "Reply to the recruiter"}, **ASKED),
+              bee("w2", "ok", "2026-10-15T20:00:21+09:00"),
+              bee("w3", "applying", "2026-10-15T20:00:30+09:00", item={"kind": "fact_delete", "fact_id": 7,
+                                                                       "text": "Bonus is 15%"}, **ASKED),
+              bee("w3", "ok", "2026-10-15T20:00:31+09:00")]
+    record(tmp_path, [INBOUND, say(2, "Hi.")], writes=writes, age_s=5)
+    found = [(i["id"], i["kind"], i["state"], i["undoable"]) for i in view(tmp_path)["items"] if i["type"] == "bee_write"]
+    assert found == [("write-w1", "fact_create", "written", False), ("write-w2", "todo_complete", "written", False),
+                     ("write-w3", "fact_delete", "written", False)]
+    record(tmp_path / "again", [INBOUND, say(2, "Hi.")], writes=writes[:4], age_s=5)
+    found = [(i["id"], i["undoable"]) for i in view(tmp_path / "again")["items"] if i["type"] == "bee_write"]
+    assert found == [("write-w1", False), ("write-w2", True)]  # a todo marked done can be marked open again
 
 
 def test_a_failed_write_tried_again_after_the_call_reads_failed_until_the_try_ends(tmp_path):

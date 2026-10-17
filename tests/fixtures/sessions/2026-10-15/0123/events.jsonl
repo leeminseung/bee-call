@@ -133,6 +133,15 @@
 {"t": 334.0, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 336.0, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 344.0, "role": "assistant", "text": "Bee 기록으로는 성현 님과 오전 10시로 이야기하셨어요. 장소는 아직 정하지 않으셨고요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995323.0, "stopped_speaking_at": 1791995329.0, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 345.0, "text": "참, 저 거의 매일 도서관에서 일해요. 그건 기억해 둬요.", "type": "user_transcript"}
+{"t": 345.3, "role": "user", "text": "참, 저 거의 매일 도서관에서 일해요. 그건 기억해 둬요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995327.5, "stopped_speaking_at": 1791995329.8, "transcription_delay": 0.17, "end_of_turn_delay": 0.4}, "type": "message"}
+{"t": 346.1, "name": "propose_bee_save", "arguments": "{\"kind\": \"fact_create\", \"text\": \"거의 매일 도서관에서 일한다\"}", "output": "Proposal 2: fact '거의 매일 도서관에서 일한다'. Ask the user now.", "type": "tool"}
+{"t": 347.0, "role": "assistant", "text": "Bee에 '거의 매일 도서관에서 일한다'를 기억해 둘까요?", "interrupted": false, "metrics": {"started_speaking_at": 1791995331.0, "stopped_speaking_at": 1791995333.0, "llm_node_ttft": 0.58, "tts_node_ttfb": 0.22, "e2e_latency": 1.05}, "type": "message"}
+{"t": 348.0, "text": "네, 기억해 줘요.", "type": "user_transcript"}
+{"t": 348.3, "role": "user", "text": "네, 기억해 줘요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995333.6, "stopped_speaking_at": 1791995334.4, "transcription_delay": 0.16, "end_of_turn_delay": 0.38}, "type": "message"}
+{"t": 349.0, "key": "w2", "kind": "fact_create", "text": "거의 매일 도서관에서 일한다", "item": {"kind": "fact_create", "text": "거의 매일 도서관에서 일한다"}, "question": "Bee에 '거의 매일 도서관에서 일한다'를 기억해 둘까요?", "answer": "네, 기억해 줘요.", "result": "ok", "error": null, "type": "bee_write"}
+{"t": 349.02, "name": "save_to_bee", "arguments": "{\"proposal\": 2}", "output": "Saved to Bee: fact '거의 매일 도서관에서 일한다'. Tell the user in a few words what you saved.", "type": "tool"}
+{"t": 349.2, "role": "assistant", "text": "기억해 뒀어요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995335.0, "stopped_speaking_at": 1791995335.9, "llm_node_ttft": 0.52, "tts_node_ttfb": 0.21, "e2e_latency": 0.98}, "type": "message"}
 {"t": 349.375, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 354.75, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 360.125, "old": "listening", "new": "speaking", "type": "user_state"}
