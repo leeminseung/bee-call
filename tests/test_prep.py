@@ -405,8 +405,8 @@ def test_the_prep_is_told_to_compact_what_came_before_into_what_this_call_must_k
             "call may touch;\n- what the user wants from calls like this one: tone, topics to avoid, things they asked "
             "not to repeat;\n- what this call could get to know about the user, from the meta agent's notes;\n- the "
             "unconfirmed facts, to-dos and suggestions to check, with their Bee ids.\nOnly what the data says. Call "
-            "the user \"the user\" in it, not by name. A note of the right length, for another user:\n<note>- Open: "
-            "moving to Busan in March") in PREP_INSTRUCTIONS
+            "the user \"the user\" in it, not by name and never he, she, his or her. A note of the right length, for "
+            "another user:\n<note>- Open: moving to Busan in March") in PREP_INSTRUCTIONS
     assert "</note>\nCount before you finish: past 100 words, cut what this call needs least." in PREP_INSTRUCTIONS
     from voice.prep import PREP_INSTRUCTIONS_WITHOUT_BEE, seed_text
     from beelink.context import CallInputs

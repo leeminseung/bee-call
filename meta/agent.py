@@ -111,20 +111,24 @@ turned down; what you learned the user prefers; and from Bee, what is worth brin
 talking about, a kept fact the next topic may touch, unconfirmed facts and suggestions to check, with their Bee ids; \
 and what is worth getting to know about the user next: a gap in what Bee keeps, two facts that disagree, an insight \
 the user might want to talk through. Changes to Bee go on the agenda too: the call's AI makes them in a call, after \
-the user agrees."""
+the user agrees. Refer to the user as "the user", never he, she, his or her, also in what you keep from your earlier \
+notes, and do not guess anything about the user that they have not said, such as a gender from a name."""
 NOTES_WITHOUT_BEE = """\
 ## Notes for the next call
 write_state rewrites your notes, state.md. The next call's prep reads them first, so they are how what you learned \
 reaches the call. Keep: the open threads, each with where it came from; the agenda for the next call; what the user \
-turned down; what you learned the user prefers; and what is worth getting to know about the user next."""
+turned down; what you learned the user prefers; and what is worth getting to know about the user next. Refer to the \
+user as "the user", never he, she, his or her, also in what you keep from your earlier notes, and do not guess \
+anything about the user that they have not said, such as a gender from a name."""
 ORGANIZING = """\
 ## Organizing Bee's memory, only when asked
 When the user said yes in a call to organizing what Bee recorded over the past days, the app wakes you with that \
 request and the days to cover. Then read those days in Bee, pick what is worth keeping (lasting facts about the \
 user, to-dos they mean to do), check each against what Bee already has (its facts, confirmed or not, its to-dos and \
 the to-dos it suggests) so nothing is added twice, and add them with bee_add_fact and bee_add_todo, each one short \
-statement in English. Never delete, merge away or rewrite what Bee \
-already has. Finish with one sentence for the user's notification: how many you added, and that they can see and \
+statement in English, written the way Bee writes its own, with no subject and no pronoun for the user: "Wants to \
+keep own judgment when using AI", not "He wants…", "The user wants…", "…his own…" or "…their own…"; where the \
+user says "my", write "own" or nothing. Never delete, merge away or rewrite what Bee already has. Finish with one sentence for the user's notification: how many you added, and that they can see and \
 edit them in the Bee app. At any other time you have no tools that change Bee."""
 # What the meta agent's file tools also hide from a person who turned Bee off (second review of 2026-10-18, finding 3):
 # the files that hold what came from Bee, so none of it finds its way back into the notes after the rewrite: Bee's
@@ -181,7 +185,8 @@ TOOLS = [
            "glob": {"type": "string", "description": "File name pattern like transcript.md. Default *."}},
           ["pattern"]),
     *(_tool(t.name, t.description, t.parameters["properties"], t.parameters["required"]) for t in toolkit.TOOLS),
-    _tool("write_state", "Replace state.md, your notes, with this markdown.", {"text": {"type": "string"}}),
+    _tool("write_state", "Replace state.md, your notes, with this markdown. Call the user \"the user\" in it, never "
+                         "he, she, his or her: rewrite any line you keep that does.", {"text": {"type": "string"}}),
     _tool("offer_call", "Ask the user, with a notification, whether they want a short call about one topic.",
           {"topic": {"type": "string", "description": "What the call is about, in a few words, in the user's language."},
            "why": {"type": "string", "description": "Why a call would help now, in one or two sentences in the user's "
@@ -221,9 +226,14 @@ BEE_TOOLS = (*toolkit.NAMES, "book_call")  # for Bee people only; all but book_c
 ADD_TOOLS = [
     _tool("bee_add_fact", "Add one fact about the user to Bee, as a confirmed fact: one short statement in English, "
                           "that Bee does not have yet.",
-          {"text": {"type": "string", "description": "The fact, one short statement in English."}}),
+          {"text": {"type": "string", "description": "The fact, one short statement in English with no subject and no "
+                                                    "pronoun for the user (no \"the user\", he, she, they, his, her or "
+                                                    "their), as Bee writes its own (\"Wants to keep own judgment when "
+                                                    "using AI\")."}}),
     _tool("bee_add_todo", "Add one to-do to Bee, open: one short statement in English, that Bee does not have yet.",
-          {"text": {"type": "string", "description": "The to-do, one short statement in English."}}),
+          {"text": {"type": "string", "description": "The to-do, one short statement in English with no subject and "
+                                                    "no pronoun for the user (no \"the user\", he, she, they, his, her "
+                                                    "or their)."}}),
 ]
 ORGANIZE_TOOLS = ("list_files", "read_file", "grep", *toolkit.NAMES)  # what else an organize run has: it reads
 Send = Callable[[Offer, Path, datetime], Awaitable[str]]
@@ -443,7 +453,9 @@ def context(workspace: Path, events: list[dict[str, Any]], now: datetime, call_t
         f"It is now {now_text(now)}. The evening call time (the time an offer suggests, not a booking) is "
         f"{call_time or DEFAULT_CALL_TIME}. {limits}",
         "Open offers:\n" + ("\n".join(offers) if offers else "none"),
-        "Your notes (state.md):\n" + session.state(),
+        # Notes written before the user's decision of 2026-10-18 may call the user "he": said where the notes are shown
+        "Your notes (state.md; in what you write, the user is \"the user\", never he, she, his or her):\n"
+        + session.state(),
         "Your recent entries (meta session):\n" + session.recent_text(since=since, after=after),
         "What just happened:\n" + "\n".join(_event_line(workspace, e, memos, now, conversations) for e in events),
     ])

@@ -64,7 +64,8 @@ def test_the_name_is_said_at_most_once_and_the_prep_greets_without_it():
     korean = call_language("ko").rule
     assert 'Korean leaves "you" unsaid' in korean and '"주말엔 뭐 하세요?", not "OO 님은 주말엔 뭐 하세요?"' in korean
     for text in (PREP_INSTRUCTIONS, PREP_INSTRUCTIONS_WITHOUT_BEE):
-        assert "without the user's name" in text and 'Call the user "the user" in it, not by name.' in text
+        assert "without the user's name" in text
+        assert 'Call the user "the user" in it, not by name and never he, she, his or her.' in text
     # Told so only in the instructions, every Korean opening still greeted by name: the seed's last words ask too.
     for meta in ({"direction": "inbound"}, {"direction": "outbound"}, {"direction": "outbound", "agreed": "yes"},
                  {"direction": "inbound", "earlier_call": "..."}):
@@ -195,7 +196,7 @@ def test_bee_items_are_english_and_the_question_quotes_them_in_the_call_s_langua
     """2026-10-17: Bee's language is English; the question around the item stays in the call's language."""
 
     assert "Write every Bee item in English, Bee's language, whatever the call's language" in BEE_INSTRUCTIONS
-    assert "\"Bee에 'My home server has to be quiet'로 기억해 둘까요?\"" in BEE_INSTRUCTIONS
+    assert "\"Bee에 'Wants a quiet home server'로 기억해 둘까요?\"" in BEE_INSTRUCTIONS
     assert "keep its text as Bee has it" in BEE_INSTRUCTIONS and "a correction in English" in BEE_INSTRUCTIONS
     assert "written in the user's language" not in BEE_INSTRUCTIONS
 

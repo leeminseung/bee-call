@@ -80,7 +80,8 @@ each:
 - what the user wants from calls like this one: tone, topics to avoid, things they asked not to repeat;
 - what this call could get to know about the user, from the meta agent's notes;
 - the unconfirmed facts, to-dos and suggestions to check, with their Bee ids.
-Only what the data says. Call the user "the user" in it, not by name. A note of the right length, for another user:
+Only what the data says. Call the user "the user" in it, not by name and never he, she, his or her. A note of the \
+right length, for another user:
 <note>- Open: moving to Busan in March; the answer on the lease is due Monday.
 - The last call ended mid-topic: the user had to go into a meeting.
 - Avoid their brother's wedding: they asked not to talk about it.
@@ -109,7 +110,7 @@ each:
 - what the user wants from calls like this one: tone, topics to avoid, things they asked not to repeat;
 - what this call could get to know about the user, from the notes kept between calls.
 Only what the message says; when it says little, note that, and plan to ask the user about their day. Call the user \
-"the user" in it, not by name. A note of the right length, for another user:
+"the user" in it, not by name and never he, she, his or her. A note of the right length, for another user:
 <note>- Open: moving to Busan in March; the answer on the lease is due Monday.
 - The last call ended mid-topic: the user had to go into a meeting.
 - Avoid their brother's wedding: they asked not to talk about it.
