@@ -934,8 +934,9 @@ class BeeCoordinator(Coordinator):
     async def organize_bee(self, context: RunContext, scope: str = "call", facts: list[str] | None = None,
                            todos: list[str] | None = None, days: int | None = None) -> str:
         """Put what came up new in this call into Bee together, or organize what Bee recorded over the past days,
-        only after a clear yes to your one question offering it (one that names Bee and lists no items). Organizing
-        only adds: it never deletes or rewrites what Bee has.
+        after a clear yes to your one question offering it (one that names Bee and lists no items), or at once when
+        the user asks you to organize and it is clear what they mean. Organizing only adds: it never deletes or
+        rewrites what Bee has.
 
         Args:
             scope: "call" (the default): add what came up in this call at once, facts as confirmed facts and todos as
