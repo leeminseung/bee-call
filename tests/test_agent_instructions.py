@@ -144,7 +144,11 @@ def test_the_call_ai_collects_what_comes_up_new_and_offers_it_once(tmp_path):
     # measured 2026-10-18 (meaning checks out of the code): one call said "넣었어요" without calling organize_bee
     assert "Say that something went into Bee or changed in Bee only after save_to_bee or organize_bee said it did." \
         in keeping
-    for words in ("Ask about Bee at most twice in a call, that one question included",
+    # the user's decision of 2026-10-18: keep the limit of two Bee questions a call, and say why
+    for words in ("Ask about Bee at most twice in a call, so Bee never takes over the call: the one question offering "
+                  "what came up new, near the end, and a check of one thing Bee already has. Check more only when the "
+                  "user brings Bee up. Never ask twice about the same item; offering to fix what the user just "
+                  "corrected is part of that check.",
                   "In a call where nothing lasting comes up and nothing in the prep note needs checking, ask nothing "
                   "about Bee."):
         assert words in keeping, words

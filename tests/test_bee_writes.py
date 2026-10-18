@@ -558,7 +558,9 @@ def test_a_deleted_fact_can_be_brought_back_confirmed(tmp_path, fake_bee):
 
     said, undone, rec = asyncio.run(main())
     assert said.startswith("Deleted from Bee: fact 'Bonus is 15%'.")
-    assert undone.startswith("Brought it back: fact 'Bonus is 15%' is in Bee again, confirmed.")
+    # measured 2026-10-18: asked to delete it again, the call AI used the old id first; the answer gives the new one
+    assert undone == ("Brought it back: fact 'Bonus is 15%' is in Bee again, confirmed. Its new id in Bee is 200. Tell "
+                      "the user in a few words.")
     assert writes_to_bee(fake_bee) == [["facts", "delete"], ["facts", "create"], ["facts", "confirm"]]
     assert ["facts", "create", "--text", "Bonus is 15%", "--json"] in calls(fake_bee)
     deleted, back = BeeWrites(rec.dir).all()  # the fact made again is a write of its own (review of 2026-10-18)
@@ -952,7 +954,11 @@ def test_taking_back_a_save_that_failed_stops_its_retry_after_the_call(tmp_path,
         return failed, undo, retried, rec
 
     failed, undo, retried, rec = asyncio.run(main())
-    assert "tried again after the call" in failed and undo.startswith("Called off: todo 'Call Dana' did not go into Bee")
+    # measured 2026-10-18: told only that it would be tried again, the call AI said "Okay, I won't add it" without a
+    # take-back in 2 of 3 calls, and the retry after the call added it; the answer now says how to stop it
+    assert failed.endswith("that it will be tried again after the call. If they then say they no longer want it, "
+                           "calling undo_bee_write stops that; do not offer it.")
+    assert undo.startswith("Called off: todo 'Call Dana' did not go into Bee")
     assert retried == [] and [(w.text, w.status) for w in BeeWrites(rec.dir).all()] == [
         ("Note the bug", "ok"), ("Call Dana", "withdrawn")]
     assert [c[:2] for c in calls(fake_bee)].count(["todos", "create"]) == 2 and ["todos", "delete"] not in [
@@ -978,8 +984,13 @@ def test_a_take_back_that_can_never_work_is_left_to_the_bee_app_and_older_ones_s
         return first, second, rec
 
     first, second, rec = asyncio.run(main())
+    # measured 2026-10-18: told only to send the user to the Bee app, the call AI said the older one could not be
+    # taken back either (3 of 3); the answer now says that the one before it still can
+    # (and, told that, it offered to take back the older one unasked, 3 of 3: it is told not to offer)
     assert first == ("todo 'Ask about bonus terms' cannot be taken back from here (Bee did not say which todo it made). "
-                     "Tell the user it has to be changed in the Bee app.")
+                     "Tell the user it has to be changed in the Bee app. It is passed over: if the user asks to take "
+                     "back an earlier change too, calling undo_bee_write again takes back the one before it (todo "
+                     "'Note the bug'). They asked about this one only, so do not offer more.")
     assert second.startswith("Took it back: todo 'Note the bug'")
     assert [(w.kind, w.status) for w in BeeWrites(rec.dir).all()] == [("todo_create", "undone"),
                                                                       ("todo_accept", "undo_impossible")]

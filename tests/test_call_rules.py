@@ -155,7 +155,7 @@ def test_bee_is_the_user_s_memory_kept_accurate_and_tidy_with_a_light_limit():
     for example in ("something lasting about themselves", "fact_create", "fact_delete", "todo_complete",
                     '"그거 주문했어"', "todo_dismiss", "To-dos you added to Bee in earlier calls"):
         assert example in BEE_INSTRUCTIONS, example
-    assert "Ask about Bee at most twice in a call" in BEE_INSTRUCTIONS and "never twice about the same item" in BEE_INSTRUCTIONS
+    assert "Ask about Bee at most twice in a call" in BEE_INSTRUCTIONS and "Never ask twice about the same item" in BEE_INSTRUCTIONS
     for step in ("only after the user's clear yes", "save_to_bee", "undo_bee_write"):
         assert step in BEE_INSTRUCTIONS, step
 

@@ -25,7 +25,7 @@ from beelink import reads, toolkit
 from beelink.calls import OurCalls
 from beelink.clock import now_text
 from beelink.writer import (AS_BEE_HAS_IT, KINDS, REMOVING, BeeWrites, as_bee_has_it, event_fields, item_label, label,
-                            restore_item, undo_target)
+                            made_todo, restore_item, the_fact, undo_target)
 from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
 from voice.recorder import CallRecorder
@@ -136,14 +136,17 @@ you, answer in a few words and turn back to them."""
 # Collect, then offer once (the user's decision of 2026-10-18): what comes up new in a call goes into Bee together,
 # after one question; one item at a time is only for what Bee already has and for what the user asks to put in Bee.
 # Whether an answer is a clear yes is the AI's to judge, from these rules (the user's decision of 2026-10-18): the
-# code no longer looks for the question or reads the answer.
+# code no longer looks for the question or reads the answer. At most two Bee questions a call, with the reason said,
+# so the AI can weigh a case the rule does not name (the user's decision of 2026-10-18).
 KEEPING_WHAT_YOU_LEARN = """\
 ## Keeping what you learn in Bee
 Each call should leave Bee a little truer without turning into a review of Bee: what comes up new, you collect as \
 the call goes and put in Bee together, after one question; what Bee already has, you check one item at a time. Ask \
-about Bee at most twice in a call, that one question included, unless the user brings Bee up, and never twice about \
-the same item. In a call where nothing lasting comes up and nothing in the prep note needs checking, ask nothing \
-about Bee. Say that something went into Bee or changed in Bee only after save_to_bee or organize_bee said it did.
+about Bee at most twice in a call, so Bee never takes over the call: the one question offering what came up new, \
+near the end, and a check of one thing Bee already has. Check more only when the user brings Bee up. Never ask twice \
+about the same item; offering to fix what the user just corrected is part of that check. In a call where nothing \
+lasting comes up and nothing in the prep note needs checking, ask nothing about Bee. Say that something went into \
+Bee or changed in Bee only after save_to_bee or organize_bee said it did.
 Write every Bee item in English, Bee's language, whatever the call's language: Bee keeps the user's memory in \
 English. To confirm, mark done, take or delete what Bee has, keep its text as Bee has it, and write a correction in \
 English.
@@ -702,14 +705,17 @@ class BeeCoordinator(Coordinator):
             return (f"Bee did not confirm saving {what} ({write.error}): it may or may not be in Bee, and it will not "
                     "be saved again by itself. Tell the user that, and that they can check Bee after the call.")
         return (f"Saving {what} to Bee did not go through ({write.error}). Tell the user it did not go through and "
-                "that it will be tried again after the call.")
+                "that it will be tried again after the call. If they then say they no longer want it, calling "
+                "undo_bee_write stops that; do not offer it.")
 
     @function_tool
     async def undo_bee_write(self, context: RunContext) -> str:
-        """Take back the last change you made to Bee before the user's words now, when the user wants it back: an item
-        added comes out, a fact deleted comes back, a suggestion turned down comes back as a to-do, something brought
-        back goes out again, a change that did not go through is not tried again after the call. Call it once for
-        each change to take back; when one did not go through, calling it again tries that same one."""
+        """Take back the newest change you made to Bee in this call that is not taken back yet, from before the user's
+        words now, when the user wants it back: an item added comes out, a fact deleted comes back, a suggestion
+        turned down comes back as a to-do, something brought back goes out again, a change that did not go through is
+        not tried again after the call. Call it once for each change to take back, newest first; one that cannot be
+        taken back from here is passed over, so the next call takes back the one before it. When a take-back did not
+        go through, calling it again tries that same one."""
         async with self._undo_lock:  # the target is chosen and acted on before another take-back may look
             turn = self._last_exchange()[2]  # what this turn's own tools changed is not taken back by it
             target, held = undo_target(self._bee_writes.all(), current_turn=turn)
@@ -734,9 +740,13 @@ class BeeCoordinator(Coordinator):
             if write.status == "undo_unknown":
                 return (f"Bee did not confirm taking back {what} ({write.error}): it may or may not be out, and it is "
                         "not tried again by itself. Tell the user to check it in the Bee app.")
-            if write.status == "undo_impossible":
+            if write.status == "undo_impossible":  # passed over from now on: what came before it can still go
+                earlier, _ = undo_target(self._bee_writes.all(), current_turn=turn)
+                more = (f" It is passed over: if the user asks to take back an earlier change too, calling "
+                        f"undo_bee_write again takes back the one before it ({label(earlier, ENGLISH)}). They asked "
+                        "about this one only, so do not offer more." if earlier is not None else "")
                 return (f"{what} cannot be taken back from here ({write.error}). Tell the user it has to be changed in "
-                        "the Bee app.")
+                        f"the Bee app.{more}")
             if write.status != "undone":
                 return (f"Could not take back {what} ({write.error}). Tell the user; if they want, calling "
                         "undo_bee_write again tries the same one.")
@@ -767,14 +777,17 @@ class BeeCoordinator(Coordinator):
         if write.status == "ok":
             self._claimed.pop(same_item(removal.item), None)  # it may be taken out again, after a yes
             self._claimed[same_item(write.item)] = write.key
+            # Bee gives what comes back a new id: a later change to it needs that one, not the id it had
+            made = (the_fact if removal.kind == "fact_delete" else made_todo)(write.response).get("id")
+            new_id = f" Its new id in Bee is {made}." if isinstance(made, int) else ""
             if removal.kind == "fact_delete":
-                return f"Brought it back: {back} is in Bee again, confirmed. Tell the user in a few words."
+                return f"Brought it back: {back} is in Bee again, confirmed.{new_id} Tell the user in a few words."
             return (f"Brought it back as a to-do: {back} (Bee cannot bring back a suggestion, so it is an open to-do "
-                    "now). Tell the user in a few words.")
+                    f"now).{new_id} Tell the user in a few words.")
         if write.status == "failed":  # as a failed save: tried again after the call (follow-up review, finding 5)
             return (f"Bringing back {what} did not go through ({write.error}). Tell the user it did not go through and "
-                    "that it will be tried again after the call; if they would rather leave it as it is, calling "
-                    "undo_bee_write stops that.")
+                    "that it will be tried again after the call. If they then say they would rather leave it as it "
+                    "is, calling undo_bee_write stops that; do not offer it.")
         return (f"Bee did not confirm bringing back {what} ({write.error}): it may be back already, and it is not "
                 "tried again by itself. Tell the user to check it in the Bee app.")
 
