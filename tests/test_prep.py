@@ -415,3 +415,127 @@ def test_the_seed_asks_for_the_opening_in_the_call_s_language_whatever_the_earli
                          language=call_language(code))
         assert seed.endswith(f"The call is in {name}: write the opening in {name}, whatever language the notes, the "
                              "earlier calls or Bee are in."), code
+
+
+# ---------- the user's decision of 2026-10-18: what Bee already has, listed after the prep note ----------
+
+def bee_data(tmp_path, monkeypatch, facts: int = 3, todos: int = 2, suggestions: int = 2, more: bool = False) -> None:
+    """Bee's lists as the fake answers them: facts made a minute apart (the newest has the highest id), open and done
+    to-dos, and suggestions."""
+    base = 1792150000000
+    answers = {
+        "facts list": {"facts": [{"id": 300 + n, "text": f"Fact {n}", "created_at": base + n * 60000, "confirmed": True,
+                                  "tags": []} for n in range(facts)], "next_cursor": "50" if more else None},
+        "todos list": {"todos": [{"id": 400 + n, "text": f"To-do {n}", "created_at": base + n * 60000,
+                                  "completed": n % 2 == 1} for n in range(2 * todos)], "next_cursor": None},
+        "todos suggestions": {"todoSuggestions": [{"id": 900 + n, "text": f"Suggestion {n}", "created_at": base + n,
+                                                   "emoji": "", "details": ""} for n in range(suggestions)]},
+    }
+    (tmp_path / "bee-data.json").write_text(json.dumps(answers))
+    monkeypatch.setenv("FAKE_BEE_DATA", str(tmp_path / "bee-data.json"))
+
+
+def test_what_bee_has_lists_its_facts_open_to_dos_and_suggestions_with_their_ids(fake_bee, tmp_path, monkeypatch):
+    from voice.prep import what_bee_has
+
+    bee_data(tmp_path, monkeypatch)
+    has = asyncio.run(what_bee_has(None, NOW.tzinfo, wait_s=5))
+    assert has.text == ("What Bee already has, as read when the call began, each with its Bee id:\n"
+                        "Confirmed facts:\n- 302: Fact 2\n- 301: Fact 1\n- 300: Fact 0\n"
+                        "Open to-dos:\n- 402: To-do 2\n- 400: To-do 0\n"
+                        "To-dos Bee suggests:\n- 901: Suggestion 1\n- 900: Suggestion 0")
+    assert has.listed == {"facts": 3, "todos": 2, "suggestions": 2} and has.missing == {}
+    assert sorted(c[:2] for c in calls_of(fake_bee)) == [["facts", "list"], ["todos", "list"], ["todos", "suggestions"]]
+
+
+def test_what_bee_has_keeps_the_newest_up_to_its_caps_and_says_bee_has_more(fake_bee, tmp_path, monkeypatch):
+    from voice.prep import BEE_HAS_MOST, what_bee_has
+
+    bee_data(tmp_path, monkeypatch, facts=40, todos=35, suggestions=20, more=True)
+    has = asyncio.run(what_bee_has(None, NOW.tzinfo, wait_s=5))
+    assert has.listed == BEE_HAS_MOST == {"facts": 30, "todos": 30, "suggestions": 15}
+    assert "Confirmed facts (the newest; Bee has more):\n- 339: Fact 39\n" in has.text and "- 309: Fact 9" not in has.text
+    assert "Open to-dos (the newest; Bee has more):\n- 468: To-do 68\n" in has.text
+    assert "- 469:" not in has.text  # done to-dos are not open
+    assert "To-dos Bee suggests (the newest; Bee has more):\n- 919: Suggestion 19\n" in has.text
+
+
+def test_what_bee_has_leaves_out_a_part_that_fails_or_is_late_and_says_so(fake_bee, tmp_path, monkeypatch):
+    from voice.prep import what_bee_has
+
+    bee_data(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_BEE_DOWN", "todos suggestions")
+    monkeypatch.setenv("FAKE_BEE_SLOW", "facts list 3")
+    started = time.monotonic()
+    has = asyncio.run(what_bee_has(None, NOW.tzinfo, wait_s=0.8))
+    assert time.monotonic() - started < 2.0  # the late read is not waited for
+    assert "Confirmed facts: not read in time, so not listed." in has.text
+    assert "To-dos Bee suggests: Bee could not be read, so not listed." in has.text
+    assert "Open to-dos:\n- 402: To-do 2" in has.text
+    assert has.missing == {"facts": "not read in time", "suggestions": "Bee could not be read"}
+
+
+def test_what_bee_has_leaves_out_what_bee_made_of_our_calls_as_the_toolkit_does(fake_bee, tmp_path, monkeypatch):
+    from voice.prep import what_bee_has
+
+    bee_data(tmp_path, monkeypatch)
+    ours = SimpleNamespace(kept_facts=lambda items: [i for i in items if i["id"] != 302],
+                           others=lambda items: [i for i in items if i["id"] != 901])
+    has = asyncio.run(what_bee_has(ours, NOW.tzinfo, wait_s=5))
+    assert "302" not in has.text and "901" not in has.text and "- 301: Fact 1" in has.text
+
+
+def calls_of(log):
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+def listed_turn(tmp_path, has_after: float | None):
+    """A Bee call picked up with its prep note; what Bee has lands `has_after` seconds into the first turn (0: before
+    it; None: never). Returns the instructions in the first turn's context and how long the turn waited."""
+    from voice.prep import BeeHas
+
+    async def main():
+        loop = asyncio.get_running_loop()
+        has: asyncio.Future = loop.create_future()
+        listed = BeeHas(text="What Bee already has, as read when the call began, each with its Bee id:\n"
+                             "Open to-dos:\n- 401: Book a dentist appointment", listed={"todos": 1})
+        if has_after == 0:
+            has.set_result(listed)
+        agent = BeeCoordinator(CallRecorder(tmp_path, room="r", now=NOW), SimpleNamespace(), tmp_path,
+                               clock=lambda: NOW, prep_note="Matt is weighing a job offer.", bee_has=has)
+        async with AgentSession(llm=EchoLLM()) as session:
+            await session.start(agent)
+            turn_ctx = agent.chat_ctx.copy()
+            if has_after:
+                loop.call_later(has_after, has.set_result, listed)
+            started = time.monotonic()
+            await agent.on_user_turn_completed(turn_ctx, turn_ctx.add_message(role="user", content="Hey."))
+            waited = time.monotonic() - started
+            await asyncio.sleep(0.05)
+            return turn_ctx.items[0].text_content, agent.instructions, waited
+
+    return asyncio.run(main())
+
+
+def test_what_bee_has_is_listed_after_the_prep_note_never_in_the_fixed_prefix(tmp_path):
+    from voice.coordinator import BEE_INSTRUCTIONS
+
+    turn, later, waited = listed_turn(tmp_path, has_after=0)
+    assert turn.endswith("Call prep note (from Bee, just before the call):\nMatt is weighing a job offer.\n\n"
+                         "What Bee already has, as read when the call began, each with its Bee id:\n"
+                         "Open to-dos:\n- 401: Book a dentist appointment\n")
+    assert later == turn and waited < 0.1
+    assert "401: Book a dentist appointment" not in BEE_INSTRUCTIONS  # the cached prefix is the same in every call
+
+
+def test_the_first_turn_waits_a_little_for_what_bee_has(tmp_path):
+    turn, _, waited = listed_turn(tmp_path, has_after=0.4)
+    assert turn.endswith("- 401: Book a dentist appointment\n") and 0.35 < waited < 1.0
+
+
+def test_what_bee_has_not_read_by_the_first_turn_is_said_in_one_line(tmp_path):
+    from voice.coordinator import BEE_HAS_LATE
+
+    turn, later, waited = listed_turn(tmp_path, has_after=None)
+    assert turn.endswith(f"Matt is weighing a job offer.\n\n{BEE_HAS_LATE}\n") and later == turn and 1.9 < waited < 2.3
+    assert BEE_HAS_LATE == "What Bee already has could not be read in time for this call, so it is not listed."

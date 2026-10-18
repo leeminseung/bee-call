@@ -454,6 +454,68 @@ class Preparation:
             raise ValueError("the answer had no <note>")
 
 
+# What Bee already has, listed for the call AI after its prep note so its organize leaves out what Bee keeps (the
+# user's decision of 2026-10-18). Sizes only: the newest of each list, nothing compared or judged.
+BEE_HAS_MOST = {"facts": 30, "todos": 30, "suggestions": 15}  # the newest of each listed (arbitrary)
+BEE_HAS_CHARS = 20000  # the toolkit's room for one list's answer, so a page of 50 comes whole (arbitrary)
+BEE_HAS_TEXT_MOST = 200  # characters of one item's text in the list (arbitrary)
+BEE_HAS_PARTS = (  # name, as the list says it, the toolkit tool and its arguments, the list in Bee's answer
+    ("facts", "Confirmed facts", "bee_facts", {"status": "confirmed", "limit": 50}, "facts"),
+    ("todos", "Open to-dos", "bee_todos", {"status": "open", "limit": 50}, "todos"),
+    ("suggestions", "To-dos Bee suggests", "bee_todos", {"status": "suggested", "limit": 50}, "todoSuggestions"),
+)
+
+
+@dataclass
+class BeeHas:
+    """What Bee already has, as the call AI's context lists it after the prep note: its confirmed facts, open to-dos
+    and the to-dos it suggests, each with its Bee id; a part not read says so in one line."""
+    text: str = ""
+    listed: dict[str, int] = field(default_factory=dict)  # items listed, by part
+    missing: dict[str, str] = field(default_factory=dict)  # parts not read, and why
+    seconds: float = 0.0
+
+
+async def what_bee_has(ours: OurCalls | None, zone: Any, wait_s: float = NOTE_SECONDS) -> BeeHas:
+    """Reads Bee's confirmed facts, open to-dos and suggested to-dos with the shared toolkit, the three at once and
+    within `wait_s` (the prep's time budget), leaving out what Bee made of our own calls as the toolkit does; lists
+    the newest of each, at most BEE_HAS_MOST. A read that fails or is not done in time is left out, said in one line.
+    Never raises."""
+    started = time.monotonic()
+    tasks = {name: asyncio.create_task(toolkit.read(tool, dict(args), ours=ours, zone=zone, timeout=wait_s,
+                                                    max_chars=BEE_HAS_CHARS))
+             for name, _, tool, args, _ in BEE_HAS_PARTS}
+    done, late = await asyncio.wait(tasks.values(), timeout=wait_s)
+    for task in late:
+        task.cancel()
+    has = BeeHas()
+    lines = ["What Bee already has, as read when the call began, each with its Bee id:"]
+    for name, title, _, _, key in BEE_HAS_PARTS:
+        task = tasks[name]
+        data = task.result().data if task in done else None
+        items = data.get(key) if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            has.missing[name] = "not read in time" if task in late else "Bee could not be read"
+            lines.append(f"{title}: {has.missing[name]}, so not listed.")
+            continue
+        items = [i for i in items if isinstance(i, dict) and i.get("id") is not None and str(i.get("text") or "").strip()]
+        items.sort(key=lambda i: i["created_at"] if isinstance(i.get("created_at"), (int, float)) else 0, reverse=True)
+        shown = items[:BEE_HAS_MOST[name]]
+        has.listed[name] = len(shown)
+        if not shown:
+            lines.append(f"{title}: none.")
+            continue
+        more = len(items) > len(shown) or bool(data.get("next_cursor"))
+        lines.append(f"{title}{' (the newest; Bee has more)' if more else ''}:")
+        for item in shown:
+            words = " ".join(str(item["text"]).split())
+            cut = words if len(words) <= BEE_HAS_TEXT_MOST else words[:BEE_HAS_TEXT_MOST].rstrip() + "…"
+            lines.append(f"- {item['id']}: {cut}")
+    has.text = "\n".join(lines)
+    has.seconds = round(time.monotonic() - started, 2)
+    return has
+
+
 async def prepare_call(inputs: CallInputs, meta: dict[str, Any], role: Role | None, *, spend: SpendLog,
                        bee: bool, now: datetime, deadline_s: float = NOTE_SECONDS,
                        language: CallLanguage | None = None, ours: OurCalls | None = None) -> Prep:

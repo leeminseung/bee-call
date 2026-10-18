@@ -10,6 +10,7 @@ them. The voice server picks one by the person's setting when the call starts (v
 
 import asyncio
 import re
+import time
 from html import escape
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -28,6 +29,7 @@ from beelink.writer import (AS_BEE_HAS_IT, CREATING, KINDS, REMOVING, BeeWrites,
                             item_label, label, made_todo, restore_item, restores_of, the_fact)
 from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
+from voice.prep import BeeHas
 from voice.recorder import CallRecorder
 from voice.audio_tags import SPOKEN, without_tags
 from voice.costs import DayBudget
@@ -167,7 +169,9 @@ that the user can see and edit them in the Bee app, for example "Done. You can s
 "넣었어요. Bee 앱에서 보고 고칠 수 있어요."
 - When the user wants more than this call organized (what Bee recorded over the past days), call organize_bee with \
 scope "recent". It runs in the background like a job, and the user gets one notification when it is done.
-Organizing only adds. It never deletes, merges away or rewrites what Bee already has.
+Organizing only adds. It never deletes, merges away or rewrites what Bee already has. What Bee already has is \
+listed after the call prep note: its confirmed facts, open to-dos and the to-dos it suggests. Leave out of \
+organize_bee anything Bee already has, even in other words, including a to-do Bee already suggests.
 ### One item at a time: what Bee already has, or what the user asks for
 Ask about a single item only for what Bee already has, for example:
 - When the prep note lists an unconfirmed Bee fact, check it at a natural moment (fact_confirm), quoting it as Bee \
@@ -211,6 +215,8 @@ INSTRUCTIONS = instructions()  # a person without Bee, for a voice that performs
 BEE_INSTRUCTIONS = instructions(bee=True)  # a person who connected Bee, the same voice
 
 NOTE_WAIT_S = 2.0  # the first reply waits at most this long for a prep note still being written (arbitrary)
+# Said after the note when what Bee already has was not read by the first reply (voice/prep.py what_bee_has).
+BEE_HAS_LATE = "What Bee already has could not be read in time for this call, so it is not listed."
 CALL_READ_CHARS = 3000  # about the longest a Bee read's answer is in a call, to keep the call's history short (arbitrary)
 # A tool the call AI waits on (anything outside the call: Bee today) says the language's waiting line once the
 # call has been silent this long, so the caller does not think it dropped (Matt, 2026-10-15). One rule for
@@ -294,6 +300,7 @@ class Coordinator(Agent):
 
     def __init__(self, recorder: CallRecorder, jobs: JobRunner, workspace: Path, *, clock: Callable[[], datetime],
                  prep_note: str | None = None, pending_note: "asyncio.Future[str | None] | None" = None,
+                 bee_has: "asyncio.Future[BeeHas] | None" = None,
                  language: CallLanguage | None = None, earlier_call: str | None = None,
                  direction: str = "inbound", audio_tags: bool = False,
                  budget: Callable[[], DayBudget] | None = None) -> None:
@@ -301,7 +308,9 @@ class Coordinator(Agent):
         # book_call reads it again when the user books.
         # The date and the prep note go into the instructions before the call's first reply, and stay as they
         # are after it (Claude checks its earlier thinking against them). A note still being written when the
-        # AI picks up (pending_note) replaces prep_note, the plain Bee context, if it arrives before that.
+        # AI picks up (pending_note) replaces prep_note, the plain Bee context, if it arrives before that. What Bee
+        # already has (bee_has, voice/prep.py what_bee_has) is listed after the note the same way: read in time,
+        # it is in; else one line says it could not be read.
         self._clock = clock
         rule = f"\n{language.rule}\n" if language and language.rule else ""
         # A call that continues an earlier one (voice/continuation.py): the user started it from that call's record,
@@ -318,11 +327,19 @@ class Coordinator(Agent):
         self._recorder = recorder
         self._jobs = jobs
         self._workspace = workspace
+        self._note = prep_note
+        self._bee_has = bee_has
+        self._listed: str | None = None  # what Bee has, as listed after the note, once read (or why it is not)
+        if bee_has is not None and bee_has.done() and not bee_has.cancelled() and bee_has.exception() is None:
+            self._list_taken(bee_has.result())
         super().__init__(instructions=self._with_note(prep_note), tools=self._bee_reads())
         self._language = language or call_language()
         self._pending_note = pending_note
-        self._note_open = pending_note is not None  # until the first reply
+        self._note_taken = False
+        # The instructions may change until the first reply: a note or the list of what Bee has may still land.
+        self._open = pending_note is not None or (bee_has is not None and self._listed is None)
         self._note_task: asyncio.Task | None = None
+        self._list_task: asyncio.Task | None = None
         self._booked: str | None = None  # the call back booked in this call (book_call), if any
         # end_call ran: the goodbye is said, and nothing more is (a reply queued by job news before it would follow)
         self.ending = False
@@ -335,9 +352,19 @@ class Coordinator(Agent):
         return []
 
     def _with_note(self, note: str | None) -> str:
-        if not note:
-            return self._base_instructions
-        return self._base_instructions + f"\n{self.NOTE_HEADER}\n{note.strip()}\n"
+        """The instructions with the prep note, then what Bee already has: after the fixed prefix, which stays the
+        same in every call."""
+        text = self._base_instructions
+        if note:
+            text += f"\n{self.NOTE_HEADER}\n{note.strip()}\n"
+        if self._listed:
+            text += f"\n{self._listed}\n"
+        return text
+
+    def _list_taken(self, has: BeeHas) -> None:
+        self._listed = has.text
+        self._recorder.event("bee_list_taken", seconds=has.seconds, listed=has.listed, missing=has.missing,
+                             chars=len(has.text))
 
     async def add_note(self, note: str) -> None:
         """Adds an app note to the conversation in turn order. The Claude adapter sends it as a system
@@ -350,28 +377,57 @@ class Coordinator(Agent):
     async def on_enter(self) -> None:
         if self._pending_note is not None:
             self._note_task = asyncio.create_task(self._take_note_when_ready())
+        if self._bee_has is not None and self._listed is None:
+            self._list_task = asyncio.create_task(self._take_list_when_ready())
 
     async def _take_note_when_ready(self) -> None:
         await self._take_note(await asyncio.shield(self._pending_note))
 
     async def _take_note(self, note: str | None) -> None:
-        if note and self._note_open:
-            self._note_open = False
+        if note and self._open and not self._note_taken:
+            self._note_taken, self._note = True, note
             await self.update_instructions(self._with_note(note))
             self._recorder.event("prep_note_taken")
 
-    async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
-        pending = self._pending_note
-        if not self._note_open or pending is None:
+    async def _take_list_when_ready(self) -> None:
+        try:
+            has = await asyncio.shield(self._bee_has)
+        except Exception:  # never raised by what_bee_has; the call goes on without the list
             return
-        if not pending.done():
-            try:
-                await asyncio.wait_for(asyncio.shield(pending), NOTE_WAIT_S)
-            except asyncio.TimeoutError:
-                self._recorder.event("prep_note_late", waited_s=NOTE_WAIT_S)
-        if pending.done() and not pending.cancelled():
-            await self._take_note(pending.result())
-        self._note_open = False
+        await self._take_list(has)
+
+    async def _take_list(self, has: BeeHas) -> None:
+        if self._open and self._listed is None:
+            self._list_taken(has)
+            await self.update_instructions(self._with_note(self._note))
+
+    async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
+        if not self._open:
+            return
+        deadline = time.monotonic() + NOTE_WAIT_S  # what is still coming gets this long, together
+        pending = self._pending_note
+        if pending is not None and not self._note_taken:
+            if not pending.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(pending), max(0.0, deadline - time.monotonic()))
+                except asyncio.TimeoutError:
+                    self._recorder.event("prep_note_late", waited_s=NOTE_WAIT_S)
+            if pending.done() and not pending.cancelled():
+                await self._take_note(pending.result())
+        has = self._bee_has
+        if has is not None and self._listed is None:
+            if not has.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(has), max(0.0, deadline - time.monotonic()))
+                except (asyncio.TimeoutError, Exception):
+                    pass
+            if has.done() and not has.cancelled() and has.exception() is None:
+                await self._take_list(has.result())
+            else:  # not read in time: the call goes on, and the AI knows the list is missing
+                self._listed = BEE_HAS_LATE
+                self._recorder.event("bee_list_late", waited_s=NOTE_WAIT_S)
+                await self.update_instructions(self._with_note(self._note))
+        self._open = False
         # This turn's context was copied from the agent before the note landed in its instructions.
         current = turn_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID)
         if current is not None and current.text_content != self.instructions:
