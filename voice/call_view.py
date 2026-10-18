@@ -414,8 +414,10 @@ def _writes_from_writer(record: Record, call: Call, zone: tzinfo) -> list[Write]
         status = line.get("status")
         retried = _time(line.get("at"), zone) if status == "applying" and write.state == "failed" else None
         write.ok, write.status = status == "ok", status
-        write.state = {"ok": "written", "undo_failed": "written", "undone": "undone", "failed": "failed",
-                       "applying": "applying"}.get(status, "unknown")
+        # A write that cannot be taken back here is still in Bee; a failed one the user took back is not, and it is
+        # not tried again (follow-up review of 2026-10-18).
+        write.state = {"ok": "written", "undo_failed": "written", "undo_impossible": "written", "undone": "undone",
+                       "failed": "failed", "withdrawn": "failed", "applying": "applying"}.get(status, "unknown")
         write.retried_at = retried.timestamp() if retried else None
     return list(found.values())
 
@@ -593,10 +595,10 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
             shown = "failed" if retrying else "unknown"
         item = {"type": "bee_write", "id": write.id, "at": _iso(write.at or call.when(write.t), zone),
                 "kind": write.kind, "text": write.text, "state": shown,
-                "will_retry": live and write.state == "failed",
+                "will_retry": live and write.state == "failed" and write.status != "withdrawn",
                 # The app's hint on an undoable card is "빼려면 '빼 줘'라고 말하세요": a delete or a dismissed
                 # suggestion can be taken back too, but it comes back, so the hint does not fit them.
-                "undoable": write is target and write.kind not in REMOVING}
+                "undoable": write is target and shown == "written" and write.kind not in REMOVING}
         placed.append(((write.t, write.line), item))
     placed.sort(key=lambda entry: entry[0])
     items: list[dict[str, Any]] = []

@@ -435,9 +435,10 @@ def test_bee_write_states_come_from_the_writer_s_record(tmp_path):
 
 
 def test_in_a_live_call_a_failed_write_will_be_retried_and_the_last_write_in_bee_can_be_taken_out(tmp_path):
-    """undoable is the write the call AI's take-back would act on (beelink/writer.py undo_target): the newest change
-    left, a write whose undo Bee refused first of all (review of 2026-10-18, finding 1: it was skipped for an older
-    one); a write still being made shows once it has a result, and until then holds the take-back."""
+    """undoable is the write the call AI's take-back would act on (beelink/writer.py undo_target), when it is in
+    Bee: the newest change, never an older one in its place (follow-up review of 2026-10-18): a failed write is the
+    newest change too (taking it back stops its retry), so nothing older carries the hint; a write still being made
+    shows once it has a result, and until then holds the take-back."""
     todo = {"kind": "todo_create", "text": "Call mom"}
     writes = [bee("w1", "applying", "2026-10-15T20:00:10+09:00", item=todo, **ASKED), bee("w1", "ok", "2026-10-15T20:00:11+09:00"),
               bee("w2", "applying", "2026-10-15T20:00:20+09:00", item=todo, **ASKED), bee("w2", "ok", "2026-10-15T20:00:21+09:00"),
@@ -447,8 +448,12 @@ def test_in_a_live_call_a_failed_write_will_be_retried_and_the_last_write_in_bee
     record(tmp_path, [INBOUND, say(2, "Hi.")], writes=writes, age_s=5)
     found = [(i["id"], i["state"], i["will_retry"], i["undoable"]) for i in view(tmp_path)["items"]
              if i["type"] == "bee_write"]
-    assert found == [("write-w1", "written", False, False), ("write-w2", "written", False, True),
+    assert found == [("write-w1", "written", False, False), ("write-w2", "written", False, False),
                      ("write-w3", "failed", True, False)]
+    refused = writes[:5]  # without the failed one, the write whose undo Bee refused is taken back first
+    record(tmp_path / "refused", [INBOUND, say(2, "Hi.")], writes=refused, age_s=5)
+    assert [(i["id"], i["undoable"]) for i in view(tmp_path / "refused")["items"] if i["type"] == "bee_write"] == [
+        ("write-w1", False), ("write-w2", True)]
     making = writes + [bee("w4", "applying", "2026-10-15T20:00:40+09:00", item=todo, **ASKED)]
     record(tmp_path / "making", [INBOUND, say(2, "Hi.")], writes=making, age_s=5)
     assert [(i["id"], i["undoable"]) for i in view(tmp_path / "making")["items"] if i["type"] == "bee_write"] == [
@@ -783,8 +788,8 @@ def test_one_changes_rebuild_reads_the_records_and_ring_logs_once_however_many_c
 def test_a_removal_brought_back_shows_what_it_did_and_what_came_back(tmp_path):
     """Review of 2026-10-18, finding 2: the fact made again after a delete showed only as the delete "undone" (the
     testers' app labels that "뺌"). Now the delete's card keeps what it did, and what came back is a card of its own
-    (fact_create, written: "넣음"). Neither carries the take-it-out hint: the take-back passes over both, so the hint
-    goes to the change before them."""
+    (fact_create, written: "넣음"). What came back is the newest change: "빼 줘" takes it out again, so it carries the
+    hint (follow-up review of 2026-10-18); the delete never does."""
     writes = [bee("w1", "applying", "2026-10-15T20:00:10+09:00", item={"kind": "todo_create", "text": "Call mom"},
                   **ASKED), bee("w1", "ok", "2026-10-15T20:00:11+09:00"),
               bee("w2", "applying", "2026-10-15T20:00:20+09:00", item={"kind": "fact_delete", "fact_id": 7,
@@ -795,8 +800,8 @@ def test_a_removal_brought_back_shows_what_it_did_and_what_came_back(tmp_path):
               bee("w3", "ok", "2026-10-15T20:00:31+09:00")]
     record(tmp_path, [INBOUND, say(2, "Hi.")], writes=writes, age_s=5)
     found = [(i["id"], i["kind"], i["state"], i["undoable"]) for i in view(tmp_path)["items"] if i["type"] == "bee_write"]
-    assert found == [("write-w1", "todo_create", "written", True), ("write-w2", "fact_delete", "written", False),
-                     ("write-w3", "fact_create", "written", False)]
+    assert found == [("write-w1", "todo_create", "written", False), ("write-w2", "fact_delete", "written", False),
+                     ("write-w3", "fact_create", "written", True)]
 
 
 def test_a_take_back_bee_did_not_answer_shows_as_unknown_and_holds_the_hint(tmp_path):

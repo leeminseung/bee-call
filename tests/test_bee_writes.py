@@ -83,6 +83,13 @@ async def saved(agent, question: str, answer: str, **item) -> str:
     return await agent.save_to_bee(None, **item)
 
 
+async def taken_back(agent, words: str = "Take that back.", context=None) -> str:
+    """The user asks for the last change back, in words of their own (a take-back passes over what the user's
+    current turn changed), and the AI takes it back; what undo_bee_write told the AI."""
+    await say(agent, ("user", words))
+    return await agent.undo_bee_write(context)
+
+
 ASKED = ("Want me to add 'note the bug' to your Bee todos?", "Yes, please.")
 
 
@@ -137,7 +144,7 @@ def test_an_item_is_written_once_a_call_until_it_is_taken_back(tmp_path, fake_be
         await say(agent, ("assistant", "Bee에 'Has a peanut allergy'로 기억해 둘까요?"), ("user", "응."))
         both = await asyncio.gather(agent.save_to_bee(None, kind="fact_create", text="Has a peanut allergy."),
                                     agent.save_to_bee(None, kind="fact_create", text="Has a peanut allergy"))
-        undone = await agent.undo_bee_write(None)
+        undone = await taken_back(agent)
         await say(agent, ("assistant", "다시 Bee에 'Has a peanut allergy'로 기억해 둘까요?"), ("user", "응, 넣어 줘."))
         return both, undone, await agent.save_to_bee(None, kind="fact_create", text="Has a peanut allergy")
 
@@ -167,8 +174,8 @@ def test_take_it_out_undoes_the_last_write_of_the_call(tmp_path, fake_bee):
     async def main():
         agent, rec = await in_a_call(tmp_path)
         await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
-        undone = await agent.undo_bee_write(None)
-        again = await agent.undo_bee_write(None)
+        undone = await taken_back(agent)
+        again = await taken_back(agent)
         return undone, again, rec
 
     undone, again, rec = asyncio.run(main())
@@ -187,7 +194,7 @@ def test_take_it_out_works_when_bee_answers_with_the_bare_todo(tmp_path, fake_be
     async def main():
         agent, _ = await in_a_call(tmp_path)
         await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
-        return await agent.undo_bee_write(None)
+        return await taken_back(agent)
 
     assert asyncio.run(main()).startswith("Took it back: todo 'Note the bug'.")
     assert ["todos", "delete", "99", "--json"] in calls(fake_bee)
@@ -202,9 +209,10 @@ def test_take_it_out_never_deletes_by_an_id_that_is_not_a_todo_s(tmp_path, fake_
         agent, _ = await in_a_call(tmp_path)
         await saved(agent, "Shall I add Bee's suggested todo 'Ask about bonus terms'?", "Yes.",
                     kind="todo_accept", suggestion_id=34, text="Ask about bonus terms")
-        return await agent.undo_bee_write(None)
+        return await taken_back(agent)
 
-    assert asyncio.run(main()).startswith("Could not take back") and writes_to_bee(fake_bee) == [
+    # the follow-up review of 2026-10-18 (finding 3): it can never be computed, so it is not tried again either
+    assert "cannot be taken back from here" in asyncio.run(main()) and writes_to_bee(fake_bee) == [
         ["todos", "accept-suggestion"]]
 
 
@@ -217,7 +225,7 @@ def test_undoing_a_fact_fix_works_when_bee_answers_with_the_bare_fact(tmp_path, 
         agent, _ = await in_a_call(tmp_path)
         await saved(agent, "Shall I fix it in Bee to 'Bonus is 10%'?", "Yes.",
                     kind="fact_update", fact_id=7, text="Bonus is 10%")
-        return await agent.undo_bee_write(None)
+        return await taken_back(agent)
 
     assert asyncio.run(main()).startswith("Took it back")
     updates = [c for c in calls(fake_bee) if c[:2] == ["facts", "update"]]
@@ -229,7 +237,7 @@ def test_undoing_a_fact_fix_puts_the_fact_back_as_it_was(tmp_path, fake_bee):
         agent, _ = await in_a_call(tmp_path)
         await saved(agent, "Shall I fix it in Bee to 'Bonus is 10%'?", "Yes.",
                     kind="fact_update", fact_id=7, text="Bonus is 10%")
-        await agent.undo_bee_write(None)
+        await taken_back(agent)
 
     asyncio.run(main())
     updates = [c for c in calls(fake_bee) if c[:2] == ["facts", "update"]]
@@ -504,7 +512,7 @@ def test_every_tool_the_call_ai_waits_on_says_one_line_after_2_s(tmp_path, fake_
             fillers[name] = context.fillers
         await say(agent, ("assistant", "Bee에 할 일로 '버그 기록'을 넣을까요?"), ("user", "네."))
         for name, use in (("save_to_bee", lambda c: agent.save_to_bee(c, kind="todo_create", text="버그 기록")),
-                          ("undo_bee_write", lambda c: agent.undo_bee_write(c))):
+                          ("undo_bee_write", lambda c: taken_back(agent, "그거 빼 줘.", c))):
             context = Context()
             await use(context)
             fillers[name] = context.fillers
@@ -526,7 +534,7 @@ def test_a_fact_the_user_wants_kept_is_made_and_confirmed_and_can_be_taken_back(
         agent, rec = await in_a_call(tmp_path, [("user", "I'm allergic to peanuts, by the way.")])
         said = await saved(agent, "Shall I keep 'Allergic to peanuts' in Bee?", "Yes, please.",
                            kind="fact_create", text="Allergic to peanuts")
-        undone = await agent.undo_bee_write(None)
+        undone = await taken_back(agent)
         return said, undone, rec
 
     said, undone, rec = asyncio.run(main())
@@ -545,7 +553,7 @@ def test_a_deleted_fact_can_be_brought_back_confirmed(tmp_path, fake_bee):
         agent, rec = await in_a_call(tmp_path)
         said = await saved(agent, "Shall I delete 'Bonus is 15%' from Bee?", "Yes, delete it.",
                            kind="fact_delete", text="Bonus is 15%", fact_id=7)
-        undone = await agent.undo_bee_write(None)
+        undone = await taken_back(agent)
         return said, undone, rec
 
     said, undone, rec = asyncio.run(main())
@@ -564,7 +572,7 @@ def test_a_todo_the_user_did_is_marked_done_and_can_be_reopened(tmp_path, fake_b
         agent, rec = await in_a_call(tmp_path, [("user", "그거 했어.")], language="ko")
         said = await saved(agent, "Bee에서 'Reply to the recruiter' 끝난 걸로 할까요?", "응, 그렇게 해 줘.",
                            kind="todo_complete", text="Reply to the recruiter", todo_id=51)
-        undone = await agent.undo_bee_write(None)
+        undone = await taken_back(agent)
         return said, undone
 
     said, undone = asyncio.run(main())
@@ -580,7 +588,7 @@ def test_a_suggestion_turned_down_comes_back_as_an_open_to_do(tmp_path, fake_bee
         agent, _ = await in_a_call(tmp_path)
         said = await saved(agent, "Shall I remove Bee's suggestion 'Ask about bonus terms'?", "Yes.",
                            kind="todo_dismiss", text="Ask about bonus terms", suggestion_id=34)
-        undone = await agent.undo_bee_write(None)
+        undone = await taken_back(agent)
         return said, undone
 
     said, undone = asyncio.run(main())
@@ -728,7 +736,7 @@ def test_a_fact_brought_back_is_a_write_of_its_own_and_the_user_s_for_every_late
         await saved(agent, "Shall I delete 'Bonus is 15%' from Bee?", "Yes.", kind="fact_delete", text="Bonus is 15%",
                     fact_id=7)
         await say(agent, ("assistant", "Deleted."), ("user", "Wait, bring it back."))
-        undone = await agent.undo_bee_write(None)
+        undone = await taken_back(agent)
         ours = OurCalls.of(tmp_path / "workspace")
         read = await toolkit.read("bee_facts", {"fact_id": 200}, ours=ours, zone=seoul_now().tzinfo, timeout=5,
                                   max_chars=3000)
@@ -742,7 +750,7 @@ def test_a_fact_brought_back_is_a_write_of_its_own_and_the_user_s_for_every_late
     assert [(e["kind"], e["result"]) for e in events(rec) if e["type"] == "bee_write"] == [
         ("fact_delete", "ok"), ("fact_create", "ok")]
     body = writer.summary_notification(BeeWrites(rec.dir).all(), call_language("en"))["aps"]["alert"]["body"]
-    assert body == "Added to Bee: fact 'Bonus is 15%'. Removed from Bee: fact 'Bonus is 15%'"
+    assert body == "Brought back in Bee: fact 'Bonus is 15%'"  # one line, not a removal and an add (follow-up review)
 
 
 def test_two_take_backs_in_one_reply_each_take_back_one_change(tmp_path, fake_bee):
@@ -780,9 +788,10 @@ def test_take_both_out_after_an_organize_takes_each_out_once(tmp_path, fake_bee,
     assert [w.status for w in BeeWrites(rec.dir).all()] == ["undone", "undone"]
 
 
-def test_trying_again_after_a_bring_back_that_failed_tries_the_same_one(tmp_path, fake_bee, monkeypatch):
-    """Finding 1: after a take-back that did not go through, "try again" took back an older write instead. It tries
-    the same one again; the older to-do is left alone."""
+def test_a_bring_back_that_failed_is_tried_after_the_call_unless_the_user_lets_it_go(tmp_path, fake_bee, monkeypatch):
+    """Follow-up review of 2026-10-18, finding 5: a failed bring-back was tried again after the call without the user
+    being told. It is said, as a failed save is; and taking it back, as the user lets it go, stops that retry. The
+    older to-do is left alone (finding 2: never an older change in its place)."""
     fail_once(tmp_path, monkeypatch, "facts create")
 
     async def main():
@@ -790,17 +799,16 @@ def test_trying_again_after_a_bring_back_that_failed_tries_the_same_one(tmp_path
         await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
         await saved(agent, "Shall I delete 'Bonus is 15%' from Bee?", "Yes.", kind="fact_delete", text="Bonus is 15%",
                     fact_id=7)
-        await say(agent, ("assistant", "Deleted."), ("user", "Wait, bring it back."))
-        first = await agent.undo_bee_write(None)
-        await say(agent, ("assistant", "I couldn't bring it back."), ("user", "Try again."))
-        again = await agent.undo_bee_write(None)
-        return first, again, rec
+        first = await taken_back(agent, "Wait, bring it back.")
+        again = await taken_back(agent, "Never mind then, leave it deleted.")
+        retried = await BeeWrites(rec.dir).retry_failed()
+        return first, again, retried, rec
 
-    first, again, rec = asyncio.run(main())
-    assert first.startswith("Could not bring back fact 'Bonus is 15%'") and again.startswith("Brought it back")
-    assert [(w.kind, w.status, w.item.get("restores")) for w in BeeWrites(rec.dir).all()] == [
-        ("todo_create", "ok", None), ("fact_delete", "ok", None), ("fact_create", "failed", "w2"),
-        ("fact_create", "ok", "w2")]
+    first, again, retried, rec = asyncio.run(main())
+    assert "did not go through" in first and "tried again after the call" in first
+    assert again.startswith("Left as it is: bringing back fact 'Bonus is 15%' did not go through")
+    assert retried == [] and [(w.kind, w.status, w.item.get("restores")) for w in BeeWrites(rec.dir).all()] == [
+        ("todo_create", "ok", None), ("fact_delete", "ok", None), ("fact_create", "withdrawn", "w2")]
     assert ["todos", "delete"] not in [c[:2] for c in calls(fake_bee)]
 
 
@@ -812,8 +820,8 @@ def test_trying_again_after_an_undo_bee_refused_takes_back_the_same_write(tmp_pa
         agent, rec = await in_a_call(tmp_path)
         await saved(agent, "Shall I add 'Call Dana' to your Bee todos?", "Yes.", kind="todo_create", text="Call Dana")
         await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
-        first = await agent.undo_bee_write(None)
-        again = await agent.undo_bee_write(None)
+        first = await taken_back(agent)
+        again = await taken_back(agent)
         return first, again, rec
 
     first, again, rec = asyncio.run(main())
@@ -832,8 +840,8 @@ def test_an_undo_bee_did_not_answer_is_never_tried_again_by_itself(tmp_path, fak
         agent, rec = await in_a_call(tmp_path)
         await saved(agent, "Shall I add 'Call Dana' to your Bee todos?", "Yes.", kind="todo_create", text="Call Dana")
         await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
-        first = await agent.undo_bee_write(None)
-        again = await agent.undo_bee_write(None)
+        first = await taken_back(agent)
+        again = await taken_back(agent)
         return first, again, rec
 
     first, again, rec = asyncio.run(main())
@@ -842,7 +850,7 @@ def test_an_undo_bee_did_not_answer_is_never_tried_again_by_itself(tmp_path, fak
     assert [c[:2] for c in calls(fake_bee)].count(["todos", "delete"]) == 1
     assert [w.status for w in BeeWrites(rec.dir).all()] == ["ok", "undo_unknown"]
     body = writer.summary_notification(BeeWrites(rec.dir).all(), call_language("en"))["aps"]["alert"]["body"]
-    assert body == "Added to Bee: todo 'Call Dana'. Not sure it went in, check Bee: todo 'Note the bug'"
+    assert body == "Added to Bee: todo 'Call Dana'. Not sure it was taken back, check Bee: todo 'Note the bug'"
 
 
 def test_the_notification_counts_a_write_whose_undo_bee_refused_as_in_bee():
@@ -878,3 +886,151 @@ def test_a_to_do_alarm_without_a_zone_is_the_user_s_own(tmp_path, fake_bee):
     assert good.startswith("Saved to Bee") and bad.startswith("Give alarm_at in ISO 8601")
     assert ["todos", "create", "--text", "Call the dentist", "--alarm-at", "2026-10-20T17:00:00+09:00", "--json"] in \
         calls(fake_bee)
+
+
+# ---------- follow-up review of 2026-10-18 ----------
+
+@pytest.mark.parametrize("save_first", [True, False])
+def test_take_it_out_and_put_another_in_works_in_either_order(tmp_path, fake_bee, monkeypatch, save_first):
+    """Finding 1: "Not that. Take it out and put 'Call Dana' instead." With the save run first in the reply, the
+    take-back stopped at 'Call Dana' still being made and said Bee had not confirmed it. A take-back passes over what
+    the user's current turn changed, so the change before is taken out in either order."""
+    monkeypatch.setenv("FAKE_BEE_TODOS", str(tmp_path / "todos.json"))
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
+        await say(agent, ("assistant", "Added."), ("user", "No, not that. Take it out and put 'Call Dana' instead."))
+        save = agent.save_to_bee(None, kind="todo_create", text="Call Dana")
+        undo = agent.undo_bee_write(None)
+        both = await asyncio.gather(*((save, undo) if save_first else (undo, save)))
+        return both, rec
+
+    both, rec = asyncio.run(main())
+    assert sorted(said.split(":")[0] for said in both) == ["Saved to Bee", "Took it back"]
+    assert [(w.text, w.status) for w in BeeWrites(rec.dir).all()] == [("Note the bug", "undone"), ("Call Dana", "ok")]
+    assert [c[2] for c in calls(fake_bee) if c[:2] == ["todos", "delete"]] == ["99"]
+
+
+def test_taking_back_a_bring_back_takes_out_what_came_back_and_again_brings_it_back(tmp_path, fake_bee):
+    """Finding 2: after a bring-back, "take it back out" took out an older to-do and left the fact made again. The
+    bring-back is the newest change: taking it back deletes what came back, and taking back once more brings it back
+    again; the older to-do stays."""
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
+        await saved(agent, "Shall I delete 'Bonus is 15%' from Bee?", "Yes.", kind="fact_delete", text="Bonus is 15%",
+                    fact_id=7)
+        back = await taken_back(agent, "Wait, bring it back.")
+        out = await taken_back(agent, "Hmm, no, take it back out.")
+        again = await taken_back(agent, "Sorry, bring it back after all.")
+        return back, out, again, rec
+
+    back, out, again, rec = asyncio.run(main())
+    assert back.startswith("Brought it back") and out.startswith("Took it back out: fact 'Bonus is 15%'")
+    assert again.startswith("Brought it back")
+    assert [(w.kind, w.status, w.item.get("restores")) for w in BeeWrites(rec.dir).all()] == [
+        ("todo_create", "ok", None), ("fact_delete", "ok", None), ("fact_create", "undone", "w2"),
+        ("fact_create", "ok", "w2")]
+    assert ["todos", "delete"] not in [c[:2] for c in calls(fake_bee)]
+    assert [c[:3] for c in calls(fake_bee) if c[:2] == ["facts", "delete"]] == [["facts", "delete", "7"],
+                                                                                ["facts", "delete", "200"]]
+
+
+def test_taking_back_a_save_that_failed_stops_its_retry_after_the_call(tmp_path, fake_bee, monkeypatch):
+    """Finding 2: 'Call Dana' failed (to be tried again after the call), the user said take that one back, the older
+    'Note the bug' was deleted instead, and the retry added 'Call Dana' anyway. The failed write is the newest change:
+    it is withdrawn, Bee is not asked, and it is never tried again."""
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
+        fail_once(tmp_path, monkeypatch, "todos create")
+        failed = await saved(agent, "Shall I add 'Call Dana' to your Bee todos?", "Yes.", kind="todo_create",
+                             text="Call Dana")
+        undo = await taken_back(agent, "Never mind, take that one back.")
+        retried = await BeeWrites(rec.dir).retry_failed()
+        return failed, undo, retried, rec
+
+    failed, undo, retried, rec = asyncio.run(main())
+    assert "tried again after the call" in failed and undo.startswith("Called off: todo 'Call Dana' did not go into Bee")
+    assert retried == [] and [(w.text, w.status) for w in BeeWrites(rec.dir).all()] == [
+        ("Note the bug", "ok"), ("Call Dana", "withdrawn")]
+    assert [c[:2] for c in calls(fake_bee)].count(["todos", "create"]) == 2 and ["todos", "delete"] not in [
+        c[:2] for c in calls(fake_bee)]
+    body = writer.summary_notification(BeeWrites(rec.dir).all(), call_language("en"))["aps"]["alert"]["body"]
+    assert body == "Added to Bee: todo 'Note the bug'"
+
+
+def test_a_take_back_that_can_never_work_is_left_to_the_bee_app_and_older_ones_still_work(tmp_path, fake_bee,
+                                                                                         monkeypatch):
+    """Finding 3: Bee answered accept-suggestion with the suggestion, not a to-do, so taking it back can never be
+    computed; it was recorded as a refusal and tried first on every take-back, so older ones could not be taken back.
+    It is now its own final state: the AI says to change it in the Bee app, and the next take-back goes on."""
+    monkeypatch.setenv("FAKE_BEE_ACCEPT_ANSWER", "suggestion")
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
+        await saved(agent, "Shall I add Bee's suggested todo 'Ask about bonus terms'?", "Yes.", kind="todo_accept",
+                    text="Ask about bonus terms", suggestion_id=34)
+        first = await taken_back(agent)
+        second = await taken_back(agent, "Then take the bug one out.")
+        return first, second, rec
+
+    first, second, rec = asyncio.run(main())
+    assert first == ("todo 'Ask about bonus terms' cannot be taken back from here (Bee did not say which todo it made). "
+                     "Tell the user it has to be changed in the Bee app.")
+    assert second.startswith("Took it back: todo 'Note the bug'")
+    assert [(w.kind, w.status) for w in BeeWrites(rec.dir).all()] == [("todo_create", "undone"),
+                                                                      ("todo_accept", "undo_impossible")]
+
+
+def test_a_fix_whose_earlier_text_was_not_read_is_left_to_the_bee_app(tmp_path, fake_bee, monkeypatch):
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
+        monkeypatch.setenv("FAKE_BEE_SLOW", "facts get 3")
+        monkeypatch.setattr(cli, "CALL_WAIT_S", 0.5)
+        await saved(agent, "Shall I fix it in Bee to 'Bonus is 10%'?", "Yes.", kind="fact_update", fact_id=7,
+                    text="Bonus is 10%")
+        monkeypatch.delenv("FAKE_BEE_SLOW")
+        return await taken_back(agent), await taken_back(agent, "Then the bug note."), rec
+
+    first, second, rec = asyncio.run(main())
+    assert "cannot be taken back from here (the fact's earlier text is not known)" in first
+    assert second.startswith("Took it back: todo 'Note the bug'")
+
+
+def test_a_take_back_bee_carried_out_but_answered_with_an_error_is_found_done(tmp_path, fake_bee, monkeypatch):
+    """Finding 3: a delete Bee carried out but answered with an error was taken for a refusal, so every later take-back
+    tried it again and the notification listed it as added. Bee is asked what it has: the to-do is gone, so it is
+    taken back."""
+    monkeypatch.setenv("FAKE_BEE_TODOS", str(tmp_path / "todos.json"))
+    flag = tmp_path / "fail-after"
+    flag.write_text("todos delete")
+    monkeypatch.setenv("FAKE_BEE_FAIL_AFTER_ONCE", str(flag))
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await saved(agent, *ASKED, kind="todo_create", text="Note the bug")
+        return await taken_back(agent), rec
+
+    undone, rec = asyncio.run(main())
+    assert undone.startswith("Took it back: todo 'Note the bug'")
+    assert [w.status for w in BeeWrites(rec.dir).all()] == ["undone"]
+    assert [c[:2] for c in calls(fake_bee)].count(["todos", "delete"]) == 1
+    assert writer.summary_notification(BeeWrites(rec.dir).all(), call_language("en")) is None
+
+
+@pytest.mark.parametrize("language,body", [
+    ("en", "Brought back in Bee: fact 'Bonus is 15%'. Not sure it was taken back, check Bee: todo 'Note the bug'"),
+    ("ko", "Bee에 되돌려 놓았어요: 사실 'Bonus is 15%'. 빠졌는지 모르니 Bee에서 확인해 주세요: 할 일 'Note the bug'")])
+def test_the_notification_says_what_came_back_and_which_take_back_to_check(language, body):
+    """Finding 4: a delete and its bring-back read as "Added ... Removed ..." of the same fact; a take-back Bee did
+    not answer read as if the item might not have gone in."""
+    from beelink.writer import BeeWrite, summary_notification
+
+    writes = [BeeWrite("w1", {"kind": "fact_delete", "fact_id": 7, "text": "Bonus is 15%"}, "q", "a", "ok"),
+              BeeWrite("w2", {"kind": "fact_create", "text": "Bonus is 15%", "restores": "w1"}, "q", "a", "ok"),
+              BeeWrite("w3", {"kind": "todo_create", "text": "Note the bug"}, "q", "a", "undo_unknown")]
+    assert summary_notification(writes, call_language(language))["aps"]["alert"]["body"] == body

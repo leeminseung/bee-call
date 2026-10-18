@@ -172,7 +172,9 @@ if cmd[:2] == ["todos", "accept-suggestion"]:
     if os.environ.get("FAKE_BEE_ACCEPT_ANSWER") == "suggestion":  # an answer that is not a todo at all
         out({"id": int(cmd[2]), "text": "Ask about bonus terms", "accepted": True})
     made({"id": 100, "text": "Ask about bonus terms", "created_at": now_ms, "completed": False})
-if cmd[:2] == ["todos", "delete"]:
+if cmd[:2] == ["todos", "delete"]:  # gone from FAKE_BEE_TODOS too, before the answer (which may fail after)
+    if todos_file:
+        json.dump([t for t in stored() if t.get("id") != int(cmd[2])], open(todos_file, "w"))
     out({"deleted": True, "id": int(cmd[2])})
 # The facts Bee made (facts create), kept in the file FAKE_BEE_FACTS names (none when it is not set).
 facts_file = os.environ.get("FAKE_BEE_FACTS")
