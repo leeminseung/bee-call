@@ -24,8 +24,8 @@ from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_inst
 from beelink import reads, toolkit
 from beelink.calls import OurCalls
 from beelink.clock import now_text
-from beelink.writer import (AS_BEE_HAS_IT, KINDS, REMOVING, BeeWrites, as_bee_has_it, event_fields, item_label, label,
-                            made_todo, restore_item, the_fact, undo_target)
+from beelink.writer import (AS_BEE_HAS_IT, CREATING, KINDS, REMOVING, BeeWrites, as_bee_has_it, event_fields,
+                            item_label, label, made_todo, restore_item, restores_of, the_fact)
 from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
 from voice.recorder import CallRecorder
@@ -188,7 +188,9 @@ language). Ask once, and again only when the answer leaves it unclear. After a c
 a few words what you did. A hedge, a "later", a yes taken back ("Yes. Actually no, keep it.", "네, 잠깐만요, 지우지 \
 마세요.") or a yes to another question is no yes. Change nothing then. To delete a fact or turn down Bee's \
 suggestion, say so in the question: "Shall I delete 'Bonus is 15%' from Bee?" When the user wants something back, \
-call undo_bee_write. If a change does not go through, say what save_to_bee tells you to say."""
+call undo_bee_write with the key of the change they mean: every answer that reports a change gives its key ("w3"), \
+and the user's words tell you which change they mean. Never say a key aloud. If a change does not go through, say \
+what save_to_bee tells you to say."""
 
 
 def instructions(audio_tags: bool = False, bee: bool = False) -> str:
@@ -592,8 +594,9 @@ class BeeCoordinator(Coordinator):
         super().__init__(recorder, jobs, workspace, **kwargs)
         self._bee_writes = BeeWrites(recorder.dir)  # this call's Bee writes, kept in its folder
         self._claimed: dict[tuple, str] = {}  # each item saved or tried in this call (same_item): its write's key
-        # One take-back at a time: LiveKit runs one reply's tool calls together, and two at once both took the newest
-        # change (review of 2026-10-18, finding 1).
+        self._from_organize: set[str] = set()  # the keys of the writes organize_bee made
+        # One take-back reaches Bee at a time: LiveKit runs one reply's tool calls together, and each take-back reads
+        # its change's state before acting on it.
         self._undo_lock = asyncio.Lock()
         self._organized: set[tuple[str, str]] = set()  # the yeses organize_bee took: (their last turn's id, scope)
         # What the user said yes to organizing beyond this call: the voice server hands it to the meta agent once the
@@ -683,12 +686,14 @@ class BeeCoordinator(Coordinator):
             item["text"] = before["text"]
         claimed = self._claimed.get(same_item(item))
         if claimed is not None:
-            already = "added when organizing Bee" if claimed == ORGANIZED else "already saved or tried"
-            return f"Not saved again: {item_label(item, ENGLISH)} was {already} in this call."
+            organized = claimed == ORGANIZED or claimed in self._from_organize
+            already = "added when organizing Bee" if organized else "already saved or tried"
+            change = f" (change {claimed})" if claimed.startswith("w") else ""
+            return f"Not saved again: {item_label(item, ENGLISH)} was {already} in this call{change}."
         self._claimed[same_item(item)] = "saving"  # before anything waits, so a second save at the same time sees it
-        question, answer, turn = self._last_exchange()
+        question, answer, _ = self._last_exchange()
         async with self.waiting(context):
-            write = await self._bee_writes.begin(item, question, answer, before=before, turn=turn)
+            write = await self._bee_writes.begin(item, question, answer, before=before)
             self._claimed[same_item(item)] = write.key
             try:
                 await self._bee_writes.apply(write)
@@ -700,80 +705,131 @@ class BeeCoordinator(Coordinator):
         if write.status == "ok":
             done = {"fact_delete": "Deleted from Bee", "todo_dismiss": "Turned down in Bee",
                     "todo_complete": "Marked done in Bee"}.get(kind, "Saved to Bee")
-            return f"{done}: {what}.{had} Tell the user in a few words what you did."
+            return f"{done}: {what} (change {write.key}).{had} Tell the user in a few words what you did."
         if write.status == "unknown":
-            return (f"Bee did not confirm saving {what} ({write.error}): it may or may not be in Bee, and it will not "
-                    "be saved again by itself. Tell the user that, and that they can check Bee after the call.")
-        return (f"Saving {what} to Bee did not go through ({write.error}). Tell the user it did not go through and "
-                "that it will be tried again after the call. If they then say they no longer want it, calling "
-                "undo_bee_write stops that; do not offer it.")
+            return (f"Bee did not confirm saving {what} (change {write.key}; {write.error}): it may or may not be in "
+                    "Bee, and it will not be saved again by itself. Tell the user that, and that they can check Bee "
+                    "after the call.")
+        # The retry after the call is stopped by taking this change back, by its key (third review, finding 4).
+        return (f"Saving {what} to Bee did not go through (change {write.key}; {write.error}). Tell the user it did "
+                "not go through and that it will be tried again after the call. If they then say they no longer want "
+                f"it, taking back {write.key} with undo_bee_write stops that; do not offer it.")
 
     @function_tool
-    async def undo_bee_write(self, context: RunContext) -> str:
-        """Take back the newest change you made to Bee in this call that is not taken back yet, from before the user's
-        words now, when the user wants it back: an item added comes out, a fact deleted comes back, a suggestion
-        turned down comes back as a to-do, something brought back goes out again, a change that did not go through is
-        not tried again after the call. Call it once for each change to take back, newest first; one that cannot be
-        taken back from here is passed over, so the next call takes back the one before it. When a take-back did not
-        go through, calling it again tries that same one."""
-        async with self._undo_lock:  # the target is chosen and acted on before another take-back may look
-            turn = self._last_exchange()[2]  # what this turn's own tools changed is not taken back by it
-            target, held = undo_target(self._bee_writes.all(), current_turn=turn)
-            if held is not None:
-                return (f"Not taken back: Bee did not confirm {label(held, ENGLISH)} (it may or may not be as it was), "
-                        "so it is not tried again by itself. Tell the user to check it in the Bee app.")
+    async def undo_bee_write(self, context: RunContext, change: str) -> str:
+        """Take back one change you made to Bee in this call, when the user wants it back: an item added comes out, a
+        fact deleted comes back, a suggestion turned down comes back as a to-do, something brought back goes out
+        again, and a change that did not go through is not tried again after the call. Name the change by its key,
+        from the answer that reported it; the user's words tell you which change they mean. To take back two changes,
+        call it once for each key.
+
+        Args:
+            change: The key of the change to take back, such as "w3".
+        """
+        named = re.search(r"\bw\d+\b", str(change or "").lower())  # the key's form only: "w3", also in "change w3"
+        key = named.group(0) if named else ""
+        # The model names the change; the code only checks that it is one of this call's and in a state that can be
+        # taken back, and acts on it (third review of 2026-10-18: the newest-change rule kept opening new holes).
+        async with self._undo_lock:
+            writes = self._bee_writes.all()
+            target = next((w for w in writes if w.key == key), None)
             if target is None:
-                return "No change to Bee in this call is left to take back."
-            what = label(target, ENGLISH)
+                return self._name_a_change(writes, change)
+            what = f"{label(target, ENGLISH)} (change {key})"
+            if target.status == "undone":
+                return f"Already taken back: {what}. Nothing more to do."
+            if target.status == "withdrawn":
+                return f"Already called off: {what} did not go through, and it will not be tried again."
+            if target.status == "undo_impossible":
+                return f"{what} cannot be taken back from here. Tell the user it has to be changed in the Bee app."
+            if target.status == "undo_unknown":
+                return (f"Not taken back again: Bee did not confirm the earlier take-back of {what}, so it may or "
+                        "may not be out. Tell the user to check it in the Bee app.")
+            if target.status not in ("ok", "undo_failed", "failed"):  # unknown, or applying left by a stopped process
+                return (f"Not taken back: Bee did not confirm {what}, so it may or may not be in Bee, and it is not "
+                        "tried again by itself. Tell the user to check it in the Bee app.")
             if target.kind in REMOVING and target.status != "failed":
-                return await self._bring_back(context, target, turn)
+                return await self._bring_back(context, target, writes)
             async with self.waiting(context):
-                write = await self._bee_writes.undo(target.key)
+                write = await self._bee_writes.undo(key)
             if write.status == "withdrawn":  # it never went in, and now it is not tried again after the call
                 self._claimed.pop(same_item(write.item), None)
                 self._recorder.event("bee_write_undone", key=write.key, kind=write.kind, text=write.text)
                 if write.item.get("restores"):
                     return (f"Left as it is: bringing back {what} did not go through, and it will not be tried again "
                             "after the call. Tell the user in a few words.")
-                return (f"Called off: {what} did not go into Bee, and it will not be tried again after the call. Tell "
-                        "the user in a few words.")
+                if write.kind in CREATING:
+                    return (f"Called off: {what} did not go into Bee, and it will not be tried again after the call. "
+                            "Tell the user in a few words.")
+                doing = {"fact_delete": "deleting", "todo_dismiss": "turning down", "todo_complete": "marking done",
+                         "fact_confirm": "confirming", "fact_update": "fixing"}.get(write.kind, "changing")
+                return (f"Called off: {doing} {what} did not happen, and it will not be tried again after the call; it "
+                        "is as it was in Bee. Tell the user in a few words.")
             if write.status == "undo_unknown":
                 return (f"Bee did not confirm taking back {what} ({write.error}): it may or may not be out, and it is "
                         "not tried again by itself. Tell the user to check it in the Bee app.")
-            if write.status == "undo_impossible":  # passed over from now on: what came before it can still go
-                earlier, _ = undo_target(self._bee_writes.all(), current_turn=turn)
-                more = (f" It is passed over: if the user asks to take back an earlier change too, calling "
-                        f"undo_bee_write again takes back the one before it ({label(earlier, ENGLISH)}). They asked "
-                        "about this one only, so do not offer more." if earlier is not None else "")
+            if write.status == "undo_impossible":
                 return (f"{what} cannot be taken back from here ({write.error}). Tell the user it has to be changed in "
-                        f"the Bee app.{more}")
+                        "the Bee app.")
             if write.status != "undone":
-                return (f"Could not take back {what} ({write.error}). Tell the user; if they want, calling "
-                        "undo_bee_write again tries the same one.")
+                return (f"Could not take back {what} ({write.error}). Tell the user; if they want, taking back {key} "
+                        "again tries it again.")
             self._recorder.event("bee_write_undone", key=write.key, kind=write.kind, text=write.text)
             self._claimed.pop(same_item(write.item), None)  # taken back, it may be asked about and changed again
             if write.item.get("restores"):
                 return f"Took it back out: {what} is out of Bee again. Tell the user in a few words."
             return f"Took it back: {what}. Tell the user in a few words."
 
-    async def _bring_back(self, context: RunContext, removal, turn: str | None) -> str:
-        """A deleted fact or a dismissed suggestion brought back by a write of its own (restore_item), recorded as
-        any write is, so the app shows it as what went in and every later read keeps it as the user's (review of
-        2026-10-18, finding 2). The removal keeps its own record; the bring-back is the newer change, so taking it
-        back takes out what came back."""
-        what = label(removal, ENGLISH)
+    def _name_a_change(self, writes: list, said: object) -> str:
+        """The answer to a take-back that named no change of this call: each change and its key, to call again."""
+        if not writes:
+            return "No change to Bee was made in this call, so there is nothing to take back."
+        states = {"undone": "taken back", "withdrawn": "called off", "failed": "did not go through, tried again "
+                  "after the call", "unknown": "Bee did not confirm it", "applying": "Bee did not confirm it",
+                  "undo_unknown": "Bee did not confirm its take-back", "undo_impossible": "cannot be taken back here"}
+        done = {"fact_delete": "deleted", "todo_dismiss": "turned down", "todo_complete": "marked done",
+                "fact_confirm": "confirmed", "fact_update": "fixed"}
+        listed = []
+        for write in writes:
+            state = states.get(write.status) or ("brought back" if write.item.get("restores")
+                                                 else done.get(write.kind, "added"))
+            listed.append(f"{write.key} {label(write, ENGLISH)} ({state})")
+        named = f"{str(said).strip()!r} is not one of them. " if str(said or "").strip() else ""
+        return (f"Name the change to take back by its key. {named}This call's changes: {'; '.join(listed)}. Call "
+                "undo_bee_write again with the key of the change the user means.")
+
+    async def _bring_back(self, context: RunContext, removal, writes: list) -> str:
+        """A deleted fact or a dismissed suggestion brought back by a write of its own (restore_item), with its own key,
+        recorded as any write is, so the app shows it as what went in and every later read keeps it as the user's;
+        taking that write back takes out what came back. A removal already brought back is not brought back twice."""
+        what = f"{label(removal, ENGLISH)} (change {removal.key})"
+        live = [w for w in restores_of(writes, removal.key) if w.status not in ("undone", "withdrawn")]
+        if live:
+            back = live[-1]
+            if back.status in ("ok", "undo_failed"):
+                return (f"Already brought back: {what} came back as change {back.key}. To take it out again, take back "
+                        f"{back.key}.")
+            if back.status == "undo_impossible":
+                return (f"Already brought back: {what} came back as change {back.key}, which cannot be taken back from "
+                        "here. Tell the user it has to be changed in the Bee app.")
+            if back.status == "failed":
+                return (f"Bringing back {what} (change {back.key}) did not go through; it will be tried again after "
+                        f"the call. If the user no longer wants it back, take back {back.key}.")
+            return (f"Bee did not confirm bringing back {what} (change {back.key}), or taking that back. Tell the user "
+                    "to check it in the Bee app.")
         try:
             item = restore_item(removal)
-        except ValueError as exc:
+        except ValueError as exc:  # final: what it removed was not kept
+            self._bee_writes.cannot_take_back(removal.key, str(exc))
             return f"{what} cannot be brought back from here ({exc}). Tell the user it has to be changed in the Bee app."
         question, answer, _ = self._last_exchange()
         async with self.waiting(context):
-            write = await self._bee_writes.begin(item, question, answer, turn=turn)
+            write = await self._bee_writes.begin(item, question, answer)
             try:
                 await self._bee_writes.apply(write)
             finally:  # also when cut off mid-write: the record shows it, and that Bee may have it
                 self._recorder.event("bee_write", **event_fields(write))
-        back = label(write, ENGLISH)
+        back = f"{label(write, ENGLISH)} (change {write.key})"
         if write.status == "ok":
             self._claimed.pop(same_item(removal.item), None)  # it may be taken out again, after a yes
             self._claimed[same_item(write.item)] = write.key
@@ -782,14 +838,15 @@ class BeeCoordinator(Coordinator):
             new_id = f" Its new id in Bee is {made}." if isinstance(made, int) else ""
             if removal.kind == "fact_delete":
                 return f"Brought it back: {back} is in Bee again, confirmed.{new_id} Tell the user in a few words."
-            return (f"Brought it back as a to-do: {back} (Bee cannot bring back a suggestion, so it is an open to-do "
-                    f"now).{new_id} Tell the user in a few words.")
+            return (f"Brought it back as a to-do: {back}; Bee cannot bring back a suggestion, so it is an open to-do "
+                    f"now.{new_id} Tell the user in a few words.")
         if write.status == "failed":  # as a failed save: tried again after the call (follow-up review, finding 5)
-            return (f"Bringing back {what} did not go through ({write.error}). Tell the user it did not go through and "
-                    "that it will be tried again after the call. If they then say they would rather leave it as it "
-                    "is, calling undo_bee_write stops that; do not offer it.")
-        return (f"Bee did not confirm bringing back {what} ({write.error}): it may be back already, and it is not "
-                "tried again by itself. Tell the user to check it in the Bee app.")
+            return (f"Bringing back {what} did not go through (change {write.key}; {write.error}). Tell the user it "
+                    "did not go through and that it will be tried again after the call. If they then say they would "
+                    f"rather leave it as it is, taking back {write.key} with undo_bee_write stops that; do not offer "
+                    "it.")
+        return (f"Bee did not confirm bringing back {what} (change {write.key}; {write.error}): it may be back "
+                "already, and it is not tried again by itself. Tell the user to check it in the Bee app.")
 
     @function_tool
     async def organize_bee(self, context: RunContext, scope: str = "call", facts: list[str] | None = None,
@@ -846,8 +903,10 @@ class BeeCoordinator(Coordinator):
         for item in items:  # before anything waits, so a save at the same time sees them
             self._claimed[same_item(item)] = ORGANIZED
         async with self.waiting(context):
-            writes = [await self._bee_writes.begin(item, question, answer, turn=answered)  # their keys in order
-                      for item in items]
+            writes = [await self._bee_writes.begin(item, question, answer) for item in items]  # their keys in order
+            for one in writes:
+                self._claimed[same_item(one.item)] = one.key
+                self._from_organize.add(one.key)
 
             async def write(one) -> None:
                 try:
@@ -859,15 +918,18 @@ class BeeCoordinator(Coordinator):
         went = [w for w in writes if w.status == "ok"]
         failed = [w for w in writes if w.status == "failed"]
         maybe = [w for w in writes if w.status not in ("ok", "failed")]
+
+        def keyed(found: list) -> str:  # each item with the key of its change, to take one back by
+            return ", ".join(f"{label(w, ENGLISH)} (change {w.key})" for w in found)
+
         parts = []
         if went:
-            parts.append(f"Added to Bee: {', '.join(label(w, ENGLISH) for w in went)}.")
+            parts.append(f"Added to Bee: {keyed(went)}.")
         if failed:
-            parts.append(f"Did not go through: {', '.join(label(w, ENGLISH) for w in failed)}; tried again after the "
-                         "call.")
+            parts.append(f"Did not go through: {keyed(failed)}; tried again after the call.")
         if maybe:
-            parts.append(f"Bee did not confirm {', '.join(label(w, ENGLISH) for w in maybe)}: they may be in Bee, and "
-                         "are not added again by themselves.")
+            parts.append(f"Bee did not confirm {keyed(maybe)}: they may be in Bee, and are not added again by "
+                         "themselves.")
         if again:
             parts.append(f"Already in Bee from this call, so not added again: "
                          f"{', '.join(item_label(i, ENGLISH) for i in again)}.")

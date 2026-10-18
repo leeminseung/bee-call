@@ -46,8 +46,9 @@ def test_after_a_clear_yes_the_call_s_facts_and_to_dos_go_into_bee_at_once(tmp_p
     assert sorted(map(tuple, bee_commands(fake_bee))) == [("facts", "confirm"), ("facts", "confirm"),
                                                           ("facts", "create"), ("facts", "create"),
                                                           ("todos", "create")]  # made at once, each fact confirmed
-    assert said.startswith("Added to Bee: fact 'Drinks coffee first thing in the morning', fact 'Lives in Seoul', "
-                           "todo 'Order coffee beans'.")
+    # each with the key of its change, to take one back by (third review of 2026-10-18)
+    assert said.startswith("Added to Bee: fact 'Drinks coffee first thing in the morning' (change w1), fact 'Lives in "
+                           "Seoul' (change w2), todo 'Order coffee beans' (change w3).")
     assert "they can see and edit them in the Bee app" in said
     writes = BeeWrites(rec.dir).all()  # the app shows each as a Bee write card, where the call says it
     assert [(w.kind, w.text, w.status) for w in writes] == [
@@ -70,7 +71,7 @@ def test_organizing_reads_no_meaning_but_counts_lengths_and_the_user_s_answer(tm
     assert long.startswith("Not added: each item is one short statement")
     said, _, rec = organized(tmp_path / "any", [("assistant", "그럼 그렇게 할까요?"), ("user", "응, 좋아."),
                                                  ("user", "넣어 줘.")], facts=["Drinks coffee"])
-    assert said.startswith("Added to Bee: fact 'Drinks coffee'.")
+    assert said.startswith("Added to Bee: fact 'Drinks coffee' (change w1).")
     assert [(w.question, w.answer) for w in BeeWrites(rec.dir).all()] == [("그럼 그렇게 할까요?", "응, 좋아. 넣어 줘.")]
 
 
@@ -86,7 +87,7 @@ def test_one_yes_organizes_once_and_what_the_call_saved_already_is_not_added_aga
 
     first, second, third, rec = asyncio.run(main())
     assert first.startswith("Saved to Bee")
-    assert second.startswith("Added to Bee: fact 'Lives in Seoul'.")
+    assert second.startswith("Added to Bee: fact 'Lives in Seoul' (change w2).")
     assert "Already in Bee from this call, so not added again: fact 'Drinks coffee'." in second
     assert third.startswith("Already done for that answer.")
     assert [w.text for w in BeeWrites(rec.dir).all()] == ["Drinks coffee", "Lives in Seoul"]
@@ -338,5 +339,6 @@ def test_an_organize_that_adds_nothing_leaves_the_answer_for_one_that_does(tmp_p
 
     said = asyncio.run(main())
     assert said[0].startswith('scope is "call"') and said[1].startswith("Nothing added")
-    assert said[2].startswith("Not added: each item") and said[3].startswith("Added to Bee: fact 'Plays piano'.")
+    assert said[2].startswith("Not added: each item") and said[3].startswith("Added to Bee: fact 'Plays piano' (change "
+                                                                             "w1).")
     assert said[4].startswith("Already done for that answer") and said[5].startswith("Started")

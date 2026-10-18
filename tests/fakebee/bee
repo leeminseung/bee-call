@@ -193,8 +193,17 @@ if cmd[:2] == ["facts", "list"]:  # the facts made here, a page at a time (the -
     start = int(cmd[cmd.index("--cursor") + 1]) if "--cursor" in cmd else 0
     more = start + limit < len(made_facts())
     out({"facts": made_facts()[start:start + limit], "next_cursor": str(start + limit) if more else None})
-if cmd[:2] == ["facts", "delete"]:
+if cmd[:2] == ["facts", "delete"]:  # gone from FAKE_BEE_FACTS too, before the answer (which may fail after)
+    if facts_file and os.path.exists(facts_file):
+        json.dump([f for f in made_facts() if f.get("id") != int(cmd[2])], open(facts_file, "w"))
     out({"deleted": True, "id": int(cmd[2])})
+# A todo or a fact made here and then deleted is gone: asked for by its id, Bee answers 404, as the real one does.
+if cmd[:2] == ["todos", "get"] and todos_file and os.path.exists(todos_file) and int(cmd[2]) >= 99:
+    found = [t for t in stored() if t.get("id") == int(cmd[2])]
+    if not found:
+        print("Request failed with status 404", file=sys.stderr)
+        sys.exit(1)
+    out({"todo": found[0]})
 if cmd[:2] == ["todos", "get"]:
     out({"todo": {"id": int(cmd[2]), "text": "Reply to the recruiter", "created_at": now_ms - 86400000,
                   "completed": bool(os.environ.get("FAKE_BEE_TODO_DONE"))}})
@@ -213,6 +222,12 @@ if cmd[:2] == ["journals", "get"]:  # a voice memo, from the file FAKE_BEE_JOURN
          "updated_at": now_ms - 30000, "aiResponse": {"message": "Got it, a reminder to book the dentist.",
                                                       "cleanedUpText": "Remember to book the dentist.",
                                                       "followUp": None, "todos": ["Book the dentist"]}})
+if cmd[:2] == ["facts", "get"] and facts_file and os.path.exists(facts_file) and int(cmd[2]) >= 200:
+    found = [f for f in made_facts() if f.get("id") == int(cmd[2])]
+    if not found:
+        print("Request failed with status 404", file=sys.stderr)
+        sys.exit(1)
+    out({"fact": found[0]})
 if cmd[:2] == ["facts", "get"]:  # wrapped, or bare with FAKE_BEE_BARE_FACT=1 (the CLI's parseFactResponse takes both)
     fact = {"id": int(cmd[2]), "text": "Bonus is 15%", "created_at": now_ms, "confirmed": False, "tags": ["work"]}
     out(fact if os.environ.get("FAKE_BEE_BARE_FACT") else {"fact": fact})

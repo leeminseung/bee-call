@@ -171,7 +171,11 @@ def test_the_user_s_yes_is_the_call_ai_s_to_judge_from_a_principle_with_examples
                   "A hedge, a \"later\", a yes taken back (\"Yes. Actually no, keep it.\", \"네, 잠깐만요, 지우지 마세요.\") or "
                   "a yes to another question is no yes. Change nothing then.",
                   "To delete a fact or turn down Bee's suggestion, say so in the question: \"Shall I delete 'Bonus is "
-                  "15%' from Bee?\"", "When the user wants something back, call undo_bee_write."):
+                  "15%' from Bee?\"",
+                  # third review of 2026-10-18: the AI names the change by its key; the code checks only that it can
+                  "When the user wants something back, call undo_bee_write with the key of the change they mean: every "
+                  "answer that reports a change gives its key (\"w3\"), and the user's words tell you which change "
+                  "they mean. Never say a key aloud."):
         assert words in BEE_INSTRUCTIONS, words
     for gone in ("propose_bee_save", "quotes the item exactly", "saves nothing", "cannot be brought back",
                  "only the answer to your first question"):

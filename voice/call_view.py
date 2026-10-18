@@ -22,11 +22,10 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, tzinfo
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from beelink.planner import OFFERS_DIR, OUTBOUND_LOG
-from beelink.writer import KINDS, REMOVING, undo_target
+from beelink.writer import KINDS, REMOVING
 from voice.audio_tags import strip_tags
 from voice.call_folders import CALL_ID, EVENTS, call_ids, read_events, session_id
 from voice.offers import topic_line
@@ -422,17 +421,6 @@ def _writes_from_writer(record: Record, call: Call, zone: tzinfo) -> list[Write]
     return list(found.values())
 
 
-def _take_back_target(writes: list[Write]) -> Write | None:
-    """The write the call AI's take-back would act on now (beelink/writer.py undo_target), from the writer's own
-    statuses; for a record without bee-writes.jsonl, its last write in Bee."""
-    if any(w.status is None for w in writes):
-        return next((w for w in reversed(writes) if w.ok), None)
-    shaped = [SimpleNamespace(status=w.status, key=w.id[len("write-"):], item={"restores": w.restores}, write=w)
-              for w in writes]
-    target, _ = undo_target(shaped)
-    return target.write if target is not None else None
-
-
 def _writes_from_events(call: Call) -> list[Write]:
     """Writes as the call's events tell them, for records without bee-writes.jsonl: the bee_write events of a write
     and its undo (by key, or without keys by kind and text), and before those the writes queued for after the call
@@ -585,7 +573,6 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
         item, where = _job_item(call_id, call, job, state, zone, wall)
         (docked if item["state"] == "running" else placed).append((where, item))
     live = state == "live"
-    target = _take_back_target(call.writes) if live else None
     for write in call.writes:
         if write.state == "applying" and live:
             continue  # still being made: it shows once Bee answered
@@ -596,9 +583,12 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
         item = {"type": "bee_write", "id": write.id, "at": _iso(write.at or call.when(write.t), zone),
                 "kind": write.kind, "text": write.text, "state": shown,
                 "will_retry": live and write.state == "failed" and write.status != "withdrawn",
-                # The app's hint on an undoable card is "빼려면 '빼 줘'라고 말하세요": a delete or a dismissed
-                # suggestion can be taken back too, but it comes back, so the hint does not fit them.
-                "undoable": write is target and shown == "written" and write.kind not in REMOVING}
+                # Every change of a live call that saying so would take out now: the call AI takes back the change
+                # the person means, by its key (third review of 2026-10-18). The app's hint on an undoable card
+                # is "빼려면 '빼 줘'라고 말하세요": a delete or a dismissed suggestion can be taken back too, but
+                # it comes back, so the hint does not fit them.
+                "undoable": live and shown == "written" and write.kind not in REMOVING
+                and write.status in ("ok", "undo_failed")}
         placed.append(((write.t, write.line), item))
     placed.sort(key=lambda entry: entry[0])
     items: list[dict[str, Any]] = []
