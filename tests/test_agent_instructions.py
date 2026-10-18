@@ -135,6 +135,9 @@ def test_the_call_ai_collects_what_comes_up_new_and_offers_it_once(tmp_path):
     assert ("Ask about a single item only for what Bee already has, or when the user asks you to put one thing in "
             "Bee") in one
     assert "even in passing" not in one and "fact_create or todo_create" in one  # new items only when asked for
+    # measured 2026-10-18 (meaning checks out of the code): one call said "넣었어요" without calling organize_bee
+    assert "Say that something went into Bee or changed in Bee only after save_to_bee or organize_bee said it did." \
+        in keeping
     for words in ("Ask about Bee at most twice in a call, that one question included",
                   "In a call where nothing lasting comes up and nothing in the prep note needs checking, ask nothing "
                   "about Bee."):

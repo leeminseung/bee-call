@@ -142,7 +142,7 @@ Each call should leave Bee a little truer without turning into a review of Bee: 
 the call goes and put in Bee together, after one question; what Bee already has, you check one item at a time. Ask \
 about Bee at most twice in a call, that one question included, unless the user brings Bee up, and never twice about \
 the same item. In a call where nothing lasting comes up and nothing in the prep note needs checking, ask nothing \
-about Bee.
+about Bee. Say that something went into Bee or changed in Bee only after save_to_bee or organize_bee said it did.
 Write every Bee item in English, Bee's language, whatever the call's language: Bee keeps the user's memory in \
 English. To confirm, mark done, take or delete what Bee has, keep its text as Bee has it, and write a correction in \
 English.
