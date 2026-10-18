@@ -1,11 +1,19 @@
 """Bee writes, made during the call right after the user's spoken yes (Matt, 2026-10-15; contract section 6).
 
-The call AI asks a question that names Bee and the item ("Bee에 할 일로 넣을까요?"); after a yes it writes at
-once, with the person's own Bee login, through BeeWrites.begin() and apply(). Every write is kept in the call
-folder, in bee-writes.jsonl, one line per step and only appended to:
+The call AI says the item and asks the user ("Bee에 'Note the bug'를 할 일로 넣을까요?"); after the user's clear yes,
+which the AI judges, it writes at once, with the person's own Bee login, through BeeWrites.begin() and apply(). Every
+write is kept in the call folder, in bee-writes.jsonl, one line per step and only appended to:
   {"key": "w1", "status": "applying", "item": {...}, "question": ..., "answer": ..., "before": ..., "at": ...}
   {"key": "w1", "status": "ok", "response": {...}, "at": ...}          or "failed" / "unknown" with "error"
-  {"key": "w1", "status": "undone", "at": ...}                          the user said "take it out" (or "undo_failed")
+  {"key": "w1", "status": "undone", "undo": {...}, "at": ...}           the user took it back ("undo_failed": Bee
+                                                                       refused; "undo_unknown": Bee did not answer;
+                                                                       "undo_impossible": it cannot be taken back here)
+  {"key": "w1", "status": "withdrawn", "at": ...}                       a failed write the user took back: never retried
+`question` is what the AI said since the user's turn before their last words and `answer` those words, verbatim, by
+position. The user takes a change back by its key (the call AI names it: every answer that reports a change gives
+its key), never by its place in the call (third review of 2026-10-18). A deleted fact or a dismissed suggestion is
+taken back by a write of its own (a fact_create or todo_create whose item says which write it "restores"), since Bee
+cannot restore either; the removal keeps its own record, and taking the bring-back back removes what came back.
 A write's state is its latest line. "failed" means the Bee CLI ended with an error: it is said out loud in the call
 and tried once more after it (retry_failed). The CLI ends with an error for any answer that is not a success,
 also when Bee stored a todo and only its answer was lost (a gateway error, a dropped connection), so before a todo
@@ -13,17 +21,17 @@ is written again Bee is asked whether it has it already (in_bee_after_all). "unk
 CLI did not answer in time, its answer could not be read, the write was cut off (its task cancelled), or Bee
 could not be asked before a retry. Such a write, like one still "applying" because the process stopped, is never
 written again by itself, since a todo must not be created twice; the user is told to check Bee. After the call,
-one notification says what went into Bee (summary_notification).
+one notification says how each Bee item the call touched ends it (summary_notification).
 
 Items:
   {"kind": "fact_confirm", "fact_id": 12}
   {"kind": "fact_update", "fact_id": 12, "text": "Bonus is 10%"}
   {"kind": "fact_create", "text": "Allergic to peanuts"}          made, then confirmed if Bee made it unconfirmed
-  {"kind": "fact_delete", "fact_id": 12}                          a wrong fact taken out; never undone
+  {"kind": "fact_delete", "fact_id": 12}                          a wrong fact taken out; brought back by a write
   {"kind": "todo_create", "text": "Ask about bonus terms", "alarm_at": "2026-10-13T09:00:00+09:00"}
   {"kind": "todo_accept", "suggestion_id": 34}
   {"kind": "todo_complete", "todo_id": 51}                        undone by marking it open again
-  {"kind": "todo_dismiss", "suggestion_id": 34}                   Bee's suggestion turned down; never undone
+  {"kind": "todo_dismiss", "suggestion_id": 34}                   Bee's suggestion turned down; back as a to-do
 (an item may also carry "text" for how it reads, as a todo suggestion or a confirmed fact does).
 
 Run by hand: uv run python -m beelink.writer data/people/<id>/<date>/<time>            what was written, and how
@@ -51,12 +59,16 @@ WRITES = "bee-writes.jsonl"
 OLD_QUEUE = "bee-queue.jsonl"
 KINDS = ("fact_confirm", "fact_update", "fact_create", "fact_delete", "todo_create", "todo_accept", "todo_complete",
          "todo_dismiss")
-NOT_UNDOABLE = ("fact_delete", "todo_dismiss")  # Bee cannot bring a deleted fact or a dismissed suggestion back
-ADDING = ("fact_confirm", "fact_update", "fact_create", "todo_create", "todo_accept")  # how the summary groups them
+# Bee cannot bring a deleted fact or a dismissed suggestion back, so taking one back makes it again from what the
+# write kept of it, as a write of its own: the fact, confirmed (a new id), or the suggestion as an open to-do (the
+# user's decisions of 2026-10-18; restore_item).
+REMOVING = ("fact_delete", "todo_dismiss")
+CREATING = ("fact_create", "todo_create", "todo_accept")  # what makes an item Bee did not have
+IN_EFFECT = ("ok", "undo_failed", "undo_impossible")  # its change stands: Bee has it as written, as far as known
 MAYBE_WRITTEN = ("unknown", "applying")  # Bee may or may not have the item; never written again by itself
-# Changes to something Bee has that go by its id and are hard or impossible to take back: what the id points to is
-# read from Bee when the AI proposes the change, the AI asks about it as Bee has it, and the write keeps it (review
-# of 2026-10-17, finding 1: a delete went by the id the model named, whatever text the user heard).
+# Changes to something Bee has that go by its id: what the id points to is read from Bee before the write, so the write
+# keeps it (taking it back needs it) and the AI hears what Bee had, to say it to the user (review of 2026-10-17,
+# finding 1: a delete went by the id the model named, whatever text the user heard).
 AS_BEE_HAS_IT = ("fact_delete", "todo_complete", "todo_dismiss")
 CLOCK_SLACK_S = 120  # Bee's clock and this machine's may differ; a todo made this much before a write is older
 TODO_PAGES = 10  # pages of 50 todos looked through for a write that may have gone in; more cannot be told
@@ -69,11 +81,12 @@ class BeeWrite:
     item: dict[str, Any]
     question: str | None
     answer: str | None
-    status: str  # applying, ok, failed, unknown, undone, undo_failed
+    status: str  # applying, ok, failed, unknown, undone, undo_failed, undo_unknown, undo_impossible, withdrawn
     response: dict[str, Any] | None = None
     before: dict[str, Any] | None = None  # the fact as it was, so an update can be taken back
     error: str | None = None
     began: float | None = None  # when it was first recorded, epoch seconds
+    undo: dict[str, Any] | None = None  # Bee's answer when it was taken back
 
     @property
     def kind(self) -> str:
@@ -151,11 +164,13 @@ async def as_bee_has_it(item: dict[str, Any]) -> dict[str, Any] | None:
     if kind == "todo_dismiss":
         pending = await cli.todo_suggestions(limit=50, timeout=cli.CALL_WAIT_S)
         return next((s for s in pending if isinstance(s, dict) and s.get("id") == item["suggestion_id"]), None)
-    raise ValueError(f"{kind} is not read before it is proposed")
+    raise ValueError(f"{kind} is not read before it is written")
 
 
 async def take_back(write: BeeWrite) -> dict[str, Any]:
-    """Undoes a write that went in."""
+    """Undoes a write that went in: Bee's answer to the undo. A deleted fact is made again, confirmed, and a dismissed
+    suggestion comes back as an open to-do, both from what the write kept (`before`), since Bee cannot restore
+    either."""
     if write.kind in ("todo_create", "todo_accept"):
         todo = made_todo(write.response)
         if "id" not in todo:
@@ -175,9 +190,27 @@ async def take_back(write: BeeWrite) -> dict[str, Any]:
         return await cli.delete_fact(made["id"])
     if write.kind == "todo_complete":
         return await cli.reopen_todo(write.item["todo_id"])
-    if write.kind in NOT_UNDOABLE:
-        raise ValueError(f"a {write.kind} cannot be undone")
+    if write.kind in REMOVING:
+        raise ValueError(f"a {write.kind} is brought back by a write of its own (restore_item)")
     raise ValueError(f"unknown kind: {write.kind!r}")
+
+
+def restore_item(write: BeeWrite) -> dict[str, Any]:
+    """The write that brings a removal back, from what the removal kept of it (`before`): a deleted fact as a new fact
+    (fact_create, confirmed as the user's), a dismissed suggestion as an open to-do (todo_create). ValueError when
+    what it removed is not known (records from before 2026-10-18 kept only the id)."""
+    text = (write.before or {}).get("text")
+    if write.kind not in REMOVING:
+        raise ValueError(f"a {write.kind} is taken back, not brought back")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("what it removed is not known")
+    return {"kind": "fact_create" if write.kind == "fact_delete" else "todo_create", "text": text.strip(),
+            "restores": write.key}
+
+
+def restores_of(writes: list[BeeWrite], key: str) -> list[BeeWrite]:
+    """The writes that brought the removal `key` back, oldest first."""
+    return [w for w in writes if w.item.get("restores") == key]
 
 
 class BeeWrites:
@@ -212,6 +245,8 @@ class BeeWrites:
             write.status = line.get("status", write.status)
             if "response" in line:
                 write.response = line["response"]
+            if "undo" in line:
+                write.undo = line["undo"]
             if "error" in line:
                 write.error = line["error"]
         return list(writes.values())
@@ -221,7 +256,7 @@ class BeeWrites:
         with self.path.open("a") as f:
             f.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
 
-    async def begin(self, item: dict[str, Any], question: str, answer: str,
+    async def begin(self, item: dict[str, Any], question: str | None, answer: str | None,
                     before: dict[str, Any] | None = None) -> BeeWrite:
         """Records a write the user said yes to, as "applying", before anything reaches Bee; `question` is what the
         AI asked, `answer` the user's reply, `before` what it changes as Bee had it (AS_BEE_HAS_IT). apply() then
@@ -258,20 +293,62 @@ class BeeWrites:
         self._append({"key": write.key, "status": status, "error": error})
         return write
 
+    def cannot_take_back(self, key: str, error: str) -> None:
+        """Records that the write `key` cannot be taken back from the call (undo_impossible): final, and its change
+        stands."""
+        self._append({"key": key, "status": "undo_impossible", "error": error[:300]})
+
     async def undo(self, key: str) -> BeeWrite:
-        """Takes a write that went in back out of Bee."""
+        """Takes the write `key` back. A failed one is withdrawn: never tried again after the call, and Bee is not
+        asked. One that went in is taken back out of Bee (take_back): undone; undo_failed when Bee refused and still
+        has it as written (it may be tried again); undo_unknown when Bee did not answer, was cut off, or cannot say
+        whether it still has it (never tried again by itself); undo_impossible when what taking it back needs is not
+        known (Bee did not say which item it made, or the fact's earlier text was not read): it is changed in the Bee
+        app. A removal is brought back by a write of its own instead (restore_item)."""
         (write,) = [w for w in self.all() if w.key == key]
-        if write.status != "ok":
+        if write.status == "failed":
+            write.status = "withdrawn"
+            self._append({"key": key, "status": "withdrawn"})
+            return write
+        if write.status not in ("ok", "undo_failed"):
             raise ValueError(f"write {key} is {write.status}")
-        if write.kind in NOT_UNDOABLE:
-            raise ValueError(f"a {write.kind} cannot be undone")
         try:
-            await take_back(write)
-            write.status = "undone"
-            self._append({"key": key, "status": "undone"})
-        except Exception as exc:
-            write.status, write.error = "undo_failed", str(exc)[:300]
-            self._append({"key": key, "status": "undo_failed", "error": write.error})
+            response = await take_back(write)
+        except ValueError as exc:  # never a Bee command that failed: what it needs is not known
+            write.status, write.error = "undo_impossible", str(exc)[:300]
+            self._append({"key": key, "status": "undo_impossible", "error": write.error})
+            return write
+        except cli.BeeOutcomeUnknown as exc:
+            write.status, write.error = "undo_unknown", str(exc)[:300]
+            self._append({"key": key, "status": "undo_unknown", "error": write.error})
+            return write
+        except asyncio.CancelledError:
+            write.status, write.error = "undo_unknown", "cut off before Bee answered"
+            self._append({"key": key, "status": "undo_unknown", "error": write.error})
+            raise
+        except Exception as exc:  # Bee said no; or did it, and only its answer was an error: Bee is asked
+            error = str(exc)[:300]
+            try:  # held to the longest the call waits on Bee (third review of 2026-10-18, finding 5)
+                still = await asyncio.wait_for(still_as_written(write), cli.CALL_WAIT_S)
+            except asyncio.TimeoutError:
+                log.warning("asking Bee whether %s is still there took too long", key)
+                still = None
+            except asyncio.CancelledError:
+                write.status, write.error = "undo_unknown", f"{error}; cut off while asking Bee"
+                self._append({"key": key, "status": "undo_unknown", "error": write.error})
+                raise
+            except Exception as asking:
+                log.warning("could not ask Bee whether %s is still there: %s", key, asking)
+                still = None
+            if still is False:  # Bee no longer has it as written: the take-back went through after all
+                write.status, write.undo = "undone", {"found_later": True}
+                self._append({"key": key, "status": "undone", "undo": write.undo, "error": error})
+                return write
+            write.status, write.error = ("undo_failed" if still else "undo_unknown"), error
+            self._append({"key": key, "status": write.status, "error": error})
+            return write
+        write.status, write.undo = "undone", response if isinstance(response, dict) else None
+        self._append({"key": key, "status": "undone", "undo": write.undo})
         return write
 
     async def retry_failed(self, done: Callable[[BeeWrite], None] | None = None) -> list[BeeWrite]:
@@ -311,6 +388,73 @@ class BeeWrites:
             if done is not None:
                 done(write)
         return retried
+
+
+async def still_as_written(write: BeeWrite) -> bool | None:
+    """After a take-back Bee answered with an error: whether Bee still has the write as it made it (True), no longer
+    has it (False: the take-back went through after all), or cannot say (None). By what Bee shows, never by its
+    error's words (follow-up review of 2026-10-18, finding 3: a delete Bee carried out came back as an error and
+    every later take-back tried it again). Every read waits at most as long as the call waits on Bee; an item is read
+    by its id first, and its list only to tell that it is gone; undo() holds the whole check to the same ceiling
+    (third review of 2026-10-18, finding 5)."""
+    wait = cli.CALL_WAIT_S
+    if write.kind in ("todo_create", "todo_accept"):
+        todo_id = made_todo(write.response).get("id")
+        if await _shown(cli.todo, todo_id, made_todo, wait):
+            return True
+        cursor = None
+        for _ in range(TODO_PAGES):
+            page = await cli.todos(cursor=cursor, timeout=wait)
+            todos = page.get("todos")
+            if not isinstance(todos, list):
+                return None
+            if any(isinstance(t, dict) and t.get("id") == todo_id for t in todos):
+                return True
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return False
+        return None
+    if write.kind == "fact_create":
+        fact_id = the_fact(write.response).get("id")
+        if await _shown(cli.fact, fact_id, the_fact, wait):
+            return True
+        for unconfirmed in (False, True):
+            cursor = None
+            for _ in range(FACT_PAGES):
+                page = await cli.facts(limit=50, cursor=cursor, unconfirmed=unconfirmed, timeout=wait)
+                listed = page.get("facts")
+                if not isinstance(listed, list):
+                    return None
+                if any(isinstance(f, dict) and f.get("id") == fact_id for f in listed):
+                    return True
+                cursor = page.get("next_cursor")
+                if not cursor:
+                    break
+            else:
+                return None
+        return False
+    if write.kind in ("fact_confirm", "fact_update"):
+        fact = the_fact(await cli.fact(write.item["fact_id"], timeout=wait))
+        if write.kind == "fact_confirm":
+            return None if not isinstance(fact.get("confirmed"), bool) else fact["confirmed"]
+        text = _plain(fact.get("text"))
+        return True if text == _plain(write.text) else False if text == _plain((write.before or {}).get("text")) \
+            else None
+    if write.kind == "todo_complete":
+        todo = made_todo(await cli.todo(write.item["todo_id"], timeout=wait))
+        return None if not isinstance(todo.get("completed"), bool) else todo["completed"]
+    return None
+
+
+async def _shown(read: Callable[..., Any], item_id: Any, shape: Callable[[Any], dict[str, Any]], wait: float) -> bool:
+    """Whether Bee shows the item when asked for it by its id. An error tells nothing either way (Bee answers one
+    when the item is gone and when it cannot be reached), so only an item shown counts."""
+    if not isinstance(item_id, int):
+        return False
+    try:
+        return shape(await read(item_id, timeout=wait)).get("id") == item_id
+    except cli.BeeError:
+        return False
 
 
 async def in_bee_after_all(write: BeeWrite) -> dict[str, Any] | bool | None:
@@ -409,13 +553,125 @@ def item_label(item: dict[str, Any], language: CallLanguage) -> str:
         ("사실 하나" if korean else "a fact")
 
 
+EXISTED = ("fact_confirm", "fact_update", "fact_delete", "todo_complete", "todo_dismiss")  # act on what Bee had
+
+
+@dataclass
+class _Item:
+    existed: bool  # Bee had it when the call began
+    exists: bool
+    shown: BeeWrite  # the write it is named by: the last one whose change stands
+    confirmed: bool = False
+    changed: bool = False
+    done: bool = False
+    brought_back: bool = False
+
+
+def item_outcomes(writes: list[BeeWrite]) -> list[tuple[str, BeeWrite]]:
+    """How each Bee item the call touched ends it, as (outcome, the write it is named by), in the order the call first
+    touched them; an item that ends as it began is left out. Outcomes: added, confirmed, changed, done, removed,
+    brought_back (removed and made again, with the same text), not_added, not_brought_back, not_changed (a write that
+    did not go through, after its retry too), maybe_in (Bee did not confirm a write), maybe_out (Bee did not confirm
+    a take-back). An item is followed by its Bee id, also to the new id a bring-back or an accepted suggestion gave
+    it; a write whose take-back cannot be done here counts as in Bee (third review of 2026-10-18)."""
+    by_key = {w.key: w for w in writes}
+    alias: dict[tuple, tuple] = {}
+    items: dict[tuple, _Item] = {}
+    flags: dict[tuple, list[tuple[str, BeeWrite]]] = {}
+
+    def made(w: BeeWrite) -> tuple | None:
+        if w.kind not in CREATING:
+            return None
+        found = (the_fact if w.kind == "fact_create" else made_todo)(w.response).get("id")
+        return ("fact" if w.kind == "fact_create" else "todo", found) if isinstance(found, int) else None
+
+    def identity(w: BeeWrite, depth: int = 0) -> tuple:
+        restores = w.item.get("restores")
+        if restores in by_key and depth < len(writes):
+            return identity(by_key[restores], depth + 1)
+        if w.kind in ("fact_confirm", "fact_update", "fact_delete"):
+            found = ("fact", w.item.get("fact_id"))
+        elif w.kind == "todo_complete":
+            found = ("todo", w.item.get("todo_id"))
+        elif w.kind in ("todo_accept", "todo_dismiss"):
+            found = ("suggestion", w.item.get("suggestion_id"))
+        else:  # a new item is its own, whatever id Bee gave it; later changes by that id find it (alias)
+            return ("write", w.key)
+        return alias.get(found, found)
+
+    for w in writes:
+        key = identity(w)
+        new = made(w)
+        if new is not None:  # what it made is the same item from here on
+            alias.setdefault(new, key)
+        item = items.setdefault(key, _Item(existed=w.kind in EXISTED, exists=w.kind in EXISTED, shown=w))
+        if w.status in ("withdrawn", "undone"):  # never made, or taken back: as if it were not there
+            continue
+        if w.status == "failed":
+            outcome = "not_brought_back" if w.item.get("restores") else "not_added" if w.kind in CREATING \
+                else "not_changed"
+            flags.setdefault(key, []).append((outcome, w))
+            continue
+        if w.status in MAYBE_WRITTEN or w.status == "undo_unknown":
+            flags.setdefault(key, []).append(("maybe_in" if w.status in MAYBE_WRITTEN else "maybe_out", w))
+            continue
+        if w.status not in IN_EFFECT:
+            continue
+        item.shown = w  # its change stands
+        if w.kind in REMOVING:
+            item.exists, item.brought_back = False, False
+        elif w.item.get("restores"):
+            item.exists, item.brought_back = True, True
+        elif w.kind in CREATING:
+            item.exists = True
+        elif w.kind == "fact_confirm":
+            item.confirmed = True
+        elif w.kind == "fact_update":
+            item.changed = True
+        elif w.kind == "todo_complete":
+            item.done = True
+    outcomes: list[tuple[str, BeeWrite]] = []
+    for key, item in items.items():
+        unsure = [f for f in flags.get(key, []) if f[0] in ("maybe_in", "maybe_out")]
+        if unsure:  # what Bee has of it is not known: only that it is to be checked
+            outcomes += unsure
+            continue
+        if item.exists and not item.existed:
+            outcomes.append(("added", item.shown))
+        elif item.existed and not item.exists:
+            outcomes.append(("removed", item.shown))
+        elif item.exists:
+            for flag, outcome in ((item.brought_back, "brought_back"), (item.changed, "changed"),
+                                  (item.confirmed, "confirmed"), (item.done, "done")):
+                if flag:
+                    outcomes.append((outcome, item.shown))
+                    break
+        outcomes += flags.get(key, [])
+    return outcomes
+
+
+NOTIFICATION_LINES = {  # outcome: (Korean, English), in the order they are said
+    "added": ("Bee에 넣었어요", "Added to Bee"),
+    "confirmed": ("Bee에서 맞다고 확인했어요", "Confirmed in Bee"),
+    "changed": ("Bee에서 고쳤어요", "Changed in Bee"),
+    "done": ("Bee에서 끝냈어요", "Marked done in Bee"),
+    "removed": ("Bee에서 뺐어요", "Removed from Bee"),
+    "brought_back": ("Bee에 되돌려 놓았어요", "Brought back in Bee"),
+    "not_added": ("넣지 못했어요", "Couldn't add"),
+    "not_brought_back": ("되돌려 놓지 못했어요", "Couldn't bring back"),
+    "not_changed": ("Bee에서 바꾸지 못했어요", "Couldn't change in Bee"),
+    "maybe_in": ("들어갔는지 모르니 Bee에서 확인해 주세요", "Not sure it went in, check Bee"),
+    "maybe_out": ("빠졌는지 모르니 Bee에서 확인해 주세요", "Not sure it was taken back, check Bee"),
+}
+
+
 def summary_notification(writes: list[BeeWrite], language: CallLanguage) -> dict[str, Any] | None:
-    """The one plain notification after a call (contract section 5): what went into Bee, what was marked done or
-    taken out, and what did not go through; None when the call wrote nothing."""
-    went_in = [w for w in writes if w.status == "ok"]
-    left_out = [w for w in writes if w.status == "failed"]
-    maybe = [w for w in writes if w.status in MAYBE_WRITTEN]
-    if not went_in and not left_out and not maybe:
+    """The one plain notification after a call (contract section 5): how each Bee item the call touched ends it
+    (item_outcomes), never the list of writes by kind; None when nothing ends changed or to check. An item removed
+    and brought back is one "brought back" line, one brought back and removed again is "removed" (third review of
+    2026-10-18, findings 2 and 3)."""
+    outcomes = item_outcomes(writes)
+    if not outcomes:
         return None
     korean = language.code == "ko"
 
@@ -424,17 +680,10 @@ def summary_notification(writes: list[BeeWrite], language: CallLanguage) -> dict
         return label(found[0], language) + ((f" 외 {more}개" if korean else f" and {more} more") if more else "")
 
     parts = []
-    for kinds, ko, en in ((ADDING, "Bee에 넣었어요", "Added to Bee"), (("todo_complete",), "Bee에서 끝냈어요",
-                                                                     "Marked done in Bee"),
-                          (NOT_UNDOABLE, "Bee에서 뺐어요", "Removed from Bee")):
-        done = [w for w in went_in if w.kind in kinds]
-        if done:
-            parts.append(f"{ko if korean else en}: {some(done)}")
-    if left_out:
-        parts.append(f"넣지 못했어요: {some(left_out)}" if korean else f"Couldn't add: {some(left_out)}")
-    if maybe:
-        parts.append(f"들어갔는지 모르니 Bee에서 확인해 주세요: {some(maybe)}" if korean
-                     else f"Not sure it went in, check Bee: {some(maybe)}")
+    for outcome, (ko, en) in NOTIFICATION_LINES.items():
+        found = [w for o, w in outcomes if o == outcome]
+        if found:
+            parts.append(f"{ko if korean else en}: {some(found)}")
     return {"aps": {"alert": {"title": "Bee Call", "body": ". ".join(parts)}, "sound": "default", "thread-id": "bee"}}
 
 

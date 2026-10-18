@@ -82,8 +82,8 @@ def test_the_call_ai_the_meta_agent_and_the_prep_read_bee_with_the_same_tools(tm
     assert [(t.name, t.description, t.parameters) for t in PREP_TOOLS] == expected
     # the call AI keeps its write tools; the old reads of each agent are gone
     names = {t["name"] for t in offered} | {t.name for t in META_TOOLS}
-    assert {"propose_bee_save", "save_to_bee", "undo_bee_write", "organize_bee"} <= names
-    assert not names & {"search_bee", "bee_day", "bee_pending"}
+    assert {"save_to_bee", "undo_bee_write", "organize_bee"} <= names
+    assert not names & {"search_bee", "bee_day", "bee_pending", "propose_bee_save"}
 
 
 def test_the_worker_never_gets_bee():
@@ -132,17 +132,29 @@ def test_the_call_ai_collects_what_comes_up_new_and_offers_it_once(tmp_path):
                   "넣었어요. Bee 앱에서 보고 고칠 수 있어요.", 'call organize_bee with scope "recent"',
                   "Organizing only adds. It never deletes, merges away or rewrites what Bee already has"):
         assert words in new, words
-    assert ("Ask about a single item only for what Bee already has, or when the user asks you to put one thing in "
-            "Bee") in one
+    assert "Ask about a single item only for what Bee already has, for example:" in one
     assert "even in passing" not in one and "fact_create or todo_create" in one  # new items only when asked for
-    for words in ("Ask about Bee at most twice in a call, that one question included",
+    # The user's decisions of 2026-10-18: a request is the yes when it is clear what it means, said or pointed back at
+    # (measured: "그거 Bee에 넣어 줘" right after the plan was said was saved at once, which the user accepted).
+    assert ("When the user asks you to put one thing in Bee and it is clear what they mean, whether they say it "
+            "(\"'내일 치과 예약하기' Bee 할 일에 넣어 줘\") or point back at what they just said (\"그거 Bee에 넣어 줘\"), that "
+            "request is their yes: call save_to_bee at once (fact_create or todo_create), then say what went in, as Bee "
+            "has it: \"넣었어요. Bee에는 'Book a dentist appointment tomorrow'로 들어갔어요.\" When it is unclear what they "
+            "mean, say the item and ask once.") in one
+    # measured 2026-10-18 (meaning checks out of the code): one call said "넣었어요" without calling organize_bee
+    assert "Say that something went into Bee or changed in Bee only after save_to_bee or organize_bee said it did." \
+        in keeping
+    # the user's decision of 2026-10-18: keep the limit of two Bee questions a call, and say why
+    for words in ("Ask about Bee at most twice in a call, so Bee never takes over the call: the one question offering "
+                  "what came up new, near the end, and a check of one thing Bee already has. Check more only when the "
+                  "user brings Bee up. Never ask twice about the same item; offering to fix what the user just "
+                  "corrected is part of that check.",
                   "In a call where nothing lasting comes up and nothing in the prep note needs checking, ask nothing "
                   "about Bee."):
         assert words in keeping, words
-    # the one-item rules keep their measured wording
+    # the one-item rules: the examples stay; the yes is the AI's to judge (2026-10-18)
     for words in ('"Did Bee hear \'Bonus is 15%\' right?"', "offer to mark it done (todo_complete)",
-                  "first it calls propose_bee_save with the item, which changes nothing in Bee yet",
-                  "a yes to a question that does not quote the item saves nothing"):
+                  "in your question or in the sentence just before it", "When the user wants something back"):
         assert words in one, words
 
 

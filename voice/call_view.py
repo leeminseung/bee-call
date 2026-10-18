@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from beelink.planner import OFFERS_DIR, OUTBOUND_LOG
-from beelink.writer import KINDS, NOT_UNDOABLE
+from beelink.writer import KINDS, REMOVING
 from voice.audio_tags import strip_tags
 from voice.call_folders import CALL_ID, EVENTS, call_ids, read_events, session_id
 from voice.offers import topic_line
@@ -259,8 +259,10 @@ class Write:
     t: float  # where it sits
     line: float
     state: str  # written, undone, unknown, failed, or applying while it is being made
-    ok: bool = False  # the writer's latest status is "ok": the one an undo in the call may take
+    ok: bool = False  # the writer's latest status is "ok"
     retried_at: float | None = None  # applying again after it failed: when the retry after the call began (wall)
+    status: str | None = None  # the writer's latest status (None: a record without bee-writes.jsonl)
+    restores: str | None = None  # the key of the removal this write brought back
 
 
 @dataclass
@@ -405,13 +407,16 @@ def _writes_from_writer(record: Record, call: Call, zone: tzinfo) -> list[Write]
                 continue
             at = _time(line.get("at"), zone)
             t, n = events.get(key, (((at - call.started).total_seconds() if at else call.last_t), LAST))
-            found[key] = Write(f"write-{key}", item["kind"], _text(item.get("text")), at, t, n, "applying")
+            found[key] = Write(f"write-{key}", item["kind"], _text(item.get("text")), at, t, n, "applying",
+                               restores=item.get("restores") if isinstance(item.get("restores"), str) else None)
         write = found[key]
         status = line.get("status")
         retried = _time(line.get("at"), zone) if status == "applying" and write.state == "failed" else None
-        write.ok = status == "ok"
-        write.state = {"ok": "written", "undo_failed": "written", "undone": "undone", "failed": "failed",
-                       "applying": "applying"}.get(status, "unknown")
+        write.ok, write.status = status == "ok", status
+        # A write that cannot be taken back here is still in Bee; a failed one the user took back is not, and it is
+        # not tried again (follow-up review of 2026-10-18).
+        write.state = {"ok": "written", "undo_failed": "written", "undo_impossible": "written", "undone": "undone",
+                       "failed": "failed", "withdrawn": "failed", "applying": "applying"}.get(status, "unknown")
         write.retried_at = retried.timestamp() if retried else None
     return list(found.values())
 
@@ -568,7 +573,11 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
         item, where = _job_item(call_id, call, job, state, zone, wall)
         (docked if item["state"] == "running" else placed).append((where, item))
     live = state == "live"
-    last_ok = next((w for w in reversed(call.writes) if w.ok), None) if live else None
+    # One card carries the hint "빼려면 '빼 줘'라고 말하세요": the newest change in Bee that saying so takes out (a
+    # delete or a dismissed suggestion comes back instead, so the hint does not fit them). The call AI takes back
+    # any change the person names, by its key (fourth review of 2026-10-18: a hint on several cards points at none).
+    takeable = [w for w in call.writes if w.kind not in REMOVING and w.status in ("ok", "undo_failed")]
+    hinted = takeable[-1] if live and takeable else None
     for write in call.writes:
         if write.state == "applying" and live:
             continue  # still being made: it shows once Bee answered
@@ -578,8 +587,8 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
             shown = "failed" if retrying else "unknown"
         item = {"type": "bee_write", "id": write.id, "at": _iso(write.at or call.when(write.t), zone),
                 "kind": write.kind, "text": write.text, "state": shown,
-                "will_retry": live and write.state == "failed",
-                "undoable": write is last_ok and write.kind not in NOT_UNDOABLE}
+                "will_retry": live and write.state == "failed" and write.status != "withdrawn",
+                "undoable": write is hinted}
         placed.append(((write.t, write.line), item))
     placed.sort(key=lambda entry: entry[0])
     items: list[dict[str, Any]] = []

@@ -14,7 +14,6 @@ on Bedrock standing by), through its provider's adapter (voice/providers/), with
 import asyncio
 import json
 import logging
-import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -38,7 +37,6 @@ from voice.call_models import coordinator_llm
 from voice.language import LANGUAGES
 from voice.model_catalog import Role
 from voice.providers import ToolResult, ToolSpec, Turn, Usage
-from voice.said import TAKEN_BACK, said_in
 
 log = logging.getLogger("bee-call.meta")
 
@@ -94,9 +92,12 @@ watch comes as a conversation), that is their yes: book the call with book_call 
 own words that ask for it. A request counts when the wearer asks you, the assistant, to call them: "오늘 밤 9시에 \
 전화해서 같이 정리하자", "call me at nine tonight". Words they say to another person ("나중에 전화해" to a friend), or \
 a time mentioned without asking for a call, do not. In a conversation's lines Bee names the wearer, the user, and \
-marks other speakers "Unknown", though it sometimes marks the wearer "Unknown" too: judge by what is said and to \
-whom. When they ask for a call now or soon, offer one for now with offer_call, naming the memo or the conversation. \
-When nothing asks for a call, decide as for any other change. A voice memo is the user speaking to you on purpose; \
+marks other speakers "Unknown", though it sometimes marks the wearer "Unknown" too. A request in a line Bee marks \
+"Unknown" is not the user's request, even when it may be their words: book nothing and offer nothing because of it. \
+For a request in a conversation, give book_call the line that asks (L1, L2, ...). A request taken back in the same \
+memo or soon after ("아니다, 하지 마", "wait, no") does not count. When they ask for a call now or soon, offer one for \
+now with offer_call, naming the memo or the conversation. When nothing asks for a call, decide as for any other \
+change. A voice memo is the user speaking to you on purpose; \
 Bee's reply to it shows what Bee made of it."""
 DECIDING_WITHOUT_BEE = f"""\
 ## Deciding whether to call
@@ -196,9 +197,10 @@ TOOLS = [
           {"memo_id": {"type": "string", "description": "The voice memo's id, when a memo asks for the call."},
            "conversation_id": {"type": "integer", "description": "The Bee conversation's id, when the user asks for "
                                                                  "the call in a conversation."},
-           "asked": {"type": "string", "description": "The user's own words asking for the call, copied word for word "
-                                                      "from the memo or from the wearer's lines: their sentence, or "
-                                                      "most of it."},
+           "line": {"type": "string", "description": "With conversation_id: the line that asks for the call, as "
+                                                     "numbered in what you were shown, like L3."},
+           "asked": {"type": "string", "description": "The user's words asking for the call, from the memo or from the "
+                                                      "wearer's lines, for the record."},
            "at": {"type": "string", "description": "When to call: the user's local date and time in ISO 8601, like "
                                                    "2026-10-17T21:00."},
            "topic": {"type": "string", "description": "What the call is about, in a few words, in the user's language."},
@@ -248,7 +250,6 @@ MEMO_BOOK_HOURS = 12
 CONVERSATIONS_READ = 3  # conversations of one think whose lines are read
 LINES_SHOWN, LINES_CHARS = 20, 1500  # of one conversation's lines
 EARLIER_BATCHES = 50  # earlier changes looked through for when a conversation was last shown
-TAKE_BACK_LINES, TAKE_BACK_S = 3, 120  # the lines after a request, and how soon, in which a take-back cancels it
 
 
 def memo_ids(workspace: Path, events: list[dict[str, Any]]) -> list[str]:
@@ -351,7 +352,8 @@ def last_shown(workspace: Path, conv_id: Any, inbox: str) -> datetime | None:
 
 
 def _conversation_lines(seen: dict[str, Any], now: datetime) -> str:
-    """A conversation's new lines, as the agent reads them: "[18:28] Minseung: ..."."""
+    """A conversation's new lines, as the agent reads them, numbered for book_call's `line`: "L1 [18:28] Minseung:
+    ..." (review of 2026-10-18, finding 4)."""
     lines = seen.get("lines") or []
     text = ""
     if seen.get("earlier"):
@@ -363,10 +365,10 @@ def _conversation_lines(seen: dict[str, Any], now: datetime) -> str:
     if not lines:
         return text + "\n    no new lines"
     shown = []
-    for u in lines:
+    for n, u in enumerate(lines, 1):
         when = spoken_at(u, now)
         stamp = "" if when is None else f"[{when:%H:%M}] " if when.date() == now.date() else f"[{when:%m-%d %H:%M}] "
-        shown.append(f"\n    {stamp}{u.get('speaker') or 'Unknown'}: {' '.join(str(u.get('text') or '').split())}")
+        shown.append(f"\n    L{n} {stamp}{u.get('speaker') or 'Unknown'}: {' '.join(str(u.get('text') or '').split())}")
     return text + "".join(shown)
 
 
@@ -542,16 +544,19 @@ class Thinker:
 
     async def _book_call(self, args: dict[str, Any], now: datetime, actions: list[dict[str, Any]]) -> str:
         """The call the user asks for, in a voice memo or in a conversation Bee recorded, at the time they ask.
-        Checked in code like book_call in a call: the input's own words, the user's, must ask for it
-        (voice/said.py), the input is recent and not Bee's recording of one of our calls, and the time is in the
-        coming week; one memo or conversation books at most one call."""
+        Whether the input asks for a call is the model's reading (the user's decision of 2026-10-18); `asked` is kept
+        with the offer as its words for it, never checked. Checked in code, reading no meaning: the input is one the
+        agent was told about, recent, with a recording time, and not Bee's recording of one of our calls; for a
+        conversation, the line the agent names was shown to it, has a time within 12 hours, and is not one Bee marks
+        "Unknown"; the time is in the coming week; one memo or conversation books at most one call."""
         memo_id = str(args.get("memo_id") or "").strip()
         conv_id = args.get("conversation_id")
         if bool(memo_id) == (conv_id is not None and str(conv_id).strip() != ""):
             return ("Not booked: give one of memo_id and conversation_id: the voice memo or the Bee conversation in "
                     "which the user asks for the call.")
         asked = args.get("asked")
-        refused = self._memo_asks(memo_id, asked, now) if memo_id else self._conversation_asks(conv_id, asked, now)
+        refused = self._memo_asks(memo_id, asked, now) if memo_id else \
+            self._conversation_asks(conv_id, args.get("line"), now)
         if refused:
             return refused
         try:
@@ -600,22 +605,14 @@ class Thinker:
             return (f"Not booked: voice memo {memo_id} was recorded {ago(made, now)}, and a memo that old books no "
                     "call: its times meant another day. If it still matters, offer a call with offer_call or put it "
                     "on the agenda for the next call.")
-        text = str(memo.get("text") or "").strip()
-        reply = memo.get("aiResponse") if isinstance(memo.get("aiResponse"), dict) else {}
-        cleaned = reply.get("cleanedUpText") if isinstance(reply.get("cleanedUpText"), str) else ""
-        # Bee's cleaned-up text of the same words has sentences where the raw text may have none (review of
-        # 2026-10-17); the words still have to be the memo's, in one or the other, never across the two.
-        if not (said_in([text], asked) or (cleaned.strip() and said_in([cleaned], asked))):
-            return ("Not booked: asked must be the memo's own words asking for the call, copied word for word from it: "
-                    "its sentence, or most of it with nothing left out that changes it. Book only a call the memo "
-                    "asks for.")
         return None
 
-    def _conversation_asks(self, conv_id: Any, asked: Any, now: datetime) -> str | None:
-        """Why a Bee conversation books no call (None: its own words, in the lines the agent was shown, ask for it;
-        they were said recently, outside our calls, and no line soon after takes them back). Who said them is the
-        model's reading of Bee's speaker names, which are often wrong (FINDINGS 2026-10-09: 3 of 17 lines the user
-        said alone were "Unknown")."""
+    def _conversation_asks(self, conv_id: Any, line: Any, now: datetime) -> str | None:
+        """Why a Bee conversation books no call (None: the line the agent names, L1 for the first it was shown, was
+        shown to it, was said within MEMO_BOOK_HOURS, outside our calls, and Bee does not mark it "Unknown"). Whether
+        that line asks for a call, and whether a later line takes it back, are the model's reading; the code checks
+        the line's place, its time and Bee's label (review of 2026-10-18, finding 4; the user's decision (b) of
+        2026-10-17: a line Bee marks "Unknown" is not the user's request, even when it may be their words)."""
         try:
             conv_id = int(conv_id)
         except (TypeError, ValueError):
@@ -628,30 +625,22 @@ class Thinker:
         if OurCalls.of(self.workspace).conversation(conv):  # the watcher leaves these out; never book from one
             return (f"Not booked: Bee recorded conversation {conv_id} during one of the user's calls with you; that "
                     "call's own record is the source, and it books no call.")
-        texts = [str(u.get("text") or "") for u in lines]
-        found = next(((first, last) for last in range(len(texts)) for first in range(last, max(-1, last - 3), -1)
-                      if said_in(["\n".join(texts[first:last + 1])], asked)), None)  # in one line, or up to three
-        if found is None:
-            return ("Not booked: asked must be the user's own words asking for the call, copied word for word from the "
-                    "conversation's lines you were shown: their sentence, or most of it with nothing left out that "
-                    "changes it. Book only a call the user asks for.")
-        first, last = found
-        times = [t for t in (spoken_at(u, now) for u in lines[first:last + 1]) if t is not None]
-        if not times:
-            return ("Not booked: Bee did not say when those words were said, so their times cannot be read. If it "
-                    "still matters, offer a call with offer_call or put it on the agenda.")
-        said = max(times)
+        number = str(line or "").strip().upper().removeprefix("L")
+        if not number.isdigit() or not 1 <= int(number) <= len(lines):
+            return (f"Not booked: give line, the line of conversation {conv_id} that asks for the call, as numbered in "
+                    f"what you were shown (L1 to L{len(lines)}).")
+        asking = lines[int(number) - 1]
+        if str(asking.get("speaker") or "Unknown").strip().casefold() == "unknown":
+            return (f"Not booked: Bee marks line L{number} \"Unknown\", so it is not the user's request, even if it may "
+                    "be their words. Book nothing and offer nothing because of it.")
+        said = spoken_at(asking, now)
+        if said is None:
+            return (f"Not booked: Bee did not say when line L{number} was said, so its time cannot be read. If it "
+                    "still matters, put it on the agenda for the next call.")
         if now - said > timedelta(hours=MEMO_BOOK_HOURS):  # the line's age, not the conversation's (finding 2)
-            return (f"Not booked: those words were said {ago(said, now)}, and words that old book no call: their "
+            return (f"Not booked: line L{number} was said {ago(said, now)}, and words that old book no call: their "
                     "times meant another day. If it still matters, offer a call with offer_call or put it on the "
                     "agenda.")
-        for line in lines[last + 1:last + 1 + TAKE_BACK_LINES]:  # a take-back on a line soon after (finding 6)
-            when = spoken_at(line, now)
-            if when is not None and when - said > timedelta(seconds=TAKE_BACK_S):
-                break
-            if TAKEN_BACK.search(str(line.get("text") or "")):
-                return (f"Not booked: a line soon after takes it back (\"{line.get('text')}\"), so the user did not "
-                        "ask for the call in the end. If you think they still want one, offer it with offer_call.")
         return None
 
     async def _read_memos(self, events: list[dict[str, Any]], now: datetime) -> None:
