@@ -24,7 +24,8 @@ from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_inst
 from beelink import reads, toolkit
 from beelink.calls import OurCalls
 from beelink.clock import now_text
-from beelink.writer import AS_BEE_HAS_IT, KINDS, BeeWrites, as_bee_has_it, event_fields, item_label, label
+from beelink.writer import (AS_BEE_HAS_IT, KINDS, REMOVING, BeeWrites, as_bee_has_it, event_fields, item_label, label,
+                            restore_item, undo_target)
 from voice.language import CallLanguage, call_language
 from voice.offers import OfferStore
 from voice.recorder import CallRecorder
@@ -165,8 +166,7 @@ that the user can see and edit them in the Bee app, for example "Done. You can s
 scope "recent". It runs in the background like a job, and the user gets one notification when it is done.
 Organizing only adds. It never deletes, merges away or rewrites what Bee already has.
 ### One item at a time: what Bee already has, or what the user asks for
-Ask about a single item only for what Bee already has, or when the user asks you to put one thing in Bee ("그거 Bee에 \
-넣어 줘"), for example:
+Ask about a single item only for what Bee already has, for example:
 - When the prep note lists an unconfirmed Bee fact, check it at a natural moment (fact_confirm), quoting it as Bee \
 has it: "Did Bee hear 'Bonus is 15%' right?" If the user corrects it, offer to fix it (fact_update, quoting the new \
 text); if it should not be there at all, offer to delete it (fact_delete).
@@ -174,7 +174,10 @@ text); if it should not be there at all, offer to delete it (fact_delete).
 (todo_complete). To-dos you added to Bee in earlier calls may be in the prep note: ask whether one is done only when \
 it fits.
 - Take a to-do Bee suggested (todo_accept) or turn it down (todo_dismiss) when the user says so.
-- When the user asks you to put one thing in Bee, offer that item (fact_create or todo_create).
+When the user asks you to put one thing in Bee and says what it is ("'내일 치과 예약하기' Bee 할 일에 넣어 줘"), that \
+request is their yes: call save_to_bee at once (fact_create or todo_create), then say what went in, as Bee has it: \
+"넣었어요. Bee에는 'Book a dentist appointment tomorrow'로 들어갔어요." When they do not say what ("그거 넣어 줘"), say the \
+item and ask once.
 Changing Bee happens right away, in the call, and only after the user's clear yes. They can agree only to what they \
 heard, so say the item as it will go into Bee, in your question or in the sentence just before it: "Bee has 'Bonus \
 is 15%'. Is that right?" or "Bee에 'My home server has to be quiet'로 기억해 둘까요?" (write Bee as "Bee" in every \
@@ -586,6 +589,9 @@ class BeeCoordinator(Coordinator):
         super().__init__(recorder, jobs, workspace, **kwargs)
         self._bee_writes = BeeWrites(recorder.dir)  # this call's Bee writes, kept in its folder
         self._claimed: dict[tuple, str] = {}  # each item saved or tried in this call (same_item): its write's key
+        # One take-back at a time: LiveKit runs one reply's tool calls together, and two at once both took the newest
+        # change (review of 2026-10-18, finding 1).
+        self._undo_lock = asyncio.Lock()
         self._organized: set[tuple[str, str]] = set()  # the yeses organize_bee took: (their last turn's id, scope)
         # What the user said yes to organizing beyond this call: the voice server hands it to the meta agent once the
         # call ends (voice/agent.py end_call).
@@ -613,8 +619,9 @@ class BeeCoordinator(Coordinator):
     async def save_to_bee(self, context: RunContext, kind: str, text: str, fact_id: int | None = None,
                           suggestion_id: int | None = None, todo_id: int | None = None,
                           alarm_at: str | None = None) -> str:
-        """Change one item in the user's Bee now. Call it once, only after the user's clear yes to your question
-        about this item, which said the item in the question or in the sentence just before it.
+        """Change one item in the user's Bee now. Call it once: after the user's clear yes to your question about
+        this item, which said the item in the question or in the sentence just before it, or at once when the user
+        asked you to put this one thing in Bee and said what it is.
 
         Args:
             kind: fact_create (one lasting thing the user asked you to put in Bee; what just comes up goes in
@@ -640,7 +647,13 @@ class BeeCoordinator(Coordinator):
                 return "fact_id is required."
             item["fact_id"] = fact_id
         if kind == "todo_create" and alarm_at:
-            item["alarm_at"] = alarm_at
+            try:  # a time without a zone is the user's own, as book_call takes it (review of 2026-10-18, finding 5)
+                alarm = datetime.fromisoformat(str(alarm_at).strip())
+            except ValueError:
+                return "Give alarm_at in ISO 8601, like 2026-10-20T17:00."
+            zone = self._clock().tzinfo
+            alarm = alarm.replace(tzinfo=zone) if alarm.tzinfo is None else alarm
+            item["alarm_at"] = alarm.isoformat(timespec="seconds")
         if kind in ("todo_accept", "todo_dismiss"):
             if suggestion_id is None:
                 return "suggestion_id is required."
@@ -693,23 +706,59 @@ class BeeCoordinator(Coordinator):
     @function_tool
     async def undo_bee_write(self, context: RunContext) -> str:
         """Take back the last change you made to Bee in this call, when the user wants it back: an item added comes
-        out, a fact deleted comes back, a suggestion turned down comes back as a to-do."""
-        saved = [w for w in self._bee_writes.all() if w.status == "ok"]
-        if not saved:
-            return "No change to Bee in this call is left to take back."
+        out, a fact deleted comes back, a suggestion turned down comes back as a to-do. Call it once for each change
+        to take back; when one did not go through, calling it again tries that same one."""
+        async with self._undo_lock:  # the target is chosen and acted on before another take-back may look
+            target, held = undo_target(self._bee_writes.all())
+            if held is not None:
+                return (f"Not taken back: Bee did not confirm {label(held, ENGLISH)} (it may or may not be as it was), "
+                        "so it is not tried again by itself. Tell the user to check it in the Bee app.")
+            if target is None:
+                return "No change to Bee in this call is left to take back."
+            what = label(target, ENGLISH)
+            if target.kind in REMOVING:
+                return await self._bring_back(context, target)
+            async with self.waiting(context):
+                write = await self._bee_writes.undo(target.key)
+            if write.status == "undo_unknown":
+                return (f"Bee did not confirm taking back {what} ({write.error}): it may or may not be out, and it is "
+                        "not tried again by itself. Tell the user to check it in the Bee app.")
+            if write.status != "undone":
+                return (f"Could not take back {what} ({write.error}). Tell the user; if they want, calling "
+                        "undo_bee_write again tries the same one.")
+            self._recorder.event("bee_write_undone", key=write.key, kind=write.kind, text=write.text)
+            self._claimed.pop(same_item(write.item), None)  # taken back, it may be asked about and changed again
+            return f"Took it back: {what}. Tell the user in a few words."
+
+    async def _bring_back(self, context: RunContext, removal) -> str:
+        """A deleted fact or a dismissed suggestion brought back by a write of its own (restore_item), recorded as
+        any write is, so the app shows it as what went in and every later read keeps it as the user's (review of
+        2026-10-18, finding 2). The removal keeps its own record."""
+        what = label(removal, ENGLISH)
+        try:
+            item = restore_item(removal)
+        except ValueError as exc:
+            return f"Could not bring back {what} ({exc}). Tell the user."
+        question, answer, _ = self._last_exchange()
         async with self.waiting(context):
-            write = await self._bee_writes.undo(saved[-1].key)
-        what = label(write, ENGLISH)
-        if write.status != "undone":
-            return f"Could not take back {what} ({write.error}). Tell the user."
-        self._recorder.event("bee_write_undone", key=write.key, kind=write.kind, text=write.text)
-        self._claimed.pop(same_item(write.item), None)  # taken back, it may be asked about and changed again
-        if write.kind == "fact_delete":
-            return f"Brought it back: {what} is in Bee again, confirmed. Tell the user in a few words."
-        if write.kind == "todo_dismiss":
-            return (f"Brought it back as a to-do: {what} (Bee cannot bring back a suggestion, so it is an open to-do "
+            write = await self._bee_writes.begin(item, question, answer)
+            try:
+                await self._bee_writes.apply(write)
+            finally:  # also when cut off mid-write: the record shows it, and that Bee may have it
+                self._recorder.event("bee_write", **event_fields(write))
+        back = label(write, ENGLISH)
+        if write.status == "ok":
+            self._claimed.pop(same_item(removal.item), None)  # it may be taken out again, after a yes
+            self._claimed[same_item(write.item)] = write.key
+            if removal.kind == "fact_delete":
+                return f"Brought it back: {back} is in Bee again, confirmed. Tell the user in a few words."
+            return (f"Brought it back as a to-do: {back} (Bee cannot bring back a suggestion, so it is an open to-do "
                     "now). Tell the user in a few words.")
-        return f"Took it back: {what}. Tell the user in a few words."
+        if write.status == "failed":
+            return (f"Could not bring back {what} ({write.error}). Tell the user; if they want, calling undo_bee_write "
+                    "again tries the same one.")
+        return (f"Bee did not confirm bringing back {what} ({write.error}): it may be back already, and it is not "
+                "tried again by itself. Tell the user to check it in the Bee app.")
 
     @function_tool
     async def organize_bee(self, context: RunContext, scope: str = "call", facts: list[str] | None = None,
@@ -795,9 +844,10 @@ class BeeCoordinator(Coordinator):
         return " ".join(parts)
 
     def _last_exchange(self) -> tuple[str | None, str | None, str | None]:
-        """By position only, never judged: the AI's last turn before the user's last words, those words (all the
-        user's turns since that AI turn, joined), and the id of the user's last turn. What a write keeps as the
-        question and the answer it was made on; (None, None, None) before the user spoke."""
+        """By position only, never judged: what the AI said since the user's turn before their last words (all its
+        turns there, joined, the waiting line too: one reply may come in pieces; review of 2026-10-18, finding 3),
+        the user's last words (all their turns since, joined), and the id of the user's last turn. What a write keeps
+        as the question and the answer it was made on; (None, None, None) before the user spoke."""
         turns = self._turns()
         end = max((i for i, turn in enumerate(turns) if turn.role == "user"), default=None)
         if end is None:
@@ -805,7 +855,10 @@ class BeeCoordinator(Coordinator):
         start = end
         while start and turns[start - 1].role == "user":
             start -= 1
-        question = turns[start - 1].text_content or "" if start and turns[start - 1].role == "assistant" else None
+        said = start
+        while said and turns[said - 1].role == "assistant":
+            said -= 1
+        question = " ".join((turn.text_content or "").strip() for turn in turns[said:start]).strip() or None
         answer = " ".join((turn.text_content or "").strip() for turn in turns[start:end + 1]).strip()
         return question, answer, turns[end].id
 

@@ -132,9 +132,13 @@ def test_the_call_ai_collects_what_comes_up_new_and_offers_it_once(tmp_path):
                   "넣었어요. Bee 앱에서 보고 고칠 수 있어요.", 'call organize_bee with scope "recent"',
                   "Organizing only adds. It never deletes, merges away or rewrites what Bee already has"):
         assert words in new, words
-    assert ("Ask about a single item only for what Bee already has, or when the user asks you to put one thing in "
-            "Bee") in one
+    assert "Ask about a single item only for what Bee already has, for example:" in one
     assert "even in passing" not in one and "fact_create or todo_create" in one  # new items only when asked for
+    # The user's decision (a) of 2026-10-18: a request that names the item is the yes.
+    assert ("When the user asks you to put one thing in Bee and says what it is (\"'내일 치과 예약하기' Bee 할 일에 넣어 "
+            "줘\"), that request is their yes: call save_to_bee at once (fact_create or todo_create), then say what went "
+            "in, as Bee has it: \"넣었어요. Bee에는 'Book a dentist appointment tomorrow'로 들어갔어요.\" When they do not "
+            "say what (\"그거 넣어 줘\"), say the item and ask once.") in one
     # measured 2026-10-18 (meaning checks out of the code): one call said "넣었어요" without calling organize_bee
     assert "Say that something went into Bee or changed in Bee only after save_to_bee or organize_bee said it did." \
         in keeping

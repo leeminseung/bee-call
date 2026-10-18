@@ -22,10 +22,11 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, tzinfo
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from beelink.planner import OFFERS_DIR, OUTBOUND_LOG
-from beelink.writer import KINDS, REMOVING
+from beelink.writer import KINDS, REMOVING, undo_target
 from voice.audio_tags import strip_tags
 from voice.call_folders import CALL_ID, EVENTS, call_ids, read_events, session_id
 from voice.offers import topic_line
@@ -259,8 +260,10 @@ class Write:
     t: float  # where it sits
     line: float
     state: str  # written, undone, unknown, failed, or applying while it is being made
-    ok: bool = False  # the writer's latest status is "ok": the one an undo in the call may take
+    ok: bool = False  # the writer's latest status is "ok"
     retried_at: float | None = None  # applying again after it failed: when the retry after the call began (wall)
+    status: str | None = None  # the writer's latest status (None: a record without bee-writes.jsonl)
+    restores: str | None = None  # the key of the removal this write brought back
 
 
 @dataclass
@@ -405,15 +408,27 @@ def _writes_from_writer(record: Record, call: Call, zone: tzinfo) -> list[Write]
                 continue
             at = _time(line.get("at"), zone)
             t, n = events.get(key, (((at - call.started).total_seconds() if at else call.last_t), LAST))
-            found[key] = Write(f"write-{key}", item["kind"], _text(item.get("text")), at, t, n, "applying")
+            found[key] = Write(f"write-{key}", item["kind"], _text(item.get("text")), at, t, n, "applying",
+                               restores=item.get("restores") if isinstance(item.get("restores"), str) else None)
         write = found[key]
         status = line.get("status")
         retried = _time(line.get("at"), zone) if status == "applying" and write.state == "failed" else None
-        write.ok = status == "ok"
+        write.ok, write.status = status == "ok", status
         write.state = {"ok": "written", "undo_failed": "written", "undone": "undone", "failed": "failed",
                        "applying": "applying"}.get(status, "unknown")
         write.retried_at = retried.timestamp() if retried else None
     return list(found.values())
+
+
+def _take_back_target(writes: list[Write]) -> Write | None:
+    """The write the call AI's take-back would act on now (beelink/writer.py undo_target), from the writer's own
+    statuses; for a record without bee-writes.jsonl, its last write in Bee."""
+    if any(w.status is None for w in writes):
+        return next((w for w in reversed(writes) if w.ok), None)
+    shaped = [SimpleNamespace(status=w.status, key=w.id[len("write-"):], item={"restores": w.restores}, write=w)
+              for w in writes]
+    target, _ = undo_target(shaped)
+    return target.write if target is not None else None
 
 
 def _writes_from_events(call: Call) -> list[Write]:
@@ -568,7 +583,7 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
         item, where = _job_item(call_id, call, job, state, zone, wall)
         (docked if item["state"] == "running" else placed).append((where, item))
     live = state == "live"
-    last_ok = next((w for w in reversed(call.writes) if w.ok), None) if live else None
+    target = _take_back_target(call.writes) if live else None
     for write in call.writes:
         if write.state == "applying" and live:
             continue  # still being made: it shows once Bee answered
@@ -581,7 +596,7 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
                 "will_retry": live and write.state == "failed",
                 # The app's hint on an undoable card is "빼려면 '빼 줘'라고 말하세요": a delete or a dismissed
                 # suggestion can be taken back too, but it comes back, so the hint does not fit them.
-                "undoable": write is last_ok and write.kind not in REMOVING}
+                "undoable": write is target and write.kind not in REMOVING}
         placed.append(((write.t, write.line), item))
     placed.sort(key=lambda entry: entry[0])
     items: list[dict[str, Any]] = []

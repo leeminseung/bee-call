@@ -321,3 +321,22 @@ def test_an_organize_run_that_keeps_failing_is_given_up_after_three_tries_with_o
     assert "error" not in entry and entry["decision"] == "The call went fine."  # the rest goes on
     (payload,) = sent
     assert payload["aps"]["alert"]["body"] == "Couldn't finish organizing Bee. Nothing was changed."
+
+
+def test_an_organize_that_adds_nothing_leaves_the_answer_for_one_that_does(tmp_path, fake_bee):
+    """Review probes of 2026-10-18: a scope it does not know, no items or an item too long add nothing and take
+    nothing from the user's answer; after a scope's organize, the same answer organizes that scope no more."""
+    async def main():
+        agent, _ = await in_a_call(tmp_path)
+        await say(agent, ("assistant", "Shall I put what came up today in Bee?"), ("user", "Yes."))
+        return [await agent.organize_bee(None, scope="today", facts=["Plays piano"]),
+                await agent.organize_bee(None, scope="call", facts=[]),
+                await agent.organize_bee(None, scope="call", facts=["x" * 201]),
+                await agent.organize_bee(None, scope="call", facts=["Plays piano"]),
+                await agent.organize_bee(None, scope=" Call ", facts=["Allergic to cats"]),
+                await agent.organize_bee(None, scope="recent", days=3)]
+
+    said = asyncio.run(main())
+    assert said[0].startswith('scope is "call"') and said[1].startswith("Nothing added")
+    assert said[2].startswith("Not added: each item") and said[3].startswith("Added to Bee: fact 'Plays piano'.")
+    assert said[4].startswith("Already done for that answer") and said[5].startswith("Started")
