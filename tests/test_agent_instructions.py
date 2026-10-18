@@ -218,10 +218,41 @@ def test_organize_bee_takes_what_bee_does_not_have_yet(tmp_path):
     organize = next(t for t in offered if t["name"] == "organize_bee")["input_schema"]["properties"]
     assert " ".join(organize["facts"]["description"].split()) == (
         'For "call": the new facts, lasting things about the user that Bee does not have yet, confirmed or not, each '
-        "one short statement in English.")
+        "one short statement in English with no subject and no pronoun for the user (no \"the user\", he, she, they, "
+        "his, her or their), as Bee writes its own (\"Wants to keep own judgment when using AI\").")
     assert " ".join(organize["todos"]["description"].split()) == (
         'For "call": the new to-dos, things the user means to do that Bee does not have yet, open or suggested, each '
-        "one short statement in English.")
+        "one short statement in English with no subject and no pronoun for the user (no \"the user\", he, she, they, "
+        "his, her or their).")
+
+
+def test_bee_items_are_written_as_bee_writes_its_own_with_no_subject_or_pronoun(tmp_path):
+    """The user's decision of 2026-10-18: a real call wrote "Wants to keep his own experience-based judgment ...", but
+    Bee writes its own facts with no subject and no pronoun ("Uses an iPhone together with an Apple Watch."), and
+    guessing the user's gender into their memory is wrong. The rule is in the instructions and in every argument that
+    takes an item's words, for the call AI and for the meta agent's organize run; no code reads the text."""
+    from meta.agent import ADD_TOOLS, ORGANIZING
+
+    rule = ("Write each Bee item the way Bee writes its own, with no subject and no pronoun for the user: \"Wants to keep "
+            "own judgment when using AI\", not \"He wants…\", \"The user wants…\", \"…his own…\" or \"…their own…\".")
+    agent = call_ai(tmp_path, True)
+    keeping = agent.instructions[agent.instructions.index("## Keeping what you learn in Bee"):]
+    assert rule + ' Where the user says "my", write "own" or nothing.' in keeping
+    assert keeping.index("Bee keeps the user's memory in English.") < keeping.index(rule)  # beside the English rule
+    assert "'My home server" not in agent.instructions  # no example item speaks for the user
+    assert "\"Bee에 'Wants a quiet home server'로 기억해 둘까요?\"" in agent.instructions
+    offered = {t["name"]: t["input_schema"]["properties"]
+               for t in llm.ToolContext(agent.tools).parse_function_tools("anthropic")}
+    for tool, argument in (("save_to_bee", "text"), ("organize_bee", "facts"), ("organize_bee", "todos")):
+        assert "with no subject and no pronoun for the user" in " ".join(
+            offered[tool][argument]["description"].split()), (tool, argument)
+    assert ("each one short statement in English, written the way Bee writes its own, with no subject and no pronoun "
+            "for the user: \"Wants to keep own judgment when using AI\", not \"He wants…\", \"The user wants…\", \"…his "
+            "own…\" or \"…their own…\"; where the user says \"my\", write \"own\" or nothing.") in " ".join(ORGANIZING.split())
+    assert ORGANIZING in meta_instructions(bee=True)
+    for tool in ADD_TOOLS:
+        assert ("with no subject and no pronoun for the user (no \"the user\", he, she, they, his, her or their)"
+                in tool.parameters["properties"]["text"]["description"])
 
 
 def test_a_clear_request_is_the_yes_for_every_kind_of_change(tmp_path):
@@ -255,3 +286,29 @@ def test_a_clear_request_is_the_yes_for_every_kind_of_change(tmp_path):
         talk = call_ai(tmp_path, bee).instructions
         assert ("Repeat back names and numbers that change the outcome of a booking or a job, and ask whether you got "
                 "them right.") in talk and "a booking, a job or a save" not in talk
+
+
+def test_what_the_models_write_about_the_user_never_guesses_a_gender(tmp_path):
+    """The user's decision of 2026-10-18, on the root cause of "his" in a Bee fact: nobody told the system the user's
+    gender. A prep note guessed it from the name in Bee's summaries ("He noticed ..."), the meta agent carried "he" into
+    its notes, later prep notes inherited it, and the call AI wrote "his" into Bee. The texts the models write about the
+    user say "the user" and guess nothing the user has not said."""
+    rule = ('Refer to the user as "the user", never he, she, his or her, also in what you keep from your earlier notes, '
+            "and do not guess anything about the user that they have not said, such as a gender from a name.")
+    for bee in (True, False):
+        notes = meta_instructions(bee=bee)
+        notes = notes[notes.index("## Notes for the next call"):]
+        assert rule in notes.split("\n\n## ")[0], bee  # in "Notes for the next call", with Bee or without
+    for text in (PREP_INSTRUCTIONS, PREP_INSTRUCTIONS_WITHOUT_BEE):
+        assert 'Call the user "the user" in it, not by name and never he, she, his or her.' in text
+    # measured: a wake whose notes already said "he" kept that line as it was; the tool that writes them says it too
+    from datetime import datetime
+
+    from meta.agent import context
+    from tests.helpers import SEOUL
+
+    first = context(tmp_path, [], datetime(2026, 10, 18, 12, 0, tzinfo=SEOUL))
+    assert 'Your notes (state.md; in what you write, the user is "the user", never he, she, his or her):\n' in first
+    write_state = next(t for t in META_TOOLS if t.name == "write_state")
+    assert write_state.description == ('Replace state.md, your notes, with this markdown. Call the user "the user" in it, '
+                                       "never he, she, his or her: rewrite any line you keep that does.")

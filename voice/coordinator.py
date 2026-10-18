@@ -151,8 +151,10 @@ about the same item; offering to fix what the user just corrected is part of tha
 lasting comes up and nothing in the prep note needs checking, ask nothing about Bee. Say that something went into \
 Bee or changed in Bee only after save_to_bee or organize_bee said it did.
 Write every Bee item in English, Bee's language, whatever the call's language: Bee keeps the user's memory in \
-English. To confirm, mark done, take or delete what Bee has, keep its text as Bee has it, and write a correction in \
-English.
+English. Write each Bee item the way Bee writes its own, with no subject and no pronoun for the user: "Wants to keep \
+own judgment when using AI", not "He wants…", "The user wants…", "…his own…" or "…their own…". Where the user \
+says "my", write "own" or nothing. To confirm, mark done, take or delete what Bee has, keep its text as Bee has it, \
+and write a correction in English.
 ### What comes up new: collect it, then offer once
 When the user says something lasting about themselves, even in passing ("참고로 나 매운 거 못 먹어": a preference, a \
 routine, an allergy, where they work), or something they mean to do later ("이번 주에 학원 알아봐야 해"), keep it in \
@@ -192,7 +194,7 @@ dentist appointment tomorrow'로 들어갔어요." Ask first only when it is unc
 your own idea; then say the item and ask once.
 Changing Bee happens right away, in the call, and only after the user's clear yes. When you ask, they can agree only \
 to what they heard, so say the item as it will go into Bee, in your question or in the sentence just before it: "Bee \
-has 'Bonus is 15%'. Is that right?" or "Bee에 'My home server has to be quiet'로 기억해 둘까요?" (write Bee as "Bee" \
+has 'Bonus is 15%'. Is that right?" or "Bee에 'Wants a quiet home server'로 기억해 둘까요?" (write Bee as "Bee" \
 in every language). Ask once, and again only when the answer leaves it unclear. After a clear yes, call save_to_bee \
 and say in a few words what you did. A hedge, a "later", a yes taken back ("Yes. Actually no, keep it.", "네, \
 잠깐만요, 지우지 마세요.") or a yes to another question is no yes. Change nothing then. To delete a fact or turn down Bee's \
@@ -700,8 +702,9 @@ class BeeCoordinator(Coordinator):
                 Bee), todo_accept (take Bee's suggested todo), todo_complete (mark a todo done) or todo_dismiss
                 (turn down Bee's suggested todo).
             text: The item as you say it to the user: in English, Bee's language, for what you write (fact_create,
-                fact_update, todo_create), whatever the call's language; for the others, the fact or the todo as
-                Bee has it.
+                fact_update, todo_create), whatever the call's language, with no subject and no pronoun for the
+                user (no "the user", he, she, they, his, her or their), as Bee writes its own ("Wants to keep own
+                judgment when using AI"); for the others, the fact or the todo as Bee has it.
             fact_id: The Bee fact id (fact_confirm, fact_update, fact_delete).
             suggestion_id: The Bee todo suggestion id (todo_accept, todo_dismiss).
             todo_id: The Bee todo id (todo_complete).
@@ -943,9 +946,12 @@ class BeeCoordinator(Coordinator):
                 open to-dos. "recent": organize what Bee recorded over the past days, in the background after this
                 call; the user gets one notification when it is done.
             facts: For "call": the new facts, lasting things about the user that Bee does not have yet, confirmed or
-                not, each one short statement in English.
+                not, each one short statement in English with no subject and no pronoun for the user (no "the
+                user", he, she, they, his, her or their), as Bee writes its own ("Wants to keep own judgment when
+                using AI").
             todos: For "call": the new to-dos, things the user means to do that Bee does not have yet, open or
-                suggested, each one short statement in English.
+                suggested, each one short statement in English with no subject and no pronoun for the user (no "the
+                user", he, she, they, his, her or their).
             days: For "recent": how many past days to organize, 1 to 7 (3 when not given).
         """
         scope = str(scope or "call").strip().lower()
