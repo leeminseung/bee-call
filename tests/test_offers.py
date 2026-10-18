@@ -291,111 +291,32 @@ def user_said(agent, *lines: str) -> None:
     asyncio.run(agent.update_chat_ctx(chat))
 
 
-def test_a_call_back_is_booked_only_with_the_user_s_own_words_asking_for_it(tmp_path):
-    """Coordinator's review of 2026-10-15 (queued): nothing in code checked that the person asked for a call back, so
-    a model could book one on its own. book_call now takes the user's own words asking for it or agreeing to it,
-    which must be among what they said in this call (punctuation, spacing and case aside)."""
+def test_whether_the_user_asked_for_a_call_back_is_the_call_ai_s_reading_and_asked_is_kept(tmp_path):
+    """The user's decision of 2026-10-18: the code no longer checks the user's words for a call back (word for word
+    checks refused real requests and took others); its tool description says when to book. The words the model gives
+    are kept in the call's record, never checked; one call back per call, and booking again moves it."""
     from types import SimpleNamespace
     from voice.coordinator import Coordinator
     from voice.recorder import CallRecorder
 
     workspace = tmp_path / "workspace"
-    agent = Coordinator(CallRecorder(workspace, room="r", now=seoul_now()), SimpleNamespace(), workspace,
-                        clock=seoul_now)
+    rec = CallRecorder(workspace, room="r", now=seoul_now())
+    agent = Coordinator(rec, SimpleNamespace(), workspace, clock=seoul_now)
     user_said(agent, "음, 내일 아침 여덟 시에 다시 전화해 줄래요?")
     at = (datetime.now(SEOUL) + timedelta(days=1)).replace(hour=8, minute=0).isoformat(timespec="minutes")
-    for invented in ("Please call me tomorrow morning.", "", "   "):
-        refused = asyncio.run(agent.book_call(None, topic="the interview", asked=invented, at=at))
-        assert refused.startswith("Not booked") and OfferStore(workspace).all() == [], invented
-    said = asyncio.run(agent.book_call(None, topic="the interview", asked="내일 아침 여덟시에 다시 전화해 줄래요", at=at))
-    assert said.startswith("Booked")
-    user_said(agent, "Can you call me back at nine instead?", "Yes, nine works.")
+    said = asyncio.run(agent.book_call(None, topic="the interview", at=at, asked="내일 아침 여덟 시에 다시 전화해 줄래요"))
+    assert said.startswith("Booked") and len(OfferStore(workspace).all()) == 1
     nine = at.replace("T08:00", "T09:00")
-    assert asyncio.run(agent.book_call(None, topic="the interview", asked="yes nine works", at=nine)).startswith("Moved")
+    assert asyncio.run(agent.book_call(None, topic="the interview", at=nine)).startswith("Moved")
+    rec.close()
+    booked = [json.loads(line) for line in (rec.dir / "events.jsonl").read_text().splitlines()
+              if json.loads(line).get("type") == "call_booked"]
+    assert [e.get("asked") for e in booked] == ["내일 아침 여덟 시에 다시 전화해 줄래요", None]
+    from livekit.agents import llm
 
-
-@pytest.mark.parametrize("said, asked, booked", [
-    # A part out of a sentence or a clause between commas is refused when what is left out could decide it: a
-    # "not", a "don't" or a "안" beside it, the end of Korean words, or most of it.
-    (["아니요, 전화는 안 해도 돼요."], "전화", False),
-    (["No thanks, don't call me back."], "call me back", False),
-    (["Don't call me back."], "call me back", False),
-    (["No thanks. Don't call me back."], "call me back", False),
-    (["Please don't call me tomorrow."], "call me tomorrow", False),
-    (["I'm not free now so call me back tomorrow."], "call me back tomorrow", False),
-    (["내일은 전화하지 마세요."], "내일은 전화하지", False),
-    (["아니요. 전화하지 마세요."], "전화하지", False),
-    (["다시 전화 안 해 줘도 돼요."], "해 줘도 돼요", False),
-    (["Then my friend said she'd call me back."], "call me back", False),
-    (["Call me back tomorrow — actually no."], "Call me back tomorrow", False),
-    (["You cannot call me back tomorrow."], "call me back tomorrow", False),
-    # A quote that ends at the dot closing "a.m." or "p.m." is refused when the next words of the same turn take it
-    # back (review of the final fixes: "Call me at 9 a.m." out of the first one booked). The next sentence is still a
-    # sentence of its own: a constraint or a reason after "a.m." takes nothing back (review of 2026-10-16).
-    (["Call me at 9 a.m. no actually don't."], "Call me at 9 a.m.", False),
-    (["Call me at 9 p.m. no wait, never mind."], "Call me at 9 p.m.", False),
-    (["Call me at 9 a.m. Never mind, don't."], "Call me at 9 a.m.", False),
-    (["Call me at 9 p.m. Wait, no."], "Call me at 9 p.m.", False),  # second review, finding 5: the comma forms
-    (["Call me at 9 a.m. Actually, no, don't."], "Call me at 9 a.m.", False),
-    # Third review, finding 5: a plain full stop too, however the time is written, and in Korean; but words after the
-    # request that only add to it take nothing back.
-    (["Call me at 9 PM. Wait, no."], "Call me at 9 PM", False),
-    (["Call me at nine. Actually, no."], "Call me at nine", False),
-    (["Call me back tomorrow. No, wait, never mind."], "Call me back tomorrow", False),
-    (["Call me tomorrow at 8 about the dentist. No wait, never mind."], "Call me tomorrow at 8", False),
-    (["내일 아침 9시에 전화해 줘. 아니다, 하지 마."], "내일 아침 9시에 전화해 줘", False),
-    (["내일 아침 9시에 전화해 줘. 아니, 10시로 해 줘."], "내일 아침 9시에 전화해 줘", False),
-    (["Call me at 9 p.m. Don't be late."], "Call me at 9 p.m.", True),
-    (["Call me at 9 p.m. No rush though."], "Call me at 9 p.m.", True),
-    (["Call me at nine. I'll be up by then."], "Call me at nine", True),
-    (["내일 아침 9시에 전화해 줘. 아니면 10시도 괜찮아."], "내일 아침 9시에 전화해 줘", True),
-    (["Call me at 9 a.m. I'll be up by then."], "Call me at 9 a.m.", True),
-    (["Call me at 7 p.m. My meeting ends at 6."], "Call me at 7 p.m.", True),
-    (["I'm not free until 10 a.m. Call me back then."], "Call me back then", True),
-    (["I can't talk at 9 a.m. Call me at 10."], "Call me at 10", True),
-    (["Call me back at 8 a.m. Not earlier, please."], "Call me back at 8 a.m.", True),
-    (["I'm in the U.S. this week. Call me tomorrow."], "Call me tomorrow", True),
-    (["I went hiking yesterday."], "yes", False),
-    (["Hmm."], "m", False),
-    # Whole sentences or clauses, one or several in a row (an answer split at pauses, over turns too), or most of
-    # one without its lead-in: the call AI left out a lead-in such as "so" or "그럼" in 19 of its 24 first tries
-    # (Haiku 5.5, 2026-10-16), and each of those cost the call a second try while only whole clauses passed.
-    (["오늘 회의 정말 길었어요 아무튼 내일 아침 여덟 시에 다시 전화해 줄래요"], "내일 아침 여덟 시에 다시 전화해 줄래요", True),
-    (["오늘 회의가 정말 길었어요. 그럼 내일 오후 세 시에 다시 전화해 줄 수 있어요?"], "내일 오후 세 시에 다시 전화해 줄 수 있어요?", True),
-    (["The meeting ran long today. Okay, so could you call me back tomorrow at nine?"],
-     "could you call me back tomorrow at nine?", True),
-    (["음, 내일 아침 여덟 시에 다시 전화해 줄래요?"], "내일 아침 여덟 시에 다시 전화해 줄래요", True),
-    (["Call me tomorrow at 8 about the dentist."], "Call me tomorrow at 8", True),  # an English tail left out
-    (["내일 아침", "여덟 시에 다시 전화해 줘"], "내일 아침 여덟 시에 다시 전화해 줘", True),
-    (["네.", "내일.", "아침 8시에.", "전화 주세요."], "네, 내일 아침 8시에 전화 주세요", True),
-    (["Can you call me back at nine?", "Yes, nine works."], "Yes, nine works", True),
-    (["네."], "네", True),
-    # Dots inside a.m. or U.S. end nothing; a request early in a long call still counts.
-    (["Call me at 7 a.m. or 8 a.m. tomorrow."], "Call me at 7 a.m. or 8 a.m. tomorrow.", True),
-    (["Call me when the U.S. market opens at 9:30 a.m. tomorrow."],
-     "Call me when the U.S. market opens at 9:30 a.m. tomorrow.", True),
-    (["Call me tomorrow at nine about the interview."] + ["Okay."] * 12,
-     "Call me tomorrow at nine about the interview.", True),
-])
-def test_the_words_given_for_a_call_back_must_be_most_of_what_the_user_said(tmp_path, said, asked, booked):
-    """Review of the last stretch, finding 3: any fragment of anything the user said passed, a word out of a refusal
-    too. Review of the final fixes, finding 2: "most of a sentence" still passed "call me back" out of "Don't call me
-    back.", split "7 a.m." into sentences no quote could match, joined at most three and looked back only twelve
-    turns. The words must now be most of a sentence or clause the user said in this call (or of several in a row);
-    they may leave out a lead-in, or an English tail, but no "not" or "don't" and never the end of Korean words.
-    Whether they ask for the call stays the call AI's reading."""
-    from types import SimpleNamespace
-    from voice.coordinator import Coordinator
-    from voice.recorder import CallRecorder
-
-    workspace = tmp_path / "workspace"
-    agent = Coordinator(CallRecorder(workspace, room="r", now=seoul_now()), SimpleNamespace(), workspace,
-                        clock=seoul_now)
-    user_said(agent, *said)
-    at = (datetime.now(SEOUL) + timedelta(days=1)).replace(hour=8, minute=0).isoformat(timespec="minutes")
-    answer = asyncio.run(agent.book_call(None, topic="a call back", asked=asked, at=at))
-    assert answer.startswith("Booked") is booked, answer
-    assert len(OfferStore(workspace).all()) == (1 if booked else 0)
+    (tool,) = [t for t in llm.ToolContext(agent.tools).parse_function_tools("anthropic") if t["name"] == "book_call"]
+    assert ('Book a call only when the user asked for it or agreed to it out loud. "Don\'t call me tomorrow" or "Call '
+            'me at nine. Wait, no." asks for nothing.') in " ".join(tool["description"].split())
 
 
 def test_a_call_back_the_user_asks_for_is_booked_and_continues_this_call(tmp_path):
@@ -514,7 +435,6 @@ def test_looking_ahead_for_booked_calls_does_not_close_questions_early(tmp_path)
     offer, _ = asked(tmp_path, now=datetime(2026, 10, 14, 20, 0, tzinfo=SEOUL))  # suggests 21:00
     store.due(datetime(2026, 10, 14, 20, 59, 45, tzinfo=SEOUL), ahead=timedelta(seconds=30))
     assert store.answer(offer.id, "later", datetime(2026, 10, 14, 20, 59, 50, tzinfo=SEOUL)).state == "booked"
-
 
 
 def test_notifications_wait_for_morning_and_a_fifth_of_the_day_is_held(tmp_path, monkeypatch):
@@ -768,7 +688,6 @@ def test_call_me_back_in_ten_minutes_late_in_a_call_books_ten_minutes_from_now(t
         assert not asyncio.run(agent.book_call(None, topic="x", asked="Call me back in ten minutes",
                                                in_minutes=bad)).startswith(("Booked", "Moved"))
     assert len(OfferStore(workspace).all()) == 1
-
 
 
 # ---------- an agreed call that cannot be placed says so (BC-104, contract section 5) ----------

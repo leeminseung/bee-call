@@ -156,9 +156,26 @@ def test_bee_is_the_user_s_memory_kept_accurate_and_tidy_with_a_light_limit():
                     '"그거 주문했어"', "todo_dismiss", "To-dos you added to Bee in earlier calls"):
         assert example in BEE_INSTRUCTIONS, example
     assert "Ask about Bee at most twice in a call" in BEE_INSTRUCTIONS and "never twice about the same item" in BEE_INSTRUCTIONS
-    for step in ("propose_bee_save", "names Bee", "quotes the item exactly", "Only after a clear yes", "save_to_bee",
-                 "undo_bee_write"):
-        assert step in BEE_INSTRUCTIONS, step  # the safety steps stay as they were
+    for step in ("only after the user's clear yes", "save_to_bee", "undo_bee_write"):
+        assert step in BEE_INSTRUCTIONS, step
+
+
+def test_the_user_s_yes_is_the_call_ai_s_to_judge_from_a_principle_with_examples():
+    """The user's decision of 2026-10-18: no word list in code decides whether the user said yes (they refused
+    "좋죠, 넣어 주세요." and "Definitely." and took "네?" and "Yeah, no."); the instructions say what a clear yes is,
+    with examples, and the item may be said in the question or in the sentence just before it."""
+    for words in ("Changing Bee happens right away, in the call, and only after the user's clear yes.",
+                  "say the item as it will go into Bee, in your question or in the sentence just before it",
+                  "\"Bee has 'Bonus is 15%'. Is that right?\"", "Ask once, and again only when the answer leaves it unclear.",
+                  "After a clear yes, call save_to_bee and say in a few words what you did.",
+                  "A hedge, a \"later\", a yes taken back (\"Yes. Actually no, keep it.\", \"네, 잠깐만요, 지우지 마세요.\") or "
+                  "a yes to another question is no yes. Change nothing then.",
+                  "To delete a fact or turn down Bee's suggestion, say so in the question: \"Shall I delete 'Bonus is "
+                  "15%' from Bee?\"", "When the user wants something back, call undo_bee_write."):
+        assert words in BEE_INSTRUCTIONS, words
+    for gone in ("propose_bee_save", "quotes the item exactly", "saves nothing", "cannot be brought back",
+                 "only the answer to your first question"):
+        assert gone not in BEE_INSTRUCTIONS, gone
 
 
 def test_what_bee_keeps_is_brought_up_when_it_connects_and_never_recited():
@@ -179,20 +196,6 @@ def test_bee_items_are_english_and_the_question_quotes_them_in_the_call_s_langua
     assert "written in the user's language" not in BEE_INSTRUCTIONS
 
 
-def test_the_item_is_proposed_and_quoted_in_the_one_reply_that_offers_the_change():
-    """Measured 2026-10-17 (Haiku 5.5): it asked first in other words ("Should I save that to Bee so it sticks
-    around?") and proposed after the user's yes, so the yes did not count and it had to ask again; in English calls
-    it did so in 3 of 3. One reply both proposes the item and asks about it, quoted, and the reason is given."""
-    from voice.coordinator import BeeCoordinator
-
-    assert "The user can agree only to words they heard" in BEE_INSTRUCTIONS
-    assert "an offer to change one item is one reply that does two things" in BEE_INSTRUCTIONS
-    assert "which changes nothing in Bee yet" in BEE_INSTRUCTIONS
-    assert "Never ask about one item in other words first (\"Want me to save that to Bee?\")" in BEE_INSTRUCTIONS
-    assert "the user has to say yes twice" in BEE_INSTRUCTIONS
-    assert "changes nothing in Bee, so it needs no yes" in BeeCoordinator.propose_bee_save.__doc__
-
-
 def test_a_lasting_fact_is_kept_for_bee_not_kept_in_words():
     """Measured 2026-10-17 (Haiku 5.5, a Korean call): told "나 땅콩 알레르기 있어.", it said "기억해 둘게요" and
     offered nothing, though only Bee keeps it; the example became one said in passing, in Korean. Since the user's
@@ -203,17 +206,6 @@ def test_a_lasting_fact_is_kept_for_bee_not_kept_in_words():
            "remember it" in BEE_INSTRUCTIONS
     assert "even in passing (\"참고로 나 매운 거 못 먹어\"" in BEE_INSTRUCTIONS and "in your reply to it" not in BEE_INSTRUCTIONS
     assert "peanut" not in BEE_INSTRUCTIONS.casefold()
-
-
-def test_the_item_is_proposed_before_anything_is_said_about_bee_and_a_korean_question_quotes_english():
-    """Measured 2026-10-17 (Haiku 5.5, Korean calls, with an example that is not the measured line): it offered in
-    4 of 4, but in 3 it first asked with the item in Korean ("Bee에 '땅콩 알레르기 있음'으로 기억해 둘까요?") and
-    proposed the English item only after the yes, which then did not count. The proposal comes before any word about
-    Bee in the reply, and the example for a Korean call is a Korean question quoting the English item."""
-
-    assert "first it calls propose_bee_save with the item, which changes nothing in Bee yet, before saying anything " \
-           "about Bee" in BEE_INSTRUCTIONS
-    assert "or \"Bee에 'My home server has to be quiet'로 기억해 둘까요?\"" in BEE_INSTRUCTIONS
 
 
 def test_no_notes_to_itself_are_written_since_everything_is_said():

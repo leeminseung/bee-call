@@ -451,10 +451,11 @@ def test_in_a_live_call_a_failed_write_will_be_retried_and_the_last_write_in_bee
                      ("write-w3", "failed", True, False)]
 
 
-def test_the_new_kinds_show_and_a_write_bee_cannot_bring_back_is_never_undoable(tmp_path):
-    """Contract section 2.4 (2026-10-17): fact_create, fact_delete, todo_complete and todo_dismiss are writes too;
-    todo_dismiss and fact_delete cannot be undone, so even as the last write in a live call they are not undoable,
-    and the call AI's undo says so (voice/coordinator.py undo_bee_write)."""
+def test_the_new_kinds_show_and_a_removal_never_carries_the_take_it_out_hint(tmp_path):
+    """Contract section 2.4 (2026-10-17): fact_create, fact_delete, todo_complete and todo_dismiss are writes too.
+    Since 2026-10-18 a delete or a dismissed suggestion can be taken back too (it is made again, voice/coordinator.py
+    undo_bee_write), but `undoable` drives the app's hint "빼려면 '빼 줘'라고 말하세요", which does not fit bringing
+    something back, so even as the last write in a live call they are not undoable."""
     writes = [bee("w1", "applying", "2026-10-15T20:00:10+09:00", item={"kind": "fact_create", "text": "Allergic to peanuts"},
                   **ASKED), bee("w1", "ok", "2026-10-15T20:00:11+09:00"),
               bee("w2", "applying", "2026-10-15T20:00:20+09:00", item={"kind": "todo_complete", "todo_id": 51,

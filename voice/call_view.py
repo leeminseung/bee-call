@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from beelink.planner import OFFERS_DIR, OUTBOUND_LOG
-from beelink.writer import KINDS, NOT_UNDOABLE
+from beelink.writer import KINDS, REMOVING
 from voice.audio_tags import strip_tags
 from voice.call_folders import CALL_ID, EVENTS, call_ids, read_events, session_id
 from voice.offers import topic_line
@@ -579,7 +579,9 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
         item = {"type": "bee_write", "id": write.id, "at": _iso(write.at or call.when(write.t), zone),
                 "kind": write.kind, "text": write.text, "state": shown,
                 "will_retry": live and write.state == "failed",
-                "undoable": write is last_ok and write.kind not in NOT_UNDOABLE}
+                # The app's hint on an undoable card is "빼려면 '빼 줘'라고 말하세요": a delete or a dismissed
+                # suggestion can be taken back too, but it comes back, so the hint does not fit them.
+                "undoable": write is last_ok and write.kind not in REMOVING}
         placed.append(((write.t, write.line), item))
     placed.sort(key=lambda entry: entry[0])
     items: list[dict[str, Any]] = []

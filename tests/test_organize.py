@@ -1,8 +1,9 @@
 """Organizing Bee's memory (the user's decision, 2026-10-17): after a clear yes to one question that offers it, the
 call AI adds what came up in the call at once (confirmed facts, open to-dos), or hands the past days to the meta
 agent, which reads them in Bee after the call, adds what Bee does not have yet, and sends one notification. Either
-way organizing only adds. Writing to Bee is a side effect, so the yes and each add are checked in code; when and how
-to offer it is the instructions'.
+way organizing only adds. Whether the user said yes is the call AI's to judge, from its instructions (the user's
+decision of 2026-10-18); the code checks what reads no meaning: counts, lengths, items already written in the call,
+one organize per answer, and each add of the meta agent's run.
 
 The fake `bee` (tests/fakebee/bee) stands in for the Bee CLI; nothing reaches a real Bee account.
 """
@@ -56,24 +57,21 @@ def test_after_a_clear_yes_the_call_s_facts_and_to_dos_go_into_bee_at_once(tmp_p
     assert sorted(e["text"] for e in events(rec) if e["type"] == "bee_write") == sorted(w.text for w in writes)
 
 
-def test_a_korean_yes_to_the_organize_question_counts(tmp_path, fake_bee):
-    said, _, _ = organized(tmp_path, [("assistant", OFFER_KO), ("user", "응, 넣어줘.")], facts=["Drinks coffee"])
+def test_organizing_reads_no_meaning_but_counts_lengths_and_the_user_s_answer(tmp_path, fake_bee):
+    """The code does not judge the question or the answer (the user's decision of 2026-10-18): it organizes after
+    the user said something, at most ORGANIZE_MOST items of under 200 characters each, and keeps the AI's last turn
+    and the user's answer by position."""
+    nothing, _, _ = organized(tmp_path / "none", [], facts=["Drinks coffee"])
+    assert nothing.startswith("Not done: the user has said nothing yet")
+    many, _, _ = organized(tmp_path / "many", [("assistant", OFFER), ("user", "Sure.")],
+                           facts=[f"Fact {n}" for n in range(9)])
+    assert many.startswith("Not added: at most 8 items")
+    long, _, _ = organized(tmp_path / "long", [("assistant", OFFER), ("user", "Sure.")], facts=["x" * 201])
+    assert long.startswith("Not added: each item is one short statement")
+    said, _, rec = organized(tmp_path / "any", [("assistant", "그럼 그렇게 할까요?"), ("user", "응, 좋아."),
+                                                 ("user", "넣어 줘.")], facts=["Drinks coffee"])
     assert said.startswith("Added to Bee: fact 'Drinks coffee'.")
-
-
-@pytest.mark.parametrize("turns", [
-    [("user", "I drink coffee every morning.")],  # nothing was asked
-    [("assistant", OFFER), ("user", "아니, 괜찮아.")],  # a no
-    [("assistant", OFFER), ("user", "Yes. Actually no, not now.")],  # a yes taken back
-    [("assistant", "Want me to save those for you?"), ("user", "Sure.")],  # a question that does not name Bee
-    [("assistant", "Shall I keep 'Drinks coffee' in Bee?"), ("user", "Yes.")],  # a question about one item
-    [("assistant", "Bee has your coffee habit. How was the trip?"), ("user", "응, 좋았어.")],  # another question
-    [("assistant", OFFER), ("user", "Yes."), ("assistant", "What else is on your mind?"), ("user", "Not much.")],
-])
-def test_nothing_is_organized_without_a_clear_yes_to_the_question_that_offers_it(tmp_path, fake_bee, turns):
-    said, agent, rec = organized(tmp_path, turns, facts=["Drinks coffee"])
-    assert said.startswith("Not done") and bee_commands(fake_bee) == [] and BeeWrites(rec.dir).all() == []
-    assert agent.organize_request is None
+    assert [(w.question, w.answer) for w in BeeWrites(rec.dir).all()] == [("그럼 그렇게 할까요?", "응, 좋아. 넣어 줘.")]
 
 
 def test_one_yes_organizes_once_and_what_the_call_saved_already_is_not_added_again(tmp_path, fake_bee):
@@ -90,7 +88,7 @@ def test_one_yes_organizes_once_and_what_the_call_saved_already_is_not_added_aga
     assert first.startswith("Saved to Bee")
     assert second.startswith("Added to Bee: fact 'Lives in Seoul'.")
     assert "Already in Bee from this call, so not added again: fact 'Drinks coffee'." in second
-    assert third.startswith("Already done for that yes.")
+    assert third.startswith("Already done for that answer.")
     assert [w.text for w in BeeWrites(rec.dir).all()] == ["Drinks coffee", "Lives in Seoul"]
 
 
@@ -275,7 +273,6 @@ def test_what_an_organize_run_added_is_the_user_s_own_for_every_later_read(tmp_p
     assert json.dumps(fact)
 
 
-
 def test_a_to_do_bee_suggests_in_the_same_words_is_not_added_again(tmp_path, fake_bee):
     _, entry = organize(tmp_path, [{"role": "assistant", "content": [
         tool_use(1, "bee_add_todo", text="Ask about bonus terms")]}, done("Nothing new.")])  # the fake's suggestion 34
@@ -283,60 +280,7 @@ def test_a_to_do_bee_suggests_in_the_same_words_is_not_added_again(tmp_path, fak
     assert bee_commands(fake_bee) == []
 
 
-
 # ---------- review of 2026-10-18 ----------
-
-@pytest.mark.parametrize("question", [
-    "Bee가 기억하는 바로는 매운 거 못 드시죠?",
-    "Bee에 저장된 대화 보니까 어제 회의 있었죠?",
-    "Do you want me to keep going, or look in Bee?",
-    "Shall I add buy milk to your Bee todos?",
-    "Bee에 할 일로 넣어 둘까요?",
-    "Shall I put them in Bee? And how was the trip?",
-    "Bee에 기록된 내용 중에 어제 회의 얘기 해 볼까요?",
-    "Bee에 넣어 둔 것들 확인해 볼까요?",
-    # the second review of 2026-10-18 (finding 1): questions about one thing Bee has, or about something else
-    "그거 Bee 기록에서 지울까요?", "그거 Bee 기록에서 뺄까요?", "이거 Bee 기억에서 지울까요?", "그거 Bee에서 기억 고칠까요?",
-    "그거 Bee에서 기록 지울까요?", "그거 Bee 할 일에서 끝난 걸로 기록할까요?", "그거 Bee에 저장된 거 지울까요?",
-    "그거 Bee에 기억된 대로 할까요?", "Bee가 들은 거 맞는지 기억나실까요?", "Bee에 있는 내용 정리해서 말씀드릴까요?",
-    "그거 Bee에 그대로 남겨 둘까요?",
-    "Bee says you have a long day tomorrow, so want me to keep it short?",
-    "Bee says you've got a busy afternoon, should I keep it quick?",
-    "Bee has the dentist at 3 on Friday, shall I move it to the agenda for our next call?",
-    "Bee mentioned your trip, should I keep that in mind when we plan?", "Shall I keep it as it is in Bee?",
-    "Shall I move it to done in Bee?", "Do you want me to keep that one in Bee or delete it?",
-])
-def test_a_yes_to_a_question_that_does_not_offer_to_organize_adds_nothing(tmp_path, fake_bee, question):
-    """Finding 1: the offer check took any question with Bee and a word like 기억, 저장, keep or add."""
-    said, agent, rec = organized(tmp_path, [("assistant", question), ("user", "응.")], facts=["Drinks coffee"],
-                                 todos=["Buy milk"])
-    assert said.startswith("Not done") and bee_commands(fake_bee) == [] and BeeWrites(rec.dir).all() == []
-
-
-@pytest.mark.parametrize("question", [
-    OFFER, OFFER_KO, "Shall I organize what Bee recorded over the past three days?",
-    "Now the tidy-up. Shall I organize the last few days of what Bee recorded?",
-    "Bee에 지난 3일 동안 기록된 내용을 정리해서 넣어 둘까요?", "사흘 치 내용을 Bee에 정리해 넣을까요?",
-    "지난 사흘 치 정리도 Bee에 넣어 둘까요? 백그라운드에서 돌리고, 끝나면 알려 드릴게요.",
-    "오늘 나온 것들 Bee에 넣어 둘까?", "Want me to save these to Bee?",
-    "Bee에 쌓인 것 정리는, 지난 며칠 대화에서 오래 갈 내용만 골라서 Bee에 넣어 둘까요?",
-    "최근 3일치를 정리해서 Bee에 넣어 둘까요?", "지난 사흘 동안 쌓인 기록은 Bee에 정리해 둘까요?", "Bee에 정리해 둘까요?",
-    # collect, then offer once (2026-10-18): the instructions' examples, and one thing put in Bee the same way
-    "오늘 나온 것 몇 개 Bee에 넣어 둘까요?", "오늘 나온 내용 Bee에 넣어 둘까요?", "Shall I put what came up today in Bee?",
-    "A few things from today are worth keeping. Shall I put them in Bee?", "Shall I put that in Bee?",
-    "그거 Bee에 넣어 둘까요?", "오늘 나온 거 Bee에 기억해 둘까요?",
-    # measured on the final instructions (2026-10-18, second round)
-    "Twice a week sounds like it could fit around the piano. A few things from today are worth keeping. Shall I put "
-    "them in Bee?",
-    "A few things from today are worth keeping, like the Spanish class and visiting your sister in Busan monthly. "
-    "Shall I put them in Bee?",
-    "그리고 오늘 나온 것 몇 개, 예를 들면 피아노 저녁 연습이랑 고양이 알레르기 같은 것도 Bee에 넣어 둘까요?",
-    "그럼 오늘 나온 것들 몇 개 Bee에 넣어 둘까요?", "죄송해요, 방금 넣어 달라는 말이 Bee에 저장되지 않았어요. 오늘 나온 내용 Bee에 넣어 둘까요?",
-    "오늘 나온 것 몇 개 Bee에 넣어 둘까요? 고양이 알레르기 하나랑, 이번 주에 스페인어 학원 알아보기요.",
-])
-def test_the_organize_questions_the_ai_asked_in_measured_calls_still_count(tmp_path, fake_bee, question):
-    said, _, _ = organized(tmp_path, [("assistant", question), ("user", "네, 그렇게 해 주세요.")], facts=["Drinks coffee"])
-    assert said.startswith("Added to Bee"), said
 
 
 def test_one_yes_covers_this_call_and_the_past_days_once_each(tmp_path, fake_bee):
@@ -350,7 +294,7 @@ def test_one_yes_covers_this_call_and_the_past_days_once_each(tmp_path, fake_bee
 
     first, second, again, agent = asyncio.run(main())
     assert first.startswith("Added to Bee") and second.startswith("Started")
-    assert again.startswith("Already done for that yes") and agent.organize_request["days"] == 7
+    assert again.startswith("Already done for that answer") and agent.organize_request["days"] == 7
 
 
 def test_an_organize_run_that_keeps_failing_is_given_up_after_three_tries_with_one_notification(tmp_path, fake_bee):

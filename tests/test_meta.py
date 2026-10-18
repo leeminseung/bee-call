@@ -312,7 +312,6 @@ def test_the_calls_get_the_meta_agents_notes_and_answers_wake_it(tmp_path):
     assert (event["kind"], event["offer"], event["choice"]) == ("offer_answered", offer.id, "decline")
 
 
-
 class Flaky(Streams):
     """A model that fails `fails` times, then answers."""
 
@@ -609,18 +608,29 @@ def test_a_memo_that_asks_for_a_call_at_a_time_books_it_and_says_so_once(tmp_pat
 
 
 @pytest.mark.parametrize("args, why", [
-    ({"asked": "오늘 밤 9시에 전화해 줘"}, "the memo's own words"),  # words the memo does not have
     ({"at": "2026-10-14T18:00"}, "has passed"),
     ({"at": "2026-10-30T21:00"}, "a week ahead"),
     ({"memo_id": "j-99"}, "no voice memo j-99"),
 ])
-def test_a_booking_from_a_memo_must_quote_the_memo_and_be_in_the_coming_week(tmp_path, monkeypatch, args, why):
+def test_a_booking_from_a_memo_must_be_in_the_coming_week_and_name_a_memo_it_was_told_about(tmp_path, monkeypatch,
+                                                                                          args, why):
     ws = memo_change(tmp_path, monkeypatch)
     call = {"memo_id": "j-41", "asked": "오늘 밤 9시에 전화해서 같이 정리하자", "at": "2026-10-14T21:00",
             "topic": "이사 준비 정리", "why": "메모에서 부탁하셨어요.", **args}
     model, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(1, "book_call", **call)]}, done())
     assert OfferStore(ws).all() == [] and told == []
     assert why in entry["tools"][0]["result"] and entry["tools"][0]["result"].startswith("Not booked")
+
+
+def test_whether_a_memo_asks_for_a_call_is_the_model_s_reading_and_asked_is_only_kept(tmp_path, monkeypatch):
+    """The user's decision of 2026-10-18: the code no longer looks for the words in the memo (word for word checks
+    turned away real requests and took others); asked is kept with the offer as the model gives it."""
+    ws = memo_change(tmp_path, monkeypatch)
+    call = {"memo_id": "j-41", "asked": "9시에 전화 부탁", "at": "2026-10-14T21:00", "topic": "이사 준비 정리",
+            "why": "메모에서 부탁하셨어요."}
+    _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(1, "book_call", **call)]}, done())
+    (offer,) = OfferStore(ws).all()
+    assert entry["tools"][0]["result"].startswith("Booked") and offer.asked == "9시에 전화 부탁" and told == [offer]
 
 
 def test_one_memo_books_at_most_one_call(tmp_path, monkeypatch):
@@ -803,8 +813,8 @@ BOOK_FROM_CONVERSATION = dict(conversation_id=88, asked="오늘 밤 9시에 전�
 
 def test_a_conversation_in_which_the_wearer_asks_for_a_call_books_it(tmp_path, monkeypatch):
     """A note recorded on the watch comes as a Bee conversation in which only the wearer speaks. The agent is shown
-    its lines with Bee's speaker names and their times, and the booking is checked as a memo's is: the words asking
-    for the call must be the wearer's own, in those lines."""
+    its lines with Bee's speaker names and their times; whether they ask for a call is its reading, and the code
+    checks only what reads no meaning, as for a memo."""
     ws = conversation_change(tmp_path, monkeypatch, WATCH_NOTE)
     model, entry, told, asked = think_with(ws, {"role": "assistant", "content": [tool_use(
         1, "book_call", **BOOK_FROM_CONVERSATION)]}, done())
@@ -819,11 +829,10 @@ def test_a_conversation_in_which_the_wearer_asks_for_a_call_books_it(tmp_path, m
 
 
 @pytest.mark.parametrize("lines, args, why", [
-    (WATCH_NOTE, {"asked": "오늘 밤 9시에 꼭 전화해 줘"}, "own words"),  # words the conversation does not have
     (WATCH_NOTE, {"conversation_id": 99}, "no Bee conversation 99"),  # not among the changes shown
     (WATCH_NOTE, {"memo_id": "j-41"}, "one of"),  # a memo and a conversation at once
 ])
-def test_a_booking_from_a_conversation_must_quote_its_own_words(tmp_path, monkeypatch, lines, args, why):
+def test_a_booking_from_a_conversation_must_name_one_it_was_shown(tmp_path, monkeypatch, lines, args, why):
     ws = conversation_change(tmp_path, monkeypatch, lines)
     _, entry, told, _ = think_with(ws, {"role": "assistant", "content": [tool_use(
         1, "book_call", **{**BOOK_FROM_CONVERSATION, **args})]}, done())
@@ -876,7 +885,8 @@ def test_the_meta_agent_books_a_call_the_user_asks_for_in_any_bee_input():
     for words in ("in a voice memo or in a conversation Bee recorded", "asks you, the assistant, to call them",
                   "\"오늘 밤 9시에 전화해서 같이 정리하자\"", "\"call me at nine tonight\"", "(\"나중에 전화해\" to a friend)",
                   "a time mentioned without asking for a call", "\"Unknown\"", "copying their own words",
-                  "sometimes marks the wearer \"Unknown\" too", "judge by what is said and to whom"):
+                  "sometimes marks the wearer \"Unknown\" too", "judge by what is said and to whom",
+                  "A request taken back in the same memo or soon after (\"아니다, 하지 마\", \"wait, no\") does not count."):
         assert words in text, words
 
 
@@ -919,10 +929,11 @@ def test_lines_spoken_during_our_call_are_never_shown_or_booked_from(tmp_path, m
     assert result.startswith("Not booked") and told == []
 
 
-def test_an_old_request_in_a_long_recording_books_nothing(tmp_path, monkeypatch):
+def test_lines_said_long_ago_book_nothing_whatever_the_recording_s_end(tmp_path, monkeypatch):
     """Finding 2: the age was the conversation's, so yesterday's request in a recording that ended a minute ago
-    booked tonight. The lines the words are in must be recent."""
-    ws = conversation_change(tmp_path, monkeypatch, [("Minseung", "뭐 먹지.")],
+    booked tonight. Since the code no longer finds the line that asks (the user's decision of 2026-10-18), it goes by
+    the lines it showed: the newest of them must be recent."""
+    ws = conversation_change(tmp_path, monkeypatch, [],
                              earlier=[("Minseung", "오늘 밤 9시에 전화해서 같이 정리하자.", NOW - timedelta(hours=22))])
     result, told = booked(ws)
     assert result.startswith("Not booked") and "22 hours ago" in result and told == []
@@ -953,19 +964,6 @@ def test_a_live_transcription_s_lines_are_shown_once(tmp_path, monkeypatch):
     assert result.startswith("Booked") and len(told) == 1
 
 
-@pytest.mark.parametrize("lines", [
-    [("Minseung", "오늘 밤 9시에 전화해 줘."), ("Minseung", "아니다, 하지 마.")],
-    [("Minseung", "오늘 밤 9시에 전화해 줘."), ("Unknown", "응."), ("Minseung", "아니다, 됐어. 하지 마.")],
-    [("Minseung", "Call me at nine tonight."), ("Minseung", "Actually no, don't.")],
-])
-def test_a_request_taken_back_on_a_later_line_books_nothing(tmp_path, monkeypatch, lines):
-    """Finding 6: said_in sees only the rest of the line the words are in, so a take-back on the next line booked.
-    In a memo the same words were refused."""
-    ws = conversation_change(tmp_path, monkeypatch, lines)
-    result, told = booked(ws, asked=lines[0][1].rstrip("."))
-    assert result.startswith("Not booked") and "takes it back" in result and told == []
-
-
 def test_the_newest_conversations_are_the_ones_read(tmp_path, monkeypatch):
     """Finding 7: the first three of the change were read, oldest first, so a note that came fourth could not book.
     The newest are read: those still recording, then by their end."""
@@ -990,7 +988,6 @@ def test_a_line_s_start_that_is_no_time_reads_as_no_time():
 
     assert recorded({"created_at": 3.5}, NOW) is None and recorded({"created_at": 1e9}, NOW) is None
     assert recorded({"created_at": ms(NOW)}, NOW) == NOW
-
 
 
 def test_a_think_cut_off_by_a_stop_is_logged_with_what_it_used(tmp_path):
