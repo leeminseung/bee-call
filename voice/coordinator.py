@@ -21,7 +21,7 @@ from livekit.agents import Agent, ModelSettings, RunContext, function_tool, llm
 from livekit.agents.llm import StopResponse
 from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, update_instructions
 
-from beelink import reads, toolkit
+from beelink import cli, reads, toolkit
 from beelink.calls import OurCalls
 from beelink.clock import now_text
 from beelink.writer import (AS_BEE_HAS_IT, CREATING, KINDS, REMOVING, BeeWrites, as_bee_has_it, event_fields,
@@ -595,6 +595,9 @@ class BeeCoordinator(Coordinator):
         self._bee_writes = BeeWrites(recorder.dir)  # this call's Bee writes, kept in its folder
         self._claimed: dict[tuple, str] = {}  # each item saved or tried in this call (same_item): its write's key
         self._from_organize: set[str] = set()  # the keys of the writes organize_bee made
+        # This call's writes still being saved: each key and what its save sets once Bee answered. A take-back of one
+        # waits for it (fourth review of 2026-10-18: one still being saved read as "Bee did not confirm it").
+        self._saving: dict[str, asyncio.Event] = {}
         # One take-back reaches Bee at a time: LiveKit runs one reply's tool calls together, and each take-back reads
         # its change's state before acting on it.
         self._undo_lock = asyncio.Lock()
@@ -696,7 +699,8 @@ class BeeCoordinator(Coordinator):
             write = await self._bee_writes.begin(item, question, answer, before=before)
             self._claimed[same_item(item)] = write.key
             try:
-                await self._bee_writes.apply(write)
+                async with self._being_saved(write):
+                    await self._bee_writes.apply(write)
             finally:  # also when the tool is cut off mid-write: the record shows the write, and that Bee may have it
                 self._recorder.event("bee_write", **event_fields(write))
         what = label(write, ENGLISH)
@@ -717,24 +721,40 @@ class BeeCoordinator(Coordinator):
 
     @function_tool
     async def undo_bee_write(self, context: RunContext, change: str) -> str:
-        """Take back one change you made to Bee in this call, when the user wants it back: an item added comes out, a
+        """Take back a change you made to Bee in this call, when the user wants it back: an item added comes out, a
         fact deleted comes back, a suggestion turned down comes back as a to-do, something brought back goes out
         again, and a change that did not go through is not tried again after the call. Name the change by its key,
-        from the answer that reported it; the user's words tell you which change they mean. To take back two changes,
-        call it once for each key.
+        from the answer that reported it; the user's words tell you which change they mean. For several changes, give
+        each key.
 
         Args:
-            change: The key of the change to take back, such as "w3".
+            change: The key of the change to take back, such as "w3"; for several changes, each key, such as "w2, w3".
         """
-        named = re.search(r"\bw\d+\b", str(change or "").lower())  # the key's form only: "w3", also in "change w3"
-        key = named.group(0) if named else ""
-        # The model names the change; the code only checks that it is one of this call's and in a state that can be
-        # taken back, and acts on it (third review of 2026-10-18: the newest-change rule kept opening new holes).
-        async with self._undo_lock:
+        # Only the keys' form is read ("w3", also in "change w3"), each in the order given (fourth review of
+        # 2026-10-18: "w2, w3" took back w2 alone). The model names the change; the code only checks that it is one
+        # of this call's and in a state that can be taken back, and acts on it.
+        keys = list(dict.fromkeys(f"w{int(n)}" for n in re.findall(r"\bw0*(\d+)\b", str(change or "").lower())))
+        if not keys:
+            return self._name_a_change(self._bee_writes.all(), change)
+        return "\n".join([await self._take_back(context, key) for key in keys])
+
+    async def _take_back(self, context: RunContext, key: str) -> str:
+        """Takes back this call's change `key`, after a save of it still running ends (within the call's ceiling)."""
+        async with self._undo_lock:  # one take-back reaches Bee at a time
             writes = self._bee_writes.all()
             target = next((w for w in writes if w.key == key), None)
             if target is None:
-                return self._name_a_change(writes, change)
+                return self._name_a_change(writes, key)
+            saving = self._saving.get(key)
+            if target.status == "applying" and saving is not None:  # still being saved in this call: wait for it
+                try:
+                    async with self.waiting(context):
+                        await asyncio.wait_for(saving.wait(), cli.CALL_WAIT_S)
+                except asyncio.TimeoutError:
+                    return (f"Not taken back yet: {label(target, ENGLISH)} (change {key}) is still being saved. Tell "
+                            "the user it is still going into Bee, and that it can be taken back once it is in.")
+                writes = self._bee_writes.all()
+                target = next(w for w in writes if w.key == key)
             what = f"{label(target, ENGLISH)} (change {key})"
             if target.status == "undone":
                 return f"Already taken back: {what}. Nothing more to do."
@@ -791,8 +811,9 @@ class BeeCoordinator(Coordinator):
                 "fact_confirm": "confirmed", "fact_update": "fixed"}
         listed = []
         for write in writes:
-            state = states.get(write.status) or ("brought back" if write.item.get("restores")
-                                                 else done.get(write.kind, "added"))
+            saving = write.status == "applying" and write.key in self._saving
+            state = "still being saved" if saving else states.get(write.status) or (
+                "brought back" if write.item.get("restores") else done.get(write.kind, "added"))
             listed.append(f"{write.key} {label(write, ENGLISH)} ({state})")
         named = f"{str(said).strip()!r} is not one of them. " if str(said or "").strip() else ""
         return (f"Name the change to take back by its key. {named}This call's changes: {'; '.join(listed)}. Call "
@@ -826,7 +847,8 @@ class BeeCoordinator(Coordinator):
         async with self.waiting(context):
             write = await self._bee_writes.begin(item, question, answer)
             try:
-                await self._bee_writes.apply(write)
+                async with self._being_saved(write):
+                    await self._bee_writes.apply(write)
             finally:  # also when cut off mid-write: the record shows it, and that Bee may have it
                 self._recorder.event("bee_write", **event_fields(write))
         back = f"{label(write, ENGLISH)} (change {write.key})"
@@ -910,7 +932,8 @@ class BeeCoordinator(Coordinator):
 
             async def write(one) -> None:
                 try:
-                    await self._bee_writes.apply(one)
+                    async with self._being_saved(one):
+                        await self._bee_writes.apply(one)
                 finally:  # also when the tool is cut off mid-write: the record shows the write, and that Bee may have it
                     self._recorder.event("bee_write", **event_fields(one))
 
@@ -936,6 +959,16 @@ class BeeCoordinator(Coordinator):
         parts.append("Tell the user in a few words that they are in and that they can see and edit them in the Bee app."
                      if went else "Tell the user in a few words what happened.")
         return " ".join(parts)
+
+    @asynccontextmanager
+    async def _being_saved(self, write):
+        """While a write is saved to Bee: a take-back of it waits until Bee answered, also when the save is cut off."""
+        done = self._saving[write.key] = asyncio.Event()
+        try:
+            yield
+        finally:
+            done.set()
+            self._saving.pop(write.key, None)
 
     def _last_exchange(self) -> tuple[str | None, str | None, str | None]:
         """By position only, never judged: what the AI said since the user's turn before their last words (all its

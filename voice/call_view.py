@@ -573,6 +573,11 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
         item, where = _job_item(call_id, call, job, state, zone, wall)
         (docked if item["state"] == "running" else placed).append((where, item))
     live = state == "live"
+    # One card carries the hint "빼려면 '빼 줘'라고 말하세요": the newest change in Bee that saying so takes out (a
+    # delete or a dismissed suggestion comes back instead, so the hint does not fit them). The call AI takes back
+    # any change the person names, by its key (fourth review of 2026-10-18: a hint on several cards points at none).
+    takeable = [w for w in call.writes if w.kind not in REMOVING and w.status in ("ok", "undo_failed")]
+    hinted = takeable[-1] if live and takeable else None
     for write in call.writes:
         if write.state == "applying" and live:
             continue  # still being made: it shows once Bee answered
@@ -583,12 +588,7 @@ def items_of(call_id: str, call: Call, state: str, zone: tzinfo,
         item = {"type": "bee_write", "id": write.id, "at": _iso(write.at or call.when(write.t), zone),
                 "kind": write.kind, "text": write.text, "state": shown,
                 "will_retry": live and write.state == "failed" and write.status != "withdrawn",
-                # Every change of a live call that saying so would take out now: the call AI takes back the change
-                # the person means, by its key (third review of 2026-10-18). The app's hint on an undoable card
-                # is "빼려면 '빼 줘'라고 말하세요": a delete or a dismissed suggestion can be taken back too, but
-                # it comes back, so the hint does not fit them.
-                "undoable": live and shown == "written" and write.kind not in REMOVING
-                and write.status in ("ok", "undo_failed")}
+                "undoable": write is hinted}
         placed.append(((write.t, write.line), item))
     placed.sort(key=lambda entry: entry[0])
     items: list[dict[str, Any]] = []

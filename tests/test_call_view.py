@@ -434,10 +434,11 @@ def test_bee_write_states_come_from_the_writer_s_record(tmp_path):
     assert body["items"][1]["at"] == "2026-10-15T20:00:10+09:00"
 
 
-def test_in_a_live_call_a_failed_write_will_be_retried_and_each_write_in_bee_can_be_taken_out(tmp_path):
-    """undoable is every change of a live call that saying so would take out now (in Bee: ok, or a take-back Bee
-    refused): the call AI takes back the change the person means, by its key (third review of 2026-10-18). A failed
-    write will be retried; a write still being made shows once it has a result."""
+def test_in_a_live_call_a_failed_write_will_be_retried_and_the_newest_write_in_bee_carries_the_hint(tmp_path):
+    """undoable is one card: the newest change of a live call that saying "빼 줘" would take out now (in Bee: ok, or
+    a take-back Bee refused), since the app's fixed hint on several cards would point at none (fourth review of
+    2026-10-18); the call AI takes back any change the person names, by its key. A failed write will be retried; a
+    write still being made shows once it has a result."""
     todo = {"kind": "todo_create", "text": "Call mom"}
     writes = [bee("w1", "applying", "2026-10-15T20:00:10+09:00", item=todo, **ASKED), bee("w1", "ok", "2026-10-15T20:00:11+09:00"),
               bee("w2", "applying", "2026-10-15T20:00:20+09:00", item=todo, **ASKED), bee("w2", "ok", "2026-10-15T20:00:21+09:00"),
@@ -447,12 +448,12 @@ def test_in_a_live_call_a_failed_write_will_be_retried_and_each_write_in_bee_can
     record(tmp_path, [INBOUND, say(2, "Hi.")], writes=writes, age_s=5)
     found = [(i["id"], i["state"], i["will_retry"], i["undoable"]) for i in view(tmp_path)["items"]
              if i["type"] == "bee_write"]
-    assert found == [("write-w1", "written", False, True), ("write-w2", "written", False, True),
+    assert found == [("write-w1", "written", False, False), ("write-w2", "written", False, True),
                      ("write-w3", "failed", True, False)]
     making = writes + [bee("w4", "applying", "2026-10-15T20:00:40+09:00", item=todo, **ASKED)]
     record(tmp_path / "making", [INBOUND, say(2, "Hi.")], writes=making, age_s=5)
     assert [(i["id"], i["undoable"]) for i in view(tmp_path / "making")["items"] if i["type"] == "bee_write"] == [
-        ("write-w1", True), ("write-w2", True), ("write-w3", False)]
+        ("write-w1", False), ("write-w2", True), ("write-w3", False)]
     record(tmp_path / "ended", [INBOUND, say(2, "Hi."), CLOSED, ENDED], writes=writes)
     assert [i["undoable"] for i in view(tmp_path / "ended")["items"] if i["type"] == "bee_write"] == [False] * 3
 
@@ -472,7 +473,7 @@ def test_the_new_kinds_show_and_a_removal_never_carries_the_take_it_out_hint(tmp
               bee("w3", "ok", "2026-10-15T20:00:31+09:00")]
     record(tmp_path, [INBOUND, say(2, "Hi.")], writes=writes, age_s=5)
     found = [(i["id"], i["kind"], i["state"], i["undoable"]) for i in view(tmp_path)["items"] if i["type"] == "bee_write"]
-    assert found == [("write-w1", "fact_create", "written", True), ("write-w2", "todo_complete", "written", True),
+    assert found == [("write-w1", "fact_create", "written", False), ("write-w2", "todo_complete", "written", True),
                      ("write-w3", "fact_delete", "written", False)]  # a todo marked done can be marked open again
 
 
@@ -794,7 +795,7 @@ def test_a_removal_brought_back_shows_what_it_did_and_what_came_back(tmp_path):
               bee("w3", "ok", "2026-10-15T20:00:31+09:00")]
     record(tmp_path, [INBOUND, say(2, "Hi.")], writes=writes, age_s=5)
     found = [(i["id"], i["kind"], i["state"], i["undoable"]) for i in view(tmp_path)["items"] if i["type"] == "bee_write"]
-    assert found == [("write-w1", "todo_create", "written", True), ("write-w2", "fact_delete", "written", False),
+    assert found == [("write-w1", "todo_create", "written", False), ("write-w2", "fact_delete", "written", False),
                      ("write-w3", "fact_create", "written", True)]
 
 
@@ -832,3 +833,19 @@ def test_a_withdrawn_write_and_one_that_cannot_be_taken_back_show_as_what_they_a
     assert found == [("write-w1", "written", False, True), ("write-w2", "failed", False, False),
                      ("write-w3", "written", False, False), ("write-w4", "written", False, False),
                      ("write-w5", "failed", False, False)]
+
+
+def test_one_card_carries_the_take_it_out_hint_the_newest_change_in_bee(tmp_path):
+    """Fourth review of 2026-10-18: every to-do of a live call carried the app's fixed hint, so a bare "빼 줘" could
+    point at none. Only the newest change that saying so takes out carries it: here what a bring-back made."""
+    t = "2026-10-15T20:00:{:02d}+09:00".format
+    todo = lambda text: {"kind": "todo_create", "text": text}  # noqa: E731
+    writes = [bee("w1", "applying", t(10), item=todo("A"), **ASKED), bee("w1", "ok", t(11)),
+              bee("w2", "applying", t(12), item=todo("B"), **ASKED), bee("w2", "ok", t(13)),
+              bee("w3", "applying", t(14), item={"kind": "fact_delete", "fact_id": 7, "text": "C"}, **ASKED),
+              bee("w3", "ok", t(15)),
+              bee("w4", "applying", t(16), item={"kind": "fact_create", "text": "C", "restores": "w3"}, **ASKED),
+              bee("w4", "ok", t(17))]
+    record(tmp_path, [INBOUND, say(2, "Hi.")], writes=writes, age_s=5)
+    assert [(i["id"], i["undoable"]) for i in view(tmp_path)["items"] if i["type"] == "bee_write"] == [
+        ("write-w1", False), ("write-w2", False), ("write-w3", False), ("write-w4", True)]

@@ -1276,3 +1276,90 @@ def test_the_key_is_read_by_its_form_also_inside_more_words(tmp_path, fake_bee):
         return await agent.undo_bee_write(None, "change W1")
 
     assert asyncio.run(main()).startswith("Took it back: todo 'Note the bug' (change w1).")
+
+
+# ---------- fourth review of 2026-10-18 ----------
+
+def test_several_keys_in_one_take_back_are_each_taken_back_in_the_order_given(tmp_path, fake_bee, monkeypatch):
+    """Finding 3: change="w2, w3" took back w2 and dropped w3 without a word. Each key given is acted on, in order,
+    and each is reported; a key's form is read loosely ("W3.", "w02"), a number or words are not keys."""
+    monkeypatch.setenv("FAKE_BEE_TODOS", str(tmp_path / "todos.json"))
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        for n in (1, 2, 3, 4):
+            await saved(agent, f"Shall I add 'T{n}' to your Bee todos?", "Yes.", kind="todo_create", text=f"T{n}")
+        await say(agent, ("user", "Take some back."))
+        return ([await agent.undo_bee_write(None, given) for given in ("w3, w1", "w02", "the third one", "3")],
+                rec)
+
+    (both, second, words, number), rec = asyncio.run(main())
+    assert both.split("\n") == ["Took it back: todo 'T3' (change w3). Tell the user in a few words.",
+                                "Took it back: todo 'T1' (change w1). Tell the user in a few words."]
+    assert second.startswith("Took it back: todo 'T2' (change w2).")
+    assert words.startswith("Name the change to take back by its key. 'the third one' is not one of them.")
+    assert number.startswith("Name the change to take back by its key. '3' is not one of them.")
+    assert [(w.key, w.status) for w in BeeWrites(rec.dir).all()] == [
+        ("w1", "undone"), ("w2", "undone"), ("w3", "undone"), ("w4", "ok")]
+
+
+def test_a_take_back_of_a_change_still_being_saved_waits_for_it_and_takes_it_back(tmp_path, fake_bee, monkeypatch):
+    """Finding 2: a write still being saved read as "Bee did not confirm it", and naming it said to check the Bee
+    app, though it went in a moment later and stayed. The call keeps its writes in progress: the list says it is
+    still being saved, and a take-back of it waits for the save, then takes it back."""
+    monkeypatch.setenv("FAKE_BEE_TODOS", str(tmp_path / "todos.json"))
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await say(agent, ("assistant", ASKED[0]), ("user", ASKED[1]))
+        monkeypatch.setenv("FAKE_BEE_SLOW", "todos create 1")
+        saving = asyncio.create_task(agent.save_to_bee(None, kind="todo_create", text="Note the bug"))
+        await asyncio.sleep(0.3)
+        listed = await agent.undo_bee_write(None, "")
+        undone = await agent.undo_bee_write(None, "w1")
+        return listed, undone, await saving, rec
+
+    listed, undone, said, rec = asyncio.run(main())
+    assert listed == ("Name the change to take back by its key. This call's changes: w1 todo 'Note the bug' (still "
+                      "being saved). Call undo_bee_write again with the key of the change the user means.")
+    assert undone.startswith("Took it back: todo 'Note the bug' (change w1).") and said.startswith("Saved to Bee")
+    assert [w.status for w in BeeWrites(rec.dir).all()] == ["undone"]
+    assert writes_to_bee(fake_bee) == [["todos", "create"], ["todos", "delete"]]
+
+
+def test_a_take_back_of_a_change_still_being_saved_past_the_ceiling_says_so(tmp_path, fake_bee, monkeypatch):
+    """The take-back waits at most the call's ceiling (0.5 s here) for the save; past it, it says the change is still
+    being saved, and the save goes on to its end."""
+    monkeypatch.setattr(cli, "CALL_WAIT_S", 0.5)
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await say(agent, ("assistant", ASKED[0]), ("user", ASKED[1]))
+        monkeypatch.setenv("FAKE_BEE_SLOW", "todos create 1.5")
+        saving = asyncio.create_task(agent.save_to_bee(None, kind="todo_create", text="Note the bug"))
+        await asyncio.sleep(0.2)
+        undone = await agent.undo_bee_write(None, "w1")
+        return undone, await saving, rec
+
+    undone, said, rec = asyncio.run(main())
+    assert undone == ("Not taken back yet: todo 'Note the bug' (change w1) is still being saved. Tell the user it is "
+                      "still going into Bee, and that it can be taken back once it is in.")
+    assert said.startswith("Saved to Bee") and [w.status for w in BeeWrites(rec.dir).all()] == ["ok"]
+
+
+def test_a_take_back_waits_for_an_organized_item_still_being_saved(tmp_path, fake_bee, monkeypatch):
+    monkeypatch.setenv("FAKE_BEE_TODOS", str(tmp_path / "todos.json"))
+
+    async def main():
+        agent, rec = await in_a_call(tmp_path)
+        await say(agent, ("assistant", "Shall I put what came up today in Bee?"), ("user", "Yes."))
+        monkeypatch.setenv("FAKE_BEE_SLOW", "todos create 1")
+        organizing = asyncio.create_task(agent.organize_bee(None, scope="call", todos=["Call Dana"]))
+        await asyncio.sleep(0.3)
+        undone = await agent.undo_bee_write(None, "w1")
+        return undone, await organizing, rec
+
+    undone, organized, rec = asyncio.run(main())
+    assert organized.startswith("Added to Bee: todo 'Call Dana' (change w1).")
+    assert undone.startswith("Took it back: todo 'Call Dana' (change w1).")
+    assert [w.status for w in BeeWrites(rec.dir).all()] == ["undone"]
