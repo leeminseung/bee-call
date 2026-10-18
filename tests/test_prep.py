@@ -371,6 +371,20 @@ def test_the_seed_carries_the_last_calls_for_a_person_with_bee_or_without(tmp_pa
         assert "Your last calls with the user ..." in seed
 
 
+def test_what_to_read_names_the_last_few_calls_the_next_message_holds():
+    """2026-10-18: the code passes the last few calls in the seed and "What you are doing" names them; "What to read",
+    the list of what the next message holds, now names them too, with Bee or without."""
+    from voice.prep import PREP_INSTRUCTIONS, PREP_INSTRUCTIONS_WITHOUT_BEE, WHAT_TO_READ
+
+    assert WHAT_TO_READ in PREP_INSTRUCTIONS
+    assert WHAT_TO_READ.startswith(
+        "## What to read\nThe next message holds who is calling whom and why, the meta agent's notes (open threads and "
+        "the agenda for this call), your last few calls with the user, and what changed in Bee since the last call. "
+        "Start from those.")
+    assert ("## What to read\nThe next message holds who is calling whom and why, the notes kept between calls and your "
+            "last few calls with the user.") in PREP_INSTRUCTIONS_WITHOUT_BEE
+
+
 def test_the_prep_is_told_to_compact_what_came_before_into_what_this_call_must_know():
     """The user's texts (2026-10-18) for "What you are doing" and "Your note"; the opening and "What to read" stay.
     Measured that day, 1 of 8 notes kept under 100 words: "Your note" now asks for one short line each, shows a note of
@@ -419,13 +433,17 @@ def test_the_seed_asks_for_the_opening_in_the_call_s_language_whatever_the_earli
 
 # ---------- the user's decision of 2026-10-18: what Bee already has, listed after the prep note ----------
 
-def bee_data(tmp_path, monkeypatch, facts: int = 3, todos: int = 2, suggestions: int = 2, more: bool = False) -> None:
-    """Bee's lists as the fake answers them: facts made a minute apart (the newest has the highest id), open and done
-    to-dos, and suggestions."""
+def bee_data(tmp_path, monkeypatch, facts: int = 3, todos: int = 2, suggestions: int = 2, more: bool = False,
+             unconfirmed: int = 2) -> None:
+    """Bee's lists as the fake answers them: confirmed and unconfirmed facts made a minute apart (the newest has the
+    highest id), open and done to-dos, and suggestions."""
     base = 1792150000000
     answers = {
         "facts list": {"facts": [{"id": 300 + n, "text": f"Fact {n}", "created_at": base + n * 60000, "confirmed": True,
                                   "tags": []} for n in range(facts)], "next_cursor": "50" if more else None},
+        "facts list --unconfirmed": {"facts": [{"id": 700 + n, "text": f"Guess {n}", "created_at": base + n * 60000,
+                                                "confirmed": False, "tags": []} for n in range(unconfirmed)],
+                                     "next_cursor": None},
         "todos list": {"todos": [{"id": 400 + n, "text": f"To-do {n}", "created_at": base + n * 60000,
                                   "completed": n % 2 == 1} for n in range(2 * todos)], "next_cursor": None},
         "todos suggestions": {"todoSuggestions": [{"id": 900 + n, "text": f"Suggestion {n}", "created_at": base + n,
@@ -442,19 +460,24 @@ def test_what_bee_has_lists_its_facts_open_to_dos_and_suggestions_with_their_ids
     has = asyncio.run(what_bee_has(None, NOW.tzinfo, wait_s=5))
     assert has.text == ("What Bee already has, as read when the call began, each with its Bee id:\n"
                         "Confirmed facts:\n- 302: Fact 2\n- 301: Fact 1\n- 300: Fact 0\n"
+                        "Unconfirmed facts:\n- 701: Guess 1\n- 700: Guess 0\n"
                         "Open to-dos:\n- 402: To-do 2\n- 400: To-do 0\n"
                         "To-dos Bee suggests:\n- 901: Suggestion 1\n- 900: Suggestion 0")
-    assert has.listed == {"facts": 3, "todos": 2, "suggestions": 2} and has.missing == {}
-    assert sorted(c[:2] for c in calls_of(fake_bee)) == [["facts", "list"], ["todos", "list"], ["todos", "suggestions"]]
+    assert has.listed == {"facts": 3, "unconfirmed": 2, "todos": 2, "suggestions": 2} and has.missing == {}
+    assert sorted([a for a in c if a != "--json"] for c in calls_of(fake_bee)) == [
+        ["facts", "list", "--limit", "50"], ["facts", "list", "--unconfirmed", "--limit", "50"],
+        ["todos", "list", "--limit", "50"], ["todos", "suggestions", "--limit", "50"]]
 
 
 def test_what_bee_has_keeps_the_newest_up_to_its_caps_and_says_bee_has_more(fake_bee, tmp_path, monkeypatch):
     from voice.prep import BEE_HAS_MOST, what_bee_has
 
-    bee_data(tmp_path, monkeypatch, facts=40, todos=35, suggestions=20, more=True)
+    bee_data(tmp_path, monkeypatch, facts=40, todos=35, suggestions=20, more=True, unconfirmed=20)
     has = asyncio.run(what_bee_has(None, NOW.tzinfo, wait_s=5))
-    assert has.listed == BEE_HAS_MOST == {"facts": 30, "todos": 30, "suggestions": 15}
+    assert has.listed == BEE_HAS_MOST == {"facts": 30, "unconfirmed": 15, "todos": 30, "suggestions": 15}
     assert "Confirmed facts (the newest; Bee has more):\n- 339: Fact 39\n" in has.text and "- 309: Fact 9" not in has.text
+    assert "Unconfirmed facts (the newest; Bee has more):\n- 719: Guess 19\n" in has.text
+    assert "- 705: Guess 5\n" in has.text and "- 704: Guess 4" not in has.text  # the newest 15 of 20
     assert "Open to-dos (the newest; Bee has more):\n- 468: To-do 68\n" in has.text
     assert "- 469:" not in has.text  # done to-dos are not open
     assert "To-dos Bee suggests (the newest; Bee has more):\n- 919: Suggestion 19\n" in has.text
@@ -465,24 +488,52 @@ def test_what_bee_has_leaves_out_a_part_that_fails_or_is_late_and_says_so(fake_b
 
     bee_data(tmp_path, monkeypatch)
     monkeypatch.setenv("FAKE_BEE_DOWN", "todos suggestions")
-    monkeypatch.setenv("FAKE_BEE_SLOW", "facts list 3")
+    monkeypatch.setenv("FAKE_BEE_SLOW", "facts list --limit 3")  # the confirmed facts; the unconfirmed come in time
     started = time.monotonic()
     has = asyncio.run(what_bee_has(None, NOW.tzinfo, wait_s=0.8))
     assert time.monotonic() - started < 2.0  # the late read is not waited for
     assert "Confirmed facts: not read in time, so not listed." in has.text
     assert "To-dos Bee suggests: Bee could not be read, so not listed." in has.text
-    assert "Open to-dos:\n- 402: To-do 2" in has.text
+    assert "Unconfirmed facts:\n- 701: Guess 1" in has.text and "Open to-dos:\n- 402: To-do 2" in has.text
     assert has.missing == {"facts": "not read in time", "suggestions": "Bee could not be read"}
+    monkeypatch.setenv("FAKE_BEE_DOWN", "facts list --unconfirmed")  # the unconfirmed facts alone fail
+    monkeypatch.delenv("FAKE_BEE_SLOW")
+    has = asyncio.run(what_bee_has(None, NOW.tzinfo, wait_s=5))
+    assert "Unconfirmed facts: Bee could not be read, so not listed." in has.text
+    assert "Confirmed facts:\n- 302: Fact 2" in has.text and has.missing == {"unconfirmed": "Bee could not be read"}
+
+
+def test_what_bee_has_reads_its_four_parts_at_once_within_one_time_budget(monkeypatch):
+    """The unconfirmed facts are read beside the other three, not after them: four reads of 0.3 s take about 0.3 s, and
+    the prep's wait holds for all four together."""
+    from voice.prep import what_bee_has
+
+    asked = []
+
+    async def read(name, args, *, ours, zone, timeout, max_chars):
+        asked.append((name, args, timeout))
+        await asyncio.sleep(0.3)
+        key = "todoSuggestions" if args.get("status") == "suggested" else "todos" if name == "bee_todos" else "facts"
+        return toolkit.Read("", {key: [{"id": len(asked), "text": f"{name} {args.get('status')}"}]})
+
+    monkeypatch.setattr(toolkit, "read", read)
+    started = time.monotonic()
+    has = asyncio.run(what_bee_has(None, NOW.tzinfo, wait_s=5))
+    assert time.monotonic() - started < 0.55
+    assert has.listed == {"facts": 1, "unconfirmed": 1, "todos": 1, "suggestions": 1}
+    assert ("bee_facts", {"status": "unconfirmed", "limit": 50}, 5) in asked and len(asked) == 4
+    assert "Unconfirmed facts:\n- " in has.text and "bee_facts unconfirmed" in has.text
 
 
 def test_what_bee_has_leaves_out_what_bee_made_of_our_calls_as_the_toolkit_does(fake_bee, tmp_path, monkeypatch):
     from voice.prep import what_bee_has
 
     bee_data(tmp_path, monkeypatch)
-    ours = SimpleNamespace(kept_facts=lambda items: [i for i in items if i["id"] != 302],
+    ours = SimpleNamespace(kept_facts=lambda items: [i for i in items if i["id"] not in (302, 701)],
                            others=lambda items: [i for i in items if i["id"] != 901])
     has = asyncio.run(what_bee_has(ours, NOW.tzinfo, wait_s=5))
-    assert "302" not in has.text and "901" not in has.text and "- 301: Fact 1" in has.text
+    assert "302" not in has.text and "701" not in has.text and "901" not in has.text
+    assert "- 301: Fact 1" in has.text and "- 700: Guess 0" in has.text
 
 
 def calls_of(log):

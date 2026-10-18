@@ -101,8 +101,8 @@ def test_what_to_get_to_know_next_goes_from_the_meta_agent_s_notes_to_the_prep_n
     assert ("and what is worth getting to know about the user next: a gap in what Bee keeps, two facts that disagree, "
             "an insight the user might want to talk through.") in text
     assert "- what this call could get to know about the user, from the meta agent's notes;" in PREP_INSTRUCTIONS
-    assert ("the meta agent's notes (open threads and the agenda for this call), and what changed in Bee since the "
-            "last call. Start from those.") in PREP_INSTRUCTIONS
+    assert ("the meta agent's notes (open threads and the agenda for this call), your last few calls with the user, and "
+            "what changed in Bee since the last call. Start from those.") in PREP_INSTRUCTIONS
     from meta.session import STATE_TEMPLATE
 
     assert "## Worth getting to know next" in STATE_TEMPLATE
@@ -133,14 +133,18 @@ def test_the_call_ai_collects_what_comes_up_new_and_offers_it_once(tmp_path):
                   "Organizing only adds. It never deletes, merges away or rewrites what Bee already has"):
         assert words in new, words
     assert "Ask about a single item only for what Bee already has, for example:" in one
-    assert "even in passing" not in one and "fact_create or todo_create" in one  # new items only when asked for
-    # The user's decisions of 2026-10-18: a request is the yes when it is clear what it means, said or pointed back at
-    # (measured: "그거 Bee에 넣어 줘" right after the plan was said was saved at once, which the user accepted).
-    assert ("When the user asks you to put one thing in Bee and it is clear what they mean, whether they say it "
-            "(\"'내일 치과 예약하기' Bee 할 일에 넣어 줘\") or point back at what they just said (\"그거 Bee에 넣어 줘\"), that "
-            "request is their yes: call save_to_bee at once (fact_create or todo_create), then say what went in, as Bee "
-            "has it: \"넣었어요. Bee에는 'Book a dentist appointment tomorrow'로 들어갔어요.\" When it is unclear what they "
-            "mean, say the item and ask once.") in one
+    assert "even in passing" not in one and "putting one thing in" in one  # new items only when asked for
+    # The user's decisions of 2026-10-18: a request is the yes when it is clear what it means, named or pointed back at
+    # (measured: "그거 Bee에 넣어 줘" right after the plan was said was saved at once, which the user accepted), and for
+    # every kind of change, not only for putting one thing in.
+    assert ("When the user asks for a change in Bee and it is clear what they mean, whether they name the item or point "
+            "back at it, that request is their yes, whatever the change: putting one thing in (\"'내일 치과 예약하기' Bee "
+            "할 일에 넣어 줘\", fact_create or todo_create), taking or turning down a suggestion (\"그 제안은 빼 줘\", "
+            "todo_accept or todo_dismiss), marking a to-do done (todo_complete), fixing or deleting a fact (\"That fact "
+            "is wrong, delete it.\", fact_update or fact_delete). Call save_to_bee at once, then say in a few words what "
+            "changed, as Bee has it: \"넣었어요. Bee에는 'Book a dentist appointment tomorrow'로 들어갔어요.\" Ask first "
+            "only when it is unclear what they mean, or when the change is your own idea; then say the item and ask "
+            "once.") in one
     # measured 2026-10-18 (meaning checks out of the code): one call said "넣었어요" without calling organize_bee
     assert "Say that something went into Bee or changed in Bee only after save_to_bee or organize_bee said it did." \
         in keeping
@@ -196,9 +200,58 @@ def test_the_evening_call_time_is_only_what_an_offer_suggests(tmp_path):
 def test_the_call_ai_is_told_where_what_bee_has_is_listed_and_to_leave_it_out_of_organizing():
     """The user's decision of 2026-10-18: the in-call organize added what Bee already had (a dentist to-do next to the
     open one, hiking with Dana next to the confirmed fact, deciding on the offers next to Bee's suggestion). The call
-    AI's context lists what Bee has; whether an item is already there, even in other words, is the AI's to judge."""
+    AI's context lists what Bee has, its unconfirmed facts too; whether an item is already there, even in other words,
+    is the AI's to judge."""
     from voice.coordinator import BEE_INSTRUCTIONS
 
-    assert ("What Bee already has is listed after the call prep note: its confirmed facts, open to-dos and the to-dos "
-            "it suggests. Leave out of organize_bee anything Bee already has, even in other words, including a to-do "
-            "Bee already suggests.") in BEE_INSTRUCTIONS
+    assert ("What Bee already has is listed after the call prep note: its confirmed and unconfirmed facts, open to-dos "
+            "and the to-dos it suggests. Leave out of organize_bee anything Bee already has, even in other words or with "
+            "more detail, including an unconfirmed fact or a to-do Bee already suggests. Adding one again does not "
+            "confirm or take it: that is a check of its own, one item at a time.") in BEE_INSTRUCTIONS
+    # Measured 2026-10-18: with the unconfirmed facts listed, the call that repeated one (with more detail) still put it
+    # in again; the step that calls organize_bee and the tool's own words now say "not yet in Bee" too.
+    assert "call organize_bee with the facts and to-dos Bee does not have yet" in BEE_INSTRUCTIONS
+
+
+def test_organize_bee_takes_what_bee_does_not_have_yet(tmp_path):
+    offered = llm.ToolContext(call_ai(tmp_path, True).tools).parse_function_tools("anthropic")
+    organize = next(t for t in offered if t["name"] == "organize_bee")["input_schema"]["properties"]
+    assert " ".join(organize["facts"]["description"].split()) == (
+        'For "call": the new facts, lasting things about the user that Bee does not have yet, confirmed or not, each '
+        "one short statement in English.")
+    assert " ".join(organize["todos"]["description"].split()) == (
+        'For "call": the new to-dos, things the user means to do that Bee does not have yet, open or suggested, each '
+        "one short statement in English.")
+
+
+def test_a_clear_request_is_the_yes_for_every_kind_of_change(tmp_path):
+    """The user's decision of 2026-10-18: a direct, clear request is the yes for every kind of change (turning down a
+    suggestion, deleting or fixing a fact, marking a to-do done), not only for putting one thing in. Asking first stays
+    for an unclear request and for a change that is the AI's own idea, with the item said in the question."""
+    agent = call_ai(tmp_path, True)
+    text = agent.instructions
+    one = text[text.index("### One item at a time"):text.index("## Background jobs")]
+    for gone in ("When the user asks you to put one thing in Bee",  # the yes was only for putting one thing in
+                 "Take a to-do Bee suggested (todo_accept) or turn it down (todo_dismiss) when the user says so.",
+                 "only after the user's clear yes. They can agree only to what they heard"):
+        assert gone not in one, gone
+    for kept in ("Ask first only when it is unclear what they mean, or when the change is your own idea; then say the "
+                 "item and ask once.",
+                 "When you ask, they can agree only to what they heard, so say the item as it will go into Bee, in your "
+                 "question or in the sentence just before it",
+                 "If the user corrects it, offer to fix it (fact_update, quoting the new text)",
+                 "offer to mark it done (todo_complete)",
+                 "To delete a fact or turn down Bee's suggestion, say so in the question"):
+        assert kept in one, kept
+    save = next(t for t in llm.ToolContext(agent.tools).parse_function_tools("anthropic") if t["name"] == "save_to_bee")
+    assert " ".join(save["description"].split()) == (
+        "Change one item in the user's Bee now. Call it once: after the user's clear yes to your question about this "
+        "item, which said the item in the question or in the sentence just before it, or at once when the user asked "
+        "for this change and it is clear what they mean.")
+    assert save["input_schema"]["properties"]["text"]["description"].startswith("The item as you say it to the user")
+    # "How to talk" no longer asks to repeat a save back before making it: for a change to Bee, the Bee section says
+    # when to ask (a review of this change found the two read two ways for "보너스 20%야, 고쳐 줘")
+    for bee in (True, False):
+        talk = call_ai(tmp_path, bee).instructions
+        assert ("Repeat back names and numbers that change the outcome of a booking or a job, and ask whether you got "
+                "them right.") in talk and "a booking, a job or a save" not in talk

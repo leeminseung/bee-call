@@ -50,8 +50,8 @@ NOTE_SECONDS = 20.0  # after this the note is given up; the call keeps the plain
 MAX_READS = 3
 
 # Its instructions, in sections (2026-10-18). For a person who connected Bee: no fixed bundle of Bee reads, but the
-# meta agent's notes and what changed in Bee since the last call, then at most one round of reads with the Bee tools,
-# and the three sections every agent that reads Bee shares word for word (beelink/toolkit.py).
+# meta agent's notes, the last few calls and what changed in Bee since the last call, then at most one round of reads
+# with the Bee tools, and the three sections every agent that reads Bee shares word for word (beelink/toolkit.py).
 WHAT_YOU_ARE_DOING = """\
 ## What you are doing
 You are the voice of Bee Call, which the user talks with on the phone. A call is about to start, and the phone is \
@@ -67,8 +67,9 @@ situation, in parentheses, brackets or asterisks."""
 WHAT_TO_READ = """\
 ## What to read
 The next message holds who is calling whom and why, the meta agent's notes (open threads and the agenda for this \
-call), and what changed in Bee since the last call. Start from those. If one more look would help your note, such as \
-a conversation in full or an insight the agenda mentions, read it with the Bee tools, once."""
+call), your last few calls with the user, and what changed in Bee since the last call. Start from those. If one more \
+look would help your note, such as a conversation in full or an insight the agenda mentions, read it with the Bee \
+tools, once."""
 YOUR_NOTE = """\
 ## Your note
 Then write <note>...</note>: about 70 words and never more than 100, for yourself during the call. It is the context this call must know, \
@@ -455,12 +456,14 @@ class Preparation:
 
 
 # What Bee already has, listed for the call AI after its prep note so its organize leaves out what Bee keeps (the
-# user's decision of 2026-10-18). Sizes only: the newest of each list, nothing compared or judged.
-BEE_HAS_MOST = {"facts": 30, "todos": 30, "suggestions": 15}  # the newest of each listed (arbitrary)
+# user's decision of 2026-10-18). Unconfirmed facts are a part of their own (2026-10-18): without them, organize could
+# add again what Bee holds as a guess. Sizes only: the newest of each list, nothing compared or judged.
+BEE_HAS_MOST = {"facts": 30, "unconfirmed": 15, "todos": 30, "suggestions": 15}  # the newest listed (arbitrary)
 BEE_HAS_CHARS = 20000  # the toolkit's room for one list's answer, so a page of 50 comes whole (arbitrary)
 BEE_HAS_TEXT_MOST = 200  # characters of one item's text in the list (arbitrary)
 BEE_HAS_PARTS = (  # name, as the list says it, the toolkit tool and its arguments, the list in Bee's answer
     ("facts", "Confirmed facts", "bee_facts", {"status": "confirmed", "limit": 50}, "facts"),
+    ("unconfirmed", "Unconfirmed facts", "bee_facts", {"status": "unconfirmed", "limit": 50}, "facts"),
     ("todos", "Open to-dos", "bee_todos", {"status": "open", "limit": 50}, "todos"),
     ("suggestions", "To-dos Bee suggests", "bee_todos", {"status": "suggested", "limit": 50}, "todoSuggestions"),
 )
@@ -468,8 +471,8 @@ BEE_HAS_PARTS = (  # name, as the list says it, the toolkit tool and its argumen
 
 @dataclass
 class BeeHas:
-    """What Bee already has, as the call AI's context lists it after the prep note: its confirmed facts, open to-dos
-    and the to-dos it suggests, each with its Bee id; a part not read says so in one line."""
+    """What Bee already has, as the call AI's context lists it after the prep note: its confirmed and unconfirmed
+    facts, open to-dos and the to-dos it suggests, each with its Bee id; a part not read says so in one line."""
     text: str = ""
     listed: dict[str, int] = field(default_factory=dict)  # items listed, by part
     missing: dict[str, str] = field(default_factory=dict)  # parts not read, and why
@@ -477,10 +480,10 @@ class BeeHas:
 
 
 async def what_bee_has(ours: OurCalls | None, zone: Any, wait_s: float = NOTE_SECONDS) -> BeeHas:
-    """Reads Bee's confirmed facts, open to-dos and suggested to-dos with the shared toolkit, the three at once and
-    within `wait_s` (the prep's time budget), leaving out what Bee made of our own calls as the toolkit does; lists
-    the newest of each, at most BEE_HAS_MOST. A read that fails or is not done in time is left out, said in one line.
-    Never raises."""
+    """Reads Bee's confirmed and unconfirmed facts, open to-dos and suggested to-dos with the shared toolkit, the four
+    at once and within `wait_s` (the prep's time budget), leaving out what Bee made of our own calls as the toolkit
+    does; lists the newest of each, at most BEE_HAS_MOST. A read that fails or is not done in time is left out, said in
+    one line. Never raises."""
     started = time.monotonic()
     tasks = {name: asyncio.create_task(toolkit.read(tool, dict(args), ours=ours, zone=zone, timeout=wait_s,
                                                     max_chars=BEE_HAS_CHARS))

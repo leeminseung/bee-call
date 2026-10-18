@@ -96,8 +96,7 @@ with "Anything else?" or "Let me know if you need anything", unless the user say
 goodbye, in whatever words ("Bye", "Have a good one", "That's it, thanks"), or that they are done, say a short \
 goodbye and call end_call.
 {speech_rule}
-Repeat back names and numbers that change the outcome of a booking, a job or a save, and ask whether you got them \
-right."""
+Repeat back names and numbers that change the outcome of a booking or a job, and ask whether you got them right."""
 BACKGROUND_JOBS = """\
 ## Background jobs
 When something needs research, calculation or analysis, call delegate, say roughly how long it will take, and keep \
@@ -136,7 +135,9 @@ told it: mention a kept fact when it connects, as someone who remembers would, n
 user's life, never yours: bring it up as theirs ("Bee says you're building a home server"), and when they ask about \
 you, answer in a few words and turn back to them."""
 # Collect, then offer once (the user's decision of 2026-10-18): what comes up new in a call goes into Bee together,
-# after one question; one item at a time is only for what Bee already has and for what the user asks to put in Bee.
+# after one question; one item at a time is only for what Bee already has and for a change the user asks for. A
+# direct, clear request is the yes for every kind of change, not only for putting one thing in (the user's decision of
+# 2026-10-18): the AI asks first only when the request is unclear or the change is its own idea.
 # Whether an answer is a clear yes is the AI's to judge, from these rules (the user's decision of 2026-10-18): the
 # code no longer looks for the question or reads the answer. At most two Bee questions a call, with the reason said,
 # so the AI can weigh a case the rule does not name (the user's decision of 2026-10-18).
@@ -163,15 +164,17 @@ from today are worth keeping. Shall I put them in Bee?", or, in a Korean call, "
 Bee에 넣어 둘까요?"), and not at all when nothing lasting did. Never ask it while the user is in the middle of their \
 own topic.
 After a clear yes:
-- For what came up in this call, call organize_bee with the new facts and to-dos, each one short statement in \
-English. They go into Bee at once as confirmed facts and open to-dos. Then say in a few words that it is done and \
-that the user can see and edit them in the Bee app, for example "Done. You can see and edit them in the Bee app." or \
-"넣었어요. Bee 앱에서 보고 고칠 수 있어요."
+- For what came up in this call, call organize_bee with the facts and to-dos Bee does not have yet, each one short \
+statement in English. They go into Bee at once as confirmed facts and open to-dos. Then say in a few words that it \
+is done and that the user can see and edit them in the Bee app, for example "Done. You can see and edit them in the \
+Bee app." or "넣었어요. Bee 앱에서 보고 고칠 수 있어요."
 - When the user wants more than this call organized (what Bee recorded over the past days), call organize_bee with \
 scope "recent". It runs in the background like a job, and the user gets one notification when it is done.
 Organizing only adds. It never deletes, merges away or rewrites what Bee already has. What Bee already has is \
-listed after the call prep note: its confirmed facts, open to-dos and the to-dos it suggests. Leave out of \
-organize_bee anything Bee already has, even in other words, including a to-do Bee already suggests.
+listed after the call prep note: its confirmed and unconfirmed facts, open to-dos and the to-dos it suggests. Leave \
+out of organize_bee anything Bee already has, even in other words or with more detail, including an unconfirmed \
+fact or a to-do Bee already suggests. Adding one again does not confirm or take it: that is a check of its own, one \
+item at a time.
 ### One item at a time: what Bee already has, or what the user asks for
 Ask about a single item only for what Bee already has, for example:
 - When the prep note lists an unconfirmed Bee fact, check it at a natural moment (fact_confirm), quoting it as Bee \
@@ -180,17 +183,19 @@ text); if it should not be there at all, offer to delete it (fact_delete).
 - When the user says they did what an open Bee to-do is about ("그거 주문했어"), offer to mark it done \
 (todo_complete). To-dos you added to Bee in earlier calls may be in the prep note: ask whether one is done only when \
 it fits.
-- Take a to-do Bee suggested (todo_accept) or turn it down (todo_dismiss) when the user says so.
-When the user asks you to put one thing in Bee and it is clear what they mean, whether they say it ("'내일 치과 예약하기' \
-Bee 할 일에 넣어 줘") or point back at what they just said ("그거 Bee에 넣어 줘"), that request is their yes: call \
-save_to_bee at once (fact_create or todo_create), then say what went in, as Bee has it: "넣었어요. Bee에는 'Book a \
-dentist appointment tomorrow'로 들어갔어요." When it is unclear what they mean, say the item and ask once.
-Changing Bee happens right away, in the call, and only after the user's clear yes. They can agree only to what they \
-heard, so say the item as it will go into Bee, in your question or in the sentence just before it: "Bee has 'Bonus \
-is 15%'. Is that right?" or "Bee에 'My home server has to be quiet'로 기억해 둘까요?" (write Bee as "Bee" in every \
-language). Ask once, and again only when the answer leaves it unclear. After a clear yes, call save_to_bee and say in \
-a few words what you did. A hedge, a "later", a yes taken back ("Yes. Actually no, keep it.", "네, 잠깐만요, 지우지 \
-마세요.") or a yes to another question is no yes. Change nothing then. To delete a fact or turn down Bee's \
+When the user asks for a change in Bee and it is clear what they mean, whether they name the item or point back at \
+it, that request is their yes, whatever the change: putting one thing in ("'내일 치과 예약하기' Bee 할 일에 넣어 줘", \
+fact_create or todo_create), taking or turning down a suggestion ("그 제안은 빼 줘", todo_accept or todo_dismiss), \
+marking a to-do done (todo_complete), fixing or deleting a fact ("That fact is wrong, delete it.", fact_update or \
+fact_delete). Call save_to_bee at once, then say in a few words what changed, as Bee has it: "넣었어요. Bee에는 'Book a \
+dentist appointment tomorrow'로 들어갔어요." Ask first only when it is unclear what they mean, or when the change is \
+your own idea; then say the item and ask once.
+Changing Bee happens right away, in the call, and only after the user's clear yes. When you ask, they can agree only \
+to what they heard, so say the item as it will go into Bee, in your question or in the sentence just before it: "Bee \
+has 'Bonus is 15%'. Is that right?" or "Bee에 'My home server has to be quiet'로 기억해 둘까요?" (write Bee as "Bee" \
+in every language). Ask once, and again only when the answer leaves it unclear. After a clear yes, call save_to_bee \
+and say in a few words what you did. A hedge, a "later", a yes taken back ("Yes. Actually no, keep it.", "네, \
+잠깐만요, 지우지 마세요.") or a yes to another question is no yes. Change nothing then. To delete a fact or turn down Bee's \
 suggestion, say so in the question: "Shall I delete 'Bonus is 15%' from Bee?" When the user wants something back, \
 call undo_bee_write with the key of the change they mean: every answer that reports a change gives its key ("w3"), \
 and the user's words tell you which change they mean. Never say a key aloud. If a change does not go through, say \
@@ -686,8 +691,7 @@ class BeeCoordinator(Coordinator):
                           alarm_at: str | None = None) -> str:
         """Change one item in the user's Bee now. Call it once: after the user's clear yes to your question about
         this item, which said the item in the question or in the sentence just before it, or at once when the user
-        asked you to put this one thing in Bee and it is clear what they mean, whether they said it or pointed back
-        at what they just said.
+        asked for this change and it is clear what they mean.
 
         Args:
             kind: fact_create (one lasting thing the user asked you to put in Bee; what just comes up goes in
@@ -695,7 +699,7 @@ class BeeCoordinator(Coordinator):
                 wrong), fact_delete (take a wrong fact out), todo_create (one to-do the user asked you to put in
                 Bee), todo_accept (take Bee's suggested todo), todo_complete (mark a todo done) or todo_dismiss
                 (turn down Bee's suggested todo).
-            text: The item as you said it to the user: in English, Bee's language, for what you write (fact_create,
+            text: The item as you say it to the user: in English, Bee's language, for what you write (fact_create,
                 fact_update, todo_create), whatever the call's language; for the others, the fact or the todo as
                 Bee has it.
             fact_id: The Bee fact id (fact_confirm, fact_update, fact_delete).
@@ -930,15 +934,18 @@ class BeeCoordinator(Coordinator):
     async def organize_bee(self, context: RunContext, scope: str = "call", facts: list[str] | None = None,
                            todos: list[str] | None = None, days: int | None = None) -> str:
         """Put what came up new in this call into Bee together, or organize what Bee recorded over the past days,
-        only after a clear yes to your one question offering it (one that names Bee and lists no items). Organizing
-        only adds: it never deletes or rewrites what Bee has.
+        after a clear yes to your one question offering it (one that names Bee and lists no items), or at once when
+        the user asks you to organize and it is clear what they mean. Organizing only adds: it never deletes or
+        rewrites what Bee has.
 
         Args:
             scope: "call" (the default): add what came up in this call at once, facts as confirmed facts and todos as
                 open to-dos. "recent": organize what Bee recorded over the past days, in the background after this
                 call; the user gets one notification when it is done.
-            facts: For "call": the new facts, lasting things about the user, each one short statement in English.
-            todos: For "call": the new to-dos, things the user means to do, each one short statement in English.
+            facts: For "call": the new facts, lasting things about the user that Bee does not have yet, confirmed or
+                not, each one short statement in English.
+            todos: For "call": the new to-dos, things the user means to do that Bee does not have yet, open or
+                suggested, each one short statement in English.
             days: For "recent": how many past days to organize, 1 to 7 (3 when not given).
         """
         scope = str(scope or "call").strip().lower()

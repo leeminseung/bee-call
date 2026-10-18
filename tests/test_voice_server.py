@@ -957,7 +957,9 @@ def test_a_call_starts_on_an_empty_bee_day_and_keeps_its_prep_note(tmp_path, mon
     assert "Matt is weighing a job offer." in (folder / "prep.md").read_text()
     from tests.test_beelink import calls  # no fixed bundle of Bee reads before the prep: only the list, alongside it
 
-    assert sorted(c[:2] for c in calls(bee_log)) == [["facts", "list"], ["todos", "list"], ["todos", "suggestions"]]
+    assert sorted([a for a in c if a != "--json"] for c in calls(bee_log)) == [
+        ["facts", "list", "--limit", "50"], ["facts", "list", "--unconfirmed", "--limit", "50"],
+        ["todos", "list", "--limit", "50"], ["todos", "suggestions", "--limit", "50"]]
     coordinator = call.session.started["agent"]
     assert coordinator._bee_has is not None and coordinator._bee_has.done()
 
