@@ -174,10 +174,10 @@ text); if it should not be there at all, offer to delete it (fact_delete).
 (todo_complete). To-dos you added to Bee in earlier calls may be in the prep note: ask whether one is done only when \
 it fits.
 - Take a to-do Bee suggested (todo_accept) or turn it down (todo_dismiss) when the user says so.
-When the user asks you to put one thing in Bee and says what it is ("'내일 치과 예약하기' Bee 할 일에 넣어 줘"), that \
-request is their yes: call save_to_bee at once (fact_create or todo_create), then say what went in, as Bee has it: \
-"넣었어요. Bee에는 'Book a dentist appointment tomorrow'로 들어갔어요." When they do not say what ("그거 넣어 줘"), say the \
-item and ask once.
+When the user asks you to put one thing in Bee and it is clear what they mean, whether they say it ("'내일 치과 예약하기' \
+Bee 할 일에 넣어 줘") or point back at what they just said ("그거 Bee에 넣어 줘"), that request is their yes: call \
+save_to_bee at once (fact_create or todo_create), then say what went in, as Bee has it: "넣었어요. Bee에는 'Book a \
+dentist appointment tomorrow'로 들어갔어요." When it is unclear what they mean, say the item and ask once.
 Changing Bee happens right away, in the call, and only after the user's clear yes. They can agree only to what they \
 heard, so say the item as it will go into Bee, in your question or in the sentence just before it: "Bee has 'Bonus \
 is 15%'. Is that right?" or "Bee에 'My home server has to be quiet'로 기억해 둘까요?" (write Bee as "Bee" in every \
@@ -621,7 +621,8 @@ class BeeCoordinator(Coordinator):
                           alarm_at: str | None = None) -> str:
         """Change one item in the user's Bee now. Call it once: after the user's clear yes to your question about
         this item, which said the item in the question or in the sentence just before it, or at once when the user
-        asked you to put this one thing in Bee and said what it is.
+        asked you to put this one thing in Bee and it is clear what they mean, whether they said it or pointed back
+        at what they just said.
 
         Args:
             kind: fact_create (one lasting thing the user asked you to put in Bee; what just comes up goes in
