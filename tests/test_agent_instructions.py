@@ -191,3 +191,14 @@ def test_the_evening_call_time_is_only_what_an_offer_suggests(tmp_path):
         assert "A call is booked only when Open offers shows it booked, with its time." in text
     first = context(tmp_path, [], datetime(2026, 10, 18, 12, 0, tzinfo=SEOUL))
     assert "The evening call time (the time an offer suggests, not a booking) is 21:00." in first
+
+
+def test_the_call_ai_is_told_where_what_bee_has_is_listed_and_to_leave_it_out_of_organizing():
+    """The user's decision of 2026-10-18: the in-call organize added what Bee already had (a dentist to-do next to the
+    open one, hiking with Dana next to the confirmed fact, deciding on the offers next to Bee's suggestion). The call
+    AI's context lists what Bee has; whether an item is already there, even in other words, is the AI's to judge."""
+    from voice.coordinator import BEE_INSTRUCTIONS
+
+    assert ("What Bee already has is listed after the call prep note: its confirmed facts, open to-dos and the to-dos "
+            "it suggests. Leave out of organize_bee anything Bee already has, even in other words, including a to-do "
+            "Bee already suggests.") in BEE_INSTRUCTIONS

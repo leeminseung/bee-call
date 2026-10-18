@@ -80,7 +80,8 @@ from voice.fake_claude import FakeAnthropic
 from voice.fallback_llm import FirstRequestFallback
 from voice.language import CallLanguage, call_language
 from voice.people import People, Person, Settings, data_root, dev_person
-from voice.prep import INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_role
+from voice.prep import (INBOUND_READ_TIMEOUT_S, OPENING_BY_S, Prep, Preparation, call_brief, prep_role,
+                        what_bee_has)
 from voice.recorder import CallRecorder
 from voice.titles import title_call
 from voice.ringback import STATE_ATTRIBUTE, ring_back
@@ -803,6 +804,7 @@ class Call:
     rec: CallRecorder
     session: AgentSession
     keep_warm: asyncio.Task | None = None
+    bee_has: asyncio.Task | None = None  # what Bee already has, read alongside the prep (voice/prep.py what_bee_has)
     fresh: asyncio.Task | None = None  # refreshes the record while the call runs (CallRecorder.keep_fresh)
     preparation: Preparation | None = None
     prep_recorder: asyncio.Task | None = None
@@ -900,7 +902,7 @@ async def end_call(call: Call) -> None:
     # LiveKit runs this in a task of its own, which does not carry the Bee login chosen for the call: choose it
     # again, so the writes retried after the call go to this person's Bee and no one else's.
     bee.use_bee(call.people.bee_dir(caller.id) if caller.uses_bee else None)
-    for task in (call.keep_warm, call.fresh):
+    for task in (call.keep_warm, call.fresh, call.bee_has):
         if task:
             task.cancel()
     if call.preparation is not None:
@@ -992,12 +994,19 @@ async def run_call(ctx: JobContext, people: People) -> None:
         else None
     # Join the room at once: an AI call waits here for the phone, and a caller hears ringing from here.
     await ctx.connect()
+    # What Bee already has, read alongside the prep and listed for the call AI after its note, so its organize leaves
+    # out what Bee keeps (the user's decision of 2026-10-18). It never holds up the pickup: what is not read in time
+    # is left out.
+    bee_has = asyncio.create_task(what_bee_has(OurCalls.of(workspace), caller.someone.now().tzinfo)) \
+        if caller.uses_bee else None
     first_words = asyncio.Event()  # the AI's voice has started
     if meta.get("direction") == "outbound":
         pickup = await answer_ai_call(ctx, caller, meta, inbox, conversation_ids, keep_warm)
     else:
         pickup = await ring_and_prepare(ctx, caller, meta, inbox, conversation_ids, keep_warm, first_words)
     if pickup is None:
+        if bee_has is not None:
+            bee_has.cancel()
         return
     prep = pickup.prep
     rec, answered = open_record(ctx, people, caller, meta)
@@ -1010,7 +1019,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
     rec.event("prep_ready", after_s=round(time.monotonic() - started, 2), opening=prep.opening,
               opening_s=prep.opening_s, note_ready=bool(prep.note))
     session = make_session(ctx, caller.language, caller.tts_voice, rec, caller.call_model)
-    call = Call(ctx, people, caller, meta, rec, session, keep_warm=keep_warm,
+    call = Call(ctx, people, caller, meta, rec, session, keep_warm=keep_warm, bee_has=bee_has,
                 fresh=asyncio.create_task(rec.keep_fresh()), preparation=pickup.preparation,
                 prep_recorder=asyncio.create_task(record_prep(rec, prep, pickup.preparation)),
                 inputs_saver=inputs_saver, left=pickup.left)
@@ -1028,7 +1037,7 @@ async def run_call(ctx: JobContext, people: People) -> None:
     call.agent = (BeeCoordinator if caller.uses_bee else Coordinator)(
         rec, call.jobs, workspace, clock=caller.someone.now,
         prep_note=prep.note or call_brief(inputs, meta, caller.someone.now().tzinfo),
-        pending_note=pending, language=caller.language, earlier_call=meta.get("earlier_call"),
+        pending_note=pending, bee_has=bee_has, language=caller.language, earlier_call=meta.get("earlier_call"),
         direction=meta.get("direction", "inbound"), audio_tags=caller.tts_voice.performs_tags,
         budget=lambda: day_budget(caller.someone, caller.someone.now()))
 
