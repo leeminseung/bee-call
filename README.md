@@ -126,7 +126,7 @@ The app's unit tests run on a Simulator, without signing:
 cd ios/BeeCall && xcodebuild -project BeeCall.xcodeproj -scheme BeeCall -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 18 Pro' CODE_SIGNING_ALLOWED=NO -collect-test-diagnostics never test
 ```
 
-Black-box acceptance tests live on the branch `acceptance-tests` (`acceptance/`): they start the token server and the record server from a working copy and check them through HTTP, files and operator commands only (`BEE_CALL_TARGET=<working copy> uv run pytest acceptance -q`).
+The black-box acceptance tests are not included here. They start the token server and the record server from a working copy and check them only through HTTP, files and operator commands.
 
 ### iPhone app
 
