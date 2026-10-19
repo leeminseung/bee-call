@@ -55,7 +55,7 @@ CLOCK_ONLY = re.compile(r"(\d{1,2}):(\d{2})")
 DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 LAST = math.inf  # sorts after every line of the record
 
-# Bee's ids in the prep note ("(conversation 10785664)", "todo suggestion 11628862"), which the AI needs and the
+# Bee's ids in the prep note ("(conversation 11111111)", "todo suggestion 33333333"), which the AI needs and the
 # person does not (moved from web/app.js withoutIds). ASCII rules, as in JavaScript: an id next to Hangul still ends.
 ID_WORDS = r"convs?|conversations?|todos?|todo suggestions?|suggestions?|facts?|unconfirmed facts?|ids?"
 ID_GROUP = re.compile(rf"\s*\((?:(?:{ID_WORDS})\.?\s*)?#?\d{{4,}}(?:\s*(?:,|and|&)\s*#?\d{{4,}})*\)", re.I | re.A)

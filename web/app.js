@@ -109,7 +109,7 @@
     return humanize(name);
   }
 
-  // The prep note keeps Bee's ids for the AI ("(conversation 10785664)", "todo suggestion 11628862"); people
+  // The prep note keeps Bee's ids for the AI ("(conversation 11111111)", "todo suggestion 33333333"); people
   // do not need them, so the page leaves them out. The note itself is unchanged.
   const ID_WORDS = "convs?|conversations?|todos?|todo suggestions?|suggestions?|facts?|unconfirmed facts?|ids?";
   const ID_GROUP = new RegExp(`\\s*\\((?:(?:${ID_WORDS})\\.?\\s*)?#?\\d{4,}(?:\\s*(?:,|and|&)\\s*#?\\d{4,})*\\)`, "gi");

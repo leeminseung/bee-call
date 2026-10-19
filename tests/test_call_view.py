@@ -573,7 +573,7 @@ def test_older_quotes_with_a_bare_clock_time_get_the_day_before_the_call(tmp_pat
 
 def test_the_prep_note_loses_bee_s_ids_and_older_reads_become_what_it_looked_up(tmp_path):
     """The page's withoutIds rules, moved here; prep reads stored as "tool {json}" text are read too."""
-    note = ("Talked with Dana (conversation 10785664) about the hike. Todo suggestion 11628862 is open; facts "
+    note = ("Talked with Dana (conversation 11111111) about the hike. Todo suggestion 33333333 is open; facts "
             "(#8812, #8813) need checking. See #12345 too.")
     prep = {"t": 1, "type": "call_prep", "note": note, "error": None,
             "reads": ['search_bee {"query": "hike"}', 'bee_day {"date": "2026-10-14"}',
