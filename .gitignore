@@ -20,3 +20,5 @@ xcuserdata/
 DerivedData/
 *.xcuserstate
 build/
+# This Mac's address for Debug builds (copy ios/BeeCall/Local.xcconfig.example)
+ios/BeeCall/Local.xcconfig

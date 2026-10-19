@@ -1,0 +1,9 @@
+// The BeeCall target's Debug build settings. The project file names this file as their base.
+//
+// BEE_CALL_SERVER is the token server a Debug build talks to (Info.plist BeeCallServer). localhost reaches the Mac
+// from the Simulator only. For an iPhone on the same Wi-Fi, copy Local.xcconfig.example to Local.xcconfig, which git
+// ignores, and put the Mac's address in it. It is read last, so its value wins. "$()" is empty, and it keeps the "//"
+// of the address from starting a comment.
+BEE_CALL_SERVER = http:/$()/localhost:8787
+
+#include? "Local.xcconfig"

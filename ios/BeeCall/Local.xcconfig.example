@@ -1,0 +1,4 @@
+// Copy this file to Local.xcconfig (git ignores it) and replace YOUR_MAC_IP with the Mac's address on the Wi-Fi the
+// iPhone uses. Debug.xcconfig reads it, so a Debug build talks to the token server on that Mac. "$()" is empty, and it
+// keeps the "//" of the address from starting a comment.
+BEE_CALL_SERVER = http:/$()/YOUR_MAC_IP:8787
