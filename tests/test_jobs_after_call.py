@@ -41,7 +41,7 @@ def in_a_call(monkeypatch, me, step_s: float, *, title: str = "Price check", han
         call.join()
         await agent.run_call(call, me.people)
         coordinator = call.session.started["agent"]
-        await coordinator.delegate(None, task="Compare MacBook prices in Korea", title=title)
+        await coordinator.delegate(None, task="Compare laptop prices in Korea", title=title)
         await asyncio.sleep(hang_up_after)
         call.session.generate_reply = lambda **kwargs: asked_after.append(kwargs)  # from the call's end on
         call.hang_up()
@@ -68,9 +68,9 @@ def test_a_job_still_running_when_the_call_ends_runs_to_its_end_after_it(tmp_pat
 def test_a_job_that_ends_after_a_korean_call_is_told_in_korean(tmp_path, monkeypatch, quick):
     me = signed_in(tmp_path)
     me.people.change_settings("matt", {"language": "ko"})
-    pushes, _, _ = in_a_call(monkeypatch, me, step_s=0.2, title="맥북 가격 비교")
+    pushes, _, _ = in_a_call(monkeypatch, me, step_s=0.2, title="노트북 가격 비교")
     ((payload, _),) = pushes
-    assert payload["aps"]["alert"]["body"] == "결과가 나왔어요: 맥북 가격 비교"
+    assert payload["aps"]["alert"]["body"] == "결과가 나왔어요: 노트북 가격 비교"
 
 
 def test_a_job_still_running_long_after_its_call_is_stopped_saying_so(tmp_path, monkeypatch, quick):
@@ -480,7 +480,7 @@ def test_no_job_starts_once_the_day_s_budget_is_used_up(tmp_path, monkeypatch, q
         await agent.run_call(call, me.people)
         coordinator = call.session.started["agent"]
         SpendLog(me.workspace).add("a test", model="claude-sonnet-5-5", input_tokens=10**9)
-        said.append(await coordinator.delegate(None, task="Compare MacBook prices in Korea", title="Prices"))
+        said.append(await coordinator.delegate(None, task="Compare laptop prices in Korea", title="Prices"))
         call.hang_up()
         await call.end()
 

@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" font-family="sans-serif" font-size="12">
-<title>한국 가격(원), 에어와 프로, 세 가지 구성</title>
+<title>한국 가격(원), 13인치와 15인치, 세 가지 구성</title>
 <rect width="640" height="360" fill="#ffffff"/>
-<text x="56" y="22" font-size="15" font-weight="bold" fill="#222">한국 가격(원), 에어와 프로, 세 가지 구성</text>
+<text x="56" y="22" font-size="15" font-weight="bold" fill="#222">한국 가격(원), 13인치와 15인치, 세 가지 구성</text>
 <line x1="56" y1="304.0" x2="484" y2="304.0" stroke="#e5e5e5"/>
 <text x="50" y="308.0" text-anchor="end" fill="#555">0</text>
 <line x1="56" y1="251.2" x2="484" y2="251.2" stroke="#e5e5e5"/>
@@ -26,7 +26,7 @@
 <rect x="270.0" y="84.1" width="57.1" height="219.9" fill="#e0702a"/>
 <rect x="412.7" y="40.0" width="57.1" height="264.0" fill="#e0702a"/>
 <rect x="498" y="44" width="10" height="10" fill="#2f6fdf"/>
-<text x="512" y="53" fill="#333">MacBook Air</text>
+<text x="512" y="53" fill="#333">13인치</text>
 <rect x="498" y="60" width="10" height="10" fill="#e0702a"/>
-<text x="512" y="69" fill="#333">MacBook Pro</text>
+<text x="512" y="69" fill="#333">15인치</text>
 </svg>

@@ -1,7 +1,7 @@
-# 코딩용 맥북 에어와 프로
+# 업무용 13인치와 15인치 노트북
 
-파이썬과 가벼운 머신러닝을 밖에서 한다면 에어가 더 잘 맞아요.
+문서 작업과 가벼운 사진 편집을 밖에서 한다면 13인치가 더 잘 맞아요.
 
 ![가격](price-chart.svg)
 
-출처: https://www.apple.com/kr/macbook-air/
+출처: https://shop.example.com/kr/laptops/

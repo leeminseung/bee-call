@@ -168,20 +168,20 @@ Every item has `type`, `id` and `at` (when it began, or for a finished job when 
 | Field | Meaning |
 |---|---|
 | `speaker` | `person` or `ai`. |
-| `text` | A run of one speaker's speech with nothing else between, its pieces joined with spaces. The person's speech is their final transcripts, so the bubble reads as the captions did: "주로 파이썬이고 / 머신러닝도 조금 해요. / 공유 오피스나 카페에서 일할 때가 많아요." arrive as three pieces and make one bubble. The AI's speech is what it said aloud, cut where the person cut in. An empty piece adds nothing. |
+| `text` | A run of one speaker's speech with nothing else between, its pieces joined with spaces. The person's speech is their final transcripts, so the bubble reads as the captions did: "주로 문서 작업이고 / 사진 편집도 조금 해요. / 공유 오피스나 카페에서 일할 때가 많아요." arrive as three pieces and make one bubble. The AI's speech is what it said aloud, cut where the person cut in. An empty piece adds nothing. |
 | `interrupted` | The person cut the AI off at the end of this run. Always false for the person. |
 
 **`job`**: a background job.
 
 | Field | Meaning |
 |---|---|
-| `title` | A few words in the call's language: "코딩용 맥북 에어와 프로 한국 가격 비교" (open question 5). |
+| `title` | A few words in the call's language: "업무용 13인치와 15인치 노트북 한국 가격 비교" (open question 5). |
 | `state` | `running`, `done` or `failed`. A job outlives its call (section 2.7): it can be `running` in a call that has ended, and finish after it. |
 | `started_at` | When it started. The app counts "1분 10초째" from it. |
 | `duration_s` | Once finished, how long it took ("1분 27초 걸림"). Null while running. |
-| `step` | While running, the latest step, in the call's language ("애플 한국 가격표 읽는 중"). Else null. |
+| `step` | While running, the latest step, in the call's language ("제조사 한국 가격표 읽는 중"). Else null. |
 | `summary` | Once done, what it found, in a paragraph, in the call's language. Else null. |
-| `files` | What it made: charts first, then the report, tables, others, by name within a kind. Each is `{name, kind, url, page_url, title, image_url, image_url_dark}`. `name` is the file's real name, which the worker keeps to ASCII (`report.md`, `comparison.csv`), so the app may label a chip by its `kind` ("보고서", "표", "차트") rather than by its name. `kind` is `report` (report.md, with `page_url`, the report rendered as a readable page in HTML with light and dark styles, which the app opens instead of the raw text; null for a report from before pages existed), `table` (.csv, .tsv), `chart` (a chart the worker drew) or `other`. A chart has `image_url`, a PNG for the thumbnail and the card, `image_url_dark`, the same chart drawn for dark mode (transparent background, the dark chart palette; null for a chart drawn before dark charts existed, which the app then shows on a white plate), and its `title` in the call's language ("한국 가격(원), 에어와 프로, 세 가지 구성") when known. Other kinds have both null. The worker's own bookkeeping (request.md, events.jsonl, usage.json) is never listed. |
+| `files` | What it made: charts first, then the report, tables, others, by name within a kind. Each is `{name, kind, url, page_url, title, image_url, image_url_dark}`. `name` is the file's real name, which the worker keeps to ASCII (`report.md`, `comparison.csv`), so the app may label a chip by its `kind` ("보고서", "표", "차트") rather than by its name. `kind` is `report` (report.md, with `page_url`, the report rendered as a readable page in HTML with light and dark styles, which the app opens instead of the raw text; null for a report from before pages existed), `table` (.csv, .tsv), `chart` (a chart the worker drew) or `other`. A chart has `image_url`, a PNG for the thumbnail and the card, `image_url_dark`, the same chart drawn for dark mode (transparent background, the dark chart palette; null for a chart drawn before dark charts existed, which the app then shows on a white plate), and its `title` in the call's language ("한국 가격(원), 13인치와 15인치, 세 가지 구성") when known. Other kinds have both null. The worker's own bookkeeping (request.md, events.jsonl, usage.json) is never listed. |
 | `failure` | When failed: `call_ended` (it stopped with its call: a dropped call, or a call recorded before 2026-10-16, when a call's end stopped its jobs) or `error` (anything else, a job a server restart cut off among them, with the error's words kept in the server log). Else null. A job with no end on record whose work stopped (section 2.7) reads as failed: with `call_ended`, its `at` and `duration_s` taken from the call's end, when it stopped with the call; with `error` when it was still working after the call ended. |
 
 The step, the summary and a chart's title are in the call's language only once the worker is told that language
@@ -290,7 +290,7 @@ finals reach neither. The AI's lines are its spoken replies, one caption line ea
 words of it were heard, the server never splits a reply (no `FlushSentinel`), and the speech filter keeps markup out
 of the voice. A server test pins these conditions (open question 6).
 
-Worked example, `call-view-live.json`: at 3:41 the person has finished two pieces of "주로 파이썬이고 / 머신러닝도
+Worked example, `call-view-live.json`: at 3:41 the person has finished two pieces of "주로 문서 작업이고 / 사진 편집도
 조금 해요. / 공유 오피스나 카페에서 일할 때가 많아요." The view holds them (`captions_included.person` is 8), so the
 phone draws its caption line 9, the third piece still growing, inside the same bubble, above the docked job card.
 

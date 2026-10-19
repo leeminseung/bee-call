@@ -13,7 +13,7 @@ from worker.report_page import page_html
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sessions"
 HIKE = FIXTURES / "2026-10-11" / "1930" / "jobs" / "01" / "report.md"  # English: a table, a list, bold
-MACBOOK = FIXTURES / "2026-10-15" / "0123" / "jobs" / "01" / "report.md"  # Korean: a picture, a bare source address
+LAPTOPS = FIXTURES / "2026-10-15" / "0123" / "jobs" / "01" / "report.md"  # Korean: a picture, a bare source address
 CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
 
 
@@ -47,8 +47,8 @@ def test_the_page_is_readable_on_a_phone_in_light_and_dark():
     """System fonts, a readable width, the app's tokens from the dark mode design (light: background #FFFFFF, ink
     #21200B, secondary ink #6F6E60; dark, as in a sheet: #1C1C1E, #FFFFFF, #ABABB0) by the phone's setting, and a
     table that scrolls sideways rather than squeezing."""
-    page = page_html(MACBOOK.read_text())
-    assert '<html lang="ko">' in page and "<title>코딩용 맥북 에어와 프로</title>" in page
+    page = page_html(LAPTOPS.read_text())
+    assert '<html lang="ko">' in page and "<title>업무용 13인치와 15인치 노트북</title>" in page
     assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in page
     assert '<meta name="color-scheme" content="light dark">' in page
     style = page[page.index("<style>"):page.index("</style>")]
@@ -112,14 +112,14 @@ def test_raw_html_bad_links_and_pictures_in_a_report_stay_words():
 def test_links_stay_links_and_bare_addresses_become_links():
     """A link opens its page, never sending this page's address (rel noreferrer); a source written as a bare
     address becomes a link, ending where the address does: before Korean words or a closing full stop."""
-    page = page_html("출처: https://www.apple.com/kr/macbook-air/. 또 [애플](https://www.apple.com/kr/)과 "
+    page = page_html("출처: https://shop.example.com/kr/laptops/. 또 [애플](https://www.apple.com/kr/)과 "
                      "https://www.apple.com/kr에서, 문의 <mailto:help@example.com> (https://a.example/x_(y)).")
     links = [(attrs["href"], attrs["rel"]) for t, attrs in Tags(page).found if t == "a"]
     rel = "noopener noreferrer nofollow"
-    assert links == [("https://www.apple.com/kr/macbook-air/", rel), ("https://www.apple.com/kr/", rel),
+    assert links == [("https://shop.example.com/kr/laptops/", rel), ("https://www.apple.com/kr/", rel),
                      ("https://www.apple.com/kr", rel), ("mailto:help@example.com", rel),
                      ("https://a.example/x_(y)", rel)]
-    assert '</a>에서' in page and '/macbook-air/</a>.' in page and "x_(y)</a>)." in page
+    assert '</a>에서' in page and '/laptops/</a>.' in page and "x_(y)</a>)." in page
     code = page_html("`https://a.example` and\n\n    https://b.example\n")
     assert "<a " not in code  # an address in code stays code
 
@@ -139,13 +139,13 @@ def test_an_address_with_korean_in_its_path_links_to_its_own_page():
     on where a path segment or a query value begins, so "https://apple.com/kr에서" still ends before "에서"."""
     from urllib.parse import unquote
 
-    page = page_html("https://namu.wiki/w/맥북 https://ko.wikipedia.org/wiki/서울특별시 "
-                     "https://search.naver.com/search.naver?query=맥북&where=web "
+    page = page_html("https://namu.wiki/w/노트북 https://ko.wikipedia.org/wiki/서울특별시 "
+                     "https://search.naver.com/search.naver?query=노트북&where=web "
                      "https://en.wikipedia.org/wiki/Schrödinger's_cat (https://ru.wikipedia.org/wiki/Москва). "
                      "https://apple.com/kr에서\n")
     assert [unquote(attrs["href"]) for t, attrs in Tags(page).found if t == "a"] == [
-        "https://namu.wiki/w/맥북", "https://ko.wikipedia.org/wiki/서울특별시",
-        "https://search.naver.com/search.naver?query=맥북&where=web", "https://en.wikipedia.org/wiki/Schrödinger's_cat",
+        "https://namu.wiki/w/노트북", "https://ko.wikipedia.org/wiki/서울특별시",
+        "https://search.naver.com/search.naver?query=노트북&where=web", "https://en.wikipedia.org/wiki/Schrödinger's_cat",
         "https://ru.wikipedia.org/wiki/Москва", "https://apple.com/kr"]
     assert "</a>에서" in page and "Москва</a>)." in page
 
@@ -163,7 +163,7 @@ def test_a_report_made_to_be_slow_renders_in_time_proportional_to_its_length():
 def test_every_page_passes_the_tag_check_and_a_page_that_would_not_is_never_made():
     """The HTML that comes out is checked against the tags and attributes the renderer makes; anything else stops
     the page (the app then shows the report's text as it is)."""
-    for text in (HIKE.read_text(), MACBOOK.read_text(), HOSTILE):
+    for text in (HIKE.read_text(), LAPTOPS.read_text(), HOSTILE):
         report_page.check(body(page_html(text)))
     for bad in ('<body><img src="x"></body>', '<body><a href="javascript:x">x</a></body>',
                 '<body><p onclick="x">x</p></body>', '<body><td style="color:red">x</td></body>',

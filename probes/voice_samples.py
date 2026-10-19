@@ -47,7 +47,7 @@ LINES = {  # warmth and feeling are what make a voice sound like a person, so th
         "to feel let down. Do you want to talk it through, or should I just take a few things off your plate?",
         "Wait, you got the offer? That's amazing, congratulations! Honestly, you earned this. All that late-night "
         "prep finally paid off. Let's celebrate a little before we get into the details.",
-        "Okay, I have to ask... is this the third time we're comparing MacBooks? I'm kidding. This time I've got "
+        "Okay, I have to ask... is this the third time we're comparing laptops? I'm kidding. This time I've got "
         "the real numbers, so let's settle it for good.",
     ],
     "ko": [

@@ -25,13 +25,13 @@ enum ContractServer {
 /// memory so a language or voice picked shows, with the contract's rule that a new language without a voice goes
 /// back to that language's default. Paths without an example answer 404, as the server does for what it lacks.
 ///
-/// The examples are written for one day, 2026-10-15 in Seoul: after the calls, or 3:41 into the MacBook call (the
+/// The examples are written for one day, 2026-10-15 in Seoul: after the calls, or 3:41 into the laptop call (the
 /// contract's worked example). Their times are moved to `now`, by whole days, or with `live` so that moment of the
 /// call is now, so day words and running clocks read as they would; with `live`, the list and the offers are as
 /// they were at that moment, without what came after the call.
 final class ContractExamples: HTTPTransport {
     private let bundle: Bundle
-    var live: Bool // the MacBook call while it is on (call-view-live.json) instead of after (call-view.json)
+    var live: Bool // the laptop call while it is on (call-view-live.json) instead of after (call-view.json)
     var olderPagesWait = false // an older page of the list is on its way and stays so (the list's foot, loading)
     var beforeFirstCall = false // the list as it was before the person's first call: empty
     private let now: Date

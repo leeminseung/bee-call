@@ -27,10 +27,10 @@ def earlier_session(workspace: Path) -> Path:
     folder.mkdir(parents=True)
     events = [
         {"t": 0.0, "type": "call_started", "started_at": "2026-10-13T23:53:32", "room": "call-1"},
-        {"t": 26.5, "type": "job_started", "job_id": "01", "task": "Compare MacBook Air and Pro prices in Korea"},
+        {"t": 26.5, "type": "job_started", "job_id": "01", "task": "Compare 13-inch and 15-inch laptop prices in Korea"},
         {"t": 30.0, "type": "job_started", "job_id": "02", "task": "Find a laptop bag"},
         {"t": 31.0, "type": "job_started", "job_id": "03", "task": "Check the Apple store hours"},
-        {"t": 146.1, "type": "job_done", "job_id": "01", "summary": "The Air starts at 1.59 million won.",
+        {"t": 146.1, "type": "job_done", "job_id": "01", "summary": "The 13-inch starts at 1.59 million won.",
          "files": ["jobs/01/report.md", "jobs/01/usage.json"]},
         {"t": 150.0, "type": "job_failed", "job_id": "03", "error": "web search timed out"},
         {"t": 199.7, "type": "session_closed", "reason": "CloseReason.PARTICIPANT_DISCONNECTED"},
@@ -41,8 +41,8 @@ def earlier_session(workspace: Path) -> Path:
     (folder / "transcript.md").write_text(
         "# Call 2026-10-13 23:53 (room call-1)\n\n"
         "- 00:04.1 **AI:** Hi Minseung! What's on your mind tonight?\n"
-        "- 00:19.2 **User:** I'm choosing between a MacBook Air and a MacBook Pro.\n"
-        "- 03:17.5 **AI:** Sure! Here's the comparison:\n\nThe Air starts at about 1.6 million won. (interrupted)\n")
+        "- 00:19.2 **User:** I'm choosing between a 13-inch and a 15-inch laptop.\n"
+        "- 03:17.5 **AI:** Sure! Here's the comparison:\n\nThe 13-inch starts at about 1.6 million won. (interrupted)\n")
     return folder
 
 
@@ -51,9 +51,9 @@ def test_the_new_call_learns_what_was_said_and_what_the_jobs_did(tmp_path):
     text = earlier_call(tmp_path, EARLIER)
     assert text.startswith("The earlier call: Tue Oct 13, 11:53 PM, about 3 min.")
     assert "AI: Hi Minseung! What's on your mind tonight?" in text
-    assert "User: I'm choosing between a MacBook Air and a MacBook Pro." in text
-    assert "AI: Sure! Here's the comparison: The Air starts at about 1.6 million won. (interrupted)" in text
-    assert "Finished. Result: The Air starts at 1.59 million won." in text
+    assert "User: I'm choosing between a 13-inch and a 15-inch laptop." in text
+    assert "AI: Sure! Here's the comparison: The 13-inch starts at about 1.6 million won. (interrupted)" in text
+    assert "Finished. Result: The 13-inch starts at 1.59 million won." in text
     assert "Files in the app: report.md\n" in text  # not usage.json
     assert "Find a laptop bag\n  Stopped unfinished when that call ended." in text
     assert "Failed: web search timed out" in text

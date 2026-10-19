@@ -66,13 +66,13 @@ def last_event(folder: Path) -> dict:
 
 def test_a_call_gets_one_title_in_its_language_from_what_was_said(tmp_path, title_model):
     folder = untitled_copy(tmp_path)
-    model = title_model("  “맥북 에어와 프로, 코딩용으로 뭐가 나을까.”\n")
+    model = title_model("  “13인치와 15인치 노트북, 뭐가 나을까.”\n")
     title = asyncio.run(titles.title_call(folder, call_language("ko"), workspace=tmp_path))
-    assert title == "맥북 에어와 프로, 코딩용으로 뭐가 나을까"
+    assert title == "13인치와 15인치 노트북, 뭐가 나을까"
     (sent,) = model.sent
     assert (sent["model"], sent["thinking"], sent["max_tokens"]) == ("claude-haiku-5-5", "disabled", 80)
     assert "Korean" in sent["system"]
-    assert "Person: 맥북 에어랑 프로 중에 코딩용으로 고민 중이에요." in sent["said"]
+    assert "Person: 13인치랑 15인치 중에 업무용으로 고민 중이에요." in sent["said"]
     assert "AI: 요즘 어떤 게 제일 불편하세요?" in sent["said"]
     event = last_event(folder)
     assert (event["type"], event["title"], event["model"]) == ("call_titled", title, "claude-haiku-5-5")

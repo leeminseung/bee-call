@@ -16,22 +16,22 @@ final class CallModeTests: XCTestCase {
 
     private let talk: [(mine: Bool, text: String)] = [
         (false, "안녕하세요, 민승 님. 오늘 밤엔 무슨 이야기 할까요?"),
-        (true, "맥북 에어랑 프로 중에 코딩용으로 고민 중이에요."),
-        (false, "지금 애플 한국 가격표를 보고 있어요. 주로 어떤 코딩을 하세요?"),
+        (true, "13인치랑 15인치 중에 업무용으로 고민 중이에요."),
+        (false, "지금 제조사 한국 가격표를 보고 있어요. 주로 어떤 작업을 하세요?"),
     ]
 
     @MainActor func testTheAIsLineIsLargeWhileItSpeaks() {
         let lines = CallLines(captions: captions(talk), speaking: .ai)
-        XCTAssertEqual(lines.current?.text, "지금 애플 한국 가격표를 보고 있어요. 주로 어떤 코딩을 하세요?")
-        XCTAssertEqual(lines.other?.text, "맥북 에어랑 프로 중에 코딩용으로 고민 중이에요.")
+        XCTAssertEqual(lines.current?.text, "지금 제조사 한국 가격표를 보고 있어요. 주로 어떤 작업을 하세요?")
+        XCTAssertEqual(lines.other?.text, "13인치랑 15인치 중에 업무용으로 고민 중이에요.")
         XCTAssertEqual(lines.currentSide, .ai)
     }
 
     /// While the person speaks, their newest words are large, and the AI's last line is the small one.
     @MainActor func testThePersonsLineIsLargeWhileTheySpeak() {
-        let lines = CallLines(captions: captions(talk + [(true, "주로 파이썬이고")]), speaking: .person)
-        XCTAssertEqual(lines.current?.text, "주로 파이썬이고")
-        XCTAssertEqual(lines.other?.text, "지금 애플 한국 가격표를 보고 있어요. 주로 어떤 코딩을 하세요?")
+        let lines = CallLines(captions: captions(talk + [(true, "주로 문서 작업이고")]), speaking: .person)
+        XCTAssertEqual(lines.current?.text, "주로 문서 작업이고")
+        XCTAssertEqual(lines.other?.text, "지금 제조사 한국 가격표를 보고 있어요. 주로 어떤 작업을 하세요?")
         XCTAssertEqual(lines.currentSide, .person)
     }
 
@@ -39,7 +39,7 @@ final class CallModeTests: XCTestCase {
     @MainActor func testInAPauseTheLastLineStaysLarge() {
         let lines = CallLines(captions: captions(talk), speaking: nil)
         XCTAssertEqual(lines.currentSide, .ai)
-        XCTAssertEqual(lines.current?.text, "지금 애플 한국 가격표를 보고 있어요. 주로 어떤 코딩을 하세요?")
+        XCTAssertEqual(lines.current?.text, "지금 제조사 한국 가격표를 보고 있어요. 주로 어떤 작업을 하세요?")
     }
 
     /// The person may start speaking before their words arrive: their last line is large, if they have one.

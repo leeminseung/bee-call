@@ -23,7 +23,7 @@ final class CallThreadTests: XCTestCase {
 
     /// A call for the words: the list's first call with the fields a test is about changed.
     @MainActor private func call(_ startedAt: String, by starter: String = "person", state: String = "ended",
-                                 seconds: Int? = 460, title: String? = "맥북 에어와 프로, 코딩용으로 뭐가 나을까",
+                                 seconds: Int? = 460, title: String? = "13인치와 15인치 노트북, 뭐가 나을까",
                                  titleSource: String = "summary", topic: String? = nil) throws -> CallSummary {
         var body = try XCTUnwrap((try Examples.object("calls")["calls"] as? [[String: Any]])?.first)
         let fields: [String: Any] = [
@@ -227,7 +227,7 @@ final class CallThreadTests: XCTestCase {
     /// The title, or "대화 없음" for a call with no conversation.
     @MainActor func testATitleOrNoConversation() throws {
         let titled = try call("2026-10-15T01:23:05+09:00")
-        XCTAssertEqual(CallLine.title(titled, korean: true), "맥북 에어와 프로, 코딩용으로 뭐가 나을까")
+        XCTAssertEqual(CallLine.title(titled, korean: true), "13인치와 15인치 노트북, 뭐가 나을까")
         let silent = try call("2026-10-14T21:45:06+09:00", seconds: 16, title: nil, titleSource: "none")
         XCTAssertEqual(CallLine.title(silent, korean: true), "대화 없음")
         XCTAssertEqual(CallLine.title(silent, korean: false), "No conversation")

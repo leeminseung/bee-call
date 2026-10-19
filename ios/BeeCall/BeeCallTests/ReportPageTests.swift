@@ -30,14 +30,14 @@ final class ReportPageTests: XCTestCase {
     @MainActor func testAReportOpensItsPage() async throws {
         let report = try report(withPage: true), page = try XCTUnwrap(report.pageURL)
         let server = FakeServer()
-        server.replies["GET \(page)"] = .status(200, "<!doctype html><title>보고서</title><h1>코딩용 맥북</h1>")
+        server.replies["GET \(page)"] = .status(200, "<!doctype html><title>보고서</title><h1>업무용 노트북</h1>")
         let files = ServerFiles(folder: try temporaryFolder())
         let local = await files.open(report, server: server.client())
         let opened = try XCTUnwrap(local)
         XCTAssertEqual(server.sent, ["GET \(page)"], "the page, fetched with the sign-in")
         XCTAssertEqual(server.requests.last?.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
         XCTAssertEqual(opened.pathExtension, "html")
-        XCTAssertEqual(try String(contentsOf: opened, encoding: .utf8), "<!doctype html><title>보고서</title><h1>코딩용 맥북</h1>")
+        XCTAssertEqual(try String(contentsOf: opened, encoding: .utf8), "<!doctype html><title>보고서</title><h1>업무용 노트북</h1>")
         XCTAssertTrue(ServerFiles.isPage(opened))
     }
 
@@ -45,7 +45,7 @@ final class ReportPageTests: XCTestCase {
         let report = try report(withPage: false)
         XCTAssertNil(report.pageURL)
         let server = FakeServer()
-        server.replies["GET \(report.url)"] = .status(200, "# 코딩용 맥북")
+        server.replies["GET \(report.url)"] = .status(200, "# 업무용 노트북")
         let files = ServerFiles(folder: try temporaryFolder())
         let local = await files.open(report, server: server.client())
         let opened = try XCTUnwrap(local)

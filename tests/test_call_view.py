@@ -94,8 +94,8 @@ def test_the_examples_are_the_code_s_output(tmp_path):
     assert (live["call"]["title"], live["call"]["title_source"]) == ("토요일 촬영 장소를 아직 못 정했어요.", "first_sentence")
     assert live["captions_included"] == {"person": 8, "ai": 7}
     assert live["items"][-1]["type"] == "job" and live["items"][-1]["state"] == "running"
-    assert live["items"][-1]["step"] == "애플 한국 가격표 읽는 중"
-    assert live["items"][-2]["text"] == "주로 파이썬이고 머신러닝도 조금 해요."
+    assert live["items"][-1]["step"] == "제조사 한국 가격표 읽는 중"
+    assert live["items"][-2]["text"] == "주로 문서 작업이고 사진 편집도 조금 해요."
     write = next(i for i in live["items"] if i["type"] == "bee_write")
     assert (write["state"], write["undoable"]) == ("written", True)
 

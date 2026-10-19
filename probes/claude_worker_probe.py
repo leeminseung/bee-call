@@ -31,9 +31,9 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 SEOUL = ZoneInfo("Asia/Seoul")
-TASK = ("지금 한국 애플 공식 홈페이지 기준으로 맥북 에어와 맥북 프로 기본 모델의 가격을 비교하고, 개발자가 코딩용으로 "
-        "쓰기에 어느 쪽이 나은지 추천해 줘. 가격표는 CSV 파일로, 가격 비교 차트도 하나 만들어 줘.")
-TITLE = "맥북 에어·프로 가격 비교"
+TASK = ("지금 한국 판매 가격 기준으로 인기 있는 13인치 노트북과 15인치 노트북 기본 모델의 가격을 비교하고, 문서 작업용으로 "
+        "들고 다니기에 어느 쪽이 나은지 추천해 줘. 가격표는 CSV 파일로, 가격 비교 차트도 하나 만들어 줘.")
+TITLE = "13인치·15인치 노트북 가격 비교"
 
 
 def traced(client, at) -> None:

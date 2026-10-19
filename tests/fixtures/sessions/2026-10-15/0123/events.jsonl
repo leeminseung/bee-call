@@ -57,14 +57,14 @@
 {"t": 124.543, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 129.029, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 133.514, "old": "speaking", "new": "listening", "type": "user_state"}
-{"t": 138.0, "text": "맥북 에어랑 프로 중에 코딩용으로 고민 중이에요. 한국 가격 비교해 주고, 저한테 뭐가 맞는지 알려 주세요.", "type": "user_transcript"}
-{"t": 138.3, "role": "user", "text": "맥북 에어랑 프로 중에 코딩용으로 고민 중이에요. 한국 가격 비교해 주고, 저한테 뭐가 맞는지 알려 주세요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995120.5, "stopped_speaking_at": 1791995122.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
+{"t": 138.0, "text": "13인치랑 15인치 중에 업무용으로 고민 중이에요. 한국 가격 비교해 주고, 저한테 뭐가 맞는지 알려 주세요.", "type": "user_transcript"}
+{"t": 138.3, "role": "user", "text": "13인치랑 15인치 중에 업무용으로 고민 중이에요. 한국 가격 비교해 주고, 저한테 뭐가 맞는지 알려 주세요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995120.5, "stopped_speaking_at": 1791995122.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
 {"t": 142.533, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 146.767, "old": "speaking", "new": "listening", "type": "user_state"}
-{"t": 151.0, "job_id": "01", "task": "Compare the MacBook Air and MacBook Pro for coding at Apple Korea's prices: the base configurations and two common upgrades, battery life and weight. The user codes mostly in Python with some machine learning, works at a co-working space and in cafes, and carries the laptop every day. Bring back a one-line recommendation, a comparison table and a price chart.", "title": "코딩용 맥북 에어와 프로 한국 가격 비교", "type": "job_started"}
-{"t": 151.02, "name": "delegate", "arguments": "{\"task\": \"Compare the MacBook Air and MacBook Pro for coding at Apple Korea's prices: the base configurations and two common upgrades, battery life and weight. The user codes mostly in Python with some machine learning, works at a co-working space and in cafes, and carries the laptop every day. Bring back a one-line recommendation, a comparison table and a price chart.\", \"title\": \"코딩용 맥북 에어와 프로 한국 가격 비교\"}", "output": "Job 01 is running in the background.", "type": "tool"}
+{"t": 151.0, "job_id": "01", "task": "Compare a 13-inch and a 15-inch laptop for office work at Korean prices: the base configurations and two common upgrades, battery life and weight. The user mostly writes documents and edits some photos, works at a co-working space and in cafes, and carries the laptop every day. Bring back a one-line recommendation, a comparison table and a price chart.", "title": "업무용 13인치와 15인치 노트북 한국 가격 비교", "type": "job_started"}
+{"t": 151.02, "name": "delegate", "arguments": "{\"task\": \"Compare a 13-inch and a 15-inch laptop for office work at Korean prices: the base configurations and two common upgrades, battery life and weight. The user mostly writes documents and edits some photos, works at a co-working space and in cafes, and carries the laptop every day. Bring back a one-line recommendation, a comparison table and a price chart.\", \"title\": \"업무용 13인치와 15인치 노트북 한국 가격 비교\"}", "output": "Job 01 is running in the background.", "type": "tool"}
 {"t": 153.6, "role": "assistant", "text": "좋아요. 한국 가격이랑 배터리 시간을 찾아볼게요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995135.0, "stopped_speaking_at": 1791995138.6, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
-{"t": 165.0, "job_id": "01", "text": "애플 한국 가격표 읽는 중", "type": "job_progress"}
+{"t": 165.0, "job_id": "01", "text": "제조사 한국 가격표 읽는 중", "type": "job_progress"}
 {"t": 167.5, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 170.0, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 172.5, "old": "listening", "new": "speaking", "type": "user_state"}
@@ -74,25 +74,25 @@
 {"t": 182.5, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 185.0, "text": "얼마나 걸려요?", "type": "user_transcript"}
 {"t": 185.3, "role": "user", "text": "얼마나 걸려요?", "interrupted": false, "metrics": {"started_speaking_at": 1791995167.5, "stopped_speaking_at": 1791995169.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
-{"t": 187.0, "name": "job_status", "arguments": "{}", "output": "Job 01 | running for 36 s | latest step: 애플 한국 가격표 읽는 중", "type": "tool"}
+{"t": 187.0, "name": "job_status", "arguments": "{}", "output": "Job 01 | running for 36 s | latest step: 제조사 한국 가격표 읽는 중", "type": "tool"}
 {"t": 193.25, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 199.5, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 205.75, "old": "speaking", "new": "listening", "type": "user_state"}
-{"t": 216.4, "role": "assistant", "text": "지금 애플 한국 가격표를 보고 있어요. 주로 어떤 코딩을 하세요?", "interrupted": false, "metrics": {"started_speaking_at": 1791995197.0, "stopped_speaking_at": 1791995201.4, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 216.4, "role": "assistant", "text": "지금 제조사 한국 가격표를 보고 있어요. 주로 어떤 작업을 하세요?", "interrupted": false, "metrics": {"started_speaking_at": 1791995197.0, "stopped_speaking_at": 1791995201.4, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
 {"t": 216.72, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 217.04, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 217.36, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 217.68, "old": "speaking", "new": "listening", "type": "user_state"}
-{"t": 218.0, "text": "주로 파이썬이고", "type": "user_transcript"}
+{"t": 218.0, "text": "주로 문서 작업이고", "type": "user_transcript"}
 {"t": 219.0, "old": "speaking", "new": "listening", "type": "user_state"}
-{"t": 220.5, "text": "머신러닝도 조금 해요.", "type": "user_transcript"}
+{"t": 220.5, "text": "사진 편집도 조금 해요.", "type": "user_transcript"}
 {"t": 221.5, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 230.0, "text": "공유 오피스나 카페에서 일할 때가 많아요.", "type": "user_transcript"}
-{"t": 230.3, "role": "user", "text": "주로 파이썬이고 머신러닝도 조금 해요. 공유 오피스나 카페에서 일할 때가 많아요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995201.0, "stopped_speaking_at": 1791995214.0, "transcription_delay": 0.2, "end_of_turn_delay": 0.5}, "type": "message"}
+{"t": 230.3, "role": "user", "text": "주로 문서 작업이고 사진 편집도 조금 해요. 공유 오피스나 카페에서 일할 때가 많아요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995201.0, "stopped_speaking_at": 1791995214.0, "transcription_delay": 0.2, "end_of_turn_delay": 0.5}, "type": "message"}
 {"t": 231.0, "old": "listening", "new": "thinking", "type": "agent_state"}
 {"t": 233.0, "job_id": "01", "text": "비교표와 가격 차트 만드는 중", "type": "job_progress"}
-{"t": 236.0, "job_id": "01", "text": "에어는 159만 원부터, 프로는 239만 원부터예요. 밖에서 파이썬을 주로 한다면 에어가 더 잘 맞아요.", "type": "relay"}
-{"t": 238.0, "job_id": "01", "summary": "애플 한국 기준 에어는 1,590,000원, 프로는 2,390,000원부터예요. 파이썬과 가벼운 머신러닝을 밖에서 한다면 배터리와 무게에서 에어가 낫고, 프로는 노트북에서 모델을 학습시킬 때만 값을 해요.", "files": ["jobs/01/comparison.csv", "jobs/01/price-chart.png", "jobs/01/price-chart.svg", "jobs/01/report.md", "jobs/01/usage.json"], "type": "job_done"}
+{"t": 236.0, "job_id": "01", "text": "13인치는 159만 원부터, 15인치는 239만 원부터예요. 밖에서 문서 작업을 주로 한다면 13인치가 더 잘 맞아요.", "type": "relay"}
+{"t": 238.0, "job_id": "01", "summary": "한국 가격 기준 13인치는 1,590,000원, 15인치는 2,390,000원부터예요. 문서 작업과 가벼운 사진 편집을 밖에서 한다면 배터리와 무게에서 13인치가 낫고, 15인치는 큰 화면이 꼭 필요할 때만 값을 해요.", "files": ["jobs/01/comparison.csv", "jobs/01/price-chart.png", "jobs/01/price-chart.svg", "jobs/01/report.md", "jobs/01/usage.json"], "type": "job_done"}
 {"t": 238.222, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 238.444, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 238.667, "old": "listening", "new": "speaking", "type": "user_state"}
@@ -101,7 +101,7 @@
 {"t": 239.333, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 239.556, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 239.778, "old": "speaking", "new": "listening", "type": "user_state"}
-{"t": 251.2, "role": "assistant", "text": "그럼 들고 다니기 좋은 게 중요하겠네요. 에어는 159만 원부터, 프로는 239만 원부터예요. 노트북에서 모델을 직접 학습시키는 게 아니라면 에어가 더 잘 맞아요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995225.0, "stopped_speaking_at": 1791995236.2, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 251.2, "role": "assistant", "text": "그럼 들고 다니기 좋은 게 중요하겠네요. 13인치는 159만 원부터, 15인치는 239만 원부터예요. 큰 화면이 꼭 필요한 게 아니라면 13인치가 더 잘 맞아요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995225.0, "stopped_speaking_at": 1791995236.2, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
 {"t": 254.954, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 258.708, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 262.462, "old": "listening", "new": "speaking", "type": "user_state"}
@@ -114,8 +114,8 @@
 {"t": 288.738, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 292.492, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 296.246, "old": "speaking", "new": "listening", "type": "user_state"}
-{"t": 300.0, "text": "그럼 에어로 할게요. 보고서는 이따 볼게요.", "type": "user_transcript"}
-{"t": 300.3, "role": "user", "text": "그럼 에어로 할게요. 보고서는 이따 볼게요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995282.5, "stopped_speaking_at": 1791995284.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
+{"t": 300.0, "text": "그럼 13인치로 할게요. 보고서는 이따 볼게요.", "type": "user_transcript"}
+{"t": 300.3, "role": "user", "text": "그럼 13인치로 할게요. 보고서는 이따 볼게요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995282.5, "stopped_speaking_at": 1791995284.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
 {"t": 302.225, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 304.15, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 306.075, "old": "listening", "new": "speaking", "type": "user_state"}
@@ -167,4 +167,4 @@
 {"t": 451.02, "name": "end_call", "arguments": "{}", "output": "Ending the call.", "type": "tool"}
 {"t": 460.0, "reason": "CloseReason.USER_INITIATED", "type": "session_closed"}
 {"t": 460.9, "user_audio_skipped_frames": 0, "ai_audio_skipped_frames": 0, "type": "call_ended"}
-{"t": 463.4, "title": "맥북 에어와 프로, 코딩용으로 뭐가 나을까", "model": "claude-haiku-5-5", "input_tokens": 1820, "output_tokens": 24, "seconds": 1.3, "type": "call_titled"}
+{"t": 463.4, "title": "13인치와 15인치 노트북, 뭐가 나을까", "model": "claude-haiku-5-5", "input_tokens": 1820, "output_tokens": 24, "seconds": 1.3, "type": "call_titled"}

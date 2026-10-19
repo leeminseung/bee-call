@@ -42,7 +42,7 @@ def tool(tool_id: str, tool_name: str, /, **args) -> dict:
 def searched(tool_id: str, query: str) -> list[dict]:
     return [{"type": "server_tool_use", "id": tool_id, "name": "web_search", "input": {"query": query}},
             {"type": "web_search_tool_result", "tool_use_id": tool_id, "content": [
-                {"type": "web_search_result", "url": "https://apple.example/kr", "title": "MacBook Air",
+                {"type": "web_search_result", "url": "https://shop.example/kr", "title": "13-inch laptop",
                  "encrypted_content": "ENC-" + tool_id, "page_age": None}]}]
 
 
@@ -146,7 +146,7 @@ def api(answers: list, files: dict | None = None, hold: asyncio.Event | None = N
 
 def job_in(tmp_path, language: str | None = "ko") -> Job:
     return Job(job_id="01", dir=tmp_path, now=datetime(2026, 10, 15, 15, 0, tzinfo=SEOUL),
-               task="맥북 에어와 프로 가격 비교", title="맥북 가격", language=language)
+               task="13인치와 15인치 노트북 가격 비교", title="노트북 가격", language=language)
 
 
 def run(job: Job, client, *, cancel_after: float | None = None) -> tuple[str | BaseException, list, list]:
@@ -176,25 +176,25 @@ def usage_of(job: Job) -> dict:
 def test_a_job_runs_on_claude_with_anthropic_s_server_tools_and_the_job_s_own_tools(tmp_path):
     """Claude searches, runs code and calls the job's tools; each Claude turn goes back exactly as it came, the job
     keeps one code execution container, and usage.json counts every request with its cache and its searches."""
-    report = "# 맥북 가격\n\n에어는 159만 원부터예요.\n"
+    report = "# 노트북 가격\n\n13인치는 159만 원부터예요.\n"
     first = [{"type": "thinking", "thinking": "plan", "signature": "SIG"}, text("가격을 찾아볼게요."),
-             *searched("srvtoolu_1", "맥북 에어 가격"), tool("toolu_1", "progress", text="가격 찾는 중")]
+             *searched("srvtoolu_1", "13인치 노트북 가격"), tool("toolu_1", "progress", text="가격 찾는 중")]
     client = api([
         reply(first, searches=1, tokens=(1000, 50, 0, 900)),
-        reply([*ran_code("srvtoolu_2", "file_1"), tool("toolu_2", "relay_to_user", text="에어는 159만 원부터예요."),
+        reply([*ran_code("srvtoolu_2", "file_1"), tool("toolu_2", "relay_to_user", text="13인치는 159만 원부터예요."),
                tool("toolu_3", "save_file", name="report.md", content=report)],
               tokens=(300, 80, 900, 250), container="container_1"),
         reply([tool("toolu_4", "save_chart", name="prices", title="가격(원)", kind="bar",
-                    series=[{"label": "Air", "points": [["8GB", 1590000]]}])], tokens=(100, 40, 1150, 60)),
-        reply([text("에어와 프로 가격을 비교했어요. report.md와 prices.csv를 남겼어요.")], "end_turn",
+                    series=[{"label": "13-inch", "points": [["8GB", 1590000]]}])], tokens=(100, 40, 1150, 60)),
+        reply([text("13인치와 15인치 가격을 비교했어요. report.md와 prices.csv를 남겼어요.")], "end_turn",
               tokens=(50, 30, 1210, 20)),
-    ], files={"file_1": ("prices.csv", b"model,price\nAir,1590000\n")})
+    ], files={"file_1": ("prices.csv", b"model,price\n13-inch,1590000\n")})
     job = job_in(tmp_path)
     summary, progress, relayed = run(job, client)
-    assert summary == "에어와 프로 가격을 비교했어요. report.md와 prices.csv를 남겼어요."
-    assert progress == ["가격 찾는 중"] and relayed == ["에어는 159만 원부터예요."]
+    assert summary == "13인치와 15인치 가격을 비교했어요. report.md와 prices.csv를 남겼어요."
+    assert progress == ["가격 찾는 중"] and relayed == ["13인치는 159만 원부터예요."]
     assert (tmp_path / "report.md").read_text() == report
-    assert (tmp_path / "prices.csv").read_bytes() == b"model,price\nAir,1590000\n"  # from code execution
+    assert (tmp_path / "prices.csv").read_bytes() == b"model,price\n13-inch,1590000\n"  # from code execution
     # Deleted from Anthropic's Files API once the job is over: its conversation names the file until then.
     assert client.files.deleted == ["file_1"]
     assert all((tmp_path / name).exists() for name in ("prices.svg", "prices.png", "prices-dark.png"))
@@ -211,10 +211,10 @@ def test_a_job_runs_on_claude_with_anthropic_s_server_tools_and_the_job_s_own_to
     assert tools["web_fetch"]["max_uses"] == claude.WEB_FETCHES_PER_REQUEST
     assert list(tools)[3:] == ["progress", "relay_to_user", "save_file", "save_chart"]
     asked = opening["messages"][0]["content"][0]["text"]
-    assert asked.startswith("Job 01 (it is now ") and "맥북 에어와 프로 가격 비교" in asked and "Korean" in asked
+    assert asked.startswith("Job 01 (it is now ") and "13인치와 15인치 노트북 가격 비교" in asked and "Korean" in asked
     assert second["messages"][1] == {"role": "assistant", "content": json.loads(json.dumps(
         [{"type": "thinking", "thinking": "plan", "signature": "SIG"}, text("가격을 찾아볼게요."),
-         *searched("srvtoolu_1", "맥북 에어 가격"), tool("toolu_1", "progress", text="가격 찾는 중")]))}
+         *searched("srvtoolu_1", "13인치 노트북 가격"), tool("toolu_1", "progress", text="가격 찾는 중")]))}
     assert second["messages"][2]["content"] == [
         {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Shown on the job card."}]
     assert "container" not in second and third["container"] == last["container"] == "container_1"
@@ -233,7 +233,7 @@ def test_a_job_runs_on_claude_with_anthropic_s_server_tools_and_the_job_s_own_to
 
 def test_a_paused_turn_goes_back_as_it_came_without_a_new_message(tmp_path):
     """A long server tool turn can pause (pause_turn): the paused turn is sent back unchanged, nothing added."""
-    paused = searched("srvtoolu_1", "MacBook price")
+    paused = searched("srvtoolu_1", "laptop price")
     client = api([reply(paused, "pause_turn", searches=1), reply([text("Done.")], "end_turn")])
     summary, _, _ = run(job_in(tmp_path, None), client)
     assert summary == "Done."
@@ -302,9 +302,9 @@ def test_a_long_file_name_already_taken_gets_a_numbered_name_that_fits(tmp_path)
 def test_at_its_search_limit_a_job_is_asked_for_its_answer_without_tools(tmp_path, monkeypatch):
     monkeypatch.setattr(claude, "JOB_WEB_SEARCHES", 3)
     client = api([reply([*searched("srvtoolu_1", "q"), tool("toolu_1", "progress", text="Searching")], searches=3),
-                  reply([text("Air starts at 1.59 million won.")], "end_turn")])
+                  reply([text("The 13-inch starts at 1.59 million won.")], "end_turn")])
     summary, _, _ = run(job_in(tmp_path, None), client)
-    assert summary == "Air starts at 1.59 million won."
+    assert summary == "The 13-inch starts at 1.59 million won."
     final = client.messages.sent[1]
     assert final["tool_choice"] == {"type": "none"} and "tool_choice" not in client.messages.sent[0]
     note = final["messages"][-1]["content"]
@@ -336,9 +336,9 @@ def test_at_a_limit_beside_a_server_tool_still_waiting_only_the_tool_results_go_
     client = api([reply([waiting, tool("toolu_1", "progress", text="Searching")], searches=3),
                   reply([{"type": "web_search_tool_result", "tool_use_id": "srvtoolu_7", "content": []},
                          tool("toolu_2", "progress", text="Writing")], searches=1),
-                  reply([text("The Air.")], "end_turn")])
+                  reply([text("The 13-inch.")], "end_turn")])
     summary, progress, _ = run(job_in(tmp_path, None), client)
-    assert summary == "The Air." and progress == ["Searching", "Writing"]
+    assert summary == "The 13-inch." and progress == ["Searching", "Writing"]
     second, third = client.messages.sent[1:]
     assert [b["type"] for b in second["messages"][-1]["content"]] == ["tool_result"] and "tool_choice" not in second
     assert third["tool_choice"] == {"type": "none"} and "web searches" in third["messages"][-1]["content"][-1]["text"]
@@ -356,9 +356,9 @@ def test_a_limit_put_off_once_cuts_a_turn_whose_server_tool_still_waits(tmp_path
                   reply([{"type": "code_execution_tool_result", "tool_use_id": "srvtoolu_5", "content": {
                       "type": "code_execution_result", "stdout": "", "stderr": "", "return_code": 0, "content": []}},
                          again, tool("toolu_2", "progress", text="Writing")], searches=2),
-                  reply([text("The Air.")], "end_turn")])
+                  reply([text("The 13-inch.")], "end_turn")])
     summary, _, _ = run(job_in(tmp_path, None), client)
-    assert summary == "The Air."
+    assert summary == "The 13-inch."
     final = client.messages.sent[-1]
     assert final["tool_choice"] == {"type": "none"}
     cut = final["messages"][-2]
@@ -376,9 +376,9 @@ def test_a_paused_turn_at_either_limit_still_ends_with_the_answer(tmp_path, monk
     client = api([reply([tool("toolu_1", "progress", text="Searching")]),
                   reply(searched("srvtoolu_1", "q"), "pause_turn", searches=1),
                   reply([tool("toolu_2", "progress", text="Comparing")]),
-                  reply([text("Air starts at 1.59 million won.")], "end_turn")])
+                  reply([text("The 13-inch starts at 1.59 million won.")], "end_turn")])
     summary, progress, _ = run(job_in(tmp_path, None), client)
-    assert summary == "Air starts at 1.59 million won." and progress == ["Searching", "Comparing"]
+    assert summary == "The 13-inch starts at 1.59 million won." and progress == ["Searching", "Comparing"]
     last = client.messages.sent[-1]
     assert last["tool_choice"] == {"type": "none"} and "requests" in last["messages"][-1]["content"][-1]["text"]
 
@@ -391,9 +391,9 @@ def test_a_paused_turn_at_either_limit_still_ends_with_the_answer(tmp_path, monk
                {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_8", "caller": {
                    "type": "code_execution_20260120", "tool_id": "srvtoolu_9"}, "content": []}]
     client = api([reply([*searched("srvtoolu_1", "q"), *running], "pause_turn", searches=4),
-                  reply([text("From what I found: the Air.")], "end_turn")])
+                  reply([text("From what I found: the 13-inch.")], "end_turn")])
     summary, _, _ = run(job_in(tmp_path, None), client)
-    assert summary == "From what I found: the Air."
+    assert summary == "From what I found: the 13-inch."
     final = client.messages.sent[-1]
     assert final["tool_choice"] == {"type": "none"}
     assert final["messages"][1] == {"role": "assistant", "content": json.loads(json.dumps(searched("srvtoolu_1", "q")))}

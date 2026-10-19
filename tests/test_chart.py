@@ -14,10 +14,10 @@ from PIL import Image, ImageChops, ImageFont
 from worker import chart
 from worker.chart import FONT, render_svg, svg_to_png, svg_title
 
-SERIES = [{"label": "MacBook Air", "points": [["8GB/256GB", 1590000], ["16GB/512GB", 2190000]]},
-          {"label": "MacBook Pro", "points": [["8GB/256GB", 2390000], ["16GB/512GB", 2990000]]}]
+SERIES = [{"label": "13-inch", "points": [["8GB/256GB", 1590000], ["16GB/512GB", 2190000]]},
+          {"label": "15-inch", "points": [["8GB/256GB", 2390000], ["16GB/512GB", 2990000]]}]
 SIX = [{"label": f"구성 {n + 1}", "points": [["기본", 10 + n], ["최상", 20 + n]]} for n in range(6)]
-TITLE = "한국 가격(원), 에어 & 프로"
+TITLE = "한국 가격(원), 13인치 & 15인치"
 # A chart as the worker drew it before charts had PNGs or kept their title (the renderer up to 35275c1).
 BEFORE_PNGS = Path(__file__).parent / "fixtures" / "chart-before-pngs.svg"
 # A chart of 2026-10-15, two series, drawn before charts had a dark PNG.
@@ -140,7 +140,7 @@ def test_every_text_of_the_light_chart_is_the_chart_text_colour():
 
 def test_the_svg_keeps_the_chart_s_title():
     svg = render_svg(TITLE, "bar", SERIES, "구성", "원")
-    assert svg.startswith("<svg") and "<title>한국 가격(원), 에어 &amp; 프로</title>" in svg
+    assert svg.startswith("<svg") and "<title>한국 가격(원), 13인치 &amp; 15인치</title>" in svg
     assert svg_title(svg) == TITLE
     assert svg_title("<svg xmlns='http://www.w3.org/2000/svg'><rect/></svg>") is None
 

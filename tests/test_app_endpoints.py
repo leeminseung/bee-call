@@ -123,7 +123,7 @@ def test_a_call_s_files_are_served_by_the_record_server_s_rule(minseung):
     assert types[5] == "text/html; charset=utf-8" and found[5][2].startswith(b"<!doctype html>")
     assert all(h["Content-Security-Policy"] == "sandbox" and h["X-Content-Type-Options"] == "nosniff"
                for _, h, _ in found[:6])
-    assert found[0][2].startswith("# 코딩용".encode())
+    assert found[0][2].startswith("# 업무용".encode())
 
 
 # ---------- offers ----------

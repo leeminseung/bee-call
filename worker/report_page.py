@@ -33,7 +33,7 @@ PAGE_LIMIT_S = 10.0  # a page takes milliseconds (0.5 s a MB); one made to be sl
 # has them); a double quote, angle brackets and white space are never in an address the renderer writes.
 LINK = re.compile(r"(?:https?://|mailto:)[^\s\"<>`]*", re.I)
 # An address written out in the text. ASCII and letters with accents (Schrödinger) belong to it; Korean and other
-# scripts go on only where a path segment or a query value begins (namu.wiki/w/맥북, ?query=맥북), so an address ends
+# scripts go on only where a path segment or a query value begins (namu.wiki/w/노트북, ?query=노트북), so an address ends
 # before the Korean words written right after it ("https://apple.com/kr에서").
 URL_CHAR = r"[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%\u00c0-\u024f]"
 OTHER_LETTER = r"[^\x00-\x7f\u00c0-\u024f\s\u3000-\u303f\uff00-\uffef]"  # not CJK punctuation or full-width forms
