@@ -42,7 +42,7 @@ from voice.voices import ELEVENLABS_MODEL, VoiceChoice, elevenlabs_key, make_tts
 
 LINES = {  # warmth and feeling are what make a voice sound like a person, so the lines lean on them
     "en": [
-        "Hey Minseung, it's Bee Call. Is now still a good time? I've got the laptop comparison you asked for.",
+        "Hey Matt, it's Bee Call. Is now still a good time? I've got the laptop comparison you asked for.",
         "Oh no, that sounds really frustrating. You put so much into that presentation, and it's completely fair "
         "to feel let down. Do you want to talk it through, or should I just take a few things off your plate?",
         "Wait, you got the offer? That's amazing, congratulations! Honestly, you earned this. All that late-night "

@@ -806,7 +806,7 @@ def conversation_change(tmp_path: Path, monkeypatch, lines: list[tuple[str, str]
     return ws
 
 
-WATCH_NOTE = [("Minseung", "오늘 이사 준비할 게 너무 많네."), ("Minseung", "오늘 밤 9시에 전화해서 같이 정리하자.")]
+WATCH_NOTE = [("Matt", "오늘 이사 준비할 게 너무 많네."), ("Matt", "오늘 밤 9시에 전화해서 같이 정리하자.")]
 BOOK_FROM_CONVERSATION = dict(conversation_id=88, line="L2", asked="오늘 밤 9시에 전화해서 같이 정리하자",
                               at="2026-10-14T21:00", topic="이사 준비 정리", why="오늘 밤 9시에 같이 정리하자고 하셨어요.")
 
@@ -819,7 +819,7 @@ def test_a_conversation_in_which_the_wearer_asks_for_a_call_books_it(tmp_path, m
     model, entry, told, asked = think_with(ws, {"role": "assistant", "content": [tool_use(
         1, "book_call", **BOOK_FROM_CONVERSATION)]}, done())
     first = model.sent[0]["messages"][0]["content"][0]["text"]
-    assert "L2 [18:28] Minseung: 오늘 밤 9시에 전화해서 같이 정리하자." in first  # numbered for book_call's line
+    assert "L2 [18:28] Matt: 오늘 밤 9시에 전화해서 같이 정리하자." in first  # numbered for book_call's line
     (offer,) = OfferStore(ws).all()
     assert (offer.state, offer.kind, offer.conversation_ids, offer.memo_ids) == ("booked", "conversation", [88], [])
     assert offer.call_at == "2026-10-14T21:00:00+09:00" and told == [offer] and asked == []
@@ -863,8 +863,8 @@ def test_only_the_lines_new_since_the_conversation_was_last_shown_are_shown(tmp_
     """A conversation Bee keeps updating comes back in later changes: the agent is shown the lines spoken since the
     change before, with their times, not the whole conversation again."""
     before = NOW - timedelta(minutes=20)
-    ws = conversation_change(tmp_path, monkeypatch, [("Minseung", "오늘 밤 9시에 전화해서 같이 정리하자.")],
-                             earlier=[("Minseung", "아까 한 얘기 기억나?", before), ("Unknown", "응.", before)])
+    ws = conversation_change(tmp_path, monkeypatch, [("Matt", "오늘 밤 9시에 전화해서 같이 정리하자.")],
+                             earlier=[("Matt", "아까 한 얘기 기억나?", before), ("Unknown", "응.", before)])
     earlier = ws / "inbox" / "2026-10-14-181000"
     earlier.mkdir(parents=True)
     (earlier / "changed.json").write_text(json.dumps({"conversations": [
@@ -872,7 +872,7 @@ def test_only_the_lines_new_since_the_conversation_was_last_shown_are_shown(tmp_
          "end_time": ms(before + timedelta(seconds=5))}], "journals": []}))
     model, _, _, _ = think_with(ws, done())
     first = model.sent[0]["messages"][0]["content"][0]["text"]
-    assert "Minseung: 오늘 밤 9시에 전화해서 같이 정리하자." in first and "아까 한 얘기 기억나?" not in first
+    assert "Matt: 오늘 밤 9시에 전화해서 같이 정리하자." in first and "아까 한 얘기 기억나?" not in first
     assert "2 earlier lines" in first
 
 
@@ -908,7 +908,7 @@ def test_a_request_in_a_line_bee_marks_unknown_books_nothing(tmp_path, monkeypat
     """The user's decision (b) of 2026-10-17: a request in a line Bee marks "Unknown" is not the user's request, even
     when it may be their words (Bee marked 3 of the user's 17 lines said alone "Unknown", FINDINGS 2026-10-09): the
     meta agent is told to book nothing and offer nothing because of it, and book_call refuses the line."""
-    ws = conversation_change(tmp_path, monkeypatch, [("Minseung", "오늘 이사 준비할 게 너무 많네."),
+    ws = conversation_change(tmp_path, monkeypatch, [("Matt", "오늘 이사 준비할 게 너무 많네."),
                                                      ("Unknown", "오늘 밤 9시에 전화해서 같이 정리하자.")])
     result, told = booked(ws)
     assert result.startswith("Not booked") and "\"Unknown\"" in result and told == [] and OfferStore(ws).all() == []
@@ -921,8 +921,8 @@ def test_a_request_in_a_line_bee_marks_unknown_books_nothing(tmp_path, monkeypat
 def test_lines_spoken_during_our_call_are_never_shown_or_booked_from(tmp_path, monkeypatch):
     """Finding 1: the watch records through our calls, into a conversation still recording (no end time) that began
     before the call, so the batch's copy passed the own-call check and the user's words to our AI booked a call."""
-    ws = conversation_change(tmp_path, monkeypatch, [("Minseung", "배고프다."), ("Minseung", "오늘 밤 9시에 다시 전화해 줘."),
-                                                     ("Minseung", "뭐 먹지.")],
+    ws = conversation_change(tmp_path, monkeypatch, [("Matt", "배고프다."), ("Matt", "오늘 밤 9시에 다시 전화해 줘."),
+                                                     ("Matt", "뭐 먹지.")],
                              ended=None, started=NOW - timedelta(hours=3))
     call = ws / "2026-10-14" / "1829"
     call.mkdir(parents=True)  # our call, while the second line was said (18:29:20)
@@ -940,7 +940,7 @@ def test_lines_said_long_ago_book_nothing_whatever_the_recording_s_end(tmp_path,
     booked tonight. Since the code no longer finds the line that asks (the user's decision of 2026-10-18), it goes by
     the lines it showed: the newest of them must be recent."""
     ws = conversation_change(tmp_path, monkeypatch, [],
-                             earlier=[("Minseung", "오늘 밤 9시에 전화해서 같이 정리하자.", NOW - timedelta(hours=22))])
+                             earlier=[("Matt", "오늘 밤 9시에 전화해서 같이 정리하자.", NOW - timedelta(hours=22))])
     result, told = booked(ws, line="L1")
     assert result.startswith("Not booked") and "22 hours ago" in result and told == []
 
@@ -950,11 +950,11 @@ def test_the_line_named_must_be_shown_recent_and_its_own_time_counts(tmp_path, m
     tonight because an unrelated line was said a minute ago. The agent names the line that asks (L1 for the first it
     was shown); the code checks that line's place, time and Bee's label, never its words."""
     def change(name: str) -> Path:
-        return conversation_change(tmp_path / name, monkeypatch, [("Minseung", "뭐 먹지.")], earlier=[
-            ("Minseung", "오늘 밤 9시에 전화해서 같이 정리하자.", NOW - timedelta(hours=22))])
+        return conversation_change(tmp_path / name, monkeypatch, [("Matt", "뭐 먹지.")], earlier=[
+            ("Matt", "오늘 밤 9시에 전화해서 같이 정리하자.", NOW - timedelta(hours=22))])
 
     shown = first_message(change("shown"))
-    assert "L1 [10-13 20:30] Minseung: 오늘 밤 9시에 전화해서 같이 정리하자." in shown and "L2 [18:28] Minseung: 뭐 먹지." in shown
+    assert "L1 [10-13 20:30] Matt: 오늘 밤 9시에 전화해서 같이 정리하자." in shown and "L2 [18:28] Matt: 뭐 먹지." in shown
     for n, (line, why) in enumerate((("L1", "22 hours ago"), ("", "give line"), ("L3", "L1 to L2"), ("7", "L1 to L2"))):
         result, told = booked(change(f"try{n}"), line=line)
         assert result.startswith("Not booked") and why in result and told == [], (line, result)
@@ -963,8 +963,8 @@ def test_the_line_named_must_be_shown_recent_and_its_own_time_counts(tmp_path, m
 def test_lines_shown_before_are_not_new_also_when_bee_gave_no_end_then(tmp_path, monkeypatch):
     """Finding 2: an earlier copy with no end time made every line new again; the earlier change's own time is used."""
     before = NOW - timedelta(minutes=30)
-    ws = conversation_change(tmp_path, monkeypatch, [("Minseung", "이제 정리 시작해야지.")], ended=None,
-                             earlier=[("Minseung", "아까 한 얘기 기억나?", before)])
+    ws = conversation_change(tmp_path, monkeypatch, [("Matt", "이제 정리 시작해야지.")], ended=None,
+                             earlier=[("Matt", "아까 한 얘기 기억나?", before)])
     earlier = ws / "inbox" / (NOW - timedelta(minutes=20)).astimezone().strftime("%Y-%m-%d-%H%M%S")
     earlier.mkdir(parents=True)
     (earlier / "changed.json").write_text(json.dumps({"conversations": [

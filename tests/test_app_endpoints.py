@@ -21,7 +21,7 @@ MAIN = "call-minseung-20261015-012301"
 
 @pytest.fixture
 def minseung(tmp_path, monkeypatch):
-    """Minseung, signed in, with the fixture calls and offers, at 15:00 on 2026-10-15 on their clock."""
+    """Matt, signed in, with the fixture calls and offers, at 15:00 on 2026-10-15 on their clock."""
     me = signed_in(tmp_path, "minseung")
     shutil.copytree(FIXTURES, me.workspace, dirs_exist_ok=True)
     me.people.change_settings("minseung", {"language": "ko", "call_time": "20:30"})
@@ -342,7 +342,7 @@ def test_me_and_settings_answer_the_contract_s_settings_and_the_voice_follows_th
     check_body("me", json.loads(me_body))
     assert (picked, wrong, me) == (200, 400, 200) and b"not one of the ko voices" in wrong_body
     assert json.loads(me_body)["settings"]["voice"] == "ko-yooni" and "tts" not in json.loads(me_body)["settings"]
-    # Models Minseung never picked: /me sends each role's default, and settings.json keeps "no pick" (null).
+    # Models Matt never picked: /me sends each role's default, and settings.json keeps "no pick" (null).
     shown = json.loads(me_body)["settings"]
     assert (shown["call_model"], shown["worker_model"]) == ("haiku", "sonnet")
     stored = json.loads((minseung.people.folder("minseung") / "settings.json").read_text())

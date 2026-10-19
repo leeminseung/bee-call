@@ -473,7 +473,7 @@ def test_a_call_s_prep_reads_one_transcription_of_a_conversation(tmp_path, fake_
     """Review of 2026-10-17 (booking from any Bee input), finding 3: bee conversations transcript joins every
     transcription, the live one too, so each line came twice. The conversation Bee answers with holds them; one is
     read, as the Bee CLI shows it (the first that is not live), and the conversation is kept without them."""
-    said = [{"id": 1, "speaker": "Minseung", "text": "Remind me about the movers.", "spoken_at": 1792229360000}]
+    said = [{"id": 1, "speaker": "Matt", "text": "Remind me about the movers.", "spoken_at": 1792229360000}]
     (tmp_path / "t.json").write_text(json.dumps({"88": said, "88:realtime": said}))
     monkeypatch.setenv("FAKE_BEE_TRANSCRIPTS", str(tmp_path / "t.json"))
     inputs = asyncio.run(context.fetch_call_inputs(conversation_ids=[88]))

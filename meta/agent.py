@@ -362,7 +362,7 @@ def last_shown(workspace: Path, conv_id: Any, inbox: str) -> datetime | None:
 
 
 def _conversation_lines(seen: dict[str, Any], now: datetime) -> str:
-    """A conversation's new lines, as the agent reads them, numbered for book_call's `line`: "L1 [18:28] Minseung:
+    """A conversation's new lines, as the agent reads them, numbered for book_call's `line`: "L1 [18:28] Matt:
     ..." (review of 2026-10-18, finding 4)."""
     lines = seen.get("lines") or []
     text = ""

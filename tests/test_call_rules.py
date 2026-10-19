@@ -1,4 +1,4 @@
-"""What the call AI is told about the conversation itself, after the user's calls of 2026-10-16 (build 5): it said "민승
+"""What the call AI is told about the conversation itself, after the user's calls of 2026-10-16 (build 5): it said "Matt
 님" in 15 of 24 turns, offered to end a call he made because he was bored, and wrapped up right after a research job.
 The user's decision (2026-10-16): one principle, that everything the AI writes is spoken in a real phone call, so it
 talks the way a person talks on the phone, with what the calls showed as its examples; conversational behavior is
@@ -56,7 +56,7 @@ def test_the_ai_never_steers_toward_ending_and_a_goodbye_still_ends_the_call():
 
 
 def test_the_name_is_said_at_most_once_and_the_prep_greets_without_it():
-    """Haiku 5.5 repeated the name the opening greeted with, as "you" in Korean ("민승 씨는 ...") and in goodbyes, in
+    """Haiku 5.5 repeated the name the opening greeted with, as "you" in Korean ("Matt 씨는 ...") and in goodbyes, in
     about a third of its replies at the personal moments of the real call's replay, whatever the wording (six tried);
     with no name in the opening and the note, in none (2026-10-16)."""
     assert "Say the user's name at most once, in your first words" in INSTRUCTIONS

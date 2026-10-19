@@ -15,7 +15,7 @@ final class CallModeTests: XCTestCase {
     }
 
     private let talk: [(mine: Bool, text: String)] = [
-        (false, "안녕하세요, 민승 님. 오늘 밤엔 무슨 이야기 할까요?"),
+        (false, "안녕하세요, Matt 님. 오늘 밤엔 무슨 이야기 할까요?"),
         (true, "13인치랑 15인치 중에 업무용으로 고민 중이에요."),
         (false, "지금 제조사 한국 가격표를 보고 있어요. 주로 어떤 작업을 하세요?"),
     ]

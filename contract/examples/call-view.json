@@ -38,7 +38,7 @@
       "id": "speech-9",
       "at": "2026-10-15T01:23:08+09:00",
       "speaker": "ai",
-      "text": "안녕하세요, 민승 님. 오늘 밤엔 무슨 이야기 할까요?",
+      "text": "안녕하세요, Matt 님. 오늘 밤엔 무슨 이야기 할까요?",
       "interrupted": false
     },
     {
@@ -291,7 +291,7 @@
       "id": "speech-165",
       "at": "2026-10-15T01:30:33+09:00",
       "speaker": "ai",
-      "text": "네, 민승 님. 좋은 밤 보내세요.",
+      "text": "네, Matt 님. 좋은 밤 보내세요.",
       "interrupted": false
     }
   ],
@@ -299,5 +299,5 @@
     "person": 14,
     "ai": 13
   },
-  "version": "ad30a44ed83c64e5"
+  "version": "208b6744d13f0dca"
 }

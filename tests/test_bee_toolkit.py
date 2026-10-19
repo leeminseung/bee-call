@@ -107,7 +107,7 @@ def test_answers_keep_bee_s_fields_without_locations_or_the_email_brief(fake_bee
             "summary": "Talked through the home server.", "short_summary": "Home server", "state": "COMPLETED",
             "suggested_links": [], "primary_location": place,
             "transcriptions": [{"id": 1, "realtime": False, "utterances": [
-                {"id": 1, "speaker": "Minseung", "text": "It has to be quiet.", "spoken_at": ms("2026-10-18T09:01")},
+                {"id": 1, "speaker": "Matt", "text": "It has to be quiet.", "spoken_at": ms("2026-10-18T09:01")},
                 {"id": 2, "speaker": "Unknown", "text": "Then no fans.", "spoken_at": ms("2026-10-18T09:02")}]}]},
             "timezone": "Asia/Seoul"},
         "today --context": {"date": "2026-10-18", "todayBrief": {
@@ -139,7 +139,7 @@ def test_what_bee_recorded_during_our_calls_is_left_out_and_counted(fake_bee, tm
     ws = tmp_path / "workspace"
     a_call(ws, "2026-10-18T10:00", "2026-10-18T10:20")
     ours = OurCalls.of(ws)
-    lines = [{"id": n, "speaker": "Minseung", "text": text, "spoken_at": ms(at)}
+    lines = [{"id": n, "speaker": "Matt", "text": text, "spoken_at": ms(at)}
              for n, (at, text) in enumerate([("2026-10-18T09:30", "Walking to the station."),
                                              ("2026-10-18T10:05", "Bee Call, remind me about the server."),
                                              ("2026-10-18T10:40", "Back at my desk.")])]
@@ -209,7 +209,7 @@ def test_a_long_list_is_cut_with_the_ids_left_out_and_the_next_cursor(fake_bee, 
 def test_a_long_recording_is_read_by_time_and_cut_with_how_to_read_on(fake_bee, tmp_path, monkeypatch):
     """One recording can run for days: since and until read one part, given as the user's local time or as Bee's
     epoch milliseconds; a cut answer says which since or until reads on."""
-    lines = [{"id": n, "speaker": "Minseung", "text": f"Line {n} " + "x" * 80,
+    lines = [{"id": n, "speaker": "Matt", "text": f"Line {n} " + "x" * 80,
               "spoken_at": ms("2026-10-17T09:00") + n * 60_000} for n in range(120)]
     live = [dict(u, id=1000 + u["id"]) for u in lines]  # a live transcription of the same words: read once
     answers(tmp_path, monkeypatch, {"conversations get 9": {"conversation": {

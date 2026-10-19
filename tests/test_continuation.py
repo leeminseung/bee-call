@@ -40,7 +40,7 @@ def earlier_session(workspace: Path) -> Path:
     (folder / "events.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\nnot json\n")
     (folder / "transcript.md").write_text(
         "# Call 2026-10-13 23:53 (room call-1)\n\n"
-        "- 00:04.1 **AI:** Hi Minseung! What's on your mind tonight?\n"
+        "- 00:04.1 **AI:** Hi Matt! What's on your mind tonight?\n"
         "- 00:19.2 **User:** I'm choosing between a 13-inch and a 15-inch laptop.\n"
         "- 03:17.5 **AI:** Sure! Here's the comparison:\n\nThe 13-inch starts at about 1.6 million won. (interrupted)\n")
     return folder
@@ -50,7 +50,7 @@ def test_the_new_call_learns_what_was_said_and_what_the_jobs_did(tmp_path):
     earlier_session(tmp_path)
     text = earlier_call(tmp_path, EARLIER)
     assert text.startswith("The earlier call: Tue Oct 13, 11:53 PM, about 3 min.")
-    assert "AI: Hi Minseung! What's on your mind tonight?" in text
+    assert "AI: Hi Matt! What's on your mind tonight?" in text
     assert "User: I'm choosing between a 13-inch and a 15-inch laptop." in text
     assert "AI: Sure! Here's the comparison: The 13-inch starts at about 1.6 million won. (interrupted)" in text
     assert "Finished. Result: The 13-inch starts at 1.59 million won." in text

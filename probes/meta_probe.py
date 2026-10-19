@@ -34,7 +34,7 @@ def scratch_workspace(root: Path) -> Path:
     earlier = ws / NOW.strftime("%Y-%m-%d") / "1210"
     earlier.mkdir(parents=True)
     (earlier / "transcript.md").write_text(
-        "# Call\n\n- 00:03.0 **AI:** Hi Minseung! What's on your mind?\n"
+        "# Call\n\n- 00:03.0 **AI:** Hi Matt! What's on your mind?\n"
         "- 00:08.2 **User:** I got a second offer today. I need to decide by Friday.\n"
         "- 00:15.9 **AI:** Congratulations! Want me to compare them now?\n"
         "- 00:20.4 **User:** Not now, I'm heading into a meeting. Let's do it tonight.\n")
@@ -42,7 +42,7 @@ def scratch_workspace(root: Path) -> Path:
     talk.mkdir(parents=True)
     (talk / "changed.json").write_text(json.dumps({"conversations": [{
         "id": 901, "state": "COMPLETED", "utterances_count": 14, "short_summary": "Weighing two job offers",
-        "summary": "Minseung compared Offer A (salary 92k, 5% bonus) and Offer B (salary 88k, 15% bonus, remote). "
+        "summary": "Matt compared Offer A (salary 92k, 5% bonus) and Offer B (salary 88k, 15% bonus, remote). "
                    "He has to answer both by Friday."}], "journals": []}))
     hello = ws / "inbox" / NOW.strftime("%Y-%m-%d-1832")
     hello.mkdir(parents=True)
@@ -51,7 +51,7 @@ def scratch_workspace(root: Path) -> Path:
     call = ws / NOW.strftime("%Y-%m-%d") / "1835"
     call.mkdir(parents=True)
     (call / "transcript.md").write_text(
-        "# Call\n\n- 00:03.0 **AI:** Hi Minseung, about the two offers. Got a minute?\n"
+        "# Call\n\n- 00:03.0 **AI:** Hi Matt, about the two offers. Got a minute?\n"
         "- 00:07.5 **User:** Only a minute. By the way, Offer B's bonus is ten percent, not fifteen.\n"
         "- 00:12.0 **AI:** Got it, ten percent. Should we go through them now?\n"
         "- 00:15.2 **User:** Later. I want a proper comparison of the take-home pay over three years.\n"
