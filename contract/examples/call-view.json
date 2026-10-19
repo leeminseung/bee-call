@@ -104,7 +104,7 @@
       "id": "speech-46",
       "at": "2026-10-15T01:24:11+09:00",
       "speaker": "person",
-      "text": "배터리가 금방 닳고 무거워서 들고 다니기가 힘들어요. 도서관에 매일 가지고 가거든요.",
+      "text": "배터리가 금방 닳고 무거워서 들고 다니기가 힘들어요. 공유 오피스에 매일 가지고 가거든요.",
       "interrupted": false
     },
     {
@@ -152,7 +152,7 @@
       "id": "speech-86",
       "at": "2026-10-15T01:26:43+09:00",
       "speaker": "person",
-      "text": "주로 파이썬이고 머신러닝도 조금 해요. 도서관이나 카페에서 일할 때가 많아요.",
+      "text": "주로 파이썬이고 머신러닝도 조금 해요. 공유 오피스나 카페에서 일할 때가 많아요.",
       "interrupted": false
     },
     {
@@ -241,7 +241,7 @@
       "id": "speech-136",
       "at": "2026-10-15T01:28:50+09:00",
       "speaker": "person",
-      "text": "참, 저 거의 매일 도서관에서 일해요. 그건 기억해 둬요.",
+      "text": "참, 저 거의 매일 공유 오피스에서 일해요. 그건 기억해 둬요.",
       "interrupted": false
     },
     {
@@ -249,7 +249,7 @@
       "id": "speech-139",
       "at": "2026-10-15T01:28:50+09:00",
       "speaker": "ai",
-      "text": "Bee에 'Works at the library almost every day'로 기억해 둘까요?",
+      "text": "Bee에 'Works at a co-working space almost every day'로 기억해 둘까요?",
       "interrupted": false
     },
     {
@@ -273,7 +273,7 @@
       "id": "write-w2",
       "at": "2026-10-15T01:28:53+09:00",
       "kind": "fact_create",
-      "text": "Works at the library almost every day",
+      "text": "Works at a co-working space almost every day",
       "state": "written",
       "will_retry": false,
       "undoable": false
@@ -299,5 +299,5 @@
     "person": 14,
     "ai": 13
   },
-  "version": "cba392675d56e1da"
+  "version": "ec4be2241960e090"
 }

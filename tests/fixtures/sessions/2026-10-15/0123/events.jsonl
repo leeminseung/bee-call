@@ -43,8 +43,8 @@
 {"t": 62.52, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 63.68, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 64.84, "old": "listening", "new": "speaking", "type": "user_state"}
-{"t": 66.0, "text": "배터리가 금방 닳고 무거워서 들고 다니기가 힘들어요. 도서관에 매일 가지고 가거든요.", "type": "user_transcript"}
-{"t": 66.3, "role": "user", "text": "배터리가 금방 닳고 무거워서 들고 다니기가 힘들어요. 도서관에 매일 가지고 가거든요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995048.5, "stopped_speaking_at": 1791995050.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
+{"t": 66.0, "text": "배터리가 금방 닳고 무거워서 들고 다니기가 힘들어요. 공유 오피스에 매일 가지고 가거든요.", "type": "user_transcript"}
+{"t": 66.3, "role": "user", "text": "배터리가 금방 닳고 무거워서 들고 다니기가 힘들어요. 공유 오피스에 매일 가지고 가거든요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995048.5, "stopped_speaking_at": 1791995050.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
 {"t": 72.083, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 77.867, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 83.65, "old": "speaking", "new": "listening", "type": "user_state"}
@@ -61,8 +61,8 @@
 {"t": 138.3, "role": "user", "text": "맥북 에어랑 프로 중에 코딩용으로 고민 중이에요. 한국 가격 비교해 주고, 저한테 뭐가 맞는지 알려 주세요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995120.5, "stopped_speaking_at": 1791995122.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
 {"t": 142.533, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 146.767, "old": "speaking", "new": "listening", "type": "user_state"}
-{"t": 151.0, "job_id": "01", "task": "Compare the MacBook Air and MacBook Pro for coding at Apple Korea's prices: the base configurations and two common upgrades, battery life and weight. The user codes mostly in Python with some machine learning, works in libraries and cafes, and carries the laptop every day. Bring back a one-line recommendation, a comparison table and a price chart.", "title": "코딩용 맥북 에어와 프로 한국 가격 비교", "type": "job_started"}
-{"t": 151.02, "name": "delegate", "arguments": "{\"task\": \"Compare the MacBook Air and MacBook Pro for coding at Apple Korea's prices: the base configurations and two common upgrades, battery life and weight. The user codes mostly in Python with some machine learning, works in libraries and cafes, and carries the laptop every day. Bring back a one-line recommendation, a comparison table and a price chart.\", \"title\": \"코딩용 맥북 에어와 프로 한국 가격 비교\"}", "output": "Job 01 is running in the background.", "type": "tool"}
+{"t": 151.0, "job_id": "01", "task": "Compare the MacBook Air and MacBook Pro for coding at Apple Korea's prices: the base configurations and two common upgrades, battery life and weight. The user codes mostly in Python with some machine learning, works at a co-working space and in cafes, and carries the laptop every day. Bring back a one-line recommendation, a comparison table and a price chart.", "title": "코딩용 맥북 에어와 프로 한국 가격 비교", "type": "job_started"}
+{"t": 151.02, "name": "delegate", "arguments": "{\"task\": \"Compare the MacBook Air and MacBook Pro for coding at Apple Korea's prices: the base configurations and two common upgrades, battery life and weight. The user codes mostly in Python with some machine learning, works at a co-working space and in cafes, and carries the laptop every day. Bring back a one-line recommendation, a comparison table and a price chart.\", \"title\": \"코딩용 맥북 에어와 프로 한국 가격 비교\"}", "output": "Job 01 is running in the background.", "type": "tool"}
 {"t": 153.6, "role": "assistant", "text": "좋아요. 한국 가격이랑 배터리 시간을 찾아볼게요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995135.0, "stopped_speaking_at": 1791995138.6, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
 {"t": 165.0, "job_id": "01", "text": "애플 한국 가격표 읽는 중", "type": "job_progress"}
 {"t": 167.5, "old": "listening", "new": "speaking", "type": "user_state"}
@@ -87,8 +87,8 @@
 {"t": 219.0, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 220.5, "text": "머신러닝도 조금 해요.", "type": "user_transcript"}
 {"t": 221.5, "old": "listening", "new": "speaking", "type": "user_state"}
-{"t": 230.0, "text": "도서관이나 카페에서 일할 때가 많아요.", "type": "user_transcript"}
-{"t": 230.3, "role": "user", "text": "주로 파이썬이고 머신러닝도 조금 해요. 도서관이나 카페에서 일할 때가 많아요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995201.0, "stopped_speaking_at": 1791995214.0, "transcription_delay": 0.2, "end_of_turn_delay": 0.5}, "type": "message"}
+{"t": 230.0, "text": "공유 오피스나 카페에서 일할 때가 많아요.", "type": "user_transcript"}
+{"t": 230.3, "role": "user", "text": "주로 파이썬이고 머신러닝도 조금 해요. 공유 오피스나 카페에서 일할 때가 많아요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995201.0, "stopped_speaking_at": 1791995214.0, "transcription_delay": 0.2, "end_of_turn_delay": 0.5}, "type": "message"}
 {"t": 231.0, "old": "listening", "new": "thinking", "type": "agent_state"}
 {"t": 233.0, "job_id": "01", "text": "비교표와 가격 차트 만드는 중", "type": "job_progress"}
 {"t": 236.0, "job_id": "01", "text": "에어는 159만 원부터, 프로는 239만 원부터예요. 밖에서 파이썬을 주로 한다면 에어가 더 잘 맞아요.", "type": "relay"}
@@ -133,14 +133,14 @@
 {"t": 334.0, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 336.0, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 344.0, "role": "assistant", "text": "Bee 기록으로는 지호 님과 오전 10시로 이야기하셨어요. 장소는 아직 정하지 않으셨고요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995323.0, "stopped_speaking_at": 1791995329.0, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
-{"t": 345.0, "text": "참, 저 거의 매일 도서관에서 일해요. 그건 기억해 둬요.", "type": "user_transcript"}
-{"t": 345.3, "role": "user", "text": "참, 저 거의 매일 도서관에서 일해요. 그건 기억해 둬요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995327.5, "stopped_speaking_at": 1791995329.8, "transcription_delay": 0.17, "end_of_turn_delay": 0.4}, "type": "message"}
-{"t": 346.1, "name": "propose_bee_save", "arguments": "{\"kind\": \"fact_create\", \"text\": \"Works at the library almost every day\"}", "output": "Proposal 2: fact 'Works at the library almost every day'. Ask the user now.", "type": "tool"}
-{"t": 347.0, "role": "assistant", "text": "Bee에 'Works at the library almost every day'로 기억해 둘까요?", "interrupted": false, "metrics": {"started_speaking_at": 1791995331.0, "stopped_speaking_at": 1791995333.0, "llm_node_ttft": 0.58, "tts_node_ttfb": 0.22, "e2e_latency": 1.05}, "type": "message"}
+{"t": 345.0, "text": "참, 저 거의 매일 공유 오피스에서 일해요. 그건 기억해 둬요.", "type": "user_transcript"}
+{"t": 345.3, "role": "user", "text": "참, 저 거의 매일 공유 오피스에서 일해요. 그건 기억해 둬요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995327.5, "stopped_speaking_at": 1791995329.8, "transcription_delay": 0.17, "end_of_turn_delay": 0.4}, "type": "message"}
+{"t": 346.1, "name": "propose_bee_save", "arguments": "{\"kind\": \"fact_create\", \"text\": \"Works at a co-working space almost every day\"}", "output": "Proposal 2: fact 'Works at a co-working space almost every day'. Ask the user now.", "type": "tool"}
+{"t": 347.0, "role": "assistant", "text": "Bee에 'Works at a co-working space almost every day'로 기억해 둘까요?", "interrupted": false, "metrics": {"started_speaking_at": 1791995331.0, "stopped_speaking_at": 1791995333.0, "llm_node_ttft": 0.58, "tts_node_ttfb": 0.22, "e2e_latency": 1.05}, "type": "message"}
 {"t": 348.0, "text": "네, 기억해 줘요.", "type": "user_transcript"}
 {"t": 348.3, "role": "user", "text": "네, 기억해 줘요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995333.6, "stopped_speaking_at": 1791995334.4, "transcription_delay": 0.16, "end_of_turn_delay": 0.38}, "type": "message"}
-{"t": 349.0, "key": "w2", "kind": "fact_create", "text": "Works at the library almost every day", "item": {"kind": "fact_create", "text": "Works at the library almost every day"}, "question": "Bee에 'Works at the library almost every day'로 기억해 둘까요?", "answer": "네, 기억해 줘요.", "result": "ok", "error": null, "type": "bee_write"}
-{"t": 349.02, "name": "save_to_bee", "arguments": "{\"proposal\": 2}", "output": "Saved to Bee: fact 'Works at the library almost every day'. Tell the user in a few words what you saved.", "type": "tool"}
+{"t": 349.0, "key": "w2", "kind": "fact_create", "text": "Works at a co-working space almost every day", "item": {"kind": "fact_create", "text": "Works at a co-working space almost every day"}, "question": "Bee에 'Works at a co-working space almost every day'로 기억해 둘까요?", "answer": "네, 기억해 줘요.", "result": "ok", "error": null, "type": "bee_write"}
+{"t": 349.02, "name": "save_to_bee", "arguments": "{\"proposal\": 2}", "output": "Saved to Bee: fact 'Works at a co-working space almost every day'. Tell the user in a few words what you saved.", "type": "tool"}
 {"t": 349.2, "role": "assistant", "text": "기억해 뒀어요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995335.0, "stopped_speaking_at": 1791995335.9, "llm_node_ttft": 0.52, "tts_node_ttfb": 0.21, "e2e_latency": 0.98}, "type": "message"}
 {"t": 349.375, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 354.75, "old": "speaking", "new": "listening", "type": "user_state"}

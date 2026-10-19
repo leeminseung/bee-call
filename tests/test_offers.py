@@ -904,7 +904,7 @@ def test_a_call_booked_in_a_korean_call_says_why_in_korean():
     """Decision 2 of the app contract: the reason shows on the call's card, in the person's language."""
     store_dir = Path(tempfile.mkdtemp(prefix="book-"))
     now = datetime(2026, 10, 15, 14, 27, tzinfo=SEOUL)
-    offer = OfferStore(store_dir).book("도서관에서 정리한 할 일 다시 보기", now + timedelta(hours=4), now,
+    offer = OfferStore(store_dir).book("아까 정리한 할 일 다시 보기", now + timedelta(hours=4), now,
                                        language=call_language("ko"))
     assert offer.reason == "오후 2시 27분 통화에서 이 시간에 다시 전화해 달라고 하셨어요."
 

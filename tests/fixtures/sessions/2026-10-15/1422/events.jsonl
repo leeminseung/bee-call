@@ -1,11 +1,11 @@
 {"t": 0.0, "room": "call-minseung-20261015-142209", "started_at": "2026-10-15T14:22:13+09:00", "type": "call_started"}
 {"t": 0.004, "llm": "anthropic", "model": "claude-haiku-5-5", "call_model": "haiku", "language": "ko", "voice": {"provider": "elevenlabs", "voice": "5n5gqmaQi9Ewevrz7bOS", "model": "eleven_v4_turbo"}, "person": "minseung", "audio_on_server": true, "audio_on_phone": false, "type": "coordinator"}
 {"t": 0.005, "direction": "inbound", "topic": null, "reason": null, "continue_from": null, "type": "call"}
-{"t": 1.8, "seconds": 4.1, "model": "zai.glm-5", "bee": true, "reads": [{"type": "day", "date": "2026-10-15"}], "note": "오늘 오후에 도서관에서 공부할 계획이에요.", "opening": "네, Bee Call이에요. 어떤 이야기 해 볼까요?", "error": null, "input_tokens": 4021, "output_tokens": 210, "type": "call_prep"}
+{"t": 1.8, "seconds": 4.1, "model": "zai.glm-5", "bee": true, "reads": [{"type": "day", "date": "2026-10-15"}], "note": "오늘 오후에 공유 오피스에서 일할 계획이에요.", "opening": "네, Bee Call이에요. 어떤 이야기 해 볼까요?", "error": null, "input_tokens": 4021, "output_tokens": 210, "type": "call_prep"}
 {"t": 2.0, "after_s": 5.4, "type": "picked_up"}
 {"t": 5.6, "role": "assistant", "text": "네, Bee Call이에요. 어떤 이야기 해 볼까요?", "interrupted": false, "metrics": {"started_speaking_at": 1792041736.0, "stopped_speaking_at": 1792041738.6, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
-{"t": 12.0, "text": "지금 도서관 가는 길인데, 오늘 할 일 같이 정리해 줄래요?", "type": "user_transcript"}
-{"t": 12.3, "role": "user", "text": "지금 도서관 가는 길인데, 오늘 할 일 같이 정리해 줄래요?", "interrupted": false, "metrics": {"started_speaking_at": 1792041742.5, "stopped_speaking_at": 1792041744.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
+{"t": 12.0, "text": "지금 공유 오피스 가는 길인데, 오늘 할 일 같이 정리해 줄래요?", "type": "user_transcript"}
+{"t": 12.3, "role": "user", "text": "지금 공유 오피스 가는 길인데, 오늘 할 일 같이 정리해 줄래요?", "interrupted": false, "metrics": {"started_speaking_at": 1792041742.5, "stopped_speaking_at": 1792041744.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
 {"t": 22.0, "role": "assistant", "text": "좋아요. 오늘 꼭 끝내야 하는 것부터 말씀해 주세요.", "interrupted": false, "metrics": {"started_speaking_at": 1792041751.0, "stopped_speaking_at": 1792041755.0, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
 {"t": 57.0, "text": "데모 영상 대본을 다듬어야 해요. 그거 할 일에 넣어 주세요.", "type": "user_transcript"}
 {"t": 57.3, "role": "user", "text": "데모 영상 대본을 다듬어야 해요. 그거 할 일에 넣어 주세요.", "interrupted": false, "metrics": {"started_speaking_at": 1792041787.5, "stopped_speaking_at": 1792041789.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
@@ -16,11 +16,11 @@
 {"t": 211.6, "role": "assistant", "text": "넣었어요.", "interrupted": false, "metrics": {"started_speaking_at": 1792041943.0, "stopped_speaking_at": 1792041944.6, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
 {"t": 307.0, "text": "저녁 7시에 다시 전화해서 정리한 할 일 같이 봐 줄래요?", "type": "user_transcript"}
 {"t": 307.3, "role": "user", "text": "저녁 7시에 다시 전화해서 정리한 할 일 같이 봐 줄래요?", "interrupted": false, "metrics": {"started_speaking_at": 1792042037.5, "stopped_speaking_at": 1792042039.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
-{"t": 318.0, "offer": "20261015-142731-7c2e", "at": "2026-10-15T19:00:00+09:00", "topic": "도서관에서 정리한 할 일 다시 보기", "type": "call_booked"}
+{"t": 318.0, "offer": "20261015-142731-7c2e", "at": "2026-10-15T19:00:00+09:00", "topic": "아까 정리한 할 일 다시 보기", "type": "call_booked"}
 {"t": 323.2, "role": "assistant", "text": "네, 저녁 7시에 전화할게요.", "interrupted": false, "metrics": {"started_speaking_at": 1792042053.0, "stopped_speaking_at": 1792042056.2, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
 {"t": 352.0, "text": "고마워요, 이제 도착했어요.", "type": "user_transcript"}
 {"t": 352.3, "role": "user", "text": "고마워요, 이제 도착했어요.", "interrupted": false, "metrics": {"started_speaking_at": 1792042082.5, "stopped_speaking_at": 1792042084.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
-{"t": 358.0, "role": "assistant", "text": "네, 공부 잘하세요.", "interrupted": false, "metrics": {"started_speaking_at": 1792042089.0, "stopped_speaking_at": 1792042091.0, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 358.0, "role": "assistant", "text": "네, 좋은 오후 보내세요.", "interrupted": false, "metrics": {"started_speaking_at": 1792042089.0, "stopped_speaking_at": 1792042091.0, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
 {"t": 372.0, "reason": "CloseReason.PARTICIPANT_DISCONNECTED", "type": "session_closed"}
 {"t": 372.6, "user_audio_skipped_frames": 0, "ai_audio_skipped_frames": 0, "type": "call_ended"}
-{"t": 374.0, "title": "도서관 가는 길, 오늘 할 일 정리", "model": "claude-haiku-5-5", "input_tokens": 1210, "output_tokens": 18, "seconds": 0.9, "type": "call_titled"}
+{"t": 374.0, "title": "공유 오피스 가는 길, 오늘 할 일 정리", "model": "claude-haiku-5-5", "input_tokens": 1210, "output_tokens": 18, "seconds": 0.9, "type": "call_titled"}

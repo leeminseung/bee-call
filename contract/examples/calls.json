@@ -5,7 +5,7 @@
       "started_at": "2026-10-15T14:22:13+09:00",
       "started_by": "person",
       "topic": null,
-      "title": "도서관 가는 길, 오늘 할 일 정리",
+      "title": "공유 오피스 가는 길, 오늘 할 일 정리",
       "title_source": "summary",
       "state": "ended",
       "duration_s": 372,
@@ -102,7 +102,7 @@
           "id": "write-w2",
           "at": "2026-10-15T01:28:53+09:00",
           "kind": "fact_create",
-          "text": "Works at the library almost every day",
+          "text": "Works at a co-working space almost every day",
           "state": "written",
           "will_retry": false,
           "undoable": false
@@ -208,5 +208,5 @@
   ],
   "more": true,
   "before": "MjAyNi0xMC0xNFQwODozMTowMCswOTowMHxjYWxsLW1pbnNldW5nLTIwMjYxMDE0LTA4MzEwMA",
-  "version": "8cbfb25fc8233003"
+  "version": "907a21523c52ef48"
 }

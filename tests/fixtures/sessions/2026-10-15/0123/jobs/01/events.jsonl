@@ -1,4 +1,4 @@
-{"at": 1791995136.0, "type": "started", "task": "Compare the MacBook Air and MacBook Pro for coding at Apple Korea's prices: the base configurations and two common upgrades, battery life and weight. The user codes mostly in Python with some machine learning, works in libraries and cafes, and carries the laptop every day. Bring back a one-line recommendation, a comparison table and a price chart.", "title": "코딩용 맥북 에어와 프로 한국 가격 비교", "language": "ko"}
+{"at": 1791995136.0, "type": "started", "task": "Compare the MacBook Air and MacBook Pro for coding at Apple Korea's prices: the base configurations and two common upgrades, battery life and weight. The user codes mostly in Python with some machine learning, works at a co-working space and in cafes, and carries the laptop every day. Bring back a one-line recommendation, a comparison table and a price chart.", "title": "코딩용 맥북 에어와 프로 한국 가격 비교", "language": "ko"}
 {"at": 1791995150.0, "type": "progress", "text": "애플 한국 가격표 읽는 중"}
 {"at": 1791995218.0, "type": "progress", "text": "비교표와 가격 차트 만드는 중"}
 {"at": 1791995221.0, "type": "relay", "text": "에어는 159만 원부터, 프로는 239만 원부터예요."}

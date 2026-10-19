@@ -7,7 +7,7 @@ import XCTest
 final class CallsListTests: XCTestCase {
     /// A call for the words: the list's first call with the fields a test is about changed.
     @MainActor private func call(_ startedAt: String, by starter: String = "person", state: String = "ended",
-                                 seconds: Int? = 372, title: String? = "도서관 가는 길, 오늘 할 일 정리",
+                                 seconds: Int? = 372, title: String? = "공유 오피스 가는 길, 오늘 할 일 정리",
                                  titleSource: String = "summary", marks: [String: Any]? = nil,
                                  results: [[String: Any]] = [], id: String = "call-test-1") throws -> CallEntry {
         var body = try XCTUnwrap((try Examples.object("calls")["calls"] as? [[String: Any]])?.first)
@@ -63,7 +63,7 @@ final class CallsListTests: XCTestCase {
 
     @MainActor func testARowSaysWhenWhoAndHowLong() throws {
         let row = CallsList.Row(try call("2026-10-15T14:22:13+09:00"), korean: true, ownCall: nil)
-        XCTAssertEqual(row.title, "도서관 가는 길, 오늘 할 일 정리")
+        XCTAssertEqual(row.title, "공유 오피스 가는 길, 오늘 할 일 정리")
         XCTAssertFalse(row.quietTitle)
         XCTAssertEqual(row.line, "오후 2:22 · 내가 건 전화 · 6분 12초")
         XCTAssertNil(row.state)

@@ -3,7 +3,7 @@
     {
       "id": "20261015-142731-7c2e",
       "state": "booked",
-      "topic": "도서관에서 정리한 할 일 다시 보기",
+      "topic": "아까 정리한 할 일 다시 보기",
       "created_at": "2026-10-15T14:27:31+09:00",
       "suggested_at": null,
       "call_at": "2026-10-15T19:00:00+09:00"
@@ -17,5 +17,5 @@
       "call_at": null
     }
   ],
-  "version": "17af2b3123119785"
+  "version": "5c555e5cddfde225"
 }

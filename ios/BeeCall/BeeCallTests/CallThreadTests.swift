@@ -116,12 +116,12 @@ final class CallThreadTests: XCTestCase {
     /// who spoke last, still growing, joins that bubble, above the docked job.
     @MainActor func testTheGrowingLineJoinsItsBubbleAboveTheRunningJob() throws {
         let live = try view("call-view-live"), (running, last) = try dock(live)
-        let growing = CaptionLine(speaker: last.speaker, number: next(last.speaker, in: live), text: "도서관이나 카페에서")
+        let growing = CaptionLine(speaker: last.speaker, number: next(last.speaker, in: live), text: "공유 오피스나 카페에서")
         let entries = CallThread.live(view: live, captions: held(live) + [growing], captionsShown: true)
         XCTAssertEqual(entries.count, live.drawnItems.count, "no new bubble")
         XCTAssertEqual(entries.suffix(running.count).map(\.id), running.map(\.id), "the running job is docked last")
         XCTAssertEqual(entries[entries.count - running.count - 1],
-                       .bubble(id: last.id, speaker: last.speaker, text: last.text + " 도서관이나 카페에서"))
+                       .bubble(id: last.id, speaker: last.speaker, text: last.text + " 공유 오피스나 카페에서"))
     }
 
     /// A caption line of the other speaker starts a new bubble after the items; the next line of that speaker

@@ -168,7 +168,7 @@ Every item has `type`, `id` and `at` (when it began, or for a finished job when 
 | Field | Meaning |
 |---|---|
 | `speaker` | `person` or `ai`. |
-| `text` | A run of one speaker's speech with nothing else between, its pieces joined with spaces. The person's speech is their final transcripts, so the bubble reads as the captions did: "주로 파이썬이고 / 머신러닝도 조금 해요. / 도서관이나 카페에서 일할 때가 많아요." arrive as three pieces and make one bubble. The AI's speech is what it said aloud, cut where the person cut in. An empty piece adds nothing. |
+| `text` | A run of one speaker's speech with nothing else between, its pieces joined with spaces. The person's speech is their final transcripts, so the bubble reads as the captions did: "주로 파이썬이고 / 머신러닝도 조금 해요. / 공유 오피스나 카페에서 일할 때가 많아요." arrive as three pieces and make one bubble. The AI's speech is what it said aloud, cut where the person cut in. An empty piece adds nothing. |
 | `interrupted` | The person cut the AI off at the end of this run. Always false for the person. |
 
 **`job`**: a background job.
@@ -291,7 +291,7 @@ words of it were heard, the server never splits a reply (no `FlushSentinel`), an
 of the voice. A server test pins these conditions (open question 6).
 
 Worked example, `call-view-live.json`: at 3:41 the person has finished two pieces of "주로 파이썬이고 / 머신러닝도
-조금 해요. / 도서관이나 카페에서 일할 때가 많아요." The view holds them (`captions_included.person` is 8), so the
+조금 해요. / 공유 오피스나 카페에서 일할 때가 많아요." The view holds them (`captions_included.person` is 8), so the
 phone draws its caption line 9, the third piece still growing, inside the same bubble, above the docked job card.
 
 ## 4. Offers and booked calls: `GET /offers`

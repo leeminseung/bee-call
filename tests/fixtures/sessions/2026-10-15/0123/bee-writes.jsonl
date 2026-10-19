@@ -1,4 +1,4 @@
 {"key": "w1", "status": "applying", "item": {"kind": "todo_create", "text": "토요일 촬영 장소 정하기"}, "question": "Bee 할 일에 '토요일 촬영 장소 정하기'를 넣을까요?", "answer": "네, 넣어 주세요.", "before": null, "at": "2026-10-15T01:23:30+09:00"}
 {"key": "w1", "status": "ok", "response": {"todo": {"id": 77001, "text": "토요일 촬영 장소 정하기", "created_at": 1792016610000, "completed": false}}, "at": "2026-10-15T01:23:31+09:00"}
-{"key": "w2", "status": "applying", "item": {"kind": "fact_create", "text": "Works at the library almost every day"}, "question": "Bee에 'Works at the library almost every day'로 기억해 둘까요?", "answer": "네, 기억해 줘요.", "before": null, "at": "2026-10-15T01:28:53+09:00"}
-{"key": "w2", "status": "ok", "response": {"fact": {"id": 88001, "text": "Works at the library almost every day", "created_at": 1791995334000, "confirmed": false, "tags": []}}, "at": "2026-10-15T01:28:54+09:00"}
+{"key": "w2", "status": "applying", "item": {"kind": "fact_create", "text": "Works at a co-working space almost every day"}, "question": "Bee에 'Works at a co-working space almost every day'로 기억해 둘까요?", "answer": "네, 기억해 줘요.", "before": null, "at": "2026-10-15T01:28:53+09:00"}
+{"key": "w2", "status": "ok", "response": {"fact": {"id": 88001, "text": "Works at a co-working space almost every day", "created_at": 1791995334000, "confirmed": false, "tags": []}}, "at": "2026-10-15T01:28:54+09:00"}

@@ -79,7 +79,7 @@ def test_the_examples_are_the_code_s_output(tmp_path):
         "report": True, "table": True, "chart": True, "bee_writes": 2}
     kept = [(i["kind"], i["text"], i["state"], i["undoable"]) for i in ended["items"] if i["type"] == "bee_write"]
     assert kept == [("todo_create", "토요일 촬영 장소 정하기", "written", False),
-                    ("fact_create", "Works at the library almost every day", "written", False)]  # 2026-10-17: a new kind, in English
+                    ("fact_create", "Works at a co-working space almost every day", "written", False)]  # 2026-10-17: a new kind, in English
     assert [i["id"] for i in ended["items"]][:6] == ["speech-9", "speech-14", "speech-19", "speech-24", "write-w1",
                                                      "speech-29"]
     assert ended["captions_included"] == {"person": 14, "ai": 13}
@@ -115,7 +115,7 @@ def test_the_same_files_give_the_same_version_and_a_change_a_new_one(tmp_path):
                                 wall=wall + 60)
     assert first == later
     with (workspace / "2026-10-15" / "0123" / "events.jsonl").open("a") as f:
-        f.write(json.dumps({"t": 225.0, "type": "user_transcript", "text": "도서관이나 카페에서 일할 때가 많아요."},
+        f.write(json.dumps({"t": 225.0, "type": "user_transcript", "text": "공유 오피스나 카페에서 일할 때가 많아요."},
                            ensure_ascii=False) + "\n")
     os.utime(workspace / "2026-10-15" / "0123" / "events.jsonl", (wall, wall))
     grown = call_view.call_view(workspace, MAIN, zone=SEOUL, language="ko", now=when, wall=wall)
