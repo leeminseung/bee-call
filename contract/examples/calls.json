@@ -191,8 +191,8 @@
       "call_id": "call-minseung-20261014-083100",
       "started_at": "2026-10-14T08:31:00+09:00",
       "started_by": "ai",
-      "topic": "아이폰과 애플워치에 Bee 설정하기",
-      "title": "아이폰과 애플워치에 Bee 설정하기",
+      "topic": "여행 짐 목록 만들기",
+      "title": "여행 짐 목록 만들기",
       "title_source": "topic",
       "state": "missed",
       "duration_s": null,
@@ -208,5 +208,5 @@
   ],
   "more": true,
   "before": "MjAyNi0xMC0xNFQwODozMTowMCswOTowMHxjYWxsLW1pbnNldW5nLTIwMjYxMDE0LTA4MzEwMA",
-  "version": "2615600a0b9daa81"
+  "version": "8cbfb25fc8233003"
 }

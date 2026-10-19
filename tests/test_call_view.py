@@ -87,8 +87,8 @@ def test_the_examples_are_the_code_s_output(tmp_path):
     assert (job["state"], job["duration_s"], job["at"]) == ("done", 87, "2026-10-15T01:27:03+09:00")
     assert [(f["name"], f["kind"]) for f in job["files"]] == [
         ("price-chart.svg", "chart"), ("report.md", "report"), ("comparison.csv", "table")]
-    assert ended["prep"]["note"] == ("오늘 아침 회의에서 노트북 이야기를 했고, 한국 가격을 궁금해했어요. 9월 28일부터 남은 일: "
-                                     "아이폰과 애플워치에 Bee 설정하기.")
+    assert ended["prep"]["note"] == ("오늘 아침 회의에서 노트북 이야기를 했고, 한국 가격을 궁금해했어요. 10월 3일부터 남은 일: "
+                                     "여행 짐 목록 만들기.")
 
     assert live["call"]["state"] == "live" and live["call"]["duration_s"] is None
     assert (live["call"]["title"], live["call"]["title_source"]) == ("토요일 촬영 장소를 아직 못 정했어요.", "first_sentence")
