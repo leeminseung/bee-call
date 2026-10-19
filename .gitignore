@@ -2,6 +2,8 @@
 .env
 .env.local
 .env.*.local
+# Local agent state (Claude Code settings, worktrees)
+.claude/
 
 # Call data: each person's folder (data/people/<id>/), and the single-user workspace from before
 data/
