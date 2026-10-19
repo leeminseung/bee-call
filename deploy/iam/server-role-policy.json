@@ -7,20 +7,20 @@
       "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
       "Resource": [
         "arn:aws:bedrock:*::foundation-model/*",
-        "arn:aws:bedrock:*:515927224114:inference-profile/*"
+        "arn:aws:bedrock:*:ACCOUNT_ID:inference-profile/*"
       ]
     },
     {
       "Sid": "WebSearchThroughNovaWebGrounding",
       "Effect": "Allow",
       "Action": "bedrock:InvokeTool",
-      "Resource": "arn:aws:bedrock::515927224114:system-tool/amazon.nova_grounding"
+      "Resource": "arn:aws:bedrock::ACCOUNT_ID:system-tool/amazon.nova_grounding"
     },
     {
       "Sid": "BackgroundWorker",
       "Effect": "Allow",
       "Action": "bedrock-agentcore:InvokeHarness",
-      "Resource": "arn:aws:bedrock-agentcore:ap-southeast-2:515927224114:harness/*"
+      "Resource": "arn:aws:bedrock-agentcore:ap-southeast-2:ACCOUNT_ID:harness/*"
     },
     {
       "Sid": "SpeechToText",
@@ -39,8 +39,8 @@
       "Effect": "Allow",
       "Action": ["ssm:GetParametersByPath", "ssm:GetParameter"],
       "Resource": [
-        "arn:aws:ssm:ap-southeast-2:515927224114:parameter/bee-call",
-        "arn:aws:ssm:ap-southeast-2:515927224114:parameter/bee-call/*"
+        "arn:aws:ssm:ap-southeast-2:ACCOUNT_ID:parameter/bee-call",
+        "arn:aws:ssm:ap-southeast-2:ACCOUNT_ID:parameter/bee-call/*"
       ]
     }
   ]

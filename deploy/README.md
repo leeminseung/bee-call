@@ -40,18 +40,21 @@ These steps need you, once.
 2. **Give the Mac its own agent name.** Add `LIVEKIT_AGENT_NAME=bee-call-dev` to the Mac's `.env.local` and restart its voice server. The server registers as `bee-call`; if both machines used one name, LiveKit would split calls between them. Run `voice.outbound` for a Bee account on one machine only, or both would react to the same Bee changes.
 3. **IAM, with an administrator identity** (not `bee-call-dev`):
    ```bash
+   ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
    aws iam create-role --role-name bee-call-server --assume-role-policy-document \
      '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
    aws iam put-role-policy --role-name bee-call-server --policy-name bee-call-server \
-     --policy-document file://deploy/iam/server-role-policy.json
+     --policy-document "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/g" deploy/iam/server-role-policy.json)"
    aws iam attach-role-policy --role-name bee-call-server \
      --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
    aws iam create-instance-profile --instance-profile-name bee-call-server
    aws iam add-role-to-instance-profile --instance-profile-name bee-call-server --role-name bee-call-server
-   aws iam create-policy --policy-name bee-call-deployer --policy-document file://deploy/iam/deployer-policy.json
+   aws iam create-policy --policy-name bee-call-deployer \
+     --policy-document "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/g" deploy/iam/deployer-policy.json)"
    aws iam attach-user-policy --user-name bee-call-dev \
-     --policy-arn arn:aws:iam::515927224114:policy/bee-call-deployer
+     --policy-arn "arn:aws:iam::$ACCOUNT_ID:policy/bee-call-deployer"
    ```
+   The two policy files name the AWS account as `ACCOUNT_ID`. The first line reads the account of the identity running these commands, and `sed` puts it in each policy as it is sent.
    If the role and its instance profile exist already, skip `create-role`, `create-instance-profile` and `add-role-to-instance-profile`.
    `server-role-policy.json` allows Bedrock models, Nova Web Grounding (the worker's web search, which needs `bedrock:InvokeTool` besides the model), the AgentCore harness, Transcribe, Polly and reading `/bee-call/*`. The deploying user's permissions go in a managed policy, because IAM allows a user only 2,048 characters of inline policies.
 4. **Buy the domain in Route 53.** Registering it there creates the hosted zone that `dns` writes to. The hostname can be the domain or a name under it.
