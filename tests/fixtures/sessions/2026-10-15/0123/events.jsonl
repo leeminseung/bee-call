@@ -2,7 +2,7 @@
 {"t": 0.004, "llm": "anthropic", "model": "claude-haiku-5-5", "call_model": "haiku", "language": "ko", "voice": {"provider": "elevenlabs", "voice": "5n5gqmaQi9Ewevrz7bOS", "model": "eleven_v4_turbo"}, "person": "minseung", "audio_on_server": true, "audio_on_phone": false, "type": "coordinator"}
 {"t": 0.005, "direction": "inbound", "topic": null, "reason": null, "continue_from": null, "type": "call"}
 {"t": 2.3, "after_s": 6.1, "opening": "안녕하세요, 민승 님. 오늘 밤엔 무슨 이야기 할까요?", "opening_s": 2.2, "note_ready": true, "type": "prep_ready"}
-{"t": 2.31, "seconds": 4.9, "model": "zai.glm-5", "bee": true, "reads": [{"type": "conversation", "id": 10785664, "summary": "성현 님과의 대화", "at": "2026-10-13T18:40:00+09:00"}, {"type": "day", "date": "2026-10-15"}], "note": "오늘 아침 회의에서 노트북 이야기를 했고 (conversation 10785664), 한국 가격을 궁금해했어요. 9월 28일부터 남은 일 (todo 11628862): 아이폰과 애플워치에 Bee 설정하기.", "opening": "안녕하세요, 민승 님. 오늘 밤엔 무슨 이야기 할까요?", "error": null, "input_tokens": 5210, "output_tokens": 388, "type": "call_prep"}
+{"t": 2.31, "seconds": 4.9, "model": "zai.glm-5", "bee": true, "reads": [{"type": "conversation", "id": 10785664, "summary": "지호 님과의 대화", "at": "2026-10-13T18:40:00+09:00"}, {"type": "day", "date": "2026-10-15"}], "note": "오늘 아침 회의에서 노트북 이야기를 했고 (conversation 10785664), 한국 가격을 궁금해했어요. 9월 28일부터 남은 일 (todo 11628862): 아이폰과 애플워치에 Bee 설정하기.", "opening": "안녕하세요, 민승 님. 오늘 밤엔 무슨 이야기 할까요?", "error": null, "input_tokens": 5210, "output_tokens": 388, "type": "call_prep"}
 {"t": 2.5, "old": "initializing", "new": "listening", "type": "agent_state"}
 {"t": 2.9, "old": "listening", "new": "speaking", "type": "agent_state"}
 {"t": 3.0, "after_s": 6.2, "type": "picked_up"}
@@ -132,7 +132,7 @@
 {"t": 332.0, "name": "search_bee", "arguments": "{\"query\": \"토요일 촬영\"}", "output": "...", "type": "tool"}
 {"t": 334.0, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 336.0, "old": "speaking", "new": "listening", "type": "user_state"}
-{"t": 344.0, "role": "assistant", "text": "Bee 기록으로는 성현 님과 오전 10시로 이야기하셨어요. 장소는 아직 정하지 않으셨고요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995323.0, "stopped_speaking_at": 1791995329.0, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
+{"t": 344.0, "role": "assistant", "text": "Bee 기록으로는 지호 님과 오전 10시로 이야기하셨어요. 장소는 아직 정하지 않으셨고요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995323.0, "stopped_speaking_at": 1791995329.0, "llm_node_ttft": 0.61, "tts_node_ttfb": 0.24, "e2e_latency": 1.12}, "type": "message"}
 {"t": 345.0, "text": "참, 저 거의 매일 도서관에서 일해요. 그건 기억해 둬요.", "type": "user_transcript"}
 {"t": 345.3, "role": "user", "text": "참, 저 거의 매일 도서관에서 일해요. 그건 기억해 둬요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995327.5, "stopped_speaking_at": 1791995329.8, "transcription_delay": 0.17, "end_of_turn_delay": 0.4}, "type": "message"}
 {"t": 346.1, "name": "propose_bee_save", "arguments": "{\"kind\": \"fact_create\", \"text\": \"Works at the library almost every day\"}", "output": "Proposal 2: fact 'Works at the library almost every day'. Ask the user now.", "type": "tool"}
@@ -157,8 +157,8 @@
 {"t": 413.875, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 419.25, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 424.625, "old": "listening", "new": "speaking", "type": "user_state"}
-{"t": 430.0, "text": "알겠어요. 장소는 내일 성현이랑 정할게요. 오늘은 여기까지 할게요. 고마워요.", "type": "user_transcript"}
-{"t": 430.3, "role": "user", "text": "알겠어요. 장소는 내일 성현이랑 정할게요. 오늘은 여기까지 할게요. 고마워요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995412.5, "stopped_speaking_at": 1791995414.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
+{"t": 430.0, "text": "알겠어요. 장소는 내일 지호랑 정할게요. 오늘은 여기까지 할게요. 고마워요.", "type": "user_transcript"}
+{"t": 430.3, "role": "user", "text": "알겠어요. 장소는 내일 지호랑 정할게요. 오늘은 여기까지 할게요. 고마워요.", "interrupted": false, "metrics": {"started_speaking_at": 1791995412.5, "stopped_speaking_at": 1791995414.8, "transcription_delay": 0.18, "end_of_turn_delay": 0.42}, "type": "message"}
 {"t": 434.725, "old": "speaking", "new": "listening", "type": "user_state"}
 {"t": 439.15, "old": "listening", "new": "speaking", "type": "user_state"}
 {"t": 443.575, "old": "speaking", "new": "listening", "type": "user_state"}

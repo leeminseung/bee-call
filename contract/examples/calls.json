@@ -131,8 +131,8 @@
       "call_id": "call-minseung-20261014-180158",
       "started_at": "2026-10-14T18:02:11+09:00",
       "started_by": "ai",
-      "topic": "성현이와 토요일 촬영 이야기",
-      "title": "새 음성 메모: 성현이와 토요일 촬영 이야기",
+      "topic": "지호와 토요일 촬영 이야기",
+      "title": "새 음성 메모: 지호와 토요일 촬영 이야기",
       "title_source": "summary",
       "state": "ended",
       "duration_s": 124,
@@ -208,5 +208,5 @@
   ],
   "more": true,
   "before": "MjAyNi0xMC0xNFQwODozMTowMCswOTowMHxjYWxsLW1pbnNldW5nLTIwMjYxMDE0LTA4MzEwMA",
-  "version": "2a6de123b519c2b2"
+  "version": "2615600a0b9daa81"
 }

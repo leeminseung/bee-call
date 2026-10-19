@@ -22,7 +22,7 @@
     "looked_up": [
       {
         "type": "conversation",
-        "summary": "성현 님과의 대화",
+        "summary": "지호 님과의 대화",
         "at": "2026-10-13T18:40:00+09:00"
       },
       {
@@ -173,5 +173,5 @@
     "person": 8,
     "ai": 7
   },
-  "version": "cdddfee7887c2167"
+  "version": "234c723997d96fc9"
 }
