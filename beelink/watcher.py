@@ -21,11 +21,12 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from beelink import cli
 from beelink.calls import OurCalls
@@ -43,6 +44,8 @@ MEMO_PIECES = {"journal-text", "journal-updated"}
 # has passed since the first event of the burst (review of 2026-10-17, finding 6). A memo's pieces are not held to
 # it, since a memo ends. Arbitrary.
 LONGEST_WAIT_S = 180.0
+# One event as `bee stream --agent` prints it: "Event journal-created: ..." or "Event connected.".
+AGENT_LINE = re.compile(r"Event ([a-z][a-z0-9-]*)[:.]")
 
 
 @dataclass
@@ -53,20 +56,25 @@ class Trigger:
     counts: dict[str, int] = field(default_factory=dict)
 
 
-def parse_stream_line(line: str) -> tuple[str, dict[str, Any]] | None:
-    """`bee stream --json` prints one JSON object per event: {"event": name, "data": {...}}."""
+def parse_stream_line(line: str) -> str | None:
+    """The event's name from one line of `bee stream --agent`, which prints `Event <name>: <what happened>` (or
+    `Event <name>.`) per event. `--json` prints only an event's data, without its name (bee-cli 0.7.3,
+    sources/commands/stream/index.ts), so the watcher heard no event and caught up only on a reconnect (2026-10-20).
+    A JSON object with an "event" or "type" field, as a stand-in CLI may print, counts too."""
     line = line.strip()
     if not line:
         return None
+    agent_line = AGENT_LINE.match(line)
+    if agent_line:
+        return agent_line.group(1)
     try:
         obj = json.loads(line)
     except json.JSONDecodeError:
         return None
-    name = obj.get("event") or obj.get("type")
-    if not name:
+    if not isinstance(obj, dict):
         return None
-    data = obj.get("data")
-    return name, data if isinstance(data, dict) else {}
+    name = obj.get("event") or obj.get("type")
+    return name if isinstance(name, str) and name else None
 
 
 class BeeWatcher:
@@ -176,7 +184,7 @@ class BeeWatcher:
             # and both must go when the watcher stops.
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    cli.bee_bin(), "stream", "--json", "--types", STREAM_TYPES,
+                    cli.bee_bin(), "stream", "--agent", "--types", STREAM_TYPES,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=cli.run_env(),
                     start_new_session=True,
                 )
@@ -190,10 +198,9 @@ class BeeWatcher:
                     await self.catch_up("connected")
                 assert proc.stdout is not None
                 async for raw in proc.stdout:
-                    parsed = parse_stream_line(raw.decode(errors="replace"))
-                    if parsed is None:
+                    name = parse_stream_line(raw.decode(errors="replace"))
+                    if name is None:
                         continue
-                    name, _ = parsed
                     backoff = 2.0
                     self.on_event(name)
             except Exception as exc:  # keep watching through transient failures

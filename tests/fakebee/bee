@@ -80,6 +80,16 @@ if cmd == ["logout"]:
     print("Logged out.")
     sys.exit(0)
 
+# `bee stream`: the events FAKE_BEE_STREAM lists ([{"event", "data"}]), printed the way the real CLI prints them
+# (bee-cli 0.7.3, sources/commands/stream/index.ts): `--agent` gives one "Event <name>: <data>" line each, and
+# `--json` only each event's data, without its name. The stream then stays open until it is stopped.
+if cmd[:1] == ["stream"]:
+    stream_file = os.environ.get("FAKE_BEE_STREAM")
+    for e in json.load(open(stream_file)) if stream_file else []:
+        print(f"Event {e['event']}: {json.dumps(e['data'])}" if "--agent" in args else json.dumps(e["data"]), flush=True)
+    time.sleep(60)
+    sys.exit(0)
+
 if cmd[:1] == ["changed"]:
     out(json.load(open(os.environ["FAKE_BEE_CHANGED"])))
 # An empty Bee day (FAKE_BEE_EMPTY=1): nothing recorded, nothing pending.

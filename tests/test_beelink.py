@@ -278,10 +278,53 @@ def test_watcher_ignores_empty_batches(tmp_path, fake_bee, monkeypatch):
 
 
 def test_parse_stream_line():
+    # `bee stream --agent` names each event first
+    assert parse_stream_line("Event update-conversation: id=1 state=COMPLETED") == "update-conversation"
+    assert parse_stream_line("Event journal-created.\n") == "journal-created"
+    assert parse_stream_line("Event connected: stream connected.") == "connected"
+    # `bee stream --json` prints an event's data alone, which names no event
+    assert parse_stream_line('{"conversation": {"id": 1, "state": "COMPLETED"}}') is None
+    # a stand-in CLI may print a JSON object that names the event
     assert parse_stream_line('{"event": "update-conversation", "data": {"conversation": {"id": 1}}}') == (
-        "update-conversation", {"conversation": {"id": 1}})
+        "update-conversation")
+    assert parse_stream_line("Connecting to event stream...") is None
+    assert parse_stream_line("[1, 2]") is None
     assert parse_stream_line("not json") is None
     assert parse_stream_line("") is None
+
+
+def test_watcher_catches_up_on_an_event_from_bee_stream(tmp_path, fake_bee, monkeypatch):
+    """A new voice memo is looked at once `bee stream` reports it, not only when the stream reconnects. The watcher
+    reads `bee stream --agent`, whose lines name each event; `--json` prints an event's data without its name, so
+    the watcher heard nothing between reconnects (2026-10-20)."""
+    memo = {"id": 7, "text": "Can't decide between a Mac mini and a PC", "created_at": int(time.time() * 1000)}
+    changed_file = tmp_path / "changed.json"
+    changed_file.write_text(json.dumps({"meta": {"next_cursor": "c1"}, "conversations": [], "facts": [],
+                                        "todos": [], "journals": [memo], "dailies": []}))
+    monkeypatch.setenv("FAKE_BEE_CHANGED", str(changed_file))
+    stream_file = tmp_path / "stream.json"
+    stream_file.write_text(json.dumps([{"event": "journal-created", "data": {"journal": {"id": 7}}}]))
+    monkeypatch.setenv("FAKE_BEE_STREAM", str(stream_file))
+    reasons = []
+
+    async def watch() -> None:
+        heard = asyncio.Event()
+
+        async def on_trigger(trigger):
+            reasons.append(trigger.reason)
+            if trigger.reason != "connected":
+                heard.set()
+
+        task = asyncio.create_task(BeeWatcher(tmp_path / "workspace", on_trigger, debounce=0.1).run())
+        try:
+            await asyncio.wait_for(heard.wait(), timeout=10)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(watch())
+    assert reasons == ["connected", "journal-created"]
+    assert [c[:2] for c in calls(fake_bee) if c[:1] == ["stream"]] == [["stream", "--agent"]]
 
 
 def test_context_saves_inputs_and_card(tmp_path, fake_bee):
