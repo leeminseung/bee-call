@@ -82,7 +82,8 @@ if cmd == ["logout"]:
 
 # `bee stream`: the events FAKE_BEE_STREAM lists ([{"event", "data"}]), printed the way the real CLI prints them
 # (bee-cli 0.7.3, sources/commands/stream/index.ts): `--agent` gives one "Event <name>: <data>" line each, and
-# `--json` only each event's data, without its name. The stream then stays open until it is stopped.
+# `--json` only each event's data. Bee's real data has carried the name as "type"; this stand-in's data does not.
+# The stream then stays open until it is stopped.
 if cmd[:1] == ["stream"]:
     stream_file = os.environ.get("FAKE_BEE_STREAM")
     for e in json.load(open(stream_file)) if stream_file else []:

@@ -282,7 +282,7 @@ def test_parse_stream_line():
     assert parse_stream_line("Event update-conversation: id=1 state=COMPLETED") == "update-conversation"
     assert parse_stream_line("Event journal-created.\n") == "journal-created"
     assert parse_stream_line("Event connected: stream connected.") == "connected"
-    # `bee stream --json` prints an event's data alone, which names no event
+    # a JSON line whose data names no event is not an event
     assert parse_stream_line('{"conversation": {"id": 1, "state": "COMPLETED"}}') is None
     # a stand-in CLI may print a JSON object that names the event
     assert parse_stream_line('{"event": "update-conversation", "data": {"conversation": {"id": 1}}}') == (
@@ -295,8 +295,8 @@ def test_parse_stream_line():
 
 def test_watcher_catches_up_on_an_event_from_bee_stream(tmp_path, fake_bee, monkeypatch):
     """A new voice memo is looked at once `bee stream` reports it, not only when the stream reconnects. The watcher
-    reads `bee stream --agent`, whose lines name each event; `--json` prints an event's data without its name, so
-    the watcher heard nothing between reconnects (2026-10-20)."""
+    reads `bee stream --agent`, whose lines always name the event; this stand-in's `--json` lines leave the name
+    out, so the test fails if the watcher reads `--json` and relies on the data naming the event."""
     memo = {"id": 7, "text": "Can't decide between a Mac mini and a PC", "created_at": int(time.time() * 1000)}
     changed_file = tmp_path / "changed.json"
     changed_file.write_text(json.dumps({"meta": {"next_cursor": "c1"}, "conversations": [], "facts": [],

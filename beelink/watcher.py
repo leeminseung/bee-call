@@ -58,9 +58,10 @@ class Trigger:
 
 def parse_stream_line(line: str) -> str | None:
     """The event's name from one line of `bee stream --agent`, which prints `Event <name>: <what happened>` (or
-    `Event <name>.`) per event. `--json` prints only an event's data, without its name (bee-cli 0.7.3,
-    sources/commands/stream/index.ts), so the watcher heard no event and caught up only on a reconnect (2026-10-20).
-    A JSON object with an "event" or "type" field, as a stand-in CLI may print, counts too."""
+    `Event <name>.`) per event, so the name is always there. `--json` prints only an event's data (bee-cli 0.7.3,
+    sources/commands/stream/index.ts). Bee's data carried the name as "type" in the one real event looked at
+    (2026-10-20), but the CLI's README shows its payloads without it. A JSON object with an "event" or "type" field
+    counts too."""
     line = line.strip()
     if not line:
         return None
