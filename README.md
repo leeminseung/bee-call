@@ -1,6 +1,6 @@
 # Bee Call
 
-Bee Call is for people who think out loud. Say a half-formed idea to your Bee wearable during the day, and Bee Call may ask, with a notification, whether you want a call about it. If you say yes, your iPhone rings right away or at the time the offer suggests. On the call, an AI talks it through with you, hands research to a background agent and tells you what it found, and saves the facts and to-dos you agree to back into Bee.
+Bee Call is for people who think out loud. Say a half-formed idea to your Bee wearable during the day, and Bee Call may ask, with a notification, whether you want a call about it. If you say yes, your iPhone rings right away or at the time the offer suggests. On the call, an AI talks it through with you. Longer tasks, such as research, go to a background agent so the conversation keeps going, and the AI tells you the results when they are ready. The facts and to-dos you agree to are saved back into Bee.
 
 Demo video: [link to add]
 
