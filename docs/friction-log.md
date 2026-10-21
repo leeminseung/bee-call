@@ -6,7 +6,7 @@ As of 2026-10-21, I used an iPhone 11 Pro on iOS 26.6.2, an Apple Watch SE (GPS)
 
 Each entry follows the hackathon rules' format, with the task attempted, the steps taken, the expected and actual results, the severity, the workaround and a suggestion. Severity means what the problem cost this project. Critical stopped the main path with no workaround. High blocked a feature until it was found or worked around. Medium cost hours, a design change, or data that an agent relies on. Low cost minutes.
 
-Entries 1 to 5, 13, 14 and 16 to 18 are about the Bee app and the Bee CLI. Entries 6 to 12 and 15 are about AWS. On 2026-10-19 I read the Bee CLI 0.8.0 source, and entries 3, 4, 5, 13 and 16 still apply to it. Entry 6 still applies to my account. I did not recheck the others after the dates given.
+Entries 1 to 5, 13, 14 and 16 to 20 are about the Bee app and the Bee CLI. Entries 6 to 12 and 15 are about AWS. On 2026-10-19 I read the Bee CLI 0.8.0 source, and entries 3, 4, 5, 13 and 16 still apply to it. Entry 6 still applies to my account. I did not recheck the others after the dates given.
 
 ## 1. Finding the official Bee iOS app (2026-09-28)
 
@@ -160,7 +160,7 @@ Entries 1 to 5, 13, 14 and 16 to 18 are about the Bee app and the Bee CLI. Entri
 - **Task attempted**: Use the speaker label on each transcript line to tell the wearer's words from other people's, so that an agent acts only on what the user asked for and keeps other people's words out of the user's facts.
 - **Steps taken**: Recorded a conversation alone in a quiet room, with nothing playing, and spoke 17 lines. Read the transcript with `bee conversations transcript <id> --json`.
 - **Expected**: All 17 lines carry the wearer's label.
-- **Actual**: In this one recording, 3 of the 17 lines were labeled "Unknown", the label Bee also gives other people. I have not checked whether the app offers a voice setup that would help.
+- **Actual**: In this one recording, 3 of the 17 lines were labeled "Unknown", the label Bee also gives other people. I have not checked whether the app offers a voice setup that would help. On 2026-10-22 I recorded six more times alone. In each, the opening lines were "Unknown" and every later line carried my name: 3 of 7 lines, 2 of 6, 2 of 9, 3 of 8, all 3 lines of a 30-second recording, and the only line of a 10-second one, which the app showed while it was still capturing, before the recording was dropped (entry 18). In the four longer recordings, the first line with my name started 17 to 26 seconds in.
 - **Severity**: Medium. Labels that can be wrong for the wearer cannot keep other people's words out of the user's memory, and an agent cannot tell whether a request in an "Unknown" line came from the user.
 - **Workaround**: The agent that reads new Bee records between calls acts on no request in a line labeled "Unknown". A real request that Bee mislabels is ignored, so that nobody else's words are acted on.
 - **Suggestion**: Let the wearer enroll their voice, or give each line a confidence for the wearer's label, so that an agent can choose its own threshold.
@@ -198,13 +198,42 @@ Entries 1 to 5, 13, 14 and 16 to 18 are about the Bee app and the Bee CLI. Entri
 - **Workaround**: My script stops any check that takes longer than 20 seconds and sends a new one.
 - **Suggestion**: Give the pairing request a time limit, and stop its retry loop once the caller has given up. Another developer's open pull request, https://github.com/bee-computer/bee-cli/pull/18, does the second part.
 
-## 18. Short watch recordings show as "Processing", then disappear (2026-10-21)
+## 18. Watch recordings of about 23 seconds or less disappear without a message (2026-10-21, retested 2026-10-22)
 
-- **Tool**: Bee app on Apple Watch and iPhone, Bee CLI 0.7.3 (`bee changed`, `bee now`, `bee journals list`)
+- **Tool**: Bee app on Apple Watch and iPhone, Bee CLI 0.7.3 (`bee changed`, `bee conversations list`, `bee journals list`, `bee todos suggestions`)
 - **Task attempted**: Leave a quick spoken note from the watch for an agent to pick up, the kind of note a person makes on a walk.
-- **Steps taken**: Recorded notes of a few seconds on the watch, once with Start and Stop and once by pressing and holding after "Tap to activate". Checked Recent conversations in the iPhone app and the CLI's change feed.
+- **Steps taken**: On 2026-10-21 I recorded two notes of a few seconds. On 2026-10-22, alone in a quiet room, I recorded eight more while reading text aloud in English, timed with a stopwatch. After stopping each one on the watch, I either pressed Process now, a button inside the recording's card on the iPhone app's home screen, or left it alone. Then I checked the app and the CLI.
 - **Expected**: A short note is kept as a conversation or a voice note, or the watch says that it was too short to keep.
-- **Actual**: The pressed-and-held note showed in Recent conversations as "Processing", then disappeared with no message. The Start and Stop note never appeared in the app. Neither note ever appeared in `bee changed`, `bee now` or `bee journals list`. A 48-minute conversation the same day was kept and summarized normally. The day before, a conversation that stayed "CAPTURING" for more than six hours also vanished, and `bee conversations get` later answered "Conversation not found". I do not know whether it held speech, so I cannot tell whether anything was lost.
-- **Severity**: Medium. Short notes are the natural use of a watch, an agent never sees them, and nothing tells the user that they were dropped.
-- **Workaround**: Speak for longer, and check the app for a finished summary before relying on a note.
-- **Suggestion**: Keep short recordings, for example as voice notes, or say on the watch and in the app that a recording was dropped and why, with the minimum length documented.
+- **Actual**: Every recording of about 23 seconds or less was dropped, and every one of about 30 seconds or more was kept. Each length and handling was tried once or twice.
+  - About 10 seconds, with Process now: dropped, twice. One was a note with two clear to-dos ("Remind me to buy coffee beans tomorrow morning, and to call the dentist about my appointment on Friday."). The app showed its words while it was capturing, and it was gone from the app's home screen right after I pressed Process now. No conversation, to-do or suggestion came of it.
+  - About 23 seconds, with Process now: dropped. It was gone when I returned to the home screen two or three minutes later.
+  - About 10 seconds, left alone: stayed "Capturing..." for about six minutes, then disappeared.
+  - About 30 seconds, left alone: stayed "Capturing..." for about six minutes, then was processed and kept.
+  - About 50 seconds (twice) and 85 seconds, with Process now: kept, each processed about ten seconds later.
+
+  None of the dropped recordings had appeared in the CLI, not even as an event, when I checked again 13 to 45 minutes later. On 2026-10-21 one of the earlier notes showed in Recent conversations as "Processing" before it disappeared, and a 48-minute conversation the same day was kept. Separately, on 2026-10-20 a watch conversation that stayed "CAPTURING" for more than six hours vanished, and `bee conversations get` later answered "Conversation not found". I do not know how long it was or whether it held speech, so it may be a different problem.
+- **Severity**: Medium. Short notes are the natural use of a watch, the to-do note above was dropped before any agent could read it, and nothing told me that it was dropped.
+- **Workaround**: Speak for at least 50 seconds and press Process now, or speak for at least 30 seconds and wait about six minutes. Then check the app for a finished summary before relying on a note.
+- **Suggestion**: Keep short recordings, for example as voice notes, or tell the user on the watch and in the app that a recording was too short and was dropped. Document the minimum length and the wait before a stopped recording is processed.
+
+## 19. "Press and hold for assistant" on the watch gets no answer (2026-10-22)
+
+- **Tool**: Bee app on Apple Watch ("Press and hold for assistant") and on iPhone, Bee CLI 0.7.3 (`bee changed`, `bee journals list`, `bee conversations transcript`)
+- **Task attempted**: Ask Bee's assistant a question from the watch, and see whether that leaves a voice note or another record an agent can read.
+- **Steps taken**: The option appears only while the watch is recording, so I started a recording each time. The "Enable Bee agent beta" option in the iPhone app was off, because I have no beta code (entry 2). In a recording of about two and a half minutes, I pressed and held, asked in Korean what the weather in Seoul would be tomorrow, and let go. In a recording of about 85 seconds, I asked "What's the weather tomorrow?" the same way. Each time I checked the watch and the CLI, and after the Korean question also the iPhone app.
+- **Expected**: An answer on the watch or in the app, or a message that the assistant is not available.
+- **Actual**: The watch showed "Let's talk" only while I held it, and as soon as I let go it went back to the recording screen. No answer or refusal appeared on the watch for either question, and the iPhone app showed none for the Korean one. Both recordings were kept as ordinary conversations, and each question is an ordinary line in its transcript. No voice note or other record was created.
+- **Severity**: Low. Bee Call does not rely on the assistant, and finding this out took minutes.
+- **Workaround**: None needed. Bee Call reads the conversation that the recording becomes.
+- **Suggestion**: Answer the question, or say on the watch why the assistant cannot answer. If it needs the "Enable Bee agent beta" option, say so next to the control.
+
+## 20. English speech comes out as Korean when Korean is the only language set (2026-10-22)
+
+- **Tool**: Bee app on Apple Watch (transcription) and its language setting in the iPhone app, Bee CLI 0.7.3 (`bee conversations transcript`)
+- **Task attempted**: Use Bee's transcript as the record of what the user said, for an agent that quotes or acts on the user's words.
+- **Steps taken**: The Bee app's language setting had Korean as the primary language and no additional languages, and my iPhone is set to Korean. Alone, I read three short English texts aloud on the watch, about 30, 50 and 85 seconds long, and compared each transcript with the text. Then I added English as an additional language in the Bee app and read the 50-second text again.
+- **Expected**: English speech transcribed in English, word for word, or a warning that it is in a language the settings do not list.
+- **Actual**: With Korean only, 11 of the 18 lines came out as the English I read. Four came out as Korean translations, with no warning. For example, "A long train can take more than a kilometer to stop, so drivers start braking long before a station." became "긴 기차는 스탑하는 데 1km 이상 걸리므로, 운전사들은 역 앞에서 오래 브레이크를 밟습니다.", which says that drivers brake for a long time in front of a station. One line wrote the English sounds in Korean letters ("아, 투매크, 아, 블랙티" for "To make black tea"). Two mixed both languages, for example "도 휠스 are slightly con-shaped, so the train steers itself through gentle curves." for "The wheels are slightly cone shaped, so the train steers itself through gentle curves.", with "con-shaped" as Bee wrote it. The summaries were in English. After I added English, all 8 lines of the repeated text came out in English, including the sentence that had been translated before.
+- **Severity**: Medium. Until I found the setting, an agent reading the transcript got words I never said, and a translation can change the meaning.
+- **Workaround**: Add every language you speak under Additional languages in the Bee app's settings.
+- **Suggestion**: Never translate in the transcript. When speech is in a language the settings do not list, write it as spoken or mark the line, and suggest adding that language.
