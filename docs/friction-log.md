@@ -2,6 +2,8 @@
 
 I built Bee Call alone for the Amazon Build, Ship, Shape hackathon. It is an iPhone app and server in which an AI phones its user to talk through what their Bee recorded, reading Bee and writing facts and to-dos back through the Bee CLI. The server runs on AWS. I wore Bee as the Bee app on an Apple Watch, since the Bee wearable ships only in the US.
 
+As of 2026-10-21, I used an iPhone 11 Pro on iOS 26.6.2, an Apple Watch SE (GPS) on watchOS 26.6 (23U67) and the Bee app 1.2.160. Earlier entries may have run on earlier versions of the app and the operating systems. Entries that used the Bee CLI give its version.
+
 Each entry follows the hackathon rules' format, with the task attempted, the steps taken, the expected and actual results, the severity, the workaround and a suggestion. Severity means what the problem cost this project. Critical stopped the main path with no workaround. High blocked a feature until it was found or worked around. Medium cost hours, a design change, or data that an agent relies on. Low cost minutes.
 
 Entries 1 to 5, 13, 14 and 16 to 18 are about the Bee app and the Bee CLI. Entries 6 to 12 and 15 are about AWS. On 2026-10-19 I read the Bee CLI 0.8.0 source, and entries 3, 4, 5, 13 and 16 still apply to it. Entry 6 still applies to my account. I did not recheck the others after the dates given.
