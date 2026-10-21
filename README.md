@@ -197,6 +197,7 @@ The black-box acceptance tests are not included here. They start the token serve
 - [docs/models-and-jobs.md](docs/models-and-jobs.md): the models, the model standing by, and background jobs.
 - [docs/people-and-data.md](docs/people-and-data.md): people, the daily budget, the data folder, what the app reads, and privacy.
 - [contract/app-contract.md](contract/app-contract.md): every endpoint and field the iPhone app uses.
+- [docs/friction-log.md](docs/friction-log.md): problems I hit with Bee and AWS while building this, each with a suggestion.
 - [deploy/README.md](deploy/README.md): the server on EC2.
 
 ## Testing from outside
