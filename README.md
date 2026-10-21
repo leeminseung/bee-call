@@ -18,6 +18,8 @@ Bee, Amazon's wearable AI, records conversations and voice notes. In this projec
 
 A person can also use Bee Call without Bee. They start calls from the app, the meta agent can still offer a call after one, and nothing is read from Bee or written to it. [docs/bee.md](docs/bee.md) has the details.
 
+**For other Bee developers.** I rewrote the parts of Bee Call that talk to Bee (the Bee CLI wrapper, the watcher, the read tools and the logged writes) as a separate, general Python library with tests of its own, [bee-agent-tools](https://github.com/leeminseung/bee-agent-tools). Bee Call keeps its own versions and does not depend on it. I also sent the Bee CLI a fix that lets `bee status` finish a `--no-wait` login once it is approved ([bee-computer/bee-cli#26](https://github.com/bee-computer/bee-cli/pull/26)).
+
 ## Architecture
 
 ![Bee Call architecture](docs/architecture.png)
