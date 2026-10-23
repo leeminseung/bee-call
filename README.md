@@ -22,9 +22,9 @@ A person can also use Bee Call without Bee. They start calls from the app, the m
 
 ## Architecture
 
-![Bee Call architecture](docs/architecture.png)
+![Bee Call architecture](docs/system-architecture.png)
 
-In the figure, the user speaks to Bee on an Apple Watch, and Bee's apps upload what it heard to Bee's server. The "Bee Call server" box is the between-calls process in the table below. It reads new notes through the Bee CLI and, when a call would help, sends the Bee Call app an offer. Once the user accepts, the app rings like a phone call. The "Voice agent" box is the voice server with its call AI. It talks with the user, hands long tasks to the background agent, and writes facts and to-dos back to Bee through the Bee CLI.
+In the figure, the user talks to Bee on an Apple Watch, and the Bee app on the iPhone uploads the recording to Bee's server. On the Bee Call server, the Bee link reads new conversations and voice notes through the Bee CLI. The meta agent, which reviews each new record, decides whether a call from the AI would help. Its offer reaches the Bee Call app through Apple's push service, and nothing rings without a yes. On the call, LiveKit Cloud carries the audio between the app and the call AI, which hears through Amazon Transcribe, thinks with Claude and speaks with ElevenLabs. Longer tasks the user asks for, such as research or a comparison, go to the background agent, whose reports reach the app through the app API (the token server in the figure). When the user agrees on the call to save what came up, the call AI writes those facts and to-dos back to Bee through the Bee link.
 
 | Part | Where it runs | What it does |
 |---|---|---|
