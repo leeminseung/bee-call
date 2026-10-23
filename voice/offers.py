@@ -568,7 +568,7 @@ def notification(offer: Offer, now: datetime, language: CallLanguage) -> dict[st
 
 
 def main(argv: list[str] | None = None) -> None:
-    """For tests from outside (README: Testing from outside): make an offer the way the meta agent does, without its
+    """For tests from outside (docs/testing-from-outside.md): make an offer the way the meta agent does, without its
     model. The offer asks; nothing rings until the user says yes."""
     import argparse
     import json as json_module

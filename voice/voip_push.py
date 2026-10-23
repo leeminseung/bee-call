@@ -142,7 +142,7 @@ PUSHES = Path("state") / "pushes.jsonl"  # in the person's folder: every push se
 
 def record_push(person: Person, kind: str, payload: dict[str, Any], *, sent: bool, status: int | None = None,
                 apns_id: str | None = None, reason: str | None = None) -> None:
-    """One line of the person's push record (README: Testing from outside): the push's type and payload, whether it
+    """One line of the person's push record (docs/testing-from-outside.md): the push's type and payload, whether it
     went out, and APNs' answer. Never a device token or a credential. A record that cannot be written never stops
     a push."""
     line = {"at": person.now().isoformat(timespec="seconds"), "type": kind, "payload": payload, "sent": sent,
@@ -174,7 +174,7 @@ async def _send(kind: str, payload: dict[str, Any], person: Person, config: Apns
         headers["apns-expiration"] = str(expires_epoch)
     if collapse_id:
         headers["apns-collapse-id"] = collapse_id[:64]  # a newer push with the same id replaces the older one
-    # APNS_URL: a test receiver instead of Apple (README: Testing from outside; never on a server).
+    # APNS_URL: a test receiver instead of Apple (docs/testing-from-outside.md; never on a server).
     base = os.environ.get("APNS_URL", "").strip().rstrip("/") or APNS_HOSTS[device["environment"]]
     url = f"{base}/3/device/{device['token']}"
     async with httpx.AsyncClient(http2=transport is None and base.startswith("https://"), transport=transport,

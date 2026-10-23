@@ -25,7 +25,7 @@ The meta agent only proposes. Calls wait for the user's yes, and Bee changes go 
 
 One think is one conversation with the model catalog's meta role, Claude Sonnet 5.5 with GLM 5 on Bedrock standing by, with at most 8 model requests. Every think goes into the meta session (`meta/session.jsonl`), with the events it took, every tool it used and its own words. The session screen shows them as they are on its "Between calls" page. The inbox moves on only after a think that worked. A think that failed, for example because the model was unreachable, is tried again with the same events after 30 seconds, then 1, 2 and 5 minutes, then every 15 minutes, and is never given up.
 
-`uv run python -m probes.meta_probe` shows how the model judges three made-up moments in a scratch workspace. `META_AGENT=rules` runs the meta agent without a model, for tests ([README, Testing from outside](../README.md#testing-from-outside)).
+`uv run python -m probes.meta_probe` shows how the model judges three made-up moments in a scratch workspace. `META_AGENT=rules` runs the meta agent without a model, for tests ([Testing from outside](testing-from-outside.md)).
 
 ## What the meta agent sees of Bee
 

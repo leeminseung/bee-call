@@ -70,7 +70,7 @@ Every call is kept as plain files in its folder.
 | File | What it holds |
 |---|---|
 | `transcript.md` | what both sides said, with times and interruptions |
-| `events.jsonl` | everything that happened, one JSON object per line ([README, Testing from outside](../README.md#testing-from-outside)) |
+| `events.jsonl` | everything that happened, one JSON object per line ([Testing from outside](testing-from-outside.md)) |
 | `audio/` | the raw audio of both sides, only while the person keeps audio on the server |
 | `inputs/` | the raw Bee data read for the call |
 | `prep.md` | the call prep note |
